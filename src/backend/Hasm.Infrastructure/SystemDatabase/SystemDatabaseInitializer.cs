@@ -44,9 +44,20 @@ public sealed class SystemDatabaseInitializer(HasmDatabaseOptions options)
             await create.ExecuteNonQueryAsync(ct);
             return true;
         }
-        catch (PostgresException ex) when (ex.SqlState == DuplicateDatabase)
+        catch (PostgresException ex) when (IsConcurrentCreation(ex))
         {
-            return false; // created concurrently by another initialiser
+            // Created concurrently by another initialiser. Confirm it really exists so that no
+            // unrelated failure is ever swallowed.
+            await using var verify = new NpgsqlCommand("SELECT 1 FROM pg_database WHERE datname = @n", conn);
+            verify.Parameters.AddWithValue("n", name);
+            if (await verify.ExecuteScalarAsync(ct) is not null) return false;
+            throw;
         }
     }
+
+    // Racing CREATE DATABASE calls fail with 42P04, or - when both pass the name check before either
+    // commits its catalog row - with 23505 on the pg_database name index. Both mean "already created".
+    internal static bool IsConcurrentCreation(PostgresException ex) =>
+        ex.SqlState == DuplicateDatabase
+        || (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == "pg_database_datname_index");
 }
