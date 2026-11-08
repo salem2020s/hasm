@@ -1,4 +1,8 @@
 <Solution>
   <Project Path="../../tests/integration/Hasm.Api.Tests/Hasm.Api.Tests.csproj" />
+  <Project Path="../../tests/integration/Hasm.Database.IntegrationTests/Hasm.Database.IntegrationTests.csproj" />
+  <Project Path="../../tests/unit/Hasm.Infrastructure.Tests/Hasm.Infrastructure.Tests.csproj" />
+  <Project Path="Hasm.Admin/Hasm.Admin.csproj" />
   <Project Path="Hasm.Api/Hasm.Api.csproj" />
+  <Project Path="Hasm.Infrastructure/Hasm.Infrastructure.csproj" />
 </Solution>

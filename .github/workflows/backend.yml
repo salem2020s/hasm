@@ -20,3 +20,72 @@ jobs:
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
+
+  postgres-integration:
+    # Real PostgreSQL integration tests against an ephemeral service container (destroyed with the job).
+    # Nothing here touches production or customer data; see docs/DEVELOPMENT.md.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Throwaway bootstrap superuser of an ephemeral, job-local container; used only to create the
+          # restricted test role below. Not a real secret and unreachable outside this runner.
+          POSTGRES_USER: ci_bootstrap
+          POSTGRES_PASSWORD: ci-bootstrap-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_bootstrap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HASM_REQUIRE_PG_TESTS: "1"                                      # a closed gate FAILS, never skips
+      HASM_TEST_PG_DISPOSABLE: yes-this-server-is-disposable           # explicit disposable-server acknowledgement
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Create restricted test-only database role
+        run: |
+          set -euo pipefail
+          psql --version
+          TEST_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::${TEST_PW}"
+          # Minimum privileges to create/drop its own temporary databases: no superuser, role, or replication rights.
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -v pw="${TEST_PW}" <<'SQL'
+          CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD :'pw';
+          SQL
+          # The container has no TLS; non-TLS is confined to this disposable loopback service (see DEVELOPMENT.md).
+          echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
+
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+
+      - name: Run PostgreSQL integration tests
+        run: >
+          dotnet test tests/integration/Hasm.Database.IntegrationTests
+          --no-build --configuration Release
+          --logger "trx;LogFileName=pg-integration.trx"
+          --results-directory "$RUNNER_TEMP/trx"
+
+      - name: Verify all 10 PostgreSQL tests executed and passed (none skipped)
+        run: |
+          python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          EXPECTED = 10
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          results = [r for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns)
+                     if ".SystemDatabaseTests." in r.get("testName", "")]
+          outcomes = {}
+          for r in results:
+              outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
+          print(f"PostgreSQL tests found: {len(results)}; outcomes: {outcomes}")
+          if len(results) != EXPECTED or outcomes != {"Passed": EXPECTED}:
+              print(f"::error::Expected exactly {EXPECTED} PostgreSQL tests, all Passed (none skipped/failed).")
+              sys.exit(1)
+          PY
