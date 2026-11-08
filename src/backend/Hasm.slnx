@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="../../tests/integration/Hasm.Api.Tests/Hasm.Api.Tests.csproj" />
+  <Project Path="Hasm.Api/Hasm.Api.csproj" />
+</Solution>

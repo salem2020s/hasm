@@ -34,3 +34,6 @@
 *.db
 *.bak
 *.dump
+
+# Tauri generated
+**/src-tauri/gen/
