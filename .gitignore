@@ -1,0 +1,36 @@
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+
+# .NET
+**/bin/
+**/obj/
+*.user
+
+# React / Node.js
+**/node_modules/
+**/dist/
+**/coverage/
+
+# Rust / Tauri
+**/target/
+
+# Local Claude configuration
+.claude/settings.local.json
+
+# IDE and temporary files
+.vs/
+*.log
+*.tmp
+
+# Local databases and backups
+*.sqlite
+*.db
+*.bak
+*.dump
