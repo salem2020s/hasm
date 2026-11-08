@@ -1,0 +1,56 @@
+body {
+  margin: 0;
+  font-family: system-ui, "Segoe UI", Tahoma, sans-serif;
+  color: #1f2937;
+  background: #ffffff;
+}
+
+/* Logical properties keep the layout correct in both RTL (Arabic) and LTR (English). */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.5rem;
+  padding-inline: 1rem;
+  border-block-end: 1px solid #e5e7eb;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.brand-mark {
+  height: 32px;
+  width: auto;
+  flex: none;
+}
+
+.brand-name {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.welcome {
+  max-width: 40rem;
+  margin-inline: auto;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+.brand-lockup {
+  max-width: 100%;
+  height: auto;
+}
+
+.tagline {
+  color: #4b5563;
+}
+
+button:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}

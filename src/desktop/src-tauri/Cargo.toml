@@ -1,0 +1,16 @@
+[package]
+name = "hasm-desktop"
+version = "0.0.0"
+description = "HASM Windows desktop shell (UI only, no database access)"
+edition = "2021"
+publish = false
+
+[lib]
+name = "hasm_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

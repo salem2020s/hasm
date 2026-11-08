@@ -1,0 +1,22 @@
+name: Backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["src/backend/**", "tests/**", ".github/workflows/backend.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+      - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release

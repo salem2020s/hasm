@@ -1,0 +1,27 @@
+name: Desktop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["src/desktop/**", "src/frontend/**", "assets/branding/**", ".github/workflows/desktop.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm ci
+        working-directory: src/desktop
+      - name: Build Tauri shell (no installer)
+        run: npx tauri build --debug --no-bundle
+        working-directory: src/desktop

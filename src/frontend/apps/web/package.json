@@ -1,0 +1,19 @@
+{
+  "name": "@hasm/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p . && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@hasm/api-client": "*",
+    "@hasm/ui": "*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
