@@ -21,6 +21,25 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByTestId("backend-status")).toHaveTextContent("يعمل"));
   });
 
+  it("shows a compact header with the mark and translated name, and the lockup in the welcome area", () => {
+    const { container } = renderApp(true);
+    const header = container.querySelector("header")!;
+    const markImg = header.querySelector("img")!;
+    expect(markImg.getAttribute("src")).toContain("hasm-mark");
+    expect(markImg.getAttribute("alt")).toBe("");
+    expect(header).toHaveTextContent("حسم");
+    // The old composite banner must not be used anywhere.
+    expect(container.querySelector('img[src*="hasm-logo"]')).toBeNull();
+    expect(container.querySelector("main img")!.getAttribute("src")).toContain("hasm-lockup");
+  });
+
+  it("renders brand text in the active language", () => {
+    renderApp(true);
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.getByText("HASM", { selector: ".brand-name" })).toBeInTheDocument();
+    expect(screen.getByText("Accounting & Inventory Management")).toBeInTheDocument();
+  });
+
   it("switches to English LTR", async () => {
     renderApp(true);
     fireEvent.click(screen.getByRole("button", { name: "English" }));

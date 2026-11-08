@@ -1,8 +1,11 @@
 import { createApiClient, type ApiClient } from "@hasm/api-client";
 import { LanguageSwitcher, useI18n } from "@hasm/ui";
 import { useEffect, useMemo, useState } from "react";
-import logoUrl from "../../../../../assets/branding/hasm-logo.png";
+// Official branding assets, used unmodified (see assets/branding/BRANDING.md).
+import lockupUrl from "../../../../../assets/branding/hasm-lockup.png";
+import markUrl from "../../../../../assets/branding/hasm-mark.png";
 import { apiBaseUrl } from "./config";
+import "./app.css";
 
 type Status = "checking" | "healthy" | "unreachable";
 
@@ -23,18 +26,22 @@ export function App({ client }: { client?: ApiClient }) {
   }, [api]);
 
   return (
-    <main style={{ padding: "2rem", fontFamily: "system-ui, 'Segoe UI', Tahoma, sans-serif" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>
-          {/* Official approved logo, unmodified; width/height keep its original 449x204 proportions. */}
-          <img src={logoUrl} alt={t("appName")} width={449} height={204} style={{ maxWidth: "100%", height: "auto" }} />
-        </h1>
+    <>
+      <header className="app-header">
+        <div className="brand">
+          {/* Decorative: the adjacent text carries the accessible name. Native 120x136 ratio is preserved. */}
+          <img className="brand-mark" src={markUrl} alt="" width={120} height={136} />
+          <span className="brand-name">{t("appName")}</span>
+        </div>
         <LanguageSwitcher />
       </header>
-      <p>{t("tagline")}</p>
-      <p>
-        {t("backendStatus")}: <strong data-testid="backend-status">{t(status)}</strong>
-      </p>
-    </main>
+      <main className="welcome">
+        <img className="brand-lockup" src={lockupUrl} alt={t("appName")} width={323} height={145} />
+        <p className="tagline">{t("tagline")}</p>
+        <p>
+          {t("backendStatus")}: <strong data-testid="backend-status">{t(status)}</strong>
+        </p>
+      </main>
+    </>
   );
 }

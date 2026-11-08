@@ -11,7 +11,7 @@ Scope of the current foundation: Backend health endpoint, shared React frontend 
 
 ## Structure
 ```
-assets/branding/hasm-logo.png   Official approved logo (never modify or regenerate)
+assets/branding/                Official branding assets, see BRANDING.md (never modify or regenerate)
 src/backend/                    Hasm.slnx, Hasm.Api (ASP.NET Core)
 src/frontend/                   npm workspace: apps/web, packages/ui, packages/api-client
 src/desktop/                    Tauri 2 shell (src-tauri) loading the shared frontend
@@ -57,7 +57,7 @@ cd src/desktop && npx tauri build --debug --no-bundle
 CI runs the same checks (`.github/workflows/`).
 
 ## Known placeholders and limitations
-- `src/desktop/src-tauri/icons/` holds a neutral grey placeholder app icon, **not** the HASM logo. The official logo is wide (449x204) and must not be cropped or padded; replace the icons when an approved square app-icon asset is provided (`npx tauri icon <square.png>`).
+- Desktop icons in `src/desktop/src-tauri/icons/` come from `assets/branding/hasm-icon.png` (`icon.ico` is the supplied `hasm-icon.ico`, byte-identical). The source raster is an upscaled 1024x1024 extraction from a 449x204 reference, so small icon sizes may look soft; replace with a true vector/high-resolution master before a commercial release (`npx tauri icon <square.png>`, then restore the approved `.ico`). Tauri does not always re-embed changed icons: touch `src-tauri/build.rs` before rebuilding.
 - The Desktop CSP `connect-src` hardcodes the local development API origin (`https://localhost:7241`). A per-deployment mechanism for the API address is still to be decided.
 - The Desktop app reaches the development backend only after the ASP.NET dev HTTPS certificate is trusted (`dotnet dev-certs https --trust`); certificate validation is never bypassed.
 - The GitHub Actions workflows (`.github/workflows/`) have not run yet; they are first exercised by the pull request.
