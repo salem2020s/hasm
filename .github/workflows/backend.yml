@@ -73,20 +73,37 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 100 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 170 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
-          import sys, xml.etree.ElementTree as ET
-          EXPECTED = 100  # 10 SystemDatabase + 17 CompanyProvisioning + 8 IdentityMigration + 9 UserCreation + 7 Login + 11 Session + 11 BruteForceProtection + 27 AuthApi (theory cases counted individually)
-          CLASSES = ("SystemDatabaseTests", "CompanyProvisioningTests", "IdentityMigrationTests", "UserCreationTests", "LoginTests", "SessionTests", "BruteForceProtectionTests", "AuthApiTests")
+          import re, sys, xml.etree.ElementTree as ET
+          # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class
+          # MUST be added here, so a skipped, missing or unregistered test fails the job.
+          EXPECTED = {
+              "SystemDatabaseTests": 10, "CompanyProvisioningTests": 17, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+              "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
+              "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
+              "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
+              "ConcurrentAccessChangeTests": 5, "AccessApiTests": 18,
+              "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
+          }
+          TOTAL = sum(EXPECTED.values())  # 170
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
-          results = [r for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns)
-                     if any(f".{c}." in r.get("testName", "") for c in CLASSES)]
-          outcomes = {}
-          for r in results:
+          counts, outcomes, unknown = {}, {}, []
+          for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):
+              name = r.get("testName", "")
+              m = re.match(r"Hasm\.Database\.IntegrationTests\.(\w+)\.", name)
+              cls = m.group(1) if m else ""
+              if cls == "SafetyGateTests":
+                  continue  # pure logic, needs no database
+              if cls not in EXPECTED:
+                  unknown.append(name)
+                  continue
+              counts[cls] = counts.get(cls, 0) + 1
               outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
-          print(f"PostgreSQL tests found: {len(results)}; outcomes: {outcomes}")
-          if len(results) != EXPECTED or outcomes != {"Passed": EXPECTED}:
-              print(f"::error::Expected exactly {EXPECTED} PostgreSQL tests, all Passed (none skipped/failed).")
+          print(f"PostgreSQL tests found: {sum(counts.values())}; outcomes: {outcomes}; per class: {counts}")
+          ok = counts == EXPECTED and outcomes == {"Passed": TOTAL} and not unknown
+          if not ok:
+              print(f"::error::Expected exactly {TOTAL} PostgreSQL tests with the per-class counts above, all Passed (none skipped/failed); unregistered classes: {unknown[:5]}")
               sys.exit(1)
           PY

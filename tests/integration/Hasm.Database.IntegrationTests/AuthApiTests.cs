@@ -425,7 +425,10 @@ public class AuthApiTests : IdentityTestBase
         var admin = await AdminCookie();
         var status = await Send(HttpMethod.Get, "/api/v1/auth/status", cookie: admin);
         Assert.DoesNotContain("compan", status.Body, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Get, "/api/v1/companies", cookie: admin)).Status);   // even administrators get no registry endpoint
+        // Phase 2.3B: /companies lists only the caller's own active memberships (never the registry); an identity administrator without membership sees nothing.
+        var companies = await Send(HttpMethod.Get, "/api/v1/companies", cookie: admin);
+        Assert.Equal(HttpStatusCode.OK, companies.Status);
+        Assert.Equal(0, companies.Json.GetProperty("companies").GetArrayLength());
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.UserCompanyAccess.Table}"));
     }
 

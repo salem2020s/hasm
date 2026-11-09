@@ -35,10 +35,11 @@ public class SensitiveInformationTests(WebApplicationFactory<Program> factory) :
     public async Task Company_registry_is_not_exposed_over_http()
     {
         var client = Client();
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/v1/companies")).StatusCode);
+        // Phase 2.3B: the route exists only as an authenticated, caller-scoped list; anonymous callers get nothing.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/companies")).StatusCode);
         // State-changing calls need the CSRF request header (see AuthDefaults.RequestHeader); send it so the route itself is what is tested.
         using var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/companies");
         post.Headers.Add("X-Hasm-Request", "1");
-        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(post)).StatusCode);
+        Assert.Contains((await client.SendAsync(post)).StatusCode, new[] { HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed }); // no company-creation route
     }
 }

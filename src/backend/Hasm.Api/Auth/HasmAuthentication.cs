@@ -93,7 +93,7 @@ public static class AuthenticationSetup
             var headers = context.Response.Headers;
             headers["X-Content-Type-Options"] = "nosniff";
             headers["Referrer-Policy"] = "no-referrer";
-            if (context.Request.Path.StartsWithSegments("/api/v1/auth") || context.Request.Path.StartsWithSegments("/api/v1/admin"))
+            if (new[] { "/api/v1/auth", "/api/v1/admin", "/api/v1/access", "/api/v1/session", "/api/v1/companies" }.Any(p => context.Request.Path.StartsWithSegments(p)))
                 headers.CacheControl = "no-store";
             return Task.CompletedTask;
         });

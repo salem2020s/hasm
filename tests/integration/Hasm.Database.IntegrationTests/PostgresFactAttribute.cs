@@ -126,9 +126,22 @@ public abstract class PostgresTestBase : IAsyncLifetime
             // Only databases this test generated itself, and only with the disposable prefix, are ever dropped.
             if (!name.StartsWith(PostgresTestEnvironment.DatabasePrefix, StringComparison.Ordinal))
                 throw new InvalidOperationException("Refusing to drop a database that is not a test database.");
-            await using var cmd = new NpgsqlCommand(
-                $"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(name)} WITH (FORCE)", conn);
-            await cmd.ExecuteNonQueryAsync();
+            // A PostgreSQL background worker (e.g. autovacuum) may be attached to a fresh database for a moment; a non-superuser
+            // cannot terminate it (42501), so retry briefly. Still only ever drops the test's own, prefixed database.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await using var cmd = new NpgsqlCommand(
+                        $"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(name)} WITH (FORCE)", conn);
+                    await cmd.ExecuteNonQueryAsync();
+                    break;
+                }
+                catch (PostgresException ex) when (ex.SqlState == "42501" && attempt < 10)
+                {
+                    await Task.Delay(300);
+                }
+            }
         }
     }
 

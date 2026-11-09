@@ -64,17 +64,19 @@ public class IdentityMigrationTests : IdentityTestBase
     }
 
     [PostgresFact]
-    public async Task Existing_database_at_version_2_upgrades_to_3_preserving_data()
+    public async Task Existing_database_at_version_2_upgrades_to_latest_preserving_data()
     {
         await new SystemDatabaseInitializer(Options).InitializeAsync(); // creates the per-test disposable database
-        // Simulate an older installation by undoing migration 3 by hand (inside the disposable test database only), then re-run the real initializer.
+        // Simulate an older installation by undoing migrations 4 and 3 by hand (inside the disposable test database only), then re-run the real initializer.
+        await Exec("DROP TABLE " + SystemSchema.AccessAudit.Table + ", " + SystemSchema.RoleAssignment.Table + ", " + SystemSchema.RolePermission.Table + ", " + SystemSchema.Role.Table + " CASCADE;" +
+                   "DROP FUNCTION " + SystemSchema.AccessAudit.GuardFunction + "(); DROP FUNCTION " + SystemSchema.Role.GuardFunction + "(); DROP FUNCTION " + SystemSchema.RolePermission.GuardFunction + "(); DROP FUNCTION " + SystemSchema.RoleAssignment.GuardFunction + "();");
         await Exec("DROP TABLE " + A.Table + ", " + T.Table + ", " + S.Table + ", " + U.Table + " CASCADE; DROP FUNCTION " + U.GuardFunction + "();");
-        await Exec($"DELETE FROM {SystemSchema.MigrationJournalTable} WHERE version = 3");
+        await Exec($"DELETE FROM {SystemSchema.MigrationJournalTable} WHERE version IN (3, 4)");
         await Exec($"INSERT INTO {SystemSchema.Company.Table} ({SystemSchema.Company.Id},{SystemSchema.Company.PhysicalDatabaseName},{SystemSchema.Company.ProvisioningState},{SystemSchema.Company.CreatedAtUtc},{SystemSchema.Company.StateChangedAtUtc}) VALUES (@i,'dkeepme',0,now(),now())", ("i", Guid.NewGuid()));
 
         var result = await new SystemDatabaseInitializer(Options).InitializeAsync();
 
-        Assert.Equal([3], result.AppliedMigrations);
+        Assert.Equal([3, 4], result.AppliedMigrations);
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.Company.Table}"));
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {U.Table}"));
     }
@@ -86,9 +88,9 @@ public class IdentityMigrationTests : IdentityTestBase
         var expected = new Dictionary<string, string[]>
         {
             [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc],
-            [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind],
+            [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind, S.SelectedCompanyId],
             [T.Table] = [T.Scope, T.KeyHash, T.Failures, T.WindowStartedAtUtc, T.BlockedUntilUtc],
-            [A.Table] = [A.UserId, A.CompanyId, A.GrantedAtUtc],
+            [A.Table] = [A.UserId, A.CompanyId, A.GrantedAtUtc, A.GrantedBy, A.RevokedAtUtc, A.RevokedBy],
         };
         foreach (var (table, columns) in expected)
         {
