@@ -21,6 +21,8 @@ builder.Services.AddCors(options =>
         }
     }));
 
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHasmAudit(builder.Configuration);
 builder.Services.AddHasmAuthentication(builder.Configuration);
 builder.Services.AddHasmAccess(builder.Configuration);
 

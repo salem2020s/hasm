@@ -1,5 +1,6 @@
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Http.Metadata;
@@ -26,7 +27,8 @@ public static class AccessSetup
                 return options.BuildSystemConnectionString(admin: false);
             },
             sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<PermissionCatalog>()));
+            sp.GetRequiredService<PermissionCatalog>(),
+            sp.GetRequiredService<AuditTrail>()));
         return services;
     }
 }

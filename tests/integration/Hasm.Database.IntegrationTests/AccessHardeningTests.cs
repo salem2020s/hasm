@@ -229,7 +229,7 @@ public class ScopeFailClosedTests : AccessTestBase
         var super = await NewSuper(company);
         var member = await NewMember(company, super);
         var role = await SeedRole(company, "Reviewer", DocView);
-        await using var strict = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog);   // production default: no validator registered
+        await using var strict = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit);   // production default: no validator registered
 
         Fails(await strict.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Branch, BranchA), AccessStatus.Invalid, "scope_not_verifiable");
         Fails(await strict.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Warehouse, WarehouseX), AccessStatus.Invalid, "scope_not_verifiable");
@@ -250,7 +250,7 @@ public class ScopeFailClosedTests : AccessTestBase
         Fails(await Access.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Branch, Guid.NewGuid()), AccessStatus.Invalid, "scope_not_verifiable");
         Fails(await Access.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Warehouse, BranchA), AccessStatus.Invalid, "scope_not_verifiable");   // a branch id is not a warehouse
         Fails(await Access.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Branch, WarehouseX), AccessStatus.Invalid, "scope_not_verifiable");
-        await using var broken = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, new ThrowingScopeValidator());
+        await using var broken = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit, new ThrowingScopeValidator());
         Fails(await broken.AssignRoleAsync(super.Id, company, member.Id, role, ScopeKind.Branch, BranchA), AccessStatus.Invalid, "scope_not_verifiable");  // fail closed on errors
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Ra.Table} WHERE {Ra.UserId}=@u", ("u", member.Id)));
 

@@ -64,6 +64,7 @@ public class SecurityHardeningApiTests : AccessTestBase
             b.ConfigureServices(s =>
             {
                 s.AddSingleton<TimeProvider>(Clock);
+                s.AddSingleton(_ => Audit);                 // the suite's audit trail (shared keys and checkpoints) so tests can verify what the API wrote
                 s.AddSingleton<IStartupFilter>(new PeerFilter());
             });
         });

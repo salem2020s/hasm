@@ -22,6 +22,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\backend\Hasm.Infrastructure\Hasm.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hasm.Api\Hasm.Api.csproj" />
+    <!-- Built (not referenced) so the admin-tool tests can run the real command-line tool. -->
+    <ProjectReference Include="..\..\..\src\backend\Hasm.Admin\Hasm.Admin.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

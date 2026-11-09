@@ -25,7 +25,7 @@ jobs:
     # Real PostgreSQL integration tests against an ephemeral service container (destroyed with the job).
     # Nothing here touches production or customer data; see docs/DEVELOPMENT.md.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -73,7 +73,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 206 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 275 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -87,8 +87,12 @@ jobs:
               "ConcurrentAccessChangeTests": 5, "AccessApiTests": 18,
               "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
               "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
+              # Phase 2.3C-2 cryptographic audit integrity
+              "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+              "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
+              "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
           }
-          TOTAL = sum(EXPECTED.values())  # 206
+          TOTAL = sum(EXPECTED.values())  # 275
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

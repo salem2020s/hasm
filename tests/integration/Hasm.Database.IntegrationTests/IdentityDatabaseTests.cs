@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
@@ -22,14 +23,20 @@ public abstract class IdentityTestBase : PostgresTestBase
     protected const string Pw = "Correct-Horse-Battery-9";
     protected FakeClock Clock { get; } = new();
     protected AuthOptions AuthSettings { get; } = new();
+    /// <summary>Audit evidence for the suite: in-memory keys and checkpoints (the file-based implementations have their own tests).</summary>
+    protected InMemoryAuditKeyRing AuditKeys { get; } = new();
+    protected InMemoryCheckpointStore AuditCheckpoints { get; } = new();
+    protected AuditTrail Audit { get; }
     protected IdentityStore Store { get; private set; } = null!;
     protected AuthService Auth { get; private set; } = null!;
+    protected IdentityTestBase() => Audit = new AuditTrail(new AuditServices(AuditKeys, AuditCheckpoints, 0), Clock);
+
     protected PasswordService Passwords { get; } = new(1000); // low cost keeps the suite fast; production floor is enforced by AuthOptions
 
     protected async Task Start()
     {
         await new SystemDatabaseInitializer(Options).InitializeAsync();
-        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock);
+        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit);
         Auth = new AuthService(Store, Passwords, AuthSettings);
     }
 

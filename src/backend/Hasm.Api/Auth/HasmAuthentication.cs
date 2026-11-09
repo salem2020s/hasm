@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Authentication;
@@ -75,7 +76,8 @@ public static class AuthenticationSetup
                 options.EnsureValid(requireAdmin: false);
                 return options.BuildSystemConnectionString(admin: false);
             },
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<AuditTrail>()));
         services.AddSingleton<AuthService>();
         services.AddHostedService<IdentityHousekeepingService>();
 
@@ -114,6 +116,13 @@ public static class AuthenticationSetup
         await next();
     });
 
+    private static (int, string) Audit(HttpContext context, AuditUnavailableException ex)
+    {
+        // Only the short code is logged (never keys, paths or content); the client sees one generic code.
+        context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Hasm.Audit").LogError("audit.unavailable code={Code}", ex.Code);
+        return (StatusCodes.Status503ServiceUnavailable, "audit_unavailable");
+    }
+
     /// <summary>Generic error responses: no exception text, stack trace, connection detail or secret is ever returned.</summary>
     public static void UseHasmExceptionHandling(this WebApplication app) => app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     {
@@ -121,6 +130,7 @@ public static class AuthenticationSetup
         var (status, code) = error switch
         {
             BadHttpRequestException b => (b.StatusCode, "bad_request"),
+            AuditUnavailableException a => Audit(context, a),
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };

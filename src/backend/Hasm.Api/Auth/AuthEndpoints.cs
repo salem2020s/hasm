@@ -106,7 +106,8 @@ public static class AuthEndpoints
     private static async Task<IResult> CreateUser(CreateUserRequest? body, AuthService auth, HttpContext http)
     {
         if (body is null) return Error(400, "invalid_request");
-        var result = await auth.CreateUserAsync(body.Login, body.DisplayName, body.Password, body.IsIdentityAdministrator, http.RequestAborted);
+        var result = await auth.CreateUserAsync(body.Login, body.DisplayName, body.Password, body.IsIdentityAdministrator, http.RequestAborted,
+            http.Items[AuthDefaults.SessionItemKey] is AuthenticatedSession actor ? actor.UserId : null);
         return result.Status switch
         {
             CreateUserStatus.Created => Results.Json(

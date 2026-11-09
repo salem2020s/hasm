@@ -37,3 +37,7 @@
 
 # Tauri generated
 **/src-tauri/gen/
+
+# Audit integrity: key material and checkpoint evidence must never be committed (they live outside the repository)
+*.hkey
+*.hcp
