@@ -59,6 +59,17 @@ public sealed class PostgresFactAttribute : FactAttribute
     }
 }
 
+/// <summary>Theory variant of <see cref="PostgresFactAttribute"/>.</summary>
+public sealed class PostgresTheoryAttribute : TheoryAttribute
+{
+    public PostgresTheoryAttribute()
+    {
+        var reason = PostgresTestEnvironment.Evaluate();
+        if (reason is not null && !PostgresTestEnvironment.Required)
+            Skip = $"PostgreSQL integration test not run: {reason}";
+    }
+}
+
 /// <summary>Creates a throwaway database per test and drops only that database afterwards.</summary>
 public abstract class PostgresTestBase : IAsyncLifetime
 {
@@ -93,16 +104,32 @@ public abstract class PostgresTestBase : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    private readonly List<string> companyDatabases = [];
+
+    /// <summary>Name generator for test companies: always the disposable prefix; the name is remembered and dropped on dispose.</summary>
+    protected string NewTestName()
+    {
+        var name = PostgresTestEnvironment.NewTestDatabaseName();
+        lock (companyDatabases) companyDatabases.Add(name);
+        return name;
+    }
+
     public async Task DisposeAsync()
     {
         if (Options is null) return;
-        if (!DatabaseName.StartsWith(PostgresTestEnvironment.DatabasePrefix, StringComparison.Ordinal))
-            throw new InvalidOperationException("Refusing to drop a database that is not a test database.");
+        string[] names;
+        lock (companyDatabases) names = [.. companyDatabases, DatabaseName];
         await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            $"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(DatabaseName)} WITH (FORCE)", conn);
-        await cmd.ExecuteNonQueryAsync();
+        foreach (var name in names)
+        {
+            // Only databases this test generated itself, and only with the disposable prefix, are ever dropped.
+            if (!name.StartsWith(PostgresTestEnvironment.DatabasePrefix, StringComparison.Ordinal))
+                throw new InvalidOperationException("Refusing to drop a database that is not a test database.");
+            await using var cmd = new NpgsqlCommand(
+                $"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(name)} WITH (FORCE)", conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 
     protected async Task<T> Scalar<T>(string sql, params (string, object)[] ps)

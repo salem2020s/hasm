@@ -8,7 +8,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="SystemDatabase\Migrations\*.sql" />
+    <EmbeddedResource Include="CompanyDatabase\Migrations\*.sql" />
     <InternalsVisibleTo Include="Hasm.Infrastructure.Tests" />
+    <InternalsVisibleTo Include="Hasm.Database.IntegrationTests" />
   </ItemGroup>
 
   <ItemGroup>

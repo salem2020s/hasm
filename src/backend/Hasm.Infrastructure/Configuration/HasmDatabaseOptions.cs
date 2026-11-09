@@ -118,6 +118,18 @@ public sealed class HasmDatabaseOptions
     /// <summary>Connection string for the maintenance database (admin only). Treat as a secret.</summary>
     public string BuildMaintenanceConnectionString() => Build(MaintenanceDatabase, admin: true);
 
+    /// <summary>
+    /// Connection string for one company database using the privileged account (provisioning only).
+    /// The name must be a valid opaque identifier and never the system or maintenance database. Treat the result as a secret.
+    /// </summary>
+    public string BuildCompanyAdminConnectionString(string physicalDatabaseName)
+    {
+        PhysicalIdentifier.Validate(physicalDatabaseName, nameof(physicalDatabaseName));
+        if (physicalDatabaseName == SystemDatabaseName || physicalDatabaseName == MaintenanceDatabase)
+            throw new ArgumentException("Not a company database.", nameof(physicalDatabaseName));
+        return Build(physicalDatabaseName, admin: true);
+    }
+
     private string Build(string database, bool admin)
     {
         EnsureValid(admin);

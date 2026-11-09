@@ -30,6 +30,8 @@ public class SystemSchemaTests
     [InlineData("Company.ProvisioningState", "c_08f915ea")]
     [InlineData("Company.CreatedAtUtc", "c_15ceb585")]
     [InlineData("Company.StateChangedAtUtc", "c_d806142f")]
+    [InlineData("Company.ProvisioningAttempts", "c_bf5cb42b")]
+    [InlineData("Company.LastErrorCode", "c_e6369967")]
     [InlineData("Company.PrimaryKey", "k_78d272fe")]
     [InlineData("Company.UniqueDatabaseName", "k_b3d5d2a2")]
     [InlineData("Company.CheckState", "k_3aeb4060")]
@@ -46,9 +48,9 @@ public class SystemSchemaTests
     }
 
     [Fact]
-    public void Migration_0001_uses_exactly_the_mapped_identifiers()
+    public void System_migrations_use_exactly_the_mapped_identifiers()
     {
-        var sql = MigrationScript.LoadEmbedded().Single(s => s.Version == 1).Sql;
+        var sql = string.Join(' ',MigrationScript.LoadEmbedded().Select(s => s.Sql));
         var used = Regex.Matches(sql, @"\b[tcfkr]_[0-9a-f]{8}\b").Select(m => m.Value).ToHashSet();
         var mapped = SystemSchema.Map.Values.ToHashSet();
         Assert.Equal(mapped.OrderBy(x => x), used.OrderBy(x => x));

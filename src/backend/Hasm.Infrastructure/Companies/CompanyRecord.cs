@@ -23,13 +23,18 @@ public sealed record CompanyRecord
     public ProvisioningState State { get; }
     public DateTimeOffset CreatedAtUtc { get; }
     public DateTimeOffset StateChangedAtUtc { get; }
+    /// <summary>Number of provisioning attempts started so far.</summary>
+    public int ProvisioningAttempts { get; }
+    /// <summary>Short sanitized failure code of the last failed attempt; never an error message.</summary>
+    public string? LastErrorCode { get; }
 
     public CompanyRecord(Guid id, string physicalDatabaseName, ProvisioningState state,
-        DateTimeOffset createdAtUtc, DateTimeOffset stateChangedAtUtc)
+        DateTimeOffset createdAtUtc, DateTimeOffset stateChangedAtUtc, int provisioningAttempts = 0, string? lastErrorCode = null)
     {
         if (id == Guid.Empty) throw new ArgumentException("Company id must not be empty.", nameof(id));
         PhysicalIdentifier.Validate(physicalDatabaseName, nameof(physicalDatabaseName));
         if (!Enum.IsDefined(state)) throw new ArgumentOutOfRangeException(nameof(state));
+        if (provisioningAttempts < 0) throw new ArgumentOutOfRangeException(nameof(provisioningAttempts));
         if (stateChangedAtUtc < createdAtUtc)
             throw new ArgumentException("State change cannot precede creation.", nameof(stateChangedAtUtc));
         Id = id;
@@ -37,10 +42,12 @@ public sealed record CompanyRecord
         State = state;
         CreatedAtUtc = createdAtUtc;
         StateChangedAtUtc = stateChangedAtUtc;
+        ProvisioningAttempts = provisioningAttempts;
+        LastErrorCode = lastErrorCode;
     }
 
-    public static CompanyRecord CreatePending(DateTimeOffset nowUtc) =>
-        new(Guid.NewGuid(), PhysicalIdentifier.GenerateDatabaseName(), ProvisioningState.Pending, nowUtc, nowUtc);
+    public static CompanyRecord CreatePending(DateTimeOffset nowUtc, Func<string>? nameGenerator = null) =>
+        new(Guid.NewGuid(), (nameGenerator ?? PhysicalIdentifier.GenerateDatabaseName)(), ProvisioningState.Pending, nowUtc, nowUtc);
 
     public static bool CanTransition(ProvisioningState from, ProvisioningState to) => (from, to) switch
     {
@@ -55,6 +62,6 @@ public sealed record CompanyRecord
     {
         if (!CanTransition(State, next))
             throw new InvalidOperationException($"Transition {State} -> {next} is not allowed.");
-        return new CompanyRecord(Id, PhysicalDatabaseName, next, CreatedAtUtc, nowUtc < CreatedAtUtc ? CreatedAtUtc : nowUtc);
+        return new CompanyRecord(Id, PhysicalDatabaseName, next, CreatedAtUtc, nowUtc < CreatedAtUtc ? CreatedAtUtc : nowUtc, ProvisioningAttempts, LastErrorCode);
     }
 }

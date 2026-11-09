@@ -34,11 +34,19 @@ public sealed partial record MigrationScript(int Version, string Name, string Sq
     }
 
     /// <summary>Loads embedded scripts ordered by version; versions must be unique and contiguous from 1.</summary>
-    public static IReadOnlyList<MigrationScript> LoadEmbedded(Assembly? assembly = null)
+    public static IReadOnlyList<MigrationScript> LoadEmbedded(Assembly? assembly = null) =>
+        LoadEmbedded("Hasm.Infrastructure.SystemDatabase.Migrations.", assembly);
+
+    /// <summary>Scripts of the minimal company-database schema, applied to every company database.</summary>
+    public static IReadOnlyList<MigrationScript> LoadEmbeddedCompany() =>
+        LoadEmbedded("Hasm.Infrastructure.CompanyDatabase.Migrations.", null);
+
+    private static IReadOnlyList<MigrationScript> LoadEmbedded(string resourcePrefix, Assembly? assembly)
     {
         assembly ??= typeof(MigrationScript).Assembly;
         var scripts = new List<MigrationScript>();
-        foreach (var resource in assembly.GetManifestResourceNames().Where(n => n.EndsWith(".sql", StringComparison.Ordinal)))
+        foreach (var resource in assembly.GetManifestResourceNames()
+                     .Where(n => n.StartsWith(resourcePrefix, StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.Ordinal)))
         {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream, Encoding.UTF8);

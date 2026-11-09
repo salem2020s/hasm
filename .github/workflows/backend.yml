@@ -73,14 +73,14 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 10 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 27 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import sys, xml.etree.ElementTree as ET
-          EXPECTED = 10
+          EXPECTED = 27  # 10 SystemDatabaseTests + 17 CompanyProvisioningTests (incl. 4 theory cases)
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           results = [r for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns)
-                     if ".SystemDatabaseTests." in r.get("testName", "")]
+                     if (".SystemDatabaseTests." in r.get("testName", "") or ".CompanyProvisioningTests." in r.get("testName", ""))]
           outcomes = {}
           for r in results:
               outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1

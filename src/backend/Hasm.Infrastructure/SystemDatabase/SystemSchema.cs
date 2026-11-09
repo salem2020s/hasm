@@ -16,6 +16,10 @@ public static class SystemSchema
         public const string ProvisioningState = "c_08f915ea";
         public const string CreatedAtUtc = "c_15ceb585";
         public const string StateChangedAtUtc = "c_d806142f";
+        /// <summary>Added by migration 0002.</summary>
+        public const string ProvisioningAttempts = "c_bf5cb42b";
+        /// <summary>Added by migration 0002. Short sanitized failure code, never an error message.</summary>
+        public const string LastErrorCode = "c_e6369967";
 
         public const string PrimaryKey = "k_78d272fe";
         public const string UniqueDatabaseName = "k_b3d5d2a2";
@@ -37,6 +41,8 @@ public static class SystemSchema
         ["Company.ProvisioningState"] = Company.ProvisioningState,
         ["Company.CreatedAtUtc"] = Company.CreatedAtUtc,
         ["Company.StateChangedAtUtc"] = Company.StateChangedAtUtc,
+        ["Company.ProvisioningAttempts"] = Company.ProvisioningAttempts,
+        ["Company.LastErrorCode"] = Company.LastErrorCode,
         ["Company.PrimaryKey"] = Company.PrimaryKey,
         ["Company.UniqueDatabaseName"] = Company.UniqueDatabaseName,
         ["Company.CheckState"] = Company.CheckState,
