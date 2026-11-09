@@ -147,13 +147,13 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
     }
 
     /// <summary>Administrative creation of a user (there is no self-registration). The caller must already be authorized.</summary>
-    public async Task<CreateUserResult> CreateUserAsync(string? login, string? displayName, string? password, bool isIdentityAdministrator, CancellationToken ct = default)
+    public async Task<CreateUserResult> CreateUserAsync(string? login, string? displayName, string? password, bool isIdentityAdministrator, CancellationToken ct = default, Guid? actorUserId = null)
     {
         var (precheck, normalized, name) = Precheck(login, displayName, password);
         if (precheck is not null) return precheck;
         try
         {
-            var user = await store.CreateUserAsync(normalized, name, passwords.Hash(password!), isIdentityAdministrator, ct);
+            var user = await store.CreateUserAsync(normalized, name, passwords.Hash(password!), isIdentityAdministrator, actorUserId, ct);
             logger?.LogInformation("auth.user_created user={UserId} administrator={Admin}", user.Id, isIdentityAdministrator);
             return new CreateUserResult(CreateUserStatus.Created, user);
         }

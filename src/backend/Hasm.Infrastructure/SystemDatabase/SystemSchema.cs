@@ -187,6 +187,39 @@ public static class SystemSchema
         public const string GuardFunction = "f_6521eb62";
         public const string GuardTrigger = "r_1edfb742";
     }
+    /// <summary>Hash-chained, key-authenticated audit events (migration 0005); one chain per stream (system or one company).</summary>
+    public static class AuditEvent
+    {
+        public const string Table = "t_7e93ef23";
+        public const string StreamKey = "c_8a49147d";
+        public const string Seq = "c_0aeec256";
+        public const string EventId = "c_05b414b5";
+        public const string CompanyId = "c_4260f38b";
+        public const string OccurredAtUtc = "c_00969b7e";
+        public const string EventType = "c_318d4b7d";
+        public const string ActorUserId = "c_e99d8b01";
+        public const string TargetUserId = "c_ae727dec";
+        public const string SubjectId = "c_135114d2";
+        public const string LegacyRef = "c_6d3e3fa8";
+        public const string Detail = "c_b48ab4d7";
+        public const string FormatVersion = "c_3ed2f8e1";
+        public const string KeyId = "c_2e582193";
+        public const string PrevHash = "c_1fecbd88";
+        public const string Hash = "c_59ee706d";
+        public const string Mac = "c_c64705b9";
+        public const string PrimaryKey = "k_20f7f980";
+        public const string UniqueEventId = "k_4b99ec45";
+        public const string ForeignKeyCompany = "k_688a599e";
+        public const string ForeignKeyActor = "k_134e62e4";
+        public const string ForeignKeyTarget = "k_fb29a999";
+        public const string CheckStream = "k_7ff931be";
+        public const string CheckLengths = "k_67c74be8";
+        public const string CheckDetail = "k_38f3d334";
+        public const string CheckFields = "k_8473aed1";
+        public const string IndexLegacyRef = "k_642bc5ec";
+        public const string GuardFunction = "f_359f6a00";
+        public const string GuardTrigger = "r_11080dd7";
+    }
 
     /// <summary>Non-business infrastructure table that records applied migrations.</summary>
     public const string MigrationJournalTable = "migration_journal";
@@ -327,6 +360,35 @@ public static class SystemSchema
         ["AccessAudit.IndexCompany"] = AccessAudit.IndexCompany,
         ["AccessAudit.GuardFunction"] = AccessAudit.GuardFunction,
         ["AccessAudit.GuardTrigger"] = AccessAudit.GuardTrigger,
+        ["AuditEvent.Table"] = AuditEvent.Table,
+        ["AuditEvent.StreamKey"] = AuditEvent.StreamKey,
+        ["AuditEvent.Seq"] = AuditEvent.Seq,
+        ["AuditEvent.EventId"] = AuditEvent.EventId,
+        ["AuditEvent.CompanyId"] = AuditEvent.CompanyId,
+        ["AuditEvent.OccurredAtUtc"] = AuditEvent.OccurredAtUtc,
+        ["AuditEvent.EventType"] = AuditEvent.EventType,
+        ["AuditEvent.ActorUserId"] = AuditEvent.ActorUserId,
+        ["AuditEvent.TargetUserId"] = AuditEvent.TargetUserId,
+        ["AuditEvent.SubjectId"] = AuditEvent.SubjectId,
+        ["AuditEvent.LegacyRef"] = AuditEvent.LegacyRef,
+        ["AuditEvent.Detail"] = AuditEvent.Detail,
+        ["AuditEvent.FormatVersion"] = AuditEvent.FormatVersion,
+        ["AuditEvent.KeyId"] = AuditEvent.KeyId,
+        ["AuditEvent.PrevHash"] = AuditEvent.PrevHash,
+        ["AuditEvent.Hash"] = AuditEvent.Hash,
+        ["AuditEvent.Mac"] = AuditEvent.Mac,
+        ["AuditEvent.PrimaryKey"] = AuditEvent.PrimaryKey,
+        ["AuditEvent.UniqueEventId"] = AuditEvent.UniqueEventId,
+        ["AuditEvent.ForeignKeyCompany"] = AuditEvent.ForeignKeyCompany,
+        ["AuditEvent.ForeignKeyActor"] = AuditEvent.ForeignKeyActor,
+        ["AuditEvent.ForeignKeyTarget"] = AuditEvent.ForeignKeyTarget,
+        ["AuditEvent.CheckStream"] = AuditEvent.CheckStream,
+        ["AuditEvent.CheckLengths"] = AuditEvent.CheckLengths,
+        ["AuditEvent.CheckDetail"] = AuditEvent.CheckDetail,
+        ["AuditEvent.CheckFields"] = AuditEvent.CheckFields,
+        ["AuditEvent.IndexLegacyRef"] = AuditEvent.IndexLegacyRef,
+        ["AuditEvent.GuardFunction"] = AuditEvent.GuardFunction,
+        ["AuditEvent.GuardTrigger"] = AuditEvent.GuardTrigger,
         ["UserCompanyAccess.GrantedBy"] = UserCompanyAccess.GrantedBy,
         ["UserCompanyAccess.RevokedAtUtc"] = UserCompanyAccess.RevokedAtUtc,
         ["UserCompanyAccess.RevokedBy"] = UserCompanyAccess.RevokedBy,

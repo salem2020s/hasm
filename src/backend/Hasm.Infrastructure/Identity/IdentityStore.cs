@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
@@ -30,13 +31,13 @@ public sealed class DuplicateLoginException() : Exception("The login identifier 
 /// parameterized. Uses the connection string it is given (the Backend passes the runtime, least-privilege account);
 /// connections are pooled through a lazily created data source.
 /// </summary>
-public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock) : IAsyncDisposable
+public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit) : IAsyncDisposable
 {
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
     // Arbitrary constant key for "initial administrator bootstrap" (transaction-scoped advisory lock).
     private const long BootstrapLockKey = 0x4841534D_0002;
 
-    public IdentityStore(string connectionString, TimeProvider clock) : this(() => connectionString, clock) { }
+    public IdentityStore(string connectionString, TimeProvider clock, AuditTrail audit) : this(() => connectionString, clock, audit) { }
 
     public DateTimeOffset UtcNow => clock.GetUtcNow();
 
@@ -51,11 +52,20 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
 
     // ---- Users ----
 
-    public async Task<UserRecord> CreateUserAsync(string normalizedLogin, string displayName, string passwordHash, bool isAdministrator, CancellationToken ct = default)
+    public async Task<UserRecord> CreateUserAsync(string normalizedLogin, string displayName, string passwordHash, bool isAdministrator, Guid? actorUserId = null, CancellationToken ct = default)
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        return await InsertUserAsync(conn, null, normalizedLogin, displayName, passwordHash, isAdministrator, ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var user = await InsertUserAsync(conn, tx, normalizedLogin, displayName, passwordHash, isAdministrator, ct);
+        // The user and its audit event commit together; if the event cannot be written the user is not created.
+        var receipt = await AuditAsync(conn, tx, AuditEventTypes.UserCreated, actorUserId, user.Id, $"administrator: {(isAdministrator ? "yes" : "no")}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
+        return user;
     }
+
+    private Task<AuditReceipt> AuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, short eventType, Guid? actor, Guid? target, string? detail, CancellationToken ct) =>
+        audit.AppendAsync(conn, tx, AuditStream.System, AuditCanonical.FromMicros(AuditCanonical.ToMicros(clock.GetUtcNow())),
+            new AuditEventData(eventType, actor, target, null, detail), ct);
 
     /// <summary>
     /// Creates the first identity administrator, atomically refusing when one already exists (serialized by an
@@ -75,7 +85,8 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
             if (await exists.ExecuteScalarAsync(ct) is not null) return null;
         }
         var user = await InsertUserAsync(conn, tx, normalizedLogin, displayName, passwordHash, true, ct);
-        await tx.CommitAsync(ct);
+        var receipt = await AuditAsync(conn, tx, AuditEventTypes.InitialAdministratorCreated, null, user.Id, null, ct);
+        await audit.CommitAsync(tx, receipt, ct);
         return user;
     }
 
@@ -185,7 +196,8 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
                 await cmd.ExecuteNonQueryAsync(ct);
             }
             if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, now, ct);
-            await tx.CommitAsync(ct);
+            var receipt = await AuditAsync(conn, tx, AuditEventTypes.UserStateChanged, actorUserId, userId, $"state: {state}", ct);
+            await audit.CommitAsync(tx, receipt, ct);
             return SetStateOutcome.Changed;
         }
         throw new InvalidOperationException("Administrator continuity locking did not converge.");
@@ -211,12 +223,19 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     public async Task UpdatePasswordHashAsync(Guid userId, string hash, bool passwordChanged, CancellationToken ct = default)
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            $"UPDATE {U.Table} SET {U.PasswordHash} = @h" + (passwordChanged ? $", {U.PasswordChangedAtUtc} = @n" : "") + $" WHERE {U.Id} = @id", conn);
-        cmd.Parameters.AddWithValue("h", hash);
-        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
-        cmd.Parameters.AddWithValue("id", userId);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var cmd = new NpgsqlCommand(
+            $"UPDATE {U.Table} SET {U.PasswordHash} = @h" + (passwordChanged ? $", {U.PasswordChangedAtUtc} = @n" : "") + $" WHERE {U.Id} = @id", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("h", hash);
+            cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+            cmd.Parameters.AddWithValue("id", userId);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        // A real password change is a security event (a transparent rehash with the same password is not).
+        if (!passwordChanged) { await tx.CommitAsync(ct); return; }
+        var receipt = await AuditAsync(conn, tx, AuditEventTypes.PasswordChanged, userId, userId, null, ct);
+        await audit.CommitAsync(tx, receipt, ct);
     }
 
     // ---- Sessions ----

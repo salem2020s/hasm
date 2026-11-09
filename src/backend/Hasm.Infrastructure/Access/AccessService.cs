@@ -1,8 +1,10 @@
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.Identity;
 using Npgsql;
+using System.Runtime.CompilerServices;
 using A = Hasm.Infrastructure.SystemDatabase.SystemSchema.RoleAssignment;
-using Audit = Hasm.Infrastructure.SystemDatabase.SystemSchema.AccessAudit;
+using Au = Hasm.Infrastructure.SystemDatabase.SystemSchema.AccessAudit;
 using C = Hasm.Infrastructure.SystemDatabase.SystemSchema.Company;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserCompanyAccess;
 using R = Hasm.Infrastructure.SystemDatabase.SystemSchema.Role;
@@ -49,7 +51,7 @@ public sealed record SessionContext(Guid UserId, Guid? CompanyId);
 /// server-validated source and never trusts client claims. Mutations run in one transaction under a per-company advisory lock
 /// and re-evaluate the actor's privileges inside that lock, so concurrent permission changes serialize (no check-then-act race).
 /// </summary>
-public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, IScopeTargetValidator? scopeValidator = null) : IAsyncDisposable
+public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : IAsyncDisposable
 {
     private const string UniqueViolation = "23505";
     private const int MaxDetailLength = 1000;
@@ -58,7 +60,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
 
-    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, IScopeTargetValidator? scopeValidator = null) : this(() => connectionString, clock, catalog, scopeValidator) { }
+    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : this(() => connectionString, clock, catalog, audit, scopeValidator) { }
 
     private readonly IScopeTargetValidator scopeValidator = scopeValidator ?? DenyAllScopeTargetValidator.Instance;
 
@@ -187,20 +189,39 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
     private static string Truncate(string text) => text.Length <= MaxDetailLength ? text : text[..(MaxDetailLength - 3)] + "...";
 
+    // Audit receipts of the transaction being built; consumed by CommitAuditedAsync (anchoring happens only after the commit).
+    private readonly ConditionalWeakTable<NpgsqlTransaction, List<AuditReceipt>> pendingReceipts = new();
+
+    /// <summary>
+    /// Writes the legacy access-audit projection row AND the hash-chained, key-authenticated audit event in the caller's transaction.
+    /// If the chained event cannot be written an exception propagates, the transaction is abandoned and the mutation does not happen.
+    /// </summary>
     private async Task WriteAuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid? actor, Guid company, Guid? target, Guid? role, AccessEvent ev, string? detail, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand(
-            $"INSERT INTO {Audit.Table} ({Audit.OccurredAtUtc}, {Audit.ActorUserId}, {Audit.CompanyId}, {Audit.TargetUserId}, {Audit.RoleId}, {Audit.EventCode}, {Audit.Detail}) " +
-            "VALUES (@t, @a, @c, @tu, @r, @e, @d)", conn, tx);
-        cmd.Parameters.AddWithValue("t", clock.GetUtcNow());
-        cmd.Parameters.AddWithValue("a", (object?)actor ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("c", company);
-        cmd.Parameters.AddWithValue("tu", (object?)target ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("r", (object?)role ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("e", (short)ev);
-        cmd.Parameters.AddWithValue("d", (object?)(detail is null ? null : Truncate(detail)) ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
+        var now = AuditCanonical.FromMicros(AuditCanonical.ToMicros(clock.GetUtcNow()));   // PostgreSQL precision, identical in both records
+        var text = detail is null ? null : Truncate(detail);
+        long legacyId;
+        await using (var cmd = new NpgsqlCommand(
+            $"INSERT INTO {Au.Table} ({Au.OccurredAtUtc}, {Au.ActorUserId}, {Au.CompanyId}, {Au.TargetUserId}, {Au.RoleId}, {Au.EventCode}, {Au.Detail}) " +
+            $"VALUES (@t, @a, @c, @tu, @r, @e, @d) RETURNING {Au.Id}", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("t", now);
+            cmd.Parameters.AddWithValue("a", (object?)actor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("c", company);
+            cmd.Parameters.AddWithValue("tu", (object?)target ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("r", (object?)role ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("e", (short)ev);
+            cmd.Parameters.AddWithValue("d", (object?)text ?? DBNull.Value);
+            legacyId = (long)(await cmd.ExecuteScalarAsync(ct))!;
+        }
+        var receipt = await audit.AppendAsync(conn, tx, AuditStream.ForCompany(company), now,
+            new AuditEventData((short)ev, actor, target, role, text, legacyId), ct);
+        pendingReceipts.GetOrCreateValue(tx).Add(receipt);
     }
+
+    /// <summary>Commits the transaction and anchors the new audit head(s) in the external checkpoint store.</summary>
+    private Task CommitAuditedAsync(NpgsqlTransaction tx, CancellationToken ct) =>
+        audit.CommitAsync(tx, pendingReceipts.TryGetValue(tx, out var list) ? list : [], ct);
 
     private static AccessResult<T> Denied<T>(string code = "forbidden") => AccessResult<T>.Fail(AccessStatus.Forbidden, code);
 
@@ -296,7 +317,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             return AccessResult<RoleView>.Fail(AccessStatus.Conflict, "role_name_taken");
         }
         await WriteAuditAsync(conn, tx, actorUserId, companyId, null, id, AccessEvent.RoleCreated, $"permissions: {string.Join(',', perms.Order(StringComparer.Ordinal))}", ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<RoleView>.Ok(new RoleView(id, roleName, false, null, true, [.. perms.Order(StringComparer.Ordinal)]));
     }
 
@@ -338,7 +359,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         await TouchRoleAsync(conn, tx, roleId, null, ct);
         await WriteAuditAsync(conn, tx, actorUserId, companyId, null, roleId, AccessEvent.RolePermissionsChanged,
             $"added: {string.Join(',', added)}; removed: {string.Join(',', removed)}", ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<RoleView>.Ok(ToView(role with { Permissions = perms }));
     }
 
@@ -364,7 +385,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         if (!role.IsActive) return AccessResult<bool>.Fail(AccessStatus.Conflict, "role_already_inactive");
         await TouchRoleAsync(conn, tx, roleId, false, ct);
         await WriteAuditAsync(conn, tx, actorUserId, companyId, null, roleId, AccessEvent.RoleDeactivated, null, ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<bool>.Ok(true);
     }
 
@@ -393,7 +414,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         if (!actor.HasCompanyWide(PermissionCatalog.Codes.MembersCreate)) return Denied<MemberView>();
         if (!LoginName.TryNormalize(login, out var normalized)) return AccessResult<MemberView>.Fail(AccessStatus.NotFound, "user_not_found");
         var result = await GrantCoreAsync(conn, tx, actorUserId, companyId, normalized, ct);
-        if (result.IsOk) await tx.CommitAsync(ct);
+        if (result.IsOk) await CommitAuditedAsync(tx, ct);
         return result;
     }
 
@@ -475,7 +496,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             await ses.ExecuteNonQueryAsync(ct);
         }
         await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, null, AccessEvent.MembershipRevoked, $"assignments revoked: {revoked}", ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<bool>.Ok(true);
     }
 
@@ -536,7 +557,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             return AccessResult<AssignmentView>.Fail(AccessStatus.Conflict, "already_assigned");
         }
         await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, roleId, AccessEvent.RoleAssigned, ScopeText(scope), ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<AssignmentView>.Ok(new AssignmentView(id, targetUserId, roleId, scopeKind, scopeId, now));
     }
 
@@ -575,7 +596,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             await rev.ExecuteNonQueryAsync(ct);
         }
         await WriteAuditAsync(conn, tx, actorUserId, companyId, userId, roleId, AccessEvent.RoleAssignmentRevoked, ScopeText(new ScopeTarget(kind, scopeId)), ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return AccessResult<bool>.Ok(true);
     }
 
@@ -596,8 +617,8 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         var actor = await LoadEffectiveAsync(conn, null, actorUserId, companyId, true, ct);
         if (!actor.HasCompanyWide(PermissionCatalog.Codes.AuditView)) return Denied<IReadOnlyList<AuditEntry>>();
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {Audit.Id}, {Audit.OccurredAtUtc}, {Audit.ActorUserId}, {Audit.TargetUserId}, {Audit.RoleId}, {Audit.EventCode}, {Audit.Detail} FROM {Audit.Table} " +
-            $"WHERE {Audit.CompanyId} = @c AND (@b::bigint IS NULL OR {Audit.Id} < @b) ORDER BY {Audit.Id} DESC LIMIT @l", conn);
+            $"SELECT {Au.Id}, {Au.OccurredAtUtc}, {Au.ActorUserId}, {Au.TargetUserId}, {Au.RoleId}, {Au.EventCode}, {Au.Detail} FROM {Au.Table} " +
+            $"WHERE {Au.CompanyId} = @c AND (@b::bigint IS NULL OR {Au.Id} < @b) ORDER BY {Au.Id} DESC LIMIT @l", conn);
         cmd.Parameters.AddWithValue("c", companyId);
         cmd.Parameters.Add(new NpgsqlParameter("b", NpgsqlTypes.NpgsqlDbType.Bigint) { Value = (object?)beforeId ?? DBNull.Value });
         cmd.Parameters.AddWithValue("l", Math.Clamp(limit, 1, MaxPageSize));
@@ -644,7 +665,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         ins.Parameters.AddWithValue("t", clock.GetUtcNow());
         var inserted = await ins.ExecuteNonQueryAsync(ct) == 1;
         if (inserted) await WriteAuditAsync(conn, tx, null, companyId, userId, PresetRoles.CompanyAdministratorId, AccessEvent.RoleAssigned, "scope: company; bootstrap", ct);
-        await tx.CommitAsync(ct);
+        await CommitAuditedAsync(tx, ct);
         return inserted ? BootstrapStatus.Granted : BootstrapStatus.AlreadyAdministrator;
     }
 }
