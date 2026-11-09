@@ -114,7 +114,7 @@ public abstract class PostgresTestBase : IAsyncLifetime
         return name;
     }
 
-    public async Task DisposeAsync()
+    public virtual async Task DisposeAsync()
     {
         if (Options is null) return;
         string[] names;

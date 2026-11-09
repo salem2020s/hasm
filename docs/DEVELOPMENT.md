@@ -1,6 +1,6 @@
 # HASM — Development Guide
 
-Scope of the current foundation: Backend health endpoint, shared React frontend (Arabic RTL / English LTR), the Tauri 2 Windows shell, and (Phase 2.1) the system database foundation with a minimal company registry. No business modules exist yet.
+Scope of the current foundation: Backend health endpoint, shared React frontend (Arabic RTL / English LTR), the Tauri 2 Windows shell, (Phase 2.1) the system database foundation with a minimal company registry, and (Phase 2.3A) central identity with local authentication. No business modules exist yet.
 
 ## Prerequisites
 - .NET SDK 10 (`dotnet --list-sdks`)
@@ -78,7 +78,7 @@ Creates the database only if absent (never drops/alters an existing one), then a
 
 **Physical naming:** C# uses meaningful names; `SystemSchema` is the single logical-to-physical map (fixed, committed, pinned by tests; migrations use the physical names). It is internal and never exposed by API/clients. Obfuscation is hygiene only, not a security control (D-029).
 
-**Central vs. company data:** central (`Hasm_System`): company id, opaque physical database name (immutable, unique), provisioning state, timestamps. Later central phases: licensing, users/roles, global parties. Exclusively per-company: chart of accounts, ledger, documents, inventory, local parties, branches, warehouses, settings, attachments metadata. Company display names/tax data are deliberately not in the registry yet (to be decided with company management). The registry has no HTTP endpoints until authentication/authorization exist.
+**Central vs. company data:** central (`Hasm_System`): company id, opaque physical database name (immutable, unique), provisioning state, timestamps. Also central since Phase 2.3A: users, sessions, login throttling. Later central phases: licensing, roles/permissions, global parties. Exclusively per-company: chart of accounts, ledger, documents, inventory, local parties, branches, warehouses, settings, attachments metadata. Company display names/tax data are deliberately not in the registry yet (to be decided with company management). The registry has no HTTP endpoints until authentication/authorization exist.
 
 **TLS to PostgreSQL (production requirement):** Npgsql's `SslMode=Require` (and `Prefer`) encrypts the connection but does **not** validate the server certificate, leaving it open to man-in-the-middle attacks. HASM therefore defaults to `VerifyFull` (chain + host name) and rejects `Disable`/`Allow`/`Prefer`/`Require` unless `AllowInsecureTransport=true`, which is logged by `ToString()` as `InsecureTransport=True`. Production needs a PostgreSQL server certificate whose subject/SAN matches `Hasm__Database__Host`, signed by a CA trusted by the Backend host (system store, or `Hasm__Database__SslRootCertificate` for a private CA). `VerifyCA` skips host-name checking; prefer `VerifyFull`. Certificate validation is never bypassed in code.
 
@@ -109,7 +109,42 @@ $env:HASM_TEST_PG_ADMIN_CONNECTION="Host=localhost;Username=<CREATEDB role>;Pass
 dotnet test tests/integration/Hasm.Database.IntegrationTests
 ```
 
-**CI** (`.github/workflows/backend.yml`, job `postgres-integration`, Ubuntu): starts an ephemeral `postgres:16` service container, creates a restricted `hasm_test_admin` role (`CREATEDB`, no superuser/role/replication) with a random per-run password that is masked in logs and never committed, runs the tests with `HASM_REQUIRE_PG_TESTS=1`, then verifies from the TRX results that exactly 27 database tests ran and all passed (skipped or missing tests fail the job). Non-TLS (`SSL Mode=Disable`) exists only in that disposable job's loopback connection string; the only literal credential in the workflow is the throwaway bootstrap password of that job-local container. The `build-test` job still runs these tests as skipped.
+**CI** (`.github/workflows/backend.yml`, job `postgres-integration`, Ubuntu): starts an ephemeral `postgres:16` service container, creates a restricted `hasm_test_admin` role (`CREATEDB`, no superuser/role/replication) with a random per-run password that is masked in logs and never committed, runs the tests with `HASM_REQUIRE_PG_TESTS=1`, then verifies from the TRX results that exactly 100 database tests ran and all passed (skipped or missing tests fail the job). Non-TLS (`SSL Mode=Disable`) exists only in that disposable job's loopback connection string; the only literal credential in the workflow is the throwaway bootstrap password of that job-local container. The `build-test` job still runs these tests as skipped.
+
+## Identity and local authentication (Phase 2.3A)
+Central identities live in `Hasm_System` (system migration `0003_users_and_sessions.sql`, opaque physical names mapped in `SystemSchema.User/Session/LoginThrottle/UserCompanyAccess`). Scope: login/logout, sessions, throttling, administrative user creation and the initial administrator. **Not** in scope: RBAC, MFA, AD, licensing seats, a login UI.
+
+**Data model:** `User` (stable `uuid`, normalized unique login, display name, password hash, state `Active|Disabled|Locked`, `IsIdentityAdministrator`, timestamps; rows are never deleted and id/login are immutable via trigger), `Session` (server-side; SHA-256 of a 256-bit random token, client kind, last-seen, idle and absolute expiry, revocation time/reason), `LoginThrottle` (SHA-256 key digests, failure counters, block-until), `UserCompanyAccess` (explicit user-to-company link with FK to the company registry; **no code creates rows yet**, roles/permissions arrive with RBAC). Authentication never reads or grants company access; the status response contains no company information.
+
+**Login identifiers:** trim, Unicode NFKC, invariant lower-casing; must match `[a-z0-9][a-z0-9._@-]{2,63}` (ASCII only, which rules out homoglyph look-alikes; fullwidth forms fold to ASCII). Uniqueness is on the normalized value, enforced by the application and by a database UNIQUE + CHECK constraint.
+
+**Passwords:** `Microsoft.Extensions.Identity.Core` `PasswordHasher` (Identity v3: PBKDF2-HMAC-SHA512, random 128-bit salt per hash, iteration count stored in the hash, constant-time compare), default 210,000 iterations (`Hasm__Auth__Pbkdf2Iterations`, floor 100,000). Hashes with a lower count are upgraded at the next successful login. No custom cryptography; no plaintext or reversible storage. Policy: 12-128 characters, not trivially repetitive, not equal to the login (length based, no composition rules; there is no breached-password list yet).
+
+**Session transport and storage (rationale):** one opaque, random, server-side session; two transports chosen by the client at login (`"client":"web"|"desktop"`):
+- **Web (React):** `__Host-hasm_session` cookie, `HttpOnly; Secure; SameSite=Strict; Path=/` (no Domain). JavaScript never sees the token, so XSS cannot steal it, and it is never placed in `localStorage`/`sessionStorage`. The token is not in the response body. Requires the web UI and API to be same-site (e.g. `app.example.com` + `api.example.com`, or `localhost` ports in development).
+- **Desktop (Tauri):** the WebView origin is cross-site to the API, so SameSite cookies are unsuitable. The token is returned once in the login response body and sent as `Authorization: Bearer`. The client must keep it in the OS credential store (Windows Credential Manager, from the Rust side), never in WebView storage; **this client side is not implemented in this phase**.
+- Opaque server-side sessions (rather than JWTs) give instant revocation, server-side idle/absolute expiry and the per-session accounting the licensing phase will need. Only the token's SHA-256 is stored, so a database leak yields no usable tokens.
+- **CSRF:** SameSite=Strict plus a required `X-Hasm-Request` header on every state-changing `/api` request (cross-site pages cannot send it without a CORS preflight, which only configured origins pass). CORS allows credentials only for the explicit `Cors:AllowedOrigins`.
+
+**Sessions:** idle timeout 30 min (sliding, written at most once a minute), absolute limit 12 h (`Hasm__Auth__SessionIdleMinutes`, `SessionAbsoluteHours`). Each login issues a new token (no fixation). Logout revokes server-side. Disabling/locking a user, and changing a password (all other sessions), revoke sessions in the same transaction. The user's state and administrator flag are re-read on every request. An hourly housekeeping service removes long-expired/revoked sessions and stale throttle rows.
+
+**Brute force / credential stuffing / enumeration:** failures are counted per login string (existing or not) and per source address (`MaxFailuresPerLogin`=5, `MaxFailuresPerSource`=20 per 15 min, then blocked 15 min; HTTP 429 + `Retry-After`). Blocks are temporary and do **not** change user state or end existing sessions, so an attacker cannot lock out or log out a real user permanently. A success resets the login counter but not the source counter. Every credential failure (unknown/malformed login, wrong password, Disabled, Locked) returns the same `401 {"error":"invalid_credentials"}`, and unknown logins spend the same hashing time. Source address is the connection's remote address; behind a reverse proxy set `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` and restrict trusted proxies, otherwise all clients share one source counter.
+
+**Endpoints** (`/api/v1`): `POST auth/login`, `POST auth/logout`, `GET auth/status` (anonymous allowed; returns `authenticated` and, when signed in, user id/login/display name/administrator flag and expiry times), `POST auth/change-password` (current password required; shares the throttle), `POST admin/users`, `POST admin/users/{id}/state` (`Active|Disabled|Locked`; an administrator cannot change their own state). Admin endpoints require an authenticated identity administrator (401/403 otherwise). There is **no public registration**. Auth responses are `no-store`; errors are generic JSON (no exception text; database failures return 503).
+
+**Logging:** auth events log outcome codes, user ids and session ids only. Passwords, tokens, hashes, connection strings and attacker-supplied login strings are never logged (pinned by tests that capture all log output).
+
+**Initial administrator (explicit, offline):**
+```
+$env:Hasm__Database__AdminUsername="..."; $env:Hasm__Database__AdminPassword="..."   # plus Host / SystemDatabaseName
+$env:HASM_BOOTSTRAP_ADMIN_PASSWORD="..."      # optional; otherwise prompted without echo. Never a command-line argument.
+dotnet run --project src/backend/Hasm.Admin -- bootstrap-admin <login> ["Display name"]
+```
+Creates the first identity administrator and refuses (exit 5) when one already exists (serialized by an advisory lock, so concurrent runs cannot create two). Exit codes otherwise as for the other commands.
+
+**Runtime identity and privileges:** the API connects with `Hasm__Database__Username/Password` (never the provisioning admin account; if the runtime account is unusable the API returns 503 rather than falling back). The DBA must grant it, on the system database: `SELECT, INSERT, UPDATE` on the `User` table; `SELECT, INSERT, UPDATE, DELETE` on the `Session` and `LoginThrottle` tables; `SELECT` on `UserCompanyAccess` (physical names are in `SystemSchema`; grants are not automated). The runtime role needs no DDL rights. API connections to PostgreSQL are pooled; all other TLS rules above still apply.
+
+**Tests:** unit tests (login normalization, password policy/hashing, tokens, options) run everywhere. PostgreSQL tests (`IdentityMigrationTests`, `UserCreationTests`, `LoginTests`, `SessionTests`, `BruteForceProtectionTests`, `AuthApiTests`, same safety gate as above) use an injectable clock instead of sleeping and drive the real API in-process via `WebApplicationFactory`. `AuthWithoutDatabaseTests` (no database) covers anonymous access, CSRF header and generic errors.
 
 ## Checks
 ```
@@ -118,6 +153,12 @@ cd src/frontend && npm run typecheck && npm test && npm run build
 cd src/desktop && npx tauri build --debug --no-bundle
 ```
 CI runs the same checks (`.github/workflows/`).
+
+## Phase 2.3A security limitations (must be resolved before production deployment)
+1. **Temporary account-lockout denial of service.** The per-login throttle blocks a login identifier after 5 failures in 15 minutes regardless of who sent them, so anyone who knows or guesses a login can keep that user from signing in (the block expires, existing sessions and the account state are untouched). Unknown logins are throttled identically, so this does not reveal which accounts exist. Needs a mitigation such as a per-(login, source) counter or progressive delay, CAPTCHA/proof-of-work after repeated failures, and an administrator-visible alert, before production.
+2. **Reverse-proxy client address.** The source address is the raw connection address and no forwarded-headers handling or trusted-proxy list is configured in code. Behind a proxy or load balancer every client shares one source counter (20 failures per 15 minutes), so one abuser can block sign-in for everyone. Configure `ForwardedHeaders` with explicit `KnownProxies`/`KnownNetworks` (never trust `X-Forwarded-For` from arbitrary peers) and test it before production.
+3. No MFA, password reset, breached-password check or self-service recovery; no company-level authorization (RBAC is a later phase); the Desktop client credential-store handling is not implemented.
+4. The `__Host-` session cookie requires HTTPS; web sign-in over plain HTTP does not persist a session.
 
 ## Known placeholders and limitations
 - Desktop icons in `src/desktop/src-tauri/icons/` come from `assets/branding/hasm-icon.png` (`icon.ico` is the supplied `hasm-icon.ico`, byte-identical). The source raster is an upscaled 1024x1024 extraction from a 449x204 reference, so small icon sizes may look soft; replace with a true vector/high-resolution master before a commercial release (`npx tauri icon <square.png>`, then restore the approved `.ico`). Tauri does not always re-embed changed icons: touch `src-tauri/build.rs` before rebuilding.
