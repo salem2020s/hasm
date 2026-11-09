@@ -287,18 +287,18 @@ public class AuthApiTests : IdentityTestBase
     public async Task Brute_force_attempts_receive_429_with_retry_after_and_a_generic_body()
     {
         await StartApi();
-        for (var i = 0; i < AuthSettings.MaxFailuresPerLogin; i++)
-            Assert.Equal(HttpStatusCode.Unauthorized, (await WebLogin("root", "wrong-password-" + i, "10.2.0." + i)).Status);
+        for (var i = 0; i < AuthSettings.MaxFailuresPerLoginSource; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await WebLogin("root", "wrong-password-" + i, "10.2.0.1")).Status);
 
-        var blocked = await WebLogin("root", AdminPassword, "10.2.9.9");
+        var blocked = await WebLogin("root", AdminPassword, "10.2.0.1");
         Assert.Equal(HttpStatusCode.TooManyRequests, blocked.Status);
         Assert.Equal("too_many_attempts", blocked.Error);
         Assert.InRange(int.Parse(blocked.Headers.GetValues("Retry-After").Single()), 1, 15 * 60);
 
         // An identifier that never existed is throttled in exactly the same way (no account enumeration).
-        for (var i = 0; i < AuthSettings.MaxFailuresPerLogin; i++)
-            Assert.Equal(HttpStatusCode.Unauthorized, (await WebLogin("never-existed", "wrong-password-" + i, "10.2.1." + i)).Status);
-        var ghost = await WebLogin("never-existed", AdminPassword, "10.2.9.8");
+        for (var i = 0; i < AuthSettings.MaxFailuresPerLoginSource; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await WebLogin("never-existed", "wrong-password-" + i, "10.2.0.1")).Status);
+        var ghost = await WebLogin("never-existed", AdminPassword, "10.2.0.1");
         Assert.Equal(HttpStatusCode.TooManyRequests, ghost.Status);
         Assert.Equal(blocked.Body, ghost.Body);
     }

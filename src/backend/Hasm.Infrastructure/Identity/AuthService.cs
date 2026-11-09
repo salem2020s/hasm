@@ -36,11 +36,17 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
 
         var validLogin = LoginName.TryNormalize(login, out var normalized);
         // Throttle keys exist for every attempted login string, real or not, so behaviour is identical (no enumeration).
+        // Three independent counters (see docs/DEVELOPMENT.md, "Login abuse protection"):
+        //  * pair   (login + client address): small limit; blocks only that pair, so a third party cannot lock the real user out elsewhere;
+        //  * source (client address): bounds credential stuffing by one client across all logins;
+        //  * global (login, all addresses): high last-resort ceiling against distributed guessing.
         var rawKey = validLogin ? normalized : (login ?? "").Trim().ToLowerInvariant();
         if (rawKey.Length > 128) rawKey = rawKey[..128];
-        var loginKey = SessionToken.HashKey("login:" + rawKey);
-        var sourceKey = SessionToken.HashKey("source:" + (string.IsNullOrWhiteSpace(sourceAddress) ? "unknown" : sourceAddress));
-        var keys = new[] { (ThrottleScope.Login, loginKey), (ThrottleScope.Source, sourceKey) };
+        var source = string.IsNullOrWhiteSpace(sourceAddress) ? SourceAddress.Unknown : sourceAddress;
+        var globalKey = SessionToken.HashKey("login:" + rawKey);
+        var pairKey = SessionToken.HashKey("pair:" + rawKey + "|" + source);
+        var sourceKey = SessionToken.HashKey("source:" + source);
+        var keys = new[] { (ThrottleScope.Login, pairKey), (ThrottleScope.Login, globalKey), (ThrottleScope.Source, sourceKey) };
 
         var now = store.UtcNow;
         if (await store.GetBlockedUntilAsync(keys, ct) is { } blockedUntil)
@@ -63,17 +69,22 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
 
         if (user is null || verification == PasswordVerification.Failed || user.State != UserState.Active)
         {
-            var loginBlocked = await store.RecordFailureAsync(ThrottleScope.Login, loginKey, options.MaxFailuresPerLogin, options.FailureWindow, options.Block, ct);
-            await store.RecordFailureAsync(ThrottleScope.Source, sourceKey, options.MaxFailuresPerSource, options.FailureWindow, options.Block, ct);
+            var pairBlocked = await store.RecordFailureAsync(ThrottleScope.Login, pairKey, options.MaxFailuresPerLoginSource, options.FailureWindow, options.Block, ct);
+            var globalBlocked = await store.RecordFailureAsync(ThrottleScope.Login, globalKey, options.MaxFailuresPerLoginGlobal, options.FailureWindow, options.Block, ct);
+            var sourceBlocked = await store.RecordFailureAsync(ThrottleScope.Source, sourceKey, options.MaxFailuresPerSource, options.FailureWindow, options.Block, ct);
             var reason = user is null ? "unknown_login" : verification == PasswordVerification.Failed ? "bad_password" : "state_" + user.State.ToString().ToLowerInvariant();
-            logger?.LogWarning("auth.login outcome=failed reason={Reason} user={UserId} nowBlocked={Blocked}", reason, user?.Id, loginBlocked);
+            logger?.LogWarning("auth.login outcome=failed reason={Reason} user={UserId} pairBlocked={PairBlocked} sourceBlocked={SourceBlocked}", reason, user?.Id, pairBlocked, sourceBlocked);
+            // Operator signal: many clients are guessing the same login at once; the login is now blocked for every client.
+            if (globalBlocked) logger?.LogWarning("auth.login_distributed_attack_suspected user={UserId}", user?.Id);
             return new LoginOutcome.InvalidCredentials();
         }
 
         if (verification == PasswordVerification.SuccessRehashNeeded)
             await store.UpdatePasswordHashAsync(user.Id, passwords.Hash(password), passwordChanged: false, ct);
 
-        await store.ResetThrottleAsync(ThrottleScope.Login, loginKey, ct); // the source counter is deliberately not reset by a success
+        // A success clears only this client's pair counter. The source and global counters are deliberately kept, so an attacker
+        // who owns one valid account cannot launder failures against others, and a distributed guess cannot reset itself.
+        await store.ResetThrottleAsync(ThrottleScope.Login, pairKey, ct);
 
         var token = SessionToken.Generate();
         var sessionId = Guid.NewGuid();
@@ -112,15 +123,16 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         var user = await store.FindUserByIdAsync(session.UserId, ct);
         if (user is null || user.State != UserState.Active) return new ChangePasswordResult(ChangePasswordStatus.InvalidCurrentPassword);
 
-        // A stolen session must not be able to brute-force the current password: share the login throttle.
-        var key = SessionToken.HashKey("login:" + user.Login);
+        // A stolen session must not be able to brute-force the current password. Its counter is per user and separate from the
+        // sign-in counters, so failed sign-in attempts by others can never block a legitimate password change.
+        var key = SessionToken.HashKey("chpw:" + user.Id.ToString("N"));
         if (await store.GetBlockedUntilAsync([(ThrottleScope.Login, key)], ct) is not null)
             return new ChangePasswordResult(ChangePasswordStatus.Throttled);
 
         var ok = current is { Length: > 0 and <= MaxPasswordInput } && passwords.Verify(user.PasswordHash, current) != PasswordVerification.Failed;
         if (!ok)
         {
-            await store.RecordFailureAsync(ThrottleScope.Login, key, options.MaxFailuresPerLogin, options.FailureWindow, options.Block, ct);
+            await store.RecordFailureAsync(ThrottleScope.Login, key, options.MaxFailuresPerLoginSource, options.FailureWindow, options.Block, ct);
             logger?.LogWarning("auth.change_password outcome=bad_current user={UserId}", user.Id);
             return new ChangePasswordResult(ChangePasswordStatus.InvalidCurrentPassword);
         }
@@ -172,13 +184,27 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         }
     }
 
-    public enum SetStateStatus { Changed, NotFound, OwnAccount }
+    public enum SetStateStatus { Changed, NotFound, OwnAccount, LastCompanyAdministrator, LastIdentityAdministrator, ActorNotActive }
 
-    /// <summary>Administrative lifecycle change. An administrator cannot change their own state (no lock-out of the last administrator).</summary>
+    /// <summary>
+    /// Administrative lifecycle change. An administrator cannot change their own state, and no change may leave a company without a usable
+    /// Company Administrator or the system without an Active identity administrator (see <see cref="IdentityStore.SetStateAsync"/>).
+    /// </summary>
     public async Task<SetStateStatus> SetUserStateAsync(Guid actorUserId, Guid targetUserId, UserState state, CancellationToken ct = default)
     {
         if (actorUserId == targetUserId) return SetStateStatus.OwnAccount;
-        if (!await store.SetStateAsync(targetUserId, state, ct)) return SetStateStatus.NotFound;
+        var outcome = await store.SetStateAsync(actorUserId, targetUserId, state, ct);
+        if (outcome != SetStateOutcome.Changed)
+        {
+            logger?.LogWarning("auth.user_state outcome={Outcome} actor={Actor} user={UserId} state={State}", outcome, actorUserId, targetUserId, state);
+            return outcome switch
+            {
+                SetStateOutcome.LastCompanyAdministrator => SetStateStatus.LastCompanyAdministrator,
+                SetStateOutcome.LastIdentityAdministrator => SetStateStatus.LastIdentityAdministrator,
+                SetStateOutcome.ActorNotActive => SetStateStatus.ActorNotActive,
+                _ => SetStateStatus.NotFound,
+            };
+        }
         logger?.LogInformation("auth.user_state actor={Actor} user={UserId} state={State}", actorUserId, targetUserId, state);
         return SetStateStatus.Changed;
     }

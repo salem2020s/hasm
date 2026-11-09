@@ -1,8 +1,13 @@
 using System.Reflection;
 using Hasm.Api.Access;
 using Hasm.Api.Auth;
+using Hasm.Api.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Forwarded client-address headers are trusted only from explicitly configured proxies (Hasm:ReverseProxy); invalid or unsafe
+// settings stop the process at startup.
+var reverseProxy = ReverseProxyOptions.FromConfiguration(builder.Configuration);
 
 // Allowed browser/desktop origins come from configuration (Cors:AllowedOrigins); none are hardcoded.
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
@@ -21,6 +26,7 @@ builder.Services.AddHasmAccess(builder.Configuration);
 
 var app = builder.Build();
 
+app.UseHasmReverseProxy(reverseProxy);
 app.UseHasmExceptionHandling();
 
 if (!app.Environment.IsDevelopment())

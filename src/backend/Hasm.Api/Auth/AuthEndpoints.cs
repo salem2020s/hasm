@@ -1,3 +1,4 @@
+using Hasm.Api.Hosting;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Http.Metadata;
 
@@ -42,7 +43,7 @@ public static class AuthEndpoints
         };
         if (client is null) return Error(400, "invalid_request");
 
-        var outcome = await auth.LoginAsync(body.Login, body.Password, client.Value, http.Connection.RemoteIpAddress?.ToString(), http.RequestAborted);
+        var outcome = await auth.LoginAsync(body.Login, body.Password, client.Value, http.ClientSource(), http.RequestAborted);
         switch (outcome)
         {
             case LoginOutcome.Throttled t:
@@ -132,6 +133,9 @@ public static class AuthEndpoints
         {
             AuthService.SetStateStatus.Changed => Results.NoContent(),
             AuthService.SetStateStatus.OwnAccount => Error(409, "cannot_change_own_state"),
+            AuthService.SetStateStatus.LastCompanyAdministrator => Error(409, "last_company_administrator"),
+            AuthService.SetStateStatus.LastIdentityAdministrator => Error(409, "last_identity_administrator"),
+            AuthService.SetStateStatus.ActorNotActive => Error(403, "forbidden"),
             _ => Error(404, "not_found"),
         };
     }

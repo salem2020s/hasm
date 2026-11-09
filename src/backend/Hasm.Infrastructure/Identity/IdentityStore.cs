@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
@@ -10,6 +11,8 @@ public enum UserState : short { Active = 0, Disabled = 1, Locked = 2 }
 public enum SessionClient : short { Web = 0, Desktop = 1 }
 public enum SessionRevocation : short { Logout = 0, Administrative = 1, PasswordChanged = 2 }
 public enum ThrottleScope : short { Login = 0, Source = 1 }
+
+public enum SetStateOutcome { Changed, NotFound, LastCompanyAdministrator, LastIdentityAdministrator, ActorNotActive }
 
 public sealed record UserRecord(
     Guid Id, string Login, string DisplayName, string PasswordHash, UserState State, bool IsIdentityAdministrator,
@@ -119,25 +122,89 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
-    /// <summary>Changes the lifecycle state; any non-Active state revokes all of the user's sessions atomically.</summary>
-    public async Task<bool> SetStateAsync(Guid userId, UserState state, CancellationToken ct = default)
+    /// <summary>
+    /// Changes the lifecycle state; any non-Active state revokes all of the user's sessions atomically. Moving a user out of
+    /// Active is refused when it would leave a Ready company without a usable Company Administrator
+    /// (<see cref="SetStateOutcome.LastCompanyAdministrator"/>) or the system without an Active identity administrator
+    /// (<see cref="SetStateOutcome.LastIdentityAdministrator"/>). The guards run in one transaction under the same per-company
+    /// advisory lock as the access service plus an identity-administrator lock, so concurrent disables, locks and
+    /// revocations serialize and the later one sees the earlier one's effect. When <paramref name="actorUserId"/> is given, the
+    /// actor must still be Active inside the lock (mutual disabling by two administrators cannot both succeed).
+    /// Re-activating a user is never blocked. A company that already has no administrator does not block anything.
+    /// </summary>
+    public async Task<SetStateOutcome> SetStateAsync(Guid? actorUserId, Guid userId, UserState state, CancellationToken ct = default)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        var now = clock.GetUtcNow();
-        int changed;
-        await using (var cmd = new NpgsqlCommand(
-            $"UPDATE {U.Table} SET {U.State} = @s, {U.StateChangedAtUtc} = @n WHERE {U.Id} = @id", conn, tx))
+        var companyLocks = new SortedSet<string>(StringComparer.Ordinal);
+        for (var attempt = 0; attempt < 6; attempt++)
         {
-            cmd.Parameters.AddWithValue("s", (short)state);
-            cmd.Parameters.AddWithValue("n", now);
-            cmd.Parameters.AddWithValue("id", userId);
-            changed = await cmd.ExecuteNonQueryAsync(ct);
+            await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            var now = clock.GetUtcNow();
+
+            if (state != UserState.Active)
+            {
+                await using (var lck = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@k, 4))", conn, tx))
+                {
+                    lck.Parameters.AddWithValue("k", "hasm.identity.administrators");
+                    await lck.ExecuteNonQueryAsync(ct);
+                }
+                foreach (var key in companyLocks) await AdministratorContinuity.LockCompanyAsync(conn, tx, Guid.ParseExact(key, "N"), ct);
+            }
+
+            if (actorUserId is { } actor && (await ReadStateAsync(conn, tx, actor, ct)).State != UserState.Active)
+                return SetStateOutcome.ActorNotActive;
+            var (current, isIdentityAdmin) = await ReadStateAsync(conn, tx, userId, ct);
+            if (current is null)
+                return SetStateOutcome.NotFound;
+
+            if (state != UserState.Active && current == UserState.Active)
+            {
+                if (isIdentityAdmin && await CountActiveIdentityAdministratorsAsync(conn, tx, exclude: userId, ct) == 0)
+                    return SetStateOutcome.LastIdentityAdministrator;
+
+                // Companies this user administers: lock them all (sorted) and re-check; a membership granted meanwhile adds a
+                // company, in which case start over holding the larger lock set (no lock is ever taken out of order).
+                var administered = await AdministratorContinuity.CompaniesAdministeredAsync(conn, tx, userId, ct);
+                var missing = administered.Where(c => !companyLocks.Contains(c.ToString("N"))).ToList();
+                if (missing.Count > 0)
+                {
+                    foreach (var c in missing) companyLocks.Add(c.ToString("N"));
+                    continue; // transaction disposed without commit: locks released, retried with the full set
+                }
+                foreach (var company in administered)
+                    if (await AdministratorContinuity.WouldRemoveLastAsync(conn, tx, company, userId, null, ct))
+                        return SetStateOutcome.LastCompanyAdministrator;
+            }
+
+            await using (var cmd = new NpgsqlCommand(
+                $"UPDATE {U.Table} SET {U.State} = @s, {U.StateChangedAtUtc} = @n WHERE {U.Id} = @id", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("s", (short)state);
+                cmd.Parameters.AddWithValue("n", now);
+                cmd.Parameters.AddWithValue("id", userId);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, now, ct);
+            await tx.CommitAsync(ct);
+            return SetStateOutcome.Changed;
         }
-        if (changed == 0) return false;
-        if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, now, ct);
-        await tx.CommitAsync(ct);
-        return true;
+        throw new InvalidOperationException("Administrator continuity locking did not converge.");
+    }
+
+    private static async Task<(UserState? State, bool IsIdentityAdministrator)> ReadStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand($"SELECT {U.State}, {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @id", conn, tx);
+        cmd.Parameters.AddWithValue("id", userId);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct) ? ((UserState)r.GetInt16(0), r.GetBoolean(1)) : (null, false);
+    }
+
+    private static async Task<long> CountActiveIdentityAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid exclude, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT count(*) FROM {U.Table} WHERE {U.IsIdentityAdministrator} AND {U.State} = 0 AND {U.Id} <> @x", conn, tx);
+        cmd.Parameters.AddWithValue("x", exclude);
+        return (long)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
     /// <summary>Replaces the stored hash. <paramref name="passwordChanged"/> false = transparent rehash with the same password.</summary>

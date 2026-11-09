@@ -167,7 +167,8 @@ public class AuthOptionsTests
         var o = AuthOptions.FromConfiguration(Config());
         Assert.Equal(30, o.SessionIdleMinutes);
         Assert.Equal(12, o.SessionAbsoluteHours);
-        Assert.Equal(5, o.MaxFailuresPerLogin);
+        Assert.Equal(5, o.MaxFailuresPerLoginSource);
+        Assert.Equal(100, o.MaxFailuresPerLoginGlobal);
         Assert.True(o.Pbkdf2Iterations >= 210_000);
     }
 
@@ -189,7 +190,9 @@ public class AuthOptionsTests
     [Theory]
     [InlineData("SessionIdleMinutes", "0")]
     [InlineData("SessionAbsoluteHours", "100000")]
-    [InlineData("MaxFailuresPerLogin", "1")]
+    [InlineData("MaxFailuresPerLoginSource", "1")]
+    [InlineData("MaxFailuresPerLoginGlobal", "9")]
+    [InlineData("MaxFailuresPerLoginGlobal", "19")]   // below 4x the per-pair limit
     public void Out_of_range_values_are_refused(string key, string value)
         => Assert.Throws<AuthConfigurationException>(() => AuthOptions.FromConfiguration(Config((key, value))));
 }
