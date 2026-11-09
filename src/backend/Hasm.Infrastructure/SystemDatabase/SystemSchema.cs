@@ -73,6 +73,9 @@ public static class SystemSchema
         public const string CheckClientKind = "k_31ff7b77";
         public const string CheckRevocation = "k_47a2a2e9";
         public const string IndexUser = "k_a3b3758c";
+        /// <summary>Added by migration 0004: the company the session currently works in (company-selection context).</summary>
+        public const string SelectedCompanyId = "c_f26c54a5";
+        public const string ForeignKeySelectedCompany = "k_ba7a6e5a";
     }
 
     public static class LoginThrottle
@@ -97,6 +100,92 @@ public static class SystemSchema
         public const string PrimaryKey = "k_ca5aeefe";
         public const string ForeignKeyUser = "k_35815ced";
         public const string ForeignKeyCompany = "k_f4bd087d";
+        /// <summary>Added by migration 0004.</summary>
+        public const string GrantedBy = "c_2e108925";
+        public const string RevokedAtUtc = "c_79ae7bab";
+        public const string RevokedBy = "c_cf899c17";
+        public const string ForeignKeyGrantedBy = "k_0bbbaa10";
+        public const string ForeignKeyRevokedBy = "k_4b8ded2d";
+    }
+
+    // ---- Company access and RBAC (migration 0004) ----
+    public static class Role
+    {
+        public const string Table = "t_359332ac";
+        public const string Id = "c_59b19fa5";
+        public const string CompanyId = "c_0f3f541d";
+        public const string PresetKey = "c_65735af7";
+        public const string Name = "c_bb4f89f0";
+        public const string IsActive = "c_64bdf264";
+        public const string CreatedAtUtc = "c_9f7e535b";
+        public const string CreatedBy = "c_c093e1d1";
+        public const string UpdatedAtUtc = "c_1dd9dad5";
+        public const string PrimaryKey = "k_ce37d6de";
+        public const string ForeignKeyCompany = "k_1813aa7a";
+        public const string ForeignKeyCreatedBy = "k_3376e530";
+        public const string CheckPreset = "k_88edaaae";
+        public const string CheckName = "k_e35e76dd";
+        public const string UniquePresetKey = "k_e7e6c274";
+        public const string UniqueName = "k_8bc611fb";
+        public const string GuardFunction = "f_8131c8b7";
+        public const string GuardTrigger = "r_d3408f58";
+    }
+    public static class RolePermission
+    {
+        public const string Table = "t_3e3d4119";
+        public const string RoleId = "c_0258a1a8";
+        public const string Permission = "c_27be2f9e";
+        public const string PrimaryKey = "k_31fe7478";
+        public const string ForeignKeyRole = "k_2522e0fd";
+        public const string CheckPermission = "k_42a38028";
+        public const string GuardFunction = "f_73f996bc";
+        public const string GuardTrigger = "r_2601e368";
+    }
+    public static class RoleAssignment
+    {
+        public const string Table = "t_48ebc0f2";
+        public const string Id = "c_11c1f4c7";
+        public const string UserId = "c_96082bd4";
+        public const string CompanyId = "c_bc3a9c98";
+        public const string RoleId = "c_e3896a58";
+        public const string ScopeKind = "c_c7cc8c47";
+        public const string ScopeId = "c_162127ba";
+        public const string GrantedAtUtc = "c_216ac47e";
+        public const string GrantedBy = "c_42fb57a8";
+        public const string RevokedAtUtc = "c_e4e52db8";
+        public const string RevokedBy = "c_9f9a9d22";
+        public const string PrimaryKey = "k_283ee178";
+        public const string ForeignKeyMembership = "k_0147ffd4";
+        public const string ForeignKeyRole = "k_1d3c1ee7";
+        public const string ForeignKeyGrantedBy = "k_3324fb20";
+        public const string ForeignKeyRevokedBy = "k_b500a403";
+        public const string CheckScope = "k_c3c0623f";
+        public const string CheckRevocation = "k_77a2fff4";
+        public const string UniqueActive = "k_faf323d8";
+        public const string IndexMember = "k_5f919f68";
+        public const string GuardFunction = "f_69804ba6";
+        public const string GuardTrigger = "r_3bdbbc04";
+    }
+    public static class AccessAudit
+    {
+        public const string Table = "t_dcb6ad92";
+        public const string Id = "c_a8808fec";
+        public const string OccurredAtUtc = "c_b8a31332";
+        public const string ActorUserId = "c_627d2433";
+        public const string CompanyId = "c_19755f4e";
+        public const string TargetUserId = "c_dfddf84e";
+        public const string RoleId = "c_a664f509";
+        public const string EventCode = "c_b052e578";
+        public const string Detail = "c_9a300568";
+        public const string PrimaryKey = "k_bc822b29";
+        public const string ForeignKeyActor = "k_2272e470";
+        public const string ForeignKeyCompany = "k_df82964a";
+        public const string ForeignKeyTarget = "k_e9e81c87";
+        public const string CheckEvent = "k_4e027754";
+        public const string CheckDetail = "k_8415bbea";
+        public const string IndexCompany = "k_f3321107";
+        public const string GuardFunction = "f_6521eb62";
+        public const string GuardTrigger = "r_1edfb742";
     }
 
     /// <summary>Non-business infrastructure table that records applied migrations.</summary>
@@ -172,6 +261,79 @@ public static class SystemSchema
         ["UserCompanyAccess.PrimaryKey"] = UserCompanyAccess.PrimaryKey,
         ["UserCompanyAccess.ForeignKeyUser"] = UserCompanyAccess.ForeignKeyUser,
         ["UserCompanyAccess.ForeignKeyCompany"] = UserCompanyAccess.ForeignKeyCompany,
+        ["Role.Table"] = Role.Table,
+        ["Role.Id"] = Role.Id,
+        ["Role.CompanyId"] = Role.CompanyId,
+        ["Role.PresetKey"] = Role.PresetKey,
+        ["Role.Name"] = Role.Name,
+        ["Role.IsActive"] = Role.IsActive,
+        ["Role.CreatedAtUtc"] = Role.CreatedAtUtc,
+        ["Role.CreatedBy"] = Role.CreatedBy,
+        ["Role.UpdatedAtUtc"] = Role.UpdatedAtUtc,
+        ["Role.PrimaryKey"] = Role.PrimaryKey,
+        ["Role.ForeignKeyCompany"] = Role.ForeignKeyCompany,
+        ["Role.ForeignKeyCreatedBy"] = Role.ForeignKeyCreatedBy,
+        ["Role.CheckPreset"] = Role.CheckPreset,
+        ["Role.CheckName"] = Role.CheckName,
+        ["Role.UniquePresetKey"] = Role.UniquePresetKey,
+        ["Role.UniqueName"] = Role.UniqueName,
+        ["Role.GuardFunction"] = Role.GuardFunction,
+        ["Role.GuardTrigger"] = Role.GuardTrigger,
+        ["RolePermission.Table"] = RolePermission.Table,
+        ["RolePermission.RoleId"] = RolePermission.RoleId,
+        ["RolePermission.Permission"] = RolePermission.Permission,
+        ["RolePermission.PrimaryKey"] = RolePermission.PrimaryKey,
+        ["RolePermission.ForeignKeyRole"] = RolePermission.ForeignKeyRole,
+        ["RolePermission.CheckPermission"] = RolePermission.CheckPermission,
+        ["RolePermission.GuardFunction"] = RolePermission.GuardFunction,
+        ["RolePermission.GuardTrigger"] = RolePermission.GuardTrigger,
+        ["RoleAssignment.Table"] = RoleAssignment.Table,
+        ["RoleAssignment.Id"] = RoleAssignment.Id,
+        ["RoleAssignment.UserId"] = RoleAssignment.UserId,
+        ["RoleAssignment.CompanyId"] = RoleAssignment.CompanyId,
+        ["RoleAssignment.RoleId"] = RoleAssignment.RoleId,
+        ["RoleAssignment.ScopeKind"] = RoleAssignment.ScopeKind,
+        ["RoleAssignment.ScopeId"] = RoleAssignment.ScopeId,
+        ["RoleAssignment.GrantedAtUtc"] = RoleAssignment.GrantedAtUtc,
+        ["RoleAssignment.GrantedBy"] = RoleAssignment.GrantedBy,
+        ["RoleAssignment.RevokedAtUtc"] = RoleAssignment.RevokedAtUtc,
+        ["RoleAssignment.RevokedBy"] = RoleAssignment.RevokedBy,
+        ["RoleAssignment.PrimaryKey"] = RoleAssignment.PrimaryKey,
+        ["RoleAssignment.ForeignKeyMembership"] = RoleAssignment.ForeignKeyMembership,
+        ["RoleAssignment.ForeignKeyRole"] = RoleAssignment.ForeignKeyRole,
+        ["RoleAssignment.ForeignKeyGrantedBy"] = RoleAssignment.ForeignKeyGrantedBy,
+        ["RoleAssignment.ForeignKeyRevokedBy"] = RoleAssignment.ForeignKeyRevokedBy,
+        ["RoleAssignment.CheckScope"] = RoleAssignment.CheckScope,
+        ["RoleAssignment.CheckRevocation"] = RoleAssignment.CheckRevocation,
+        ["RoleAssignment.UniqueActive"] = RoleAssignment.UniqueActive,
+        ["RoleAssignment.IndexMember"] = RoleAssignment.IndexMember,
+        ["RoleAssignment.GuardFunction"] = RoleAssignment.GuardFunction,
+        ["RoleAssignment.GuardTrigger"] = RoleAssignment.GuardTrigger,
+        ["AccessAudit.Table"] = AccessAudit.Table,
+        ["AccessAudit.Id"] = AccessAudit.Id,
+        ["AccessAudit.OccurredAtUtc"] = AccessAudit.OccurredAtUtc,
+        ["AccessAudit.ActorUserId"] = AccessAudit.ActorUserId,
+        ["AccessAudit.CompanyId"] = AccessAudit.CompanyId,
+        ["AccessAudit.TargetUserId"] = AccessAudit.TargetUserId,
+        ["AccessAudit.RoleId"] = AccessAudit.RoleId,
+        ["AccessAudit.EventCode"] = AccessAudit.EventCode,
+        ["AccessAudit.Detail"] = AccessAudit.Detail,
+        ["AccessAudit.PrimaryKey"] = AccessAudit.PrimaryKey,
+        ["AccessAudit.ForeignKeyActor"] = AccessAudit.ForeignKeyActor,
+        ["AccessAudit.ForeignKeyCompany"] = AccessAudit.ForeignKeyCompany,
+        ["AccessAudit.ForeignKeyTarget"] = AccessAudit.ForeignKeyTarget,
+        ["AccessAudit.CheckEvent"] = AccessAudit.CheckEvent,
+        ["AccessAudit.CheckDetail"] = AccessAudit.CheckDetail,
+        ["AccessAudit.IndexCompany"] = AccessAudit.IndexCompany,
+        ["AccessAudit.GuardFunction"] = AccessAudit.GuardFunction,
+        ["AccessAudit.GuardTrigger"] = AccessAudit.GuardTrigger,
+        ["UserCompanyAccess.GrantedBy"] = UserCompanyAccess.GrantedBy,
+        ["UserCompanyAccess.RevokedAtUtc"] = UserCompanyAccess.RevokedAtUtc,
+        ["UserCompanyAccess.RevokedBy"] = UserCompanyAccess.RevokedBy,
+        ["UserCompanyAccess.ForeignKeyGrantedBy"] = UserCompanyAccess.ForeignKeyGrantedBy,
+        ["UserCompanyAccess.ForeignKeyRevokedBy"] = UserCompanyAccess.ForeignKeyRevokedBy,
+        ["Session.SelectedCompanyId"] = Session.SelectedCompanyId,
+        ["Session.ForeignKeySelectedCompany"] = Session.ForeignKeySelectedCompany,
     };
 
     public static string Resolve(string logicalName) =>

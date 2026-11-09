@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.Configuration;
 //   Hasm.Admin register-company              (registers a Pending company; prints its id only)
 //   Hasm.Admin bootstrap-admin <login> [display name]  (creates the FIRST identity administrator; refuses if one exists)
 //   Hasm.Admin provision-company <company-id> (creates + migrates its separate database; safe to repeat/resume)
+//   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
 
@@ -23,11 +25,12 @@ var validUsage = command switch
     "init-system-db" or "register-company" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
+    "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     _ => false,
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | bootstrap-admin <login> [display name] | provision-company <company-id>");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id>");
     return Usage;
 }
 
@@ -107,6 +110,27 @@ try
                 default:
                     Console.Error.WriteLine($"Not created: {result.Status}.");
                     return Usage;
+            }
+        }
+        case "grant-company-admin":
+        {
+            // Offline initial/recovery administration: no HTTP endpoint exists for this. Audited without an actor user.
+            await using var access = new AccessService(options.BuildSystemConnectionString(admin: true), TimeProvider.System, PermissionCatalog.Default);
+            var status = await access.BootstrapCompanyAdministratorAsync(args[1], companyId);
+            switch (status)
+            {
+                case AccessService.BootstrapStatus.Granted:
+                    Console.WriteLine("Company membership and the Company Administrator role were granted.");
+                    return Ok;
+                case AccessService.BootstrapStatus.AlreadyAdministrator:
+                    Console.WriteLine("The user is already a Company Administrator of this company; nothing changed.");
+                    return Ok;
+                case AccessService.BootstrapStatus.CompanyUnavailable:
+                    Console.Error.WriteLine("The company does not exist or is not Ready; nothing was changed.");
+                    return Failed;
+                default:
+                    Console.Error.WriteLine("No active user with that login; nothing was changed.");
+                    return Failed;
             }
         }
         default: // provision-company

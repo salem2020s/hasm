@@ -1,4 +1,5 @@
 using System.Reflection;
+using Hasm.Api.Access;
 using Hasm.Api.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +17,7 @@ builder.Services.AddCors(options =>
     }));
 
 builder.Services.AddHasmAuthentication(builder.Configuration);
+builder.Services.AddHasmAccess(builder.Configuration);
 
 var app = builder.Build();
 
@@ -41,6 +43,7 @@ app.MapGet("/api/v1/health", () => Results.Ok(new
 }));
 
 app.MapAuthEndpoints();
+app.MapAccessEndpoints();
 
 app.Run();
 
