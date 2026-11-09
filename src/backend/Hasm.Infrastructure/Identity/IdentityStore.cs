@@ -1,0 +1,317 @@
+using Hasm.Infrastructure.SystemDatabase;
+using Npgsql;
+using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
+using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
+using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
+
+namespace Hasm.Infrastructure.Identity;
+
+public enum UserState : short { Active = 0, Disabled = 1, Locked = 2 }
+public enum SessionClient : short { Web = 0, Desktop = 1 }
+public enum SessionRevocation : short { Logout = 0, Administrative = 1, PasswordChanged = 2 }
+public enum ThrottleScope : short { Login = 0, Source = 1 }
+
+public sealed record UserRecord(
+    Guid Id, string Login, string DisplayName, string PasswordHash, UserState State, bool IsIdentityAdministrator,
+    DateTimeOffset CreatedAtUtc, DateTimeOffset? LastLoginAtUtc);
+
+/// <summary>An active session joined with the current state of its user.</summary>
+public sealed record ActiveSession(
+    Guid SessionId, Guid UserId, SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset LastSeenAtUtc,
+    string Login, string DisplayName, bool IsIdentityAdministrator);
+
+public sealed class DuplicateLoginException() : Exception("The login identifier is already in use.");
+
+/// <summary>
+/// PostgreSQL data access for the central identity tables of the system database. All statements are
+/// parameterized. Uses the connection string it is given (the Backend passes the runtime, least-privilege account);
+/// connections are pooled through a lazily created data source.
+/// </summary>
+public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock) : IAsyncDisposable
+{
+    private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
+    // Arbitrary constant key for "initial administrator bootstrap" (transaction-scoped advisory lock).
+    private const long BootstrapLockKey = 0x4841534D_0002;
+
+    public IdentityStore(string connectionString, TimeProvider clock) : this(() => connectionString, clock) { }
+
+    public DateTimeOffset UtcNow => clock.GetUtcNow();
+
+    public ValueTask DisposeAsync() => dataSource.IsValueCreated ? dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
+
+    private static string UserColumns =>
+        $"{U.Id}, {U.Login}, {U.DisplayName}, {U.PasswordHash}, {U.State}, {U.IsIdentityAdministrator}, {U.CreatedAtUtc}, {U.LastLoginAtUtc}";
+
+    private static UserRecord ReadUser(NpgsqlDataReader r) => new(
+        r.GetGuid(0), r.GetString(1), r.GetString(2), r.GetString(3), (UserState)r.GetInt16(4), r.GetBoolean(5),
+        r.GetFieldValue<DateTimeOffset>(6), r.IsDBNull(7) ? null : r.GetFieldValue<DateTimeOffset>(7));
+
+    // ---- Users ----
+
+    public async Task<UserRecord> CreateUserAsync(string normalizedLogin, string displayName, string passwordHash, bool isAdministrator, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        return await InsertUserAsync(conn, null, normalizedLogin, displayName, passwordHash, isAdministrator, ct);
+    }
+
+    /// <summary>
+    /// Creates the first identity administrator, atomically refusing when one already exists (serialized by an
+    /// advisory lock so concurrent bootstraps cannot both succeed). Returns null when an administrator exists.
+    /// </summary>
+    public async Task<UserRecord?> CreateInitialAdministratorAsync(string normalizedLogin, string displayName, string passwordHash, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var lck = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@k)", conn, tx))
+        {
+            lck.Parameters.AddWithValue("k", BootstrapLockKey);
+            await lck.ExecuteNonQueryAsync(ct);
+        }
+        await using (var exists = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.IsIdentityAdministrator} LIMIT 1", conn, tx))
+        {
+            if (await exists.ExecuteScalarAsync(ct) is not null) return null;
+        }
+        var user = await InsertUserAsync(conn, tx, normalizedLogin, displayName, passwordHash, true, ct);
+        await tx.CommitAsync(ct);
+        return user;
+    }
+
+    private async Task<UserRecord> InsertUserAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string login, string displayName, string hash, bool admin, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var now = clock.GetUtcNow();
+        await using var cmd = new NpgsqlCommand(
+            $"INSERT INTO {U.Table} ({U.Id},{U.Login},{U.DisplayName},{U.PasswordHash},{U.State},{U.IsIdentityAdministrator},{U.CreatedAtUtc},{U.StateChangedAtUtc},{U.PasswordChangedAtUtc}) " +
+            "VALUES (@id,@l,@d,@h,0,@a,@n,@n,@n)", conn, tx);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("l", login);
+        cmd.Parameters.AddWithValue("d", displayName);
+        cmd.Parameters.AddWithValue("h", hash);
+        cmd.Parameters.AddWithValue("a", admin);
+        cmd.Parameters.AddWithValue("n", now);
+        try { await cmd.ExecuteNonQueryAsync(ct); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == U.UniqueLogin)
+        {
+            throw new DuplicateLoginException();
+        }
+        return new UserRecord(id, login, displayName, hash, UserState.Active, admin, now, null);
+    }
+
+    public Task<UserRecord?> FindUserByLoginAsync(string normalizedLogin, CancellationToken ct = default) =>
+        FindUserAsync($"{U.Login} = @v", normalizedLogin, ct);
+
+    public Task<UserRecord?> FindUserByIdAsync(Guid id, CancellationToken ct = default) =>
+        FindUserAsync($"{U.Id} = @v", id, ct);
+
+    private async Task<UserRecord?> FindUserAsync(string where, object value, CancellationToken ct)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand($"SELECT {UserColumns} FROM {U.Table} WHERE {where}", conn);
+        cmd.Parameters.AddWithValue("v", value);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct) ? ReadUser(r) : null;
+    }
+
+    public async Task<bool> AnyIdentityAdministratorAsync(CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.IsIdentityAdministrator} LIMIT 1", conn);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
+    /// <summary>Changes the lifecycle state; any non-Active state revokes all of the user's sessions atomically.</summary>
+    public async Task<bool> SetStateAsync(Guid userId, UserState state, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var now = clock.GetUtcNow();
+        int changed;
+        await using (var cmd = new NpgsqlCommand(
+            $"UPDATE {U.Table} SET {U.State} = @s, {U.StateChangedAtUtc} = @n WHERE {U.Id} = @id", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("s", (short)state);
+            cmd.Parameters.AddWithValue("n", now);
+            cmd.Parameters.AddWithValue("id", userId);
+            changed = await cmd.ExecuteNonQueryAsync(ct);
+        }
+        if (changed == 0) return false;
+        if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, now, ct);
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    /// <summary>Replaces the stored hash. <paramref name="passwordChanged"/> false = transparent rehash with the same password.</summary>
+    public async Task UpdatePasswordHashAsync(Guid userId, string hash, bool passwordChanged, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE {U.Table} SET {U.PasswordHash} = @h" + (passwordChanged ? $", {U.PasswordChangedAtUtc} = @n" : "") + $" WHERE {U.Id} = @id", conn);
+        cmd.Parameters.AddWithValue("h", hash);
+        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+        cmd.Parameters.AddWithValue("id", userId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // ---- Sessions ----
+
+    public async Task CreateSessionAsync(Guid sessionId, Guid userId, byte[] tokenHash, SessionClient client, DateTimeOffset idleExpires, DateTimeOffset absoluteExpires, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var now = clock.GetUtcNow();
+        await using (var cmd = new NpgsqlCommand(
+            $"INSERT INTO {S.Table} ({S.Id},{S.UserId},{S.TokenHash},{S.CreatedAtUtc},{S.LastSeenAtUtc},{S.IdleExpiresAtUtc},{S.AbsoluteExpiresAtUtc},{S.ClientKind}) " +
+            "VALUES (@id,@u,@t,@n,@n,@i,@a,@c)", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("id", sessionId);
+            cmd.Parameters.AddWithValue("u", userId);
+            cmd.Parameters.AddWithValue("t", tokenHash);
+            cmd.Parameters.AddWithValue("n", now);
+            cmd.Parameters.AddWithValue("i", idleExpires);
+            cmd.Parameters.AddWithValue("a", absoluteExpires);
+            cmd.Parameters.AddWithValue("c", (short)client);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        await using (var login = new NpgsqlCommand($"UPDATE {U.Table} SET {U.LastLoginAtUtc} = @n WHERE {U.Id} = @u", conn, tx))
+        {
+            login.Parameters.AddWithValue("n", now);
+            login.Parameters.AddWithValue("u", userId);
+            await login.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Finds a session that is not revoked, not idle-expired, not absolute-expired and whose user is Active.
+    /// The user's current state and administrator flag are read on every call, so changes apply immediately.
+    /// </summary>
+    public async Task<ActiveSession?> FindActiveSessionAsync(byte[] tokenHash, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator} " +
+            $"FROM {S.Table} s JOIN {U.Table} u ON u.{U.Id} = s.{S.UserId} " +
+            $"WHERE s.{S.TokenHash} = @t AND s.{S.RevokedAtUtc} IS NULL AND s.{S.IdleExpiresAtUtc} > @n AND s.{S.AbsoluteExpiresAtUtc} > @n AND u.{U.State} = 0", conn);
+        cmd.Parameters.AddWithValue("t", tokenHash);
+        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return new ActiveSession(
+            r.GetGuid(0), r.GetGuid(1), (SessionClient)r.GetInt16(2),
+            r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetFieldValue<DateTimeOffset>(5),
+            r.GetString(6), r.GetString(7), r.GetBoolean(8));
+    }
+
+    /// <summary>Records activity and extends the idle expiry (capped at the absolute expiry) of a live session.</summary>
+    public async Task TouchSessionAsync(Guid sessionId, DateTimeOffset newIdleExpiry, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE {S.Table} SET {S.LastSeenAtUtc} = @n, {S.IdleExpiresAtUtc} = LEAST(@i, {S.AbsoluteExpiresAtUtc}) " +
+            $"WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn);
+        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+        cmd.Parameters.AddWithValue("i", newIdleExpiry);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RevokeSessionAsync(Guid sessionId, SessionRevocation reason, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn);
+        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+        cmd.Parameters.AddWithValue("r", (short)reason);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<int> RevokeUserSessionsAsync(Guid userId, SessionRevocation reason, Guid? exceptSessionId = null, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        return await RevokeUserSessionsAsync(conn, null, userId, reason, exceptSessionId, clock.GetUtcNow(), ct);
+    }
+
+    private static async Task<int> RevokeUserSessionsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, SessionRevocation reason, Guid? except, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL" +
+            (except is null ? "" : $" AND {S.Id} <> @x"), conn, tx);
+        cmd.Parameters.AddWithValue("n", now);
+        cmd.Parameters.AddWithValue("r", (short)reason);
+        cmd.Parameters.AddWithValue("u", userId);
+        if (except is not null) cmd.Parameters.AddWithValue("x", except.Value);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    // ---- Failed-login throttling ----
+
+    /// <summary>Latest block expiry among the given keys that is still in the future, or null when none is blocked.</summary>
+    public async Task<DateTimeOffset?> GetBlockedUntilAsync(IReadOnlyList<(ThrottleScope Scope, byte[] KeyHash)> keys, CancellationToken ct = default)
+    {
+        DateTimeOffset? latest = null;
+        var now = clock.GetUtcNow();
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        foreach (var (scope, key) in keys)
+        {
+            await using var cmd = new NpgsqlCommand(
+                $"SELECT {T.BlockedUntilUtc} FROM {T.Table} WHERE {T.Scope} = @s AND {T.KeyHash} = @k AND {T.BlockedUntilUtc} > @n", conn);
+            cmd.Parameters.AddWithValue("s", (short)scope);
+            cmd.Parameters.AddWithValue("k", key);
+            cmd.Parameters.AddWithValue("n", now);
+            if (await cmd.ExecuteScalarAsync(ct) is DateTime until)
+            {
+                var value = new DateTimeOffset(DateTime.SpecifyKind(until, DateTimeKind.Utc));
+                if (latest is null || value > latest) latest = value;
+            }
+        }
+        return latest;
+    }
+
+    /// <summary>Counts a failure (one atomic upsert). Returns true when this failure caused or kept a block.</summary>
+    public async Task<bool> RecordFailureAsync(ThrottleScope scope, byte[] keyHash, int limit, TimeSpan window, TimeSpan block, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        var expiredSql = $"t.{T.WindowStartedAtUtc} + make_interval(secs => @w) <= @n";
+        await using var cmd = new NpgsqlCommand(
+            $"INSERT INTO {T.Table} AS t ({T.Scope},{T.KeyHash},{T.Failures},{T.WindowStartedAtUtc},{T.BlockedUntilUtc}) " +
+            "VALUES (@s,@k,1,@n,CASE WHEN @l <= 1 THEN @n + make_interval(secs => @b) END) " +
+            $"ON CONFLICT ({T.Scope},{T.KeyHash}) DO UPDATE SET " +
+            $"{T.Failures} = CASE WHEN {expiredSql} THEN 1 ELSE t.{T.Failures} + 1 END, " +
+            $"{T.WindowStartedAtUtc} = CASE WHEN {expiredSql} THEN @n ELSE t.{T.WindowStartedAtUtc} END, " +
+            $"{T.BlockedUntilUtc} = CASE WHEN (CASE WHEN {expiredSql} THEN 1 ELSE t.{T.Failures} + 1 END) >= @l THEN @n + make_interval(secs => @b) ELSE t.{T.BlockedUntilUtc} END " +
+            $"RETURNING {T.BlockedUntilUtc} > @n", conn);
+        cmd.Parameters.AddWithValue("s", (short)scope);
+        cmd.Parameters.AddWithValue("k", keyHash);
+        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+        cmd.Parameters.AddWithValue("l", limit);
+        cmd.Parameters.AddWithValue("w", window.TotalSeconds);
+        cmd.Parameters.AddWithValue("b", block.TotalSeconds);
+        return await cmd.ExecuteScalarAsync(ct) is true;
+    }
+
+    public async Task ResetThrottleAsync(ThrottleScope scope, byte[] keyHash, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand($"DELETE FROM {T.Table} WHERE {T.Scope} = @s AND {T.KeyHash} = @k", conn);
+        cmd.Parameters.AddWithValue("s", (short)scope);
+        cmd.Parameters.AddWithValue("k", keyHash);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Housekeeping: removes long-expired/revoked sessions and stale throttle rows. Returns rows removed.</summary>
+    public async Task<int> PurgeAsync(TimeSpan sessionRetention, TimeSpan throttleRetention, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var sessions = new NpgsqlCommand(
+            $"DELETE FROM {S.Table} WHERE {S.AbsoluteExpiresAtUtc} < @c OR {S.IdleExpiresAtUtc} < @c OR ({S.RevokedAtUtc} IS NOT NULL AND {S.RevokedAtUtc} < @c)", conn);
+        sessions.Parameters.AddWithValue("c", now - sessionRetention);
+        var removed = await sessions.ExecuteNonQueryAsync(ct);
+        await using var throttle = new NpgsqlCommand(
+            $"DELETE FROM {T.Table} WHERE {T.WindowStartedAtUtc} < @c AND ({T.BlockedUntilUtc} IS NULL OR {T.BlockedUntilUtc} < @n)", conn);
+        throttle.Parameters.AddWithValue("c", now - throttleRetention);
+        throttle.Parameters.AddWithValue("n", now);
+        return removed + await throttle.ExecuteNonQueryAsync(ct);
+    }
+}

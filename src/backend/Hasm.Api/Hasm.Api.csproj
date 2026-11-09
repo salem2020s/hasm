@@ -6,4 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Hasm.Infrastructure\Hasm.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>

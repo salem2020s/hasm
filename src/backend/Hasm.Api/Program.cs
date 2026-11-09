@@ -1,4 +1,5 @@
 using System.Reflection;
+using Hasm.Api.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,11 +10,16 @@ builder.Services.AddCors(options =>
     {
         if (allowedOrigins.Length > 0)
         {
-            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
+            // Credentials are allowed only for the explicitly configured origins (Web cookie sessions).
+            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials().WithExposedHeaders("Retry-After");
         }
     }));
 
+builder.Services.AddHasmAuthentication(builder.Configuration);
+
 var app = builder.Build();
+
+app.UseHasmExceptionHandling();
 
 if (!app.Environment.IsDevelopment())
 {
@@ -22,6 +28,10 @@ if (!app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors();
+app.UseHasmResponseHardening();
+app.UseHasmCsrfProtection();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/api/v1/health", () => Results.Ok(new
 {
@@ -29,6 +39,8 @@ app.MapGet("/api/v1/health", () => Results.Ok(new
     service = "hasm-api",
     version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0",
 }));
+
+app.MapAuthEndpoints();
 
 app.Run();
 

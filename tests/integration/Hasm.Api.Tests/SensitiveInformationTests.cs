@@ -36,6 +36,9 @@ public class SensitiveInformationTests(WebApplicationFactory<Program> factory) :
     {
         var client = Client();
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/v1/companies")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync("/api/v1/companies", null)).StatusCode);
+        // State-changing calls need the CSRF request header (see AuthDefaults.RequestHeader); send it so the route itself is what is tested.
+        using var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/companies");
+        post.Headers.Add("X-Hasm-Request", "1");
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(post)).StatusCode);
     }
 }
