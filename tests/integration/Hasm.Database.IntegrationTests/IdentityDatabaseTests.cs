@@ -275,8 +275,8 @@ public class LoginTests : IdentityTestBase
         var disabled = await NewUser("disabled.user");
         var locked = await NewUser("locked.user");
         await NewUser("alice");
-        await Store.SetStateAsync(disabled.Id, UserState.Disabled);
-        await Store.SetStateAsync(locked.Id, UserState.Locked);
+        await Store.SetStateAsync(null, disabled.Id, UserState.Disabled);
+        await Store.SetStateAsync(null, locked.Id, UserState.Locked);
 
         var outcomes = new[]
         {
@@ -294,11 +294,11 @@ public class LoginTests : IdentityTestBase
     {
         await Start();
         var user = await NewUser();
-        await Store.SetStateAsync(user.Id, UserState.Disabled);
+        await Store.SetStateAsync(null, user.Id, UserState.Disabled);
         Assert.IsType<LoginOutcome.InvalidCredentials>(await Login("alice", Pw));
-        await Store.SetStateAsync(user.Id, UserState.Locked);
+        await Store.SetStateAsync(null, user.Id, UserState.Locked);
         Assert.IsType<LoginOutcome.InvalidCredentials>(await Login("alice", Pw));
-        await Store.SetStateAsync(user.Id, UserState.Active);
+        await Store.SetStateAsync(null, user.Id, UserState.Active);
         Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, ip: "10.0.0.9"));
     }
 
@@ -351,12 +351,12 @@ public class LoginTests : IdentityTestBase
     }
 
     [PostgresFact]
-    public async Task Change_password_attempts_share_the_brute_force_throttle()
+    public async Task Change_password_attempts_are_throttled_per_user_independently_of_sign_in_failures()
     {
         await Start();
         await NewUser();
         var session = (await Auth.AuthenticateAsync((await LoginOk()).Token))!;
-        for (var i = 0; i < AuthSettings.MaxFailuresPerLogin; i++)
+        for (var i = 0; i < AuthSettings.MaxFailuresPerLoginSource; i++)
             await Auth.ChangePasswordAsync(session, "guess-" + i + "-xxxxxxxx", "A-Brand-New-Passphrase-1");
         Assert.Equal(ChangePasswordStatus.Throttled, (await Auth.ChangePasswordAsync(session, Pw, "A-Brand-New-Passphrase-1")).Status);
     }
@@ -486,15 +486,15 @@ public class SessionTests : IdentityTestBase
         var a = await LoginOk();
         var b = await LoginOk();
 
-        Assert.True(await Store.SetStateAsync(user.Id, UserState.Disabled));
+        Assert.Equal(SetStateOutcome.Changed, await Store.SetStateAsync(null, user.Id, UserState.Disabled));
         Assert.Null(await Auth.AuthenticateAsync(a.Token));
         Assert.Null(await Auth.AuthenticateAsync(b.Token));
 
-        await Store.SetStateAsync(user.Id, UserState.Active);
+        await Store.SetStateAsync(null, user.Id, UserState.Active);
         Assert.Null(await Auth.AuthenticateAsync(a.Token));   // reactivation does not resurrect old sessions
 
         var c = await LoginOk(ip: "10.0.0.7");
-        await Store.SetStateAsync(user.Id, UserState.Locked);
+        await Store.SetStateAsync(null, user.Id, UserState.Locked);
         Assert.Null(await Auth.AuthenticateAsync(c.Token));
     }
 
@@ -536,14 +536,16 @@ public class BruteForceProtectionTests : IdentityTestBase
     }
 
     [PostgresFact]
-    public async Task Repeated_failures_block_the_account_even_for_the_correct_password()
+    public async Task Repeated_failures_block_that_client_for_the_account_even_with_the_correct_password()
     {
         await Start();
         await NewUser();
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin);
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource);
 
-        var blocked = Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.2"));   // different source, same account
+        var blocked = Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.1"));   // same client, same account
         Assert.True(blocked.RetryAfter > TimeSpan.Zero && blocked.RetryAfter <= AuthSettings.Block);
+        // The weakness fixed in Phase 2.3C-1: the same failures no longer lock the real user out from any other client.
+        Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.2"));
     }
 
     [PostgresFact]
@@ -551,11 +553,12 @@ public class BruteForceProtectionTests : IdentityTestBase
     {
         await Start();
         await NewUser();
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin);
-        await Fail("ghost", "10.0.0.2", AuthSettings.MaxFailuresPerLogin);
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource);
+        await Fail("ghost", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource);
 
-        Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.3"));
-        Assert.IsType<LoginOutcome.Throttled>(await Login("ghost", Pw, "10.0.0.3"));
+        var real = Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.1"));
+        var ghost = Assert.IsType<LoginOutcome.Throttled>(await Login("ghost", Pw, "10.0.0.1"));
+        Assert.Equal(real.RetryAfter, ghost.RetryAfter);
     }
 
     [PostgresFact]
@@ -563,12 +566,12 @@ public class BruteForceProtectionTests : IdentityTestBase
     {
         await Start();
         await NewUser();
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin);
-        Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.2"));
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource);
+        Assert.IsType<LoginOutcome.Throttled>(await Login("alice", Pw, "10.0.0.1"));
 
         Clock.Advance(AuthSettings.Block + TimeSpan.FromSeconds(1));
 
-        Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.2"));
+        Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.1"));
     }
 
     [PostgresFact]
@@ -576,9 +579,9 @@ public class BruteForceProtectionTests : IdentityTestBase
     {
         await Start();
         await NewUser();
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin - 1);
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource - 1);
         Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.1"));
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin - 1);   // would exceed the limit if the success had not reset it
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource - 1);   // would exceed the limit if the success had not reset it
         Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.1"));
     }
 
@@ -587,9 +590,9 @@ public class BruteForceProtectionTests : IdentityTestBase
     {
         await Start();
         await NewUser();
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin - 1);
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource - 1);
         Clock.Advance(AuthSettings.FailureWindow + TimeSpan.FromSeconds(1));
-        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLogin - 1);
+        await Fail("alice", "10.0.0.1", AuthSettings.MaxFailuresPerLoginSource - 1);
         Assert.IsType<LoginOutcome.Success>(await Login("alice", Pw, "10.0.0.1"));
     }
 
@@ -627,7 +630,7 @@ public class BruteForceProtectionTests : IdentityTestBase
         await Start();
         await NewUser();
         var ok = await LoginOk();
-        await Fail("alice", "10.0.0.66", AuthSettings.MaxFailuresPerLogin);   // an attacker cannot log the real user out
+        await Fail("alice", "10.0.0.66", AuthSettings.MaxFailuresPerLoginSource);   // an attacker cannot log the real user out
         Assert.NotNull(await Auth.AuthenticateAsync(ok.Token));
     }
 

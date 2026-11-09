@@ -12,8 +12,12 @@ public sealed class AuthOptions
     public int SessionIdleMinutes { get; init; } = 30;
     public int SessionAbsoluteHours { get; init; } = 12;
     public int Pbkdf2Iterations { get; init; } = PasswordService.DefaultIterations;
-    /// <summary>Failed attempts per login identifier (existing or not) within the window before it is blocked.</summary>
-    public int MaxFailuresPerLogin { get; init; } = 5;
+    /// <summary>Failed attempts for one (login identifier, client address) pair within the window before that pair is blocked.
+    /// Blocks only that pair, so a third party cannot lock a user out of sign-in from other addresses.</summary>
+    public int MaxFailuresPerLoginSource { get; init; } = 5;
+    /// <summary>Failed attempts for one login identifier across ALL addresses within the window before the identifier is blocked for
+    /// every client (last-resort ceiling against distributed guessing; deliberately far above the per-pair limit).</summary>
+    public int MaxFailuresPerLoginGlobal { get; init; } = 100;
     /// <summary>Failed attempts per source address within the window before it is blocked (credential stuffing).</summary>
     public int MaxFailuresPerSource { get; init; } = 20;
     public int FailureWindowMinutes { get; init; } = 15;
@@ -32,7 +36,8 @@ public sealed class AuthOptions
             SessionIdleMinutes = Int(s, nameof(SessionIdleMinutes), 30),
             SessionAbsoluteHours = Int(s, nameof(SessionAbsoluteHours), 12),
             Pbkdf2Iterations = Int(s, nameof(Pbkdf2Iterations), PasswordService.DefaultIterations),
-            MaxFailuresPerLogin = Int(s, nameof(MaxFailuresPerLogin), 5),
+            MaxFailuresPerLoginSource = Int(s, nameof(MaxFailuresPerLoginSource), 5),
+            MaxFailuresPerLoginGlobal = Int(s, nameof(MaxFailuresPerLoginGlobal), 100),
             MaxFailuresPerSource = Int(s, nameof(MaxFailuresPerSource), 20),
             FailureWindowMinutes = Int(s, nameof(FailureWindowMinutes), 15),
             BlockMinutes = Int(s, nameof(BlockMinutes), 15),
@@ -57,7 +62,10 @@ public sealed class AuthOptions
         Range(nameof(SessionIdleMinutes), SessionIdleMinutes, 1, 24 * 60);
         Range(nameof(SessionAbsoluteHours), SessionAbsoluteHours, 1, 24 * 30);
         Range(nameof(Pbkdf2Iterations), Pbkdf2Iterations, 100_000, 10_000_000);   // floor protects against weak configuration
-        Range(nameof(MaxFailuresPerLogin), MaxFailuresPerLogin, 3, 100);
+        Range(nameof(MaxFailuresPerLoginSource), MaxFailuresPerLoginSource, 3, 100);
+        Range(nameof(MaxFailuresPerLoginGlobal), MaxFailuresPerLoginGlobal, 10, 100_000);
+        if (MaxFailuresPerLoginGlobal < MaxFailuresPerLoginSource * 4)
+            errors.Add($"{SectionName}:{nameof(MaxFailuresPerLoginGlobal)} must be at least four times {nameof(MaxFailuresPerLoginSource)}.");
         Range(nameof(MaxFailuresPerSource), MaxFailuresPerSource, 5, 10_000);
         Range(nameof(FailureWindowMinutes), FailureWindowMinutes, 1, 24 * 60);
         Range(nameof(BlockMinutes), BlockMinutes, 1, 24 * 60);

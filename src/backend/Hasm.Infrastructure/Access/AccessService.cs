@@ -174,11 +174,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         try
         {
             var tx = await conn.BeginTransactionAsync(ct);
-            await using (var lck = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@k, 4)) ", conn, tx))
-            {
-                lck.Parameters.AddWithValue("k", "hasm.access." + companyId.ToString("N"));
-                await lck.ExecuteNonQueryAsync(ct);
-            }
+            await AdministratorContinuity.LockCompanyAsync(conn, tx, companyId, ct);
             var actor = await LoadEffectiveAsync(conn, tx, actorUserId, companyId, requireActiveUser: true, ct);
             return (conn, tx, actor);
         }
@@ -451,7 +447,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         }
         var target = await LoadEffectiveAsync(conn, tx, targetUserId, companyId, requireActiveUser: false, ct);
         if (target.Grants.Any(g => !actor.CanGrant(g.Permissions, new ScopeTarget(g.Scope, g.ScopeId)))) return Denied<bool>("target_has_higher_privileges");
-        if (await WouldRemoveLastAdministratorAsync(conn, tx, companyId, targetUserId, null, ct)) return AccessResult<bool>.Fail(AccessStatus.Conflict, "last_administrator");
+        if (await AdministratorContinuity.WouldRemoveLastAsync(conn, tx, companyId, targetUserId, null, ct)) return AccessResult<bool>.Fail(AccessStatus.Conflict, "last_administrator");
 
         var now = clock.GetUtcNow();
         int revoked;
@@ -568,7 +564,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         var role = await FindRoleAsync(conn, tx, companyId, roleId, ct);
         if (role is null || !actor.CanGrant(role.Permissions, new ScopeTarget(kind, scopeId))) return Denied<bool>("target_has_higher_privileges");
         if (role.PresetKey == PresetRoles.CompanyAdministratorKey && kind == ScopeKind.Company
-            && await WouldRemoveLastAdministratorAsync(conn, tx, companyId, null, assignmentId, ct))
+            && await AdministratorContinuity.WouldRemoveLastAsync(conn, tx, companyId, null, assignmentId, ct))
             return AccessResult<bool>.Fail(AccessStatus.Conflict, "last_administrator");
 
         await using (var rev = new NpgsqlCommand($"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t, {A.RevokedBy} = @a WHERE {A.Id} = @i AND {A.RevokedAtUtc} IS NULL", conn, tx))
@@ -590,36 +586,6 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     {
         try { return scope.Id is { } id && await scopeValidator.ExistsAsync(companyId, scope.Kind, id, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
-    }
-
-    /// <summary>
-    /// A "Company Administrator" is an Active user with an active membership of a Ready company and an active company-wide
-    /// assignment of the preset Company Administrator role. Returns true when removing the given user (all their access) or the
-    /// given assignment would leave the company with none while it currently has at least one. Called inside the company lock,
-    /// so concurrent removals serialize and the second one sees the first one's effect. The offline recovery command is unaffected.
-    /// </summary>
-    private static async Task<bool> WouldRemoveLastAdministratorAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid companyId, Guid? excludeUser, Guid? excludeAssignment, CancellationToken ct)
-    {
-        var total = await CountAdministratorsAsync(conn, tx, companyId, null, null, ct);
-        var remaining = await CountAdministratorsAsync(conn, tx, companyId, excludeUser, excludeAssignment, ct);
-        return total > 0 && remaining == 0;
-    }
-
-    private static async Task<long> CountAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid companyId, Guid? excludeUser, Guid? excludeAssignment, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand(
-            $"SELECT count(DISTINCT a.{A.UserId}) FROM {A.Table} a " +
-            $"JOIN {M.Table} m ON m.{M.UserId} = a.{A.UserId} AND m.{M.CompanyId} = a.{A.CompanyId} AND m.{M.RevokedAtUtc} IS NULL " +
-            $"JOIN {U.Table} u ON u.{U.Id} = a.{A.UserId} AND u.{U.State} = 0 " +
-            $"JOIN {C.Table} c ON c.{C.Id} = a.{A.CompanyId} AND c.{C.ProvisioningState} = {(short)ProvisioningState.Ready} " +
-            $"JOIN {R.Table} r ON r.{R.Id} = a.{A.RoleId} AND r.{R.IsActive} AND r.{R.PresetKey} = @key " +
-            $"WHERE a.{A.CompanyId} = @c AND a.{A.RevokedAtUtc} IS NULL AND a.{A.ScopeKind} = 0 " +
-            $"AND (@u::uuid IS NULL OR a.{A.UserId} <> @u) AND (@a::uuid IS NULL OR a.{A.Id} <> @a)", conn, tx);
-        cmd.Parameters.AddWithValue("key", PresetRoles.CompanyAdministratorKey);
-        cmd.Parameters.AddWithValue("c", companyId);
-        cmd.Parameters.Add(new NpgsqlParameter("u", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = (object?)excludeUser ?? DBNull.Value });
-        cmd.Parameters.Add(new NpgsqlParameter("a", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = (object?)excludeAssignment ?? DBNull.Value });
-        return (long)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
     // ------------------------------------------------------------------ audit
@@ -656,11 +622,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        await using (var lck = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@k, 4))", conn, tx))
-        {
-            lck.Parameters.AddWithValue("k", "hasm.access." + companyId.ToString("N"));
-            await lck.ExecuteNonQueryAsync(ct);
-        }
+        await AdministratorContinuity.LockCompanyAsync(conn, tx, companyId, ct);
         if (!LoginName.TryNormalize(login, out var normalized)) return BootstrapStatus.UserNotFound;
         var member = await GrantCoreAsync(conn, tx, null, companyId, normalized, ct);
         if (!member.IsOk && member.Code != "already_member")

@@ -105,8 +105,10 @@ public class LastAdministratorTests : AccessTestBase
         var admin = await NewAdmin(company);
         var op = await NewOperator(company, admin);
         var other = await NewMember(company, admin, "other");
-        // Simulate an out-of-band loss of the administrator (e.g. identity administrator disabled them).
-        await Auth.SetUserStateAsync(op.Id, admin.Id, UserState.Disabled);
+        // Simulate an out-of-band loss of the administrator (legacy data or direct database change). Since Phase 2.3C-1 the identity
+        // API refuses to disable the last administrator, so the loss is applied directly to prove the cleanup/recovery paths remain.
+        await Exec($"UPDATE {SystemSchema.User.Table} SET {SystemSchema.User.State} = 1 WHERE {SystemSchema.User.Id} = @i", ("i", admin.Id));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Ra.Table} a JOIN {SystemSchema.User.Table} u ON u.{SystemSchema.User.Id} = a.{Ra.UserId} WHERE a.{Ra.CompanyId} = @c AND a.{Ra.RoleId} = @r AND u.{SystemSchema.User.State} = 0", ("c", company), ("r", PresetRoles.CompanyAdministratorId)));
 
         Ok(await Access.RevokeMembershipAsync(op.Id, company, other.Id));                                                       // total == 0 administrators: nothing to protect
         Assert.Equal(AccessService.BootstrapStatus.Granted, await Access.BootstrapCompanyAdministratorAsync((await NewPerson("rescuer")).Login, company)); // offline recovery
