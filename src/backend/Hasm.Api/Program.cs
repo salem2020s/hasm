@@ -1,6 +1,7 @@
 using System.Reflection;
 using Hasm.Api.Access;
 using Hasm.Api.Auth;
+using Hasm.Api.Company;
 using Hasm.Api.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,6 +26,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHasmAudit(builder.Configuration);
 builder.Services.AddHasmAuthentication(builder.Configuration);
 builder.Services.AddHasmAccess(builder.Configuration);
+builder.Services.AddHasmCompanyRuntime(builder.Configuration);
 
 var app = builder.Build();
 

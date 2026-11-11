@@ -32,6 +32,14 @@ public class MigrationScriptTests
         Assert.Throws<MigrationException>(() => MigrationScript.Parse("0002_x.sql", sql));
 
     [Fact]
+    public void An_append_only_truncate_guard_trigger_is_allowed_but_a_truncate_statement_is_not()
+    {
+        MigrationScript.Parse("0002_x.sql", "CREATE TRIGGER r BEFORE TRUNCATE ON t FOR EACH STATEMENT EXECUTE FUNCTION f();");
+        Assert.Throws<MigrationException>(() => MigrationScript.Parse("0002_x.sql", "CREATE TRIGGER r BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION f(); TRUNCATE t;"));
+        Assert.Throws<MigrationException>(() => MigrationScript.Parse("0002_x.sql", "SELECT 1 BEFORE; TRUNCATE TABLE t;"));
+    }
+
+    [Fact]
     public void Destructive_words_in_comments_are_ignored() =>
         MigrationScript.Parse("0002_x.sql", "-- we never DROP anything\nCREATE TABLE x (a int);");
 

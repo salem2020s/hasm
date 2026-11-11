@@ -24,6 +24,28 @@ public sealed class HasmDatabaseOptions
     /// <summary>Privileged account used only by the explicit administrative tool (create DB + migrate).</summary>
     public string? AdminUsername { get; init; }
     public string? AdminPassword { get; init; }
+    /// <summary>
+    /// Optional separate account that holds CREATEROLE (never superuser) and is used ONLY by <c>grant-company-runtime</c> to create the
+    /// per-company runtime login role and set its password. Falls back to the admin account when unset (which then needs CREATEROLE).
+    /// </summary>
+    public string? RoleAdminUsername { get; init; }
+    public string? RoleAdminPassword { get; init; }
+    /// <summary>
+    /// Directory holding one owner-only credential file per company runtime role (written by <c>grant-company-runtime</c>, read by the API).
+    /// Credentials are never stored in application tables. May be a mounted secret store.
+    /// </summary>
+    public string? CompanyCredentialDirectory { get; init; }
+    /// <summary>Upper bound of pooled connections per company (the runtime role's PostgreSQL CONNECTION LIMIT is derived from it).</summary>
+    public int CompanyMaxPoolSize { get; init; } = DefaultCompanyMaxPoolSize;
+    /// <summary>
+    /// Explicit opt-in to run company databases with a runtime role that is over-privileged (owner/DDL/audit-modifying). Defaults to false:
+    /// the API refuses such a database. Only for disposable single-account test environments.
+    /// </summary>
+    public bool AllowOverprivilegedCompanyRuntime { get; init; }
+
+    public const int DefaultCompanyMaxPoolSize = 10;
+    public const int MaxCompanyMaxPoolSize = 50;
+
     public string MaintenanceDatabase { get; init; } = "postgres";
     /// <summary>
     /// Defaults to VerifyFull. Npgsql's Require/Prefer encrypt but do NOT validate the server
@@ -54,6 +76,14 @@ public sealed class HasmDatabaseOptions
         var allowInsecure = false;
         if (insecureText is not null && !bool.TryParse(insecureText, out allowInsecure))
             errors.Add($"{SectionName}:AllowInsecureTransport must be true or false.");
+        var poolSize = DefaultCompanyMaxPoolSize;
+        var poolText = Get("CompanyMaxPoolSize");
+        if (poolText is not null && (!int.TryParse(poolText, out poolSize) || poolSize is < 1 or > MaxCompanyMaxPoolSize))
+            errors.Add($"{SectionName}:CompanyMaxPoolSize must be an integer between 1 and {MaxCompanyMaxPoolSize}.");
+        var overText = Get("AllowOverprivilegedCompanyRuntime");
+        var allowOver = false;
+        if (overText is not null && !bool.TryParse(overText, out allowOver))
+            errors.Add($"{SectionName}:AllowOverprivilegedCompanyRuntime must be true or false.");
         if (errors.Count > 0)
             throw new DatabaseConfigurationException(Format(errors));
 
@@ -66,6 +96,11 @@ public sealed class HasmDatabaseOptions
             Password = Get("Password"),
             AdminUsername = Get("AdminUsername"),
             AdminPassword = Get("AdminPassword"),
+            RoleAdminUsername = Get("RoleAdminUsername"),
+            RoleAdminPassword = Get("RoleAdminPassword"),
+            CompanyCredentialDirectory = Get("CompanyCredentialDirectory"),
+            CompanyMaxPoolSize = poolSize,
+            AllowOverprivilegedCompanyRuntime = allowOver,
             MaintenanceDatabase = Get("MaintenanceDatabase") ?? "postgres",
             SslMode = sslMode,
             SslRootCertificate = Get("SslRootCertificate"),
@@ -84,6 +119,7 @@ public sealed class HasmDatabaseOptions
         if (SystemDatabaseName is null) errors.Add($"{SectionName}:SystemDatabaseName is required.");
         else if (!PhysicalIdentifier.IsValid(SystemDatabaseName, out var e))
             errors.Add($"{SectionName}:SystemDatabaseName is invalid: {e}");
+        if (CompanyMaxPoolSize is < 1 or > MaxCompanyMaxPoolSize) errors.Add($"{SectionName}:CompanyMaxPoolSize is out of range.");
         if (!PhysicalIdentifier.IsValid(MaintenanceDatabase))
             errors.Add($"{SectionName}:MaintenanceDatabase is invalid.");
 
@@ -130,6 +166,63 @@ public sealed class HasmDatabaseOptions
         return Build(physicalDatabaseName, admin: true);
     }
 
+    /// <summary>
+    /// Connection string for one company database with that company's OWN runtime role (never the shared runtime or the admin account).
+    /// Pooling is bounded per company. The name must be a valid opaque identifier and never the system or maintenance database.
+    /// Treat the result as a secret.
+    /// </summary>
+    public string BuildCompanyRuntimeConnectionString(string physicalDatabaseName, string roleName, string rolePassword)
+    {
+        PhysicalIdentifier.Validate(physicalDatabaseName, nameof(physicalDatabaseName));
+        PhysicalIdentifier.Validate(roleName, nameof(roleName));
+        if (physicalDatabaseName == SystemDatabaseName || physicalDatabaseName == MaintenanceDatabase)
+            throw new ArgumentException("Not a company database.", nameof(physicalDatabaseName));
+        if (string.IsNullOrEmpty(rolePassword)) throw new ArgumentException("A role password is required.", nameof(rolePassword));
+        var errors = Validate(requireAdmin: false).Where(e => !e.Contains(":Username") && !e.Contains(":Password")).ToList();
+        if (errors.Count > 0) throw new DatabaseConfigurationException(Format(errors));
+        return new NpgsqlConnectionStringBuilder
+        {
+            Host = Host,
+            Port = Port,
+            Database = physicalDatabaseName,
+            Username = roleName,
+            Password = rolePassword,
+            SslMode = SslMode,
+            RootCertificate = SslRootCertificate,
+            ApplicationName = "hasm-company",
+            Pooling = true,
+            MinPoolSize = 0,
+            MaxPoolSize = CompanyMaxPoolSize,
+            ConnectionIdleLifetime = 60,
+            Timeout = 5,
+            CommandTimeout = 30,
+        }.ConnectionString;
+    }
+
+    /// <summary>
+    /// Connection string (maintenance database) of the account that creates company runtime roles: the optional role-admin account,
+    /// otherwise the admin account. Treat as a secret.
+    /// </summary>
+    public string BuildRoleAdminConnectionString()
+    {
+        EnsureValid(requireAdmin: true);
+        var useRoleAdmin = RoleAdminUsername is not null && RoleAdminPassword is not null;
+        if ((RoleAdminUsername is null) != (RoleAdminPassword is null))
+            throw new DatabaseConfigurationException($"Invalid database configuration: {SectionName}:RoleAdminUsername and {SectionName}:RoleAdminPassword must be set together.");
+        return new NpgsqlConnectionStringBuilder
+        {
+            Host = Host,
+            Port = Port,
+            Database = MaintenanceDatabase,
+            Username = useRoleAdmin ? RoleAdminUsername : AdminUsername,
+            Password = useRoleAdmin ? RoleAdminPassword : AdminPassword,
+            SslMode = SslMode,
+            RootCertificate = SslRootCertificate,
+            ApplicationName = "hasm",
+            Pooling = false,
+        }.ConnectionString;
+    }
+
     private string Build(string database, bool admin)
     {
         EnsureValid(admin);
@@ -147,7 +240,7 @@ public sealed class HasmDatabaseOptions
         }.ConnectionString;
     }
 
-    public string Scrub(string? text) => SecretRedactor.Scrub(text, Password, AdminPassword);
+    public string Scrub(string? text) => SecretRedactor.Scrub(text, Password, AdminPassword, RoleAdminPassword);
 
     /// <summary>Safe to log: no credentials, no connection string.</summary>
     public override string ToString() =>

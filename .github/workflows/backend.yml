@@ -43,6 +43,7 @@ jobs:
           --health-retries 10
     env:
       HASM_REQUIRE_PG_TESTS: "1"                                      # a closed gate FAILS, never skips
+      HASM_REQUIRE_PG_ROLE_TESTS: "1"                                 # same for the tests that need real distinct PostgreSQL login roles
       HASM_TEST_PG_DISPOSABLE: yes-this-server-is-disposable           # explicit disposable-server acknowledgement
     steps:
       - uses: actions/checkout@v4
@@ -50,18 +51,24 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Create restricted test-only database role
+      - name: Create restricted test-only database roles
         run: |
           set -euo pipefail
           psql --version
           TEST_PW="$(openssl rand -hex 24)"
+          ROLE_PW="$(openssl rand -hex 24)"
           echo "::add-mask::${TEST_PW}"
-          # Minimum privileges to create/drop its own temporary databases: no superuser, role, or replication rights.
-          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -v pw="${TEST_PW}" <<'SQL'
+          echo "::add-mask::${ROLE_PW}"
+          # hasm_test_admin: the ordinary test account. Minimum privileges to create/drop its own temporary databases: no superuser, role, or replication rights.
+          # hasm_test_roleadmin: used ONLY by the per-company runtime-role tests (Phase 3.1A-1) to create and drop the login roles those tests need.
+          # It holds CREATEROLE but is not a superuser and cannot create databases; it exists only in this job-local, disposable service.
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -v pw="${TEST_PW}" -v rpw="${ROLE_PW}" <<'SQL'
           CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD :'pw';
+          CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD :'rpw';
           SQL
           # The container has no TLS; non-TLS is confined to this disposable loopback service (see DEVELOPMENT.md).
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
+          echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
 
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
@@ -73,7 +80,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 275 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 338 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -91,8 +98,12 @@ jobs:
               "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
               "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
               "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
+              # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
+              # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
+              "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 10, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
+              "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
           }
-          TOTAL = sum(EXPECTED.values())  # 275
+          TOTAL = sum(EXPECTED.values())  # 338
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

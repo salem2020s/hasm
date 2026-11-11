@@ -114,6 +114,9 @@ public abstract class PostgresTestBase : IAsyncLifetime
         return name;
     }
 
+    /// <summary>The company database names this test generated (all carry the disposable prefix); used by suites that must clean up related objects.</summary>
+    protected IReadOnlyList<string> GeneratedDatabaseNames { get { lock (companyDatabases) return [.. companyDatabases]; } }
+
     public virtual async Task DisposeAsync()
     {
         if (Options is null) return;

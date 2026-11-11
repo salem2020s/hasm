@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Authentication;
@@ -95,7 +96,7 @@ public static class AuthenticationSetup
             var headers = context.Response.Headers;
             headers["X-Content-Type-Options"] = "nosniff";
             headers["Referrer-Policy"] = "no-referrer";
-            if (new[] { "/api/v1/auth", "/api/v1/admin", "/api/v1/access", "/api/v1/session", "/api/v1/companies" }.Any(p => context.Request.Path.StartsWithSegments(p)))
+            if (new[] { "/api/v1/auth", "/api/v1/admin", "/api/v1/access", "/api/v1/session", "/api/v1/companies", "/api/v1/company" }.Any(p => context.Request.Path.StartsWithSegments(p)))
                 headers.CacheControl = "no-store";
             return Task.CompletedTask;
         });
@@ -116,6 +117,13 @@ public static class AuthenticationSetup
         await next();
     });
 
+    private static (int, string) Company(HttpContext context, CompanyDatabaseException ex)
+    {
+        // Only the short code is logged (never names, credentials or SQL); the client sees one generic code.
+        context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Hasm.Company").LogError("company.unavailable code={Code}", ex.Code);
+        return (StatusCodes.Status503ServiceUnavailable, "company_unavailable");
+    }
+
     private static (int, string) Audit(HttpContext context, AuditUnavailableException ex)
     {
         // Only the short code is logged (never keys, paths or content); the client sees one generic code.
@@ -131,6 +139,7 @@ public static class AuthenticationSetup
         {
             BadHttpRequestException b => (b.StatusCode, "bad_request"),
             AuditUnavailableException a => Audit(context, a),
+            CompanyDatabaseException c => Company(context, c),
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };

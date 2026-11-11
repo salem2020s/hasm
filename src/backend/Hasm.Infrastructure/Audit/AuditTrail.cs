@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Npgsql;
-using E = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
 
 namespace Hasm.Infrastructure.Audit;
 
@@ -11,9 +10,8 @@ public sealed record AuditServices(AuditKeyRing Keys, ICheckpointStore Checkpoin
 /// <summary>SQL for the audit table, shared by the writer and the read-only verifier.</summary>
 internal static class AuditStorage
 {
-    public const string Columns =
-        $"{E.StreamKey}, {E.Seq}, {E.EventId}, {E.OccurredAtUtc}, {E.EventType}, {E.CompanyId}, {E.ActorUserId}, {E.TargetUserId}, " +
-        $"{E.SubjectId}, {E.LegacyRef}, {E.Detail}, {E.FormatVersion}, {E.KeyId}, {E.PrevHash}, {E.Hash}, {E.Mac}";
+    /// <summary>Select list of the system audit table (kept for existing callers); other tables use <see cref="AuditTableMap.SelectColumns"/>.</summary>
+    public static string Columns => AuditTableMap.System.SelectColumns;
 
     public static AuditRecord Read(NpgsqlDataReader r) => new(
         r.GetString(0), r.GetInt64(1), r.GetGuid(2), AuditCanonical.ToMicros(r.GetFieldValue<DateTimeOffset>(3)), r.GetInt16(4),
@@ -69,6 +67,13 @@ public sealed class AuditTrail
         AuditEventData data, CancellationToken ct = default)
     {
         if (data.EventType < 1) throw new ArgumentOutOfRangeException(nameof(data), "Audit event types start at 1.");
+        var map = AuditTableMap.For(stream);
+        if (stream.IsBusiness)
+        {
+            // Business events live in the company database: only the reserved business range, and no legacy projection exists for them.
+            if (data.EventType < AuditEventTypes.FutureRangeStart) throw new ArgumentOutOfRangeException(nameof(data), "Business audit event types start at 1000.");
+            if (data.LegacyRef is not null) throw new ArgumentException("Business audit events have no legacy reference.", nameof(data));
+        }
         var svc = services.Value;                      // throws AuditConfigurationException when unconfigured
         var key = svc.Keys.GetActive();                // throws when the active key is missing
 
@@ -78,7 +83,7 @@ public sealed class AuditTrail
             await lck.ExecuteNonQueryAsync(ct);
         }
 
-        var head = await ReadHeadAsync(conn, tx, stream.Key, ct);
+        var head = await ReadHeadAsync(conn, tx, map, stream.Key, ct);
         var firstTouch = touched.GetOrCreateValue(tx).Add(stream.Key);
         if (firstTouch) await EnsureHeadIsSoundAndAnchoredAsync(svc, stream.Key, head, ct);     // committed state only
 
@@ -88,8 +93,7 @@ public sealed class AuditTrail
             head?.Hash ?? AuditCanonical.GenesisHash(stream.Key), [], []);
         var rec = AuditCanonical.Seal(unsealed, key);
 
-        await using var cmd = new NpgsqlCommand(
-            $"INSERT INTO {E.Table} ({AuditStorage.Columns}) VALUES (@s,@q,@id,@t,@e,@c,@a,@tu,@su,@l,@d,@v,@k,@p,@h,@m)", conn, tx);
+        await using var cmd = new NpgsqlCommand(map.InsertSql, conn, tx);
         cmd.Parameters.AddWithValue("s", rec.StreamKey);
         cmd.Parameters.AddWithValue("q", rec.Seq);
         cmd.Parameters.AddWithValue("id", rec.EventId);
@@ -99,7 +103,7 @@ public sealed class AuditTrail
         cmd.Parameters.AddWithValue("a", (object?)rec.ActorUserId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("tu", (object?)rec.TargetUserId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("su", (object?)rec.SubjectId ?? DBNull.Value);
-        cmd.Parameters.Add(new NpgsqlParameter("l", NpgsqlTypes.NpgsqlDbType.Bigint) { Value = (object?)rec.LegacyRef ?? DBNull.Value });
+        if (map.HasLegacyRef) cmd.Parameters.Add(new NpgsqlParameter("l", NpgsqlTypes.NpgsqlDbType.Bigint) { Value = (object?)rec.LegacyRef ?? DBNull.Value });
         cmd.Parameters.AddWithValue("d", (object?)rec.Detail ?? DBNull.Value);
         cmd.Parameters.AddWithValue("v", rec.FormatVersion);
         cmd.Parameters.AddWithValue("k", rec.KeyId);
@@ -146,9 +150,9 @@ public sealed class AuditTrail
         await svc.Checkpoints.AppendAsync(receipt.StreamKey, receipt.Seq, receipt.Hash, AuditCanonical.ToMicros(clock.GetUtcNow()), svc.Keys.GetActive(), ct);
     }
 
-    private static async Task<AuditRecord?> ReadHeadAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string streamKey, CancellationToken ct)
+    private static async Task<AuditRecord?> ReadHeadAsync(NpgsqlConnection conn, NpgsqlTransaction tx, AuditTableMap map, string streamKey, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand($"SELECT {AuditStorage.Columns} FROM {E.Table} WHERE {E.StreamKey} = @s ORDER BY {E.Seq} DESC LIMIT 1", conn, tx);
+        await using var cmd = new NpgsqlCommand($"SELECT {map.SelectColumns} FROM {map.Table} WHERE {map.StreamKey} = @s ORDER BY {map.Seq} DESC LIMIT 1", conn, tx);
         cmd.Parameters.AddWithValue("s", streamKey);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         return await r.ReadAsync(ct) ? AuditStorage.Read(r) : null;

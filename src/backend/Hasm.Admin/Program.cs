@@ -6,6 +6,7 @@ using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.SystemDatabase;
 using Microsoft.Extensions.Configuration;
+using Npgsql;
 
 // Explicit administrative tool. Never started by the API; uses the privileged database account.
 // Usage:
@@ -13,24 +14,32 @@ using Microsoft.Extensions.Configuration;
 //   Hasm.Admin register-company              (registers a Pending company; prints its id only)
 //   Hasm.Admin bootstrap-admin <login> [display name]  (creates the FIRST identity administrator; refuses if one exists)
 //   Hasm.Admin provision-company <company-id> (creates + migrates its separate database; safe to repeat/resume)
+//   Hasm.Admin migrate-companies [--company <id>]  (applies pending forward-only company migrations to Ready companies; per-company outcome; exit 8 on partial failure)
+//   Hasm.Admin grant-company-runtime <company-id> [--rotate-credential]  (creates/updates the company's own least-privilege runtime login role and credential file; idempotent)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
-//   Hasm.Admin audit-verify <system|company-id> [--checkpoint-dir <dir>]   (READ-ONLY integrity verification; exit 0 verified, 6 failed, 7 incomplete)
+//   Hasm.Admin audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>]   (READ-ONLY integrity verification; exit 0 verified, 6 failed, 7 incomplete)
 //   Hasm.Admin audit-anchor <system|company-id> [--establish-baseline]  (records the head of a sound stream in the checkpoint store; never changes the database)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
 
-const int Ok = 0, Failed = 1, Usage = 2, BadConfig = 3, InProgress = 4, AdminExists = 5, AuditFailed = 6, AuditIncomplete = 7;
+const int Ok = 0, Failed = 1, Usage = 2, BadConfig = 3, InProgress = 4, AdminExists = 5, AuditFailed = 6, AuditIncomplete = 7, PartialFailure = 8;
 
 var command = args.Length > 0 ? args[0] : null;
 Guid companyId = Guid.Empty;
 AuditStream auditStream = default;
 string? checkpointDirOverride = null;
+Guid? onlyCompany = null;
+var rotateCredential = false;
 var validUsage = command switch
 {
     "init-system-db" or "register-company" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
+    "migrate-companies" => args.Length == 1
+        || (args.Length == 3 && args[1] == "--company" && Guid.TryParse(args[2], out var only) && only != Guid.Empty && (onlyCompany = only) is not null),
+    "grant-company-runtime" => (args.Length == 2 || (args.Length == 3 && (rotateCredential = args[2] == "--rotate-credential")))
+        && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
@@ -40,7 +49,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | audit-keygen <key-id> | audit-verify <system|company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id> [--establish-baseline]");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | audit-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
     return Usage;
 }
 
@@ -164,16 +173,56 @@ try
         case "audit-verify":
         {
             var (keys, store) = BuildAuditEvidence(auditOptions, checkpointDirOverride, requireActiveKey: false);
-            var report = await new AuditVerifier(options.BuildSystemConnectionString(admin: false), keys, store).VerifyAsync(auditStream);
+            var report = await new AuditVerifier(await VerifierConnectionAsync(options, auditStream), keys, store).VerifyAsync(auditStream);
             PrintReport(report);
             return report.Verdict switch { AuditVerdict.Verified => Ok, AuditVerdict.Failed => AuditFailed, _ => AuditIncomplete };
         }
         case "audit-anchor":
         {
             var (keys, store) = BuildAuditEvidence(auditOptions, null, requireActiveKey: true);
-            var anchored = await new AuditVerifier(options.BuildSystemConnectionString(admin: false), keys, store).AnchorHeadAsync(auditStream, TimeProvider.System, args.Length == 3);
+            var anchored = await new AuditVerifier(await VerifierConnectionAsync(options, auditStream), keys, store).AnchorHeadAsync(auditStream, TimeProvider.System, args.Length == 3);
             Console.WriteLine(anchored is { } seq ? $"Stream head anchored at sequence {seq}." : "The stream is empty; nothing to anchor.");
             return Ok;
+        }
+        case "migrate-companies":
+        {
+            var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
+            var outcomes = await new CompanyMigrator(options, registry).MigrateAsync(onlyCompany);
+            foreach (var o in outcomes)
+                Console.WriteLine($"Company {o.CompanyId}: {o.Status}" + (o.Applied.Count > 0 ? $" (applied {string.Join(", ", o.Applied.Select(v => v.ToString("0000")))})" : "") + (o.ErrorCode is null ? "" : $" [{o.ErrorCode}]"));
+            var failed = outcomes.Count(o => o.Status == CompanyMigrationStatus.Failed);
+            var busy = outcomes.Count(o => o.Status == CompanyMigrationStatus.Busy);
+            var skipped = outcomes.Count(o => o.Status == CompanyMigrationStatus.NotReady);
+            var done = outcomes.Count(o => o.Status is CompanyMigrationStatus.Migrated or CompanyMigrationStatus.UpToDate);
+            Console.WriteLine($"Summary: {outcomes.Count} company(ies): {done} current, {failed} failed, {busy} busy, {skipped} not Ready (skipped).");
+            if (outcomes.Any(o => o.Status == CompanyMigrationStatus.Migrated))
+                Console.WriteLine("Run grant-company-runtime for each migrated company so the runtime role receives privileges on newly created tables.");
+            if (failed > 0) return done > 0 ? PartialFailure : Failed;
+            if (busy > 0) return InProgress;
+            return onlyCompany is not null && skipped > 0 ? Failed : Ok;
+        }
+        case "grant-company-runtime":
+        {
+            var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
+            RuntimeGrantResult result;
+            try { result = await new CompanyRuntimeProvisioner(options, registry).GrantAsync(companyId, rotateCredential); }
+            catch (CompanyRuntimeProvisioningException ex) { Console.Error.WriteLine($"grant-company-runtime stopped ({ex.Code}): {ex.Message}"); return Failed; }
+            catch (CompanyCredentialException ex) { Console.Error.WriteLine($"grant-company-runtime stopped ({ex.Code}): the credential store is unusable or unsafe."); return Failed; }
+            if (result.Outcome == RuntimeGrantOutcome.InProgressElsewhere)
+            {
+                Console.Error.WriteLine("Another process is working on this company; nothing was done.");
+                return InProgress;
+            }
+            Console.WriteLine(result.RoleCreated ? "Runtime login role created." : "Runtime login role already existed (verified safe).");
+            Console.WriteLine(result.CredentialWritten ? "A new credential was generated and installed in the credential directory (never printed)." : "Existing credential kept.");
+            Console.WriteLine("Runtime privileges applied and verified: this company database only; no ownership, DDL, or audit modification.");
+            if (!result.CredentialPresent)
+            {
+                Console.Error.WriteLine("No credential file exists for this company (the role was created outside this tool). Install its credential or run again with --rotate-credential.");
+                return Failed;
+            }
+            Console.WriteLine(result.LoginVerified ? "Runtime login and schema gate verified." : "Runtime login could not be verified.");
+            return result.LoginVerified ? Ok : Failed;
         }
         default: // provision-company
         {
@@ -206,12 +255,35 @@ catch (AuditUnavailableException ex)
     Console.Error.WriteLine($"{command} stopped: audit protection is unavailable or the stream is inconsistent ({ex.Code}); nothing was changed.");
     return command is "audit-anchor" ? AuditFailed : Failed;
 }
+catch (CompanyNotFoundException)
+{
+    Console.Error.WriteLine($"{command} stopped: the company is not registered; nothing was changed.");
+    return Failed;
+}
+catch (PostgresException ex) when (command is "migrate-companies" or "grant-company-runtime")
+{
+    // PostgreSQL messages may quote object names; only the SQLSTATE is printed.
+    Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");
+    return Failed;
+}
 catch (Exception ex)
 {
     // Never print connection strings or secrets; scrub the message and omit stack traces.
     // For provisioning failures the company is marked Failed centrally; its database is never dropped.
     Console.Error.WriteLine($"{command} failed: {ex.GetType().Name}: {options.Scrub(ex.Message)}");
     return Failed;
+}
+
+// Business streams live in the company database and are read with that company runtime role (least privilege).
+static async Task<string> VerifierConnectionAsync(HasmDatabaseOptions options, AuditStream stream)
+{
+    if (!stream.IsBusiness) return options.BuildSystemConnectionString(admin: false);
+    if (options.CompanyCredentialDirectory is null) throw new DatabaseConfigurationException("Invalid database configuration: Hasm:Database:CompanyCredentialDirectory is required.");
+    var company = await new CompanyRegistry(options.BuildSystemConnectionString(admin: false)).GetAsync(stream.CompanyId!.Value) ?? throw new CompanyNotFoundException(stream.CompanyId.Value);
+    var role = CompanyRuntimeRole.NameFor(company.PhysicalDatabaseName);
+    var credential = await new FileCompanyCredentialStore(options.CompanyCredentialDirectory).GetAsync(company.Id);
+    if (credential is null || credential.Username != role) throw new DatabaseConfigurationException("No runtime credential is provisioned for this company; run grant-company-runtime.");
+    return options.BuildCompanyRuntimeConnectionString(company.PhysicalDatabaseName, role, credential.Password);
 }
 
 static string ReadHidden(string prompt)

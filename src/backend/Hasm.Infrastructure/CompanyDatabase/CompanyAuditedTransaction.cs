@@ -1,0 +1,59 @@
+using Hasm.Infrastructure.Audit;
+using Npgsql;
+
+namespace Hasm.Infrastructure.CompanyDatabase;
+
+/// <summary>The unit of work handed to a business service: the company transaction and the way to append its authenticated audit events.</summary>
+public sealed class CompanyAuditedWork
+{
+    private readonly AuditTrail trail;
+    private readonly TimeProvider clock;
+    private readonly List<AuditReceipt> receipts = [];
+
+    internal CompanyAuditedWork(Guid companyId, NpgsqlConnection connection, NpgsqlTransaction transaction, AuditTrail trail, TimeProvider clock)
+    {
+        CompanyId = companyId;
+        Connection = connection;
+        Transaction = transaction;
+        this.trail = trail;
+        this.clock = clock;
+    }
+
+    public Guid CompanyId { get; }
+    /// <summary>The company-database connection (runtime role). Business statements must run on it, inside <see cref="Transaction"/>.</summary>
+    public NpgsqlConnection Connection { get; }
+    public NpgsqlTransaction Transaction { get; }
+    internal IReadOnlyList<AuditReceipt> Receipts => receipts;
+
+    /// <summary>
+    /// Appends one authenticated event to the company's business stream INSIDE the transaction. Take every business lock first: the
+    /// stream lock is taken here and must be the last lock of the transaction. Event types are 1000 and above.
+    /// </summary>
+    public async Task AppendAuditAsync(AuditEventData data, CancellationToken ct = default) =>
+        receipts.Add(await trail.AppendAsync(Connection, Transaction, AuditStream.ForBusiness(CompanyId), clock.GetUtcNow(), data, ct));
+}
+
+/// <summary>
+/// The only sanctioned way for business services to change company data. The business change and its audit event(s) are committed by ONE
+/// PostgreSQL transaction in the company database (<see cref="AuditTrail.CommitAsync(NpgsqlTransaction, IEnumerable{AuditReceipt}, CancellationToken)"/>);
+/// a failure of either rolls both back, and a mutation without any audit event is refused and rolled back. After the commit the new
+/// head is anchored in the external checkpoint store (a failure there blocks the NEXT mutation, never undoes this one). Runs through
+/// <see cref="CompanyDatabaseResolver"/>, so only a Ready company, with a compatible schema, through its own least-privilege role.
+/// </summary>
+public sealed class CompanyAuditedTransactions(CompanyDatabaseResolver resolver, AuditTrail trail, TimeProvider clock)
+{
+    public async Task<T> ExecuteAsync<T>(Guid companyId, Func<CompanyAuditedWork, Task<T>> work, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var unit = new CompanyAuditedWork(companyId, conn, tx, trail, clock);
+        var result = await work(unit);      // an exception disposes the transaction without committing: nothing is persisted
+        if (unit.Receipts.Count == 0)
+            throw new InvalidOperationException("A company business mutation must append at least one audit event.");
+        await trail.CommitAsync(tx, unit.Receipts, ct);
+        return result;
+    }
+
+    public async Task ExecuteAsync(Guid companyId, Func<CompanyAuditedWork, Task> work, CancellationToken ct = default) =>
+        await ExecuteAsync<object?>(companyId, async w => { await work(w); return null; }, ct);
+}
