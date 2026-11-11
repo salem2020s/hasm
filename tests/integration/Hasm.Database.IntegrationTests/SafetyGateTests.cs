@@ -47,4 +47,26 @@ public class SafetyGateTests
         Assert.StartsWith("hasm_test_", name);
         Assert.True(Hasm.Infrastructure.Naming.PhysicalIdentifier.IsValid(name));
     }
+
+    private const string Admin = "Host=localhost;Username=hasm_test_admin;Password=p";
+
+    [Fact]
+    public void Role_gate_needs_the_ordinary_gate_and_a_loopback_role_admin_connection()
+    {
+        Assert.Null(PostgresRoleTestEnvironment.Evaluate(Admin, "Host=127.0.0.1;Username=hasm_test_roleadmin;Password=p", Ack));
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate(Admin, null, Ack));                                                    // no separately prepared account
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate(Admin, " ", Ack));
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate(Admin, "Host=db.prod.example.com;Username=r;Password=p", Ack));         // not loopback
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate(Admin, "Host=localhost;Username=r;Password=p", null));                 // not acknowledged
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate("Host=db.prod.example.com;Username=u;Password=p", "Host=localhost;Username=r;Password=p", Ack));
+        Assert.NotNull(PostgresRoleTestEnvironment.Evaluate(null, "Host=localhost;Username=r;Password=p", Ack));
+    }
+
+    [Fact]
+    public void Role_gate_messages_do_not_echo_connection_strings()
+    {
+        var reason = PostgresRoleTestEnvironment.Evaluate(Admin, "Host=db.prod.example.com;Username=r;Password=TopSecret", Ack);
+        Assert.DoesNotContain("TopSecret", reason);
+        Assert.DoesNotContain("db.prod.example.com", reason);
+    }
 }

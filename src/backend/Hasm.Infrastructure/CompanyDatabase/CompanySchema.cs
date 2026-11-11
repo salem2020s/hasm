@@ -20,8 +20,67 @@ public static class CompanySchema
         public const string GuardTrigger = "r_ec68b932";
     }
 
+    /// <summary>Company-business audit events (company migration 0002); one chain per company, stream 'business:&lt;company id&gt;'.</summary>
+    public static class BusinessAudit
+    {
+        public const string Table = "t_2db8cf1f";
+        public const string StreamKey = "c_839d1168";
+        public const string Seq = "c_689dc6c4";
+        public const string EventId = "c_ef116a9d";
+        public const string CompanyId = "c_f02e2cd0";
+        public const string OccurredAtUtc = "c_e01c5070";
+        public const string EventType = "c_4c6c6496";
+        public const string ActorUserId = "c_b11011ac";
+        public const string TargetUserId = "c_deb363a5";
+        public const string SubjectId = "c_629e971c";
+        public const string Detail = "c_9881ea62";
+        public const string FormatVersion = "c_b4c43b5e";
+        public const string KeyId = "c_0e8a7d69";
+        public const string PrevHash = "c_d8a88c1d";
+        public const string Hash = "c_a9921270";
+        public const string Mac = "c_b0fdf392";
+        public const string PrimaryKey = "k_00c2489b";
+        public const string UniqueEventId = "k_b10664e1";
+        public const string CheckStream = "k_18ddb3ac";
+        public const string CheckLengths = "k_a89e988d";
+        public const string CheckDetail = "k_00e125c1";
+        public const string CheckFields = "k_5837bd14";
+        public const string GuardFunction = "f_d0f1d840";
+        public const string GuardTrigger = "r_4427e195";
+        public const string TruncateTrigger = "r_6b55b14e";
+        public const string BindFunction = "f_104f29c0";
+        public const string BindTrigger = "r_44f2cd47";
+    }
+
     public static IReadOnlyDictionary<string, string> Map { get; } = new Dictionary<string, string>
     {
+        ["BusinessAudit"] = BusinessAudit.Table,
+        ["BusinessAudit.StreamKey"] = BusinessAudit.StreamKey,
+        ["BusinessAudit.Seq"] = BusinessAudit.Seq,
+        ["BusinessAudit.EventId"] = BusinessAudit.EventId,
+        ["BusinessAudit.CompanyId"] = BusinessAudit.CompanyId,
+        ["BusinessAudit.OccurredAtUtc"] = BusinessAudit.OccurredAtUtc,
+        ["BusinessAudit.EventType"] = BusinessAudit.EventType,
+        ["BusinessAudit.ActorUserId"] = BusinessAudit.ActorUserId,
+        ["BusinessAudit.TargetUserId"] = BusinessAudit.TargetUserId,
+        ["BusinessAudit.SubjectId"] = BusinessAudit.SubjectId,
+        ["BusinessAudit.Detail"] = BusinessAudit.Detail,
+        ["BusinessAudit.FormatVersion"] = BusinessAudit.FormatVersion,
+        ["BusinessAudit.KeyId"] = BusinessAudit.KeyId,
+        ["BusinessAudit.PrevHash"] = BusinessAudit.PrevHash,
+        ["BusinessAudit.Hash"] = BusinessAudit.Hash,
+        ["BusinessAudit.Mac"] = BusinessAudit.Mac,
+        ["BusinessAudit.PrimaryKey"] = BusinessAudit.PrimaryKey,
+        ["BusinessAudit.UniqueEventId"] = BusinessAudit.UniqueEventId,
+        ["BusinessAudit.CheckStream"] = BusinessAudit.CheckStream,
+        ["BusinessAudit.CheckLengths"] = BusinessAudit.CheckLengths,
+        ["BusinessAudit.CheckDetail"] = BusinessAudit.CheckDetail,
+        ["BusinessAudit.CheckFields"] = BusinessAudit.CheckFields,
+        ["BusinessAudit.GuardFunction"] = BusinessAudit.GuardFunction,
+        ["BusinessAudit.GuardTrigger"] = BusinessAudit.GuardTrigger,
+        ["BusinessAudit.TruncateTrigger"] = BusinessAudit.TruncateTrigger,
+        ["BusinessAudit.BindFunction"] = BusinessAudit.BindFunction,
+        ["BusinessAudit.BindTrigger"] = BusinessAudit.BindTrigger,
         ["Identity"] = Identity.Table,
         ["Identity.Singleton"] = Identity.Singleton,
         ["Identity.CompanyId"] = Identity.CompanyId,

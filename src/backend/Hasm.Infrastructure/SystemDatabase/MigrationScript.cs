@@ -20,7 +20,8 @@ public sealed partial record MigrationScript(int Version, string Name, string Sq
     [GeneratedRegex(@"--[^\n]*")]
     private static partial Regex LineComment();
 
-    [GeneratedRegex(@"\b(DROP|TRUNCATE)\b|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase)]
+    // "BEFORE TRUNCATE" is the append-only guard trigger (protective); every other TRUNCATE statement stays forbidden.
+    [GeneratedRegex(@"\bDROP\b|(?<!\bBEFORE\s+)\bTRUNCATE\b|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase)]
     private static partial Regex Destructive();
 
     public static MigrationScript Parse(string fileName, string sql)

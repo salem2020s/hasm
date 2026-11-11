@@ -118,7 +118,7 @@ public sealed class CompanyProvisioner(
             throw new CompanyConsistencyException("The company database does not carry the identity of its registry entry.");
     }
 
-    private void EnsureSafeTarget(string name)
+    internal void EnsureSafeTarget(string name)
     {
         if (name == options.SystemDatabaseName || name == options.MaintenanceDatabase || ReservedNames.Contains(name))
             throw new CompanyConsistencyException("The registered database name collides with a protected database; refusing to touch it.");
@@ -130,7 +130,7 @@ public sealed class CompanyProvisioner(
         ct.ThrowIfCancellationRequested();
     }
 
-    private static async Task<bool> TryLockAsync(NpgsqlConnection conn, Guid companyId, CancellationToken ct)
+    internal static async Task<bool> TryLockAsync(NpgsqlConnection conn, Guid companyId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand("SELECT pg_try_advisory_lock(@ns, @key)", conn);
         cmd.Parameters.AddWithValue("ns", LockNamespace);

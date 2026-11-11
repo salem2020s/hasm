@@ -1,18 +1,28 @@
 namespace Hasm.Infrastructure.Audit;
 
 /// <summary>
-/// An independent, append-only, hash-chained audit stream: one system-wide stream (identity and other cross-company events)
-/// and one stream per company. Streams never share a chain, a sequence or a lock, so company data cannot leak across streams.
+/// An independent, append-only, hash-chained audit stream: one system-wide stream (identity and other cross-company events),
+/// one access stream per company (system database) and one BUSINESS stream per company (stored in that company's own database,
+/// so a business mutation and its audit event share one PostgreSQL transaction). Streams never share a chain, a sequence, a lock,
+/// a storage table or a checkpoint file, so company data cannot leak across streams. The stream key is inside every authenticated
+/// record and checkpoint, which domain-separates the streams cryptographically as well.
 /// </summary>
 public readonly record struct AuditStream
 {
     public const string SystemKey = "system";
     private const string CompanyPrefix = "company:";
+    private const string BusinessPrefix = "business:";
 
     public string Key { get; }
     public Guid? CompanyId { get; }
+    /// <summary>True for the per-company business stream, which is stored in the company database (see <see cref="AuditTableMap"/>).</summary>
+    public bool IsBusiness { get; }
 
-    private AuditStream(string key, Guid? companyId) { Key = key; CompanyId = companyId; }
+    private AuditStream(string key, Guid? companyId, bool isBusiness = false) { Key = key; CompanyId = companyId; IsBusiness = isBusiness; }
+
+    public static AuditStream ForBusiness(Guid companyId) =>
+        companyId == Guid.Empty ? throw new ArgumentException("A business stream needs a company id.", nameof(companyId))
+                                : new(BusinessPrefix + companyId.ToString("N"), companyId, isBusiness: true);
 
     public static AuditStream System => new(SystemKey, null);
 
@@ -20,15 +30,17 @@ public readonly record struct AuditStream
         companyId == Guid.Empty ? throw new ArgumentException("A company stream needs a company id.", nameof(companyId))
                                 : new(CompanyPrefix + companyId.ToString("N"), companyId);
 
-    /// <summary>Parses "system", "company:&lt;id&gt;" or a bare company id.</summary>
+    /// <summary>Parses "system", "company:&lt;id&gt;", "business:&lt;id&gt;" or a bare company id (the access stream).</summary>
     public static bool TryParse(string? text, out AuditStream stream)
     {
         stream = default;
         if (string.IsNullOrWhiteSpace(text)) return false;
         text = text.Trim();
         if (text.Equals(SystemKey, StringComparison.OrdinalIgnoreCase)) { stream = System; return true; }
-        if (text.StartsWith(CompanyPrefix, StringComparison.OrdinalIgnoreCase)) text = text[CompanyPrefix.Length..];
-        if (Guid.TryParse(text, out var id) && id != Guid.Empty) { stream = ForCompany(id); return true; }
+        var business = text.StartsWith(BusinessPrefix, StringComparison.OrdinalIgnoreCase);
+        if (business) text = text[BusinessPrefix.Length..];
+        else if (text.StartsWith(CompanyPrefix, StringComparison.OrdinalIgnoreCase)) text = text[CompanyPrefix.Length..];
+        if (Guid.TryParse(text, out var id) && id != Guid.Empty) { stream = business ? ForBusiness(id) : ForCompany(id); return true; }
         return false;
     }
 

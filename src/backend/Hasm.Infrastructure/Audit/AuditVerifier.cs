@@ -71,12 +71,13 @@ public sealed class AuditVerifier(string connectionString, AuditKeyRing keys, IC
         var legacyLinks = new List<(long Seq, long Ref)>();
         var matchedCps = new HashSet<long>();
 
+        var map = AuditTableMap.For(stream);
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
         await using (var ro = new NpgsqlCommand("SET TRANSACTION READ ONLY", conn, tx)) await ro.ExecuteNonQueryAsync(ct);
 
-        await using (var cmd = new NpgsqlCommand($"SELECT {AuditStorage.Columns} FROM {E.Table} WHERE {E.StreamKey} = @s ORDER BY {E.Seq}", conn, tx))
+        await using (var cmd = new NpgsqlCommand($"SELECT {map.SelectColumns} FROM {map.Table} WHERE {map.StreamKey} = @s ORDER BY {map.Seq}", conn, tx))
         {
             cmd.Parameters.AddWithValue("s", stream.Key);
             await using var rd = await cmd.ExecuteReaderAsync(ct);
@@ -154,17 +155,18 @@ public sealed class AuditVerifier(string connectionString, AuditKeyRing keys, IC
         }
 
         long legacyUnprotected = 0;
-        if (stream.CompanyId is { } companyId)
+        // Only the access stream of a company has a legacy projection (in the system database); business streams have none.
+        if (stream.CompanyId is { } companyId && !stream.IsBusiness)
             legacyUnprotected = await CheckLegacyProjectionAsync(conn, tx, companyId, legacyLinks, Add, ct);
 
         // A stream with no records proves nothing about history that exists elsewhere: never report "Verified" next to unauthenticated history.
         if (events == 0)
         {
-            var hasHistory = stream.CompanyId is not null ? legacyUnprotected > 0 : await ScalarExistsAsync(conn, tx, $"SELECT EXISTS (SELECT 1 FROM {U.Table})", ct);
+            var hasHistory = stream.IsBusiness ? false : stream.CompanyId is not null ? legacyUnprotected > 0 : await ScalarExistsAsync(conn, tx, $"SELECT EXISTS (SELECT 1 FROM {U.Table})", ct);
             if (hasHistory)
                 Add("no_authenticated_history", FindingSeverity.Incomplete, null, "The stream has no authenticated records although records or users predate the integrity chain.");
         }
-        if (await VerifierCanModifyAuditAsync(conn, tx, ct))
+        if (await VerifierCanModifyAuditAsync(conn, tx, map.Table, ct))
             Add("verifier_account_can_modify_audit", FindingSeverity.Note, null, "The database account used for verification owns the audit table or can modify it; the API runtime account must not.");
 
         var verdict = findings.Any(f => f.Severity == FindingSeverity.Failure) ? AuditVerdict.Failed
@@ -182,12 +184,12 @@ public sealed class AuditVerifier(string connectionString, AuditKeyRing keys, IC
     }
 
     /// <summary>True when the connected account owns the audit table or holds UPDATE, DELETE or TRUNCATE on it (informational).</summary>
-    private static async Task<bool> VerifierCanModifyAuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+    private static async Task<bool> VerifierCanModifyAuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string table, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             "SELECT pg_get_userbyid(c.relowner) = current_user OR has_table_privilege(current_user, c.oid, 'UPDATE') " +
             "OR has_table_privilege(current_user, c.oid, 'DELETE') OR has_table_privilege(current_user, c.oid, 'TRUNCATE') FROM pg_class c WHERE c.oid = to_regclass(@t)", conn, tx);
-        cmd.Parameters.AddWithValue("t", E.Table);
+        cmd.Parameters.AddWithValue("t", table);
         return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
