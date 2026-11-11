@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// Storage/localStorage are not Node globals on Node 24 (CI), only on newer Node (local); jsdom provides
+// them so the "no browser persistence" assertions run identically everywhere.
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApiClient } from "./index";
 
@@ -84,6 +87,9 @@ describe("api client", () => {
     expect((second.headers as Record<string, string>)["Authorization"]).toBe("Bearer opaque-token");
     expect(second.credentials).toBe("omit");
     expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+    expect(document.cookie).toBe("");
     await client.logout().catch(() => undefined);
     await client.listCompanies();
     expect((call(fetchMock, 3).init.headers as Record<string, string>)["Authorization"]).toBeUndefined();
