@@ -471,7 +471,7 @@ React + TypeScript; one build serves the web app and the Tauri window (hash rout
 4. **Currency dataset v1 must be verified against the current ISO 4217 amendment** before release (names, numeric codes, exponents, withdrawn currencies).
 5. **Desktop credential storage** is memory-only; no OS credential store, no refresh.
 6. **No per-user language field on the server**; the preference is a local setting.
-7. **CI** has not run on GitHub for this phase (see CI below); the CREATEROLE-dependent suites ran only on a role-capable service.
+7. **CI** has not run on GitHub for this phase (see CI below); the CREATEROLE-dependent role suites (`CompanyRuntimeIsolationTests`, `CompanyAdminToolRoleTests`) were executed in Phase 3.1A-1 on an isolated, role-capable PostgreSQL instance; in Phase 3.1A-2 they were skipped locally (no CREATEROLE environment) and have not yet been verified on GitHub CI.
 
 ## Checks
 ```
@@ -493,7 +493,7 @@ CI runs the same checks (`.github/workflows/`).
 - The Desktop app reaches the development backend only after the ASP.NET dev HTTPS certificate is trusted (`dotnet dev-certs https --trust`); certificate validation is never bypassed.
 - The GitHub Actions workflows (`.github/workflows/`) have not run yet; they are first exercised by the pull request.
 - The Desktop app has not been exercised end to end against a live backend.
-- PostgreSQL integration tests are executed only by the CI `postgres-integration` job (no PostgreSQL in the managed development environment); they pass only once that job has run green.
+- PostgreSQL integration tests run locally against real PostgreSQL on the dedicated development VM, behind the existing disposable-test safety gates (explicit disposable-server acknowledgement, loopback host only, `hasm_test_` databases created and dropped by the tests). The role-creation suites (`CompanyRuntimeIsolationTests`, `CompanyAdminToolRoleTests`) additionally need a separate, isolated PostgreSQL environment with a dedicated CREATEROLE test account; they are skipped locally and are normally verified by the GitHub CI `postgres-integration` job, which requires every PostgreSQL test to pass with none skipped. Production or unrelated databases must never be used for tests.
 - TypeScript 7 (`^7.0.2`) is used; it is a recent major version.
 - Dev-server file access (`server.fs.allow` in `apps/web/vite.config.ts`) is limited to the frontend workspace and `assets/branding/`; keep it narrow.
 
