@@ -12,7 +12,7 @@ interface I18nValue {
   locale: Locale;
   direction: Direction;
   setLocale: (locale: Locale) => void;
-  t: (key: string) => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
 }
 
 const I18nContext = createContext<I18nValue | null>(null);
@@ -52,7 +52,7 @@ export function I18nProvider({ catalog, defaultLocale = "ar", children }: {
   }, []);
 
   const value = useMemo<I18nValue>(
-    () => ({ locale, direction, setLocale, t: (key) => catalog[locale][key] ?? catalog.en[key] ?? key }),
+    () => ({ locale, direction, setLocale, t: (key, params) => interpolate(catalog[locale][key] ?? catalog.en[key] ?? key, params) }),
     [locale, direction, setLocale, catalog],
   );
 
@@ -63,4 +63,8 @@ export function useI18n(): I18nValue {
   const ctx = useContext(I18nContext);
   if (!ctx) throw new Error("useI18n must be used inside <I18nProvider>");
   return ctx;
+}
+
+function interpolate(text: string, params?: Record<string, string | number>): string {
+  return params ? text.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m)) : text;
 }

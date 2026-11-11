@@ -20,6 +20,14 @@ public static class SystemSchema
         public const string ProvisioningAttempts = "c_bf5cb42b";
         /// <summary>Added by migration 0002. Short sanitized failure code, never an error message.</summary>
         public const string LastErrorCode = "c_e6369967";
+        /// <summary>Added by migration 0006: nullable projections of the company-database names (the company database is authoritative).</summary>
+        public const string DisplayNameAr = "c_5d1a9b34";
+        public const string DisplayNameEn = "c_b7e20c68";
+        /// <summary>Added by migration 0006: monotonic revision of the projected names (0 = never projected).</summary>
+        public const string DisplayNameRevision = "c_41f8d6a2";
+        public const string CheckDisplayName = "k_9c3e7f15";
+        public const string RevisionGuardFunction = "f_7a2c9e41";
+        public const string RevisionGuardTrigger = "r_3d8b5f20";
 
         public const string PrimaryKey = "k_78d272fe";
         public const string UniqueDatabaseName = "k_b3d5d2a2";
@@ -239,6 +247,12 @@ public static class SystemSchema
         ["Company.UniqueDatabaseName"] = Company.UniqueDatabaseName,
         ["Company.CheckState"] = Company.CheckState,
         ["Company.CheckDatabaseName"] = Company.CheckDatabaseName,
+        ["Company.DisplayNameAr"] = Company.DisplayNameAr,
+        ["Company.DisplayNameEn"] = Company.DisplayNameEn,
+        ["Company.DisplayNameRevision"] = Company.DisplayNameRevision,
+        ["Company.CheckDisplayName"] = Company.CheckDisplayName,
+        ["Company.RevisionGuardFunction"] = Company.RevisionGuardFunction,
+        ["Company.RevisionGuardTrigger"] = Company.RevisionGuardTrigger,
         ["Company.GuardFunction"] = Company.GuardFunction,
         ["Company.GuardTrigger"] = Company.GuardTrigger,
         ["User.Table"] = User.Table,

@@ -188,7 +188,12 @@ public class CompanyRuntimePrivilegeCatalogTests
     public void No_catalog_entry_grants_a_dangerous_privilege()
     {
         var all = CompanyRuntimePrivileges.Tables.SelectMany(t => t.Privileges).Distinct();
-        Assert.Empty(all.Intersect(["ALL", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]));
+        Assert.Empty(all.Intersect(["ALL", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]));
+        // UPDATE is granted ONLY on the optimistic-concurrency configuration tables (revision-fenced by triggers); never on audit, history, reference or state.
+        var updatable = CompanyRuntimePrivileges.Tables.Where(t => t.Privileges.Contains("UPDATE")).Select(t => t.Table).Order().ToArray();
+        Assert.Equal(new[] { CompanySchema.Profile.Table, CompanySchema.Settings.Table, CompanySchema.CompanyCurrency.Table }.Order(), updatable);
+        Assert.Equal(["INSERT", "SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.ConfigRevision.Table).Privileges.Order());
+        Assert.Equal(["SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.Currency.Table).Privileges);
     }
 
     [Fact]

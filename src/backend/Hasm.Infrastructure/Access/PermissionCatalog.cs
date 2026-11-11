@@ -80,6 +80,11 @@ public sealed partial class PermissionCatalog
         new("access.roles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Delete]),
         new("access.assignments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Delete]),
         new("access.audit", ScopeKind.Company, [PermissionAction.View]),
+        // Company administration (Phase 3.1A-2, system migration 0006).
+        new("company.profile", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
+        new("company.settings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
+        new("company.currencies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
+        new("company.config", ScopeKind.Company, [PermissionAction.View]),
     ]);
 
     public static class Codes
@@ -95,6 +100,13 @@ public sealed partial class PermissionCatalog
         public const string AssignmentsCreate = "access.assignments.create";
         public const string AssignmentsDelete = "access.assignments.delete";
         public const string AuditView = "access.audit.view";
+        public const string ProfileView = "company.profile.view";
+        public const string ProfileUpdate = "company.profile.update";
+        public const string SettingsView = "company.settings.view";
+        public const string SettingsUpdate = "company.settings.update";
+        public const string CurrenciesView = "company.currencies.view";
+        public const string CurrenciesUpdate = "company.currencies.update";
+        public const string ConfigView = "company.config.view";
     }
 
     public Permission Get(string code) =>
@@ -123,7 +135,7 @@ public static class PresetRoles
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,
-                PermissionCatalog.Codes.AssignmentsView, PermissionCatalog.Codes.AuditView,
+                PermissionCatalog.Codes.AssignmentsView, PermissionCatalog.Codes.AuditView, PermissionCatalog.Codes.ConfigView,
             }),
         };
 }

@@ -67,7 +67,7 @@ public static class AccessEndpoints
         access.MapGet("/audit", ListAudit);
     }
 
-    private static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);
+    internal static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);
 
     /// <summary>Maps a service outcome to HTTP. Forbidden is 403, other companies' objects are 404; no internals are revealed.</summary>
     private static IResult Map<T>(AccessResult<T> result, Func<T, IResult> ok, int successStatus = 200) => result.Status switch
@@ -79,10 +79,10 @@ public static class AccessEndpoints
         _ => Error(409, result.Code ?? "conflict"),
     };
 
-    private sealed record Actor(Guid UserId, Guid CompanyId);
+    internal sealed record Actor(Guid UserId, Guid CompanyId);
 
     /// <summary>User and company of the live session, read from the database (not from claims or the request).</summary>
-    private static async Task<(Actor? Actor, IResult? Failure)> ResolveActor(HttpContext http, AccessService access)
+    internal static async Task<(Actor? Actor, IResult? Failure)> ResolveActor(HttpContext http, AccessService access)
     {
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return (null, Error(401, "unauthenticated"));
         var ctx = await access.GetSessionContextAsync(session.SessionId, http.RequestAborted);
@@ -104,8 +104,8 @@ public static class AccessEndpoints
     private static async Task<IResult> ListCompanies(HttpContext http, AccessService access)
     {
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession s) return Error(401, "unauthenticated");
-        var companies = await access.ListAccessibleCompaniesAsync(s.UserId, http.RequestAborted);
-        return Results.Json(new { companies = companies.Select(id => new { id }) });
+        var companies = await access.ListAccessibleCompanySummariesAsync(s.UserId, http.RequestAborted);
+        return Results.Json(new { companies = companies.Select(c => new { id = c.Id, nameAr = c.NameAr, nameEn = c.NameEn }) });
     }
 
     private static async Task<IResult> SelectCompany(SelectCompanyRequest? body, HttpContext http, AccessService access)

@@ -27,6 +27,7 @@ builder.Services.AddHasmAudit(builder.Configuration);
 builder.Services.AddHasmAuthentication(builder.Configuration);
 builder.Services.AddHasmAccess(builder.Configuration);
 builder.Services.AddHasmCompanyRuntime(builder.Configuration);
+builder.Services.AddHasmCompanyConfiguration(builder.Configuration);
 
 var app = builder.Build();
 
@@ -54,6 +55,7 @@ app.MapGet("/api/v1/health", () => Results.Ok(new
 
 app.MapAuthEndpoints();
 app.MapAccessEndpoints();
+app.MapCompanyConfigurationEndpoints();
 
 app.Run();
 
