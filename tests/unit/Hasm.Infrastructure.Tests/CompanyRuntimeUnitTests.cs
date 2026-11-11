@@ -363,14 +363,47 @@ public sealed class CompanyCredentialStoreTests : IDisposable
     {
         var store = new FileCompanyCredentialStore(dir);
         var id = Guid.NewGuid();
-        Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(store.PathFor(id), "{not json");
+        // Secure directory and file first (as the real store does), so that content validation, not the permission check, is what is exercised.
+        AuditFilePermissions.CreateOwnerOnlyDirectory(dir);
+        void Write(string content)
+        {
+            if (File.Exists(store.PathFor(id))) File.Delete(store.PathFor(id));
+            AuditFilePermissions.CreateOwnerOnlyFile(store.PathFor(id), System.Text.Encoding.UTF8.GetBytes(content));
+        }
+
+        Write("{not json");
         var ex = await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
         Assert.Equal("credential_invalid", ex.Code);
-        await File.WriteAllTextAsync(store.PathFor(id), "{\"v\":1,\"username\":\"\",\"password\":\"\"}");
-        await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
-        await File.WriteAllTextAsync(store.PathFor(id), "{\"v\":2,\"username\":\"a\",\"password\":\"b\"}");
-        await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
+        Write("{\"v\":1,\"username\":\"\",\"password\":\"\"}");
+        ex = await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
+        Assert.Equal("credential_invalid", ex.Code);
+        Write("{\"v\":2,\"username\":\"a\",\"password\":\"b\"}");
+        ex = await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
+        Assert.Equal("credential_invalid", ex.Code);
+        Write("");
+        ex = await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id));
+        Assert.Equal("credential_invalid", ex.Code);
+    }
+
+    [Fact]
+    public async Task A_credential_file_or_directory_open_to_other_accounts_is_rejected_before_it_is_read()
+    {
+        if (OperatingSystem.IsWindows()) return;   // POSIX modes only; Windows ACL handling is shared with the audit-key store and covered there
+
+        var store = new FileCompanyCredentialStore(dir);
+        var id = Guid.NewGuid();
+        store.Commit(id, store.Stage(id, new CompanyCredential("hasm_rt_x", "pw")));
+        Assert.Equal("hasm_rt_x", (await store.GetAsync(id))!.Username);                       // 0600 file in a 0700 directory is accepted
+
+        File.SetUnixFileMode(store.PathFor(id), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+        Assert.Equal("credential_permissions", (await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id))).Code);
+
+        File.SetUnixFileMode(store.PathFor(id), UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        Assert.Equal("credential_permissions", (await Assert.ThrowsAsync<CompanyCredentialException>(() => store.GetAsync(id))).Code);
+
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Assert.NotNull(await store.GetAsync(id));
     }
 
     [Fact]
