@@ -29,8 +29,12 @@ public sealed class CompanyAuditedWork
     /// Appends one authenticated event to the company's business stream INSIDE the transaction. Take every business lock first: the
     /// stream lock is taken here and must be the last lock of the transaction. Event types are 1000 and above.
     /// </summary>
-    public async Task AppendAuditAsync(AuditEventData data, CancellationToken ct = default) =>
-        receipts.Add(await trail.AppendAsync(Connection, Transaction, AuditStream.ForBusiness(CompanyId), clock.GetUtcNow(), data, ct));
+    public async Task<AuditReceipt> AppendAuditAsync(AuditEventData data, CancellationToken ct = default)
+    {
+        var receipt = await trail.AppendAsync(Connection, Transaction, AuditStream.ForBusiness(CompanyId), clock.GetUtcNow(), data, ct);
+        receipts.Add(receipt);
+        return receipt;
+    }
 }
 
 /// <summary>

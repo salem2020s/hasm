@@ -11,6 +11,8 @@ namespace Hasm.Infrastructure.Companies;
 /// </summary>
 public sealed class CompanyRegistry(string connectionString, Func<string>? nameGenerator = null)
 {
+    internal string ConnectionString => connectionString;
+
     private const string UniqueViolation = "23505";
     private const int MaxNameAttempts = 5;
 

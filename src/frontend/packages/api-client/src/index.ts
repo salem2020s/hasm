@@ -4,29 +4,223 @@ export interface HealthResponse {
   version: string;
 }
 
+export interface ApiErrorDetails {
+  fields?: { field: string; code: string }[];
+  currentRevision?: number;
+  retryAfterSeconds?: number;
+}
+
+/** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
 export class ApiError extends Error {
   readonly status: number;
+  readonly code: string;
+  readonly details: ApiErrorDetails;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(status: number, code: string, details: ApiErrorDetails = {}) {
+    super(`${status} ${code}`);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
+    this.details = details;
   }
 }
 
-/** Typed HTTP client for the HASM Backend API. It never talks to the database. */
-export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...args) => fetch(...args)) {
-  const root = baseUrl.replace(/\/+$/, "");
+export interface SessionUser {
+  id: string;
+  login: string;
+  displayName: string;
+  isIdentityAdministrator: boolean;
+}
+export interface AuthStatus {
+  authenticated: boolean;
+  user?: SessionUser;
+  session?: { client: string; idleExpiresAtUtc: string; absoluteExpiresAtUtc: string };
+}
+export interface CompanySummary {
+  id: string;
+  nameAr: string | null;
+  nameEn: string | null;
+}
+export interface Grant {
+  roleId: string;
+  scope: string;
+  scopeId: string | null;
+  permissions: string[];
+}
+export interface AccessMe {
+  companyId: string;
+  grants: Grant[];
+}
 
-  async function get<T>(path: string): Promise<T> {
-    const response = await fetchImpl(`${root}${path}`, { headers: { Accept: "application/json" } });
+export interface ProfileFields {
+  nameAr: string | null;
+  nameEn: string | null;
+  legalName: string | null;
+  commercialRegistrationNo: string | null;
+  taxRegistrationNo: string | null;
+  countryCode: string;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+}
+export interface ProfileResponse {
+  profile: ProfileFields | null;
+  revision: number;
+  updatedAtUtc: string | null;
+  projection: "none" | "synced" | "pending";
+}
+
+export interface SettingsFields {
+  defaultLanguage: string;
+  dateFormat: string;
+  numeralSystem: string;
+  timeZone: string | null;
+}
+export interface SettingsResponse {
+  settings: SettingsFields;
+  revision: number;
+  exists: boolean;
+  setupComplete: boolean;
+  updatedAtUtc: string | null;
+  options: { languages: string[]; dateFormats: string[]; numeralSystems: string[] };
+}
+
+export interface CompanyCurrency {
+  code: string;
+  nameEn: string;
+  minorUnits: number | null;
+  isBase: boolean;
+  enabled: boolean;
+  revision: number;
+}
+export interface CurrenciesResponse {
+  currencies: CompanyCurrency[];
+  baseCurrency: string | null;
+  baseCurrencySelected: boolean;
+  baseCurrencyLock: { locked: boolean; checksImplemented: boolean; unimplementedDomains: string[] };
+}
+export interface CurrencyReference {
+  code: string;
+  numericCode: string;
+  nameEn: string;
+  minorUnits: number | null;
+  active: boolean;
+  datasetVersion: number;
+}
+export interface HistoryEntry {
+  id: number;
+  entity: string;
+  key: string;
+  revision: number;
+  actorUserId: string;
+  changedAtUtc: string;
+  changes: Record<string, { old?: unknown; new?: unknown; changed?: boolean }>;
+  auditSeq: number;
+}
+export interface EntitlementsResponse {
+  edition: string;
+  restrictions: { key: string; limit: number | null; enforced: boolean; note: string }[];
+}
+
+export type ClientKind = "web" | "desktop";
+
+export interface ApiClientOptions {
+  /**
+   * "web": the HttpOnly Secure session cookie (sent with credentials). "desktop": an opaque bearer token kept ONLY in memory (never in
+   * localStorage/sessionStorage); a restart of the desktop app asks for the password again.
+   */
+  client?: ClientKind;
+  /** Called when an authenticated call is answered 401 (the session ended or expired). */
+  onUnauthenticated?: () => void;
+}
+
+/** Typed HTTP client for the HASM Backend API. It never talks to the database. */
+export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...args) => fetch(...args), options: ApiClientOptions = {}) {
+  const root = baseUrl.replace(/\/+$/, "");
+  const kind: ClientKind = options.client ?? "web";
+  let bearer: string | null = null;
+
+  async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean } = {}): Promise<T> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (method !== "GET") headers["X-Hasm-Request"] = "1"; // anti-CSRF header required by the API on every state-changing call
+    if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+    if (opts.ifMatch !== undefined) headers["If-Match"] = `"${opts.ifMatch}"`;
+    if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+    const response = await fetchImpl(`${root}${path}`, {
+      method,
+      headers,
+      credentials: kind === "web" ? "include" : "omit",
+      cache: "no-store",
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    });
     if (!response.ok) {
-      throw new ApiError(response.status, `Request to ${path} failed with ${response.status}`);
+      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number } = {};
+      try {
+        payload = (await response.json()) as typeof payload;
+      } catch {
+        /* non-JSON error body */
+      }
+      const retry = Number(response.headers?.get?.("Retry-After"));
+      if (response.status === 401 && !opts.anonymous) options.onUnauthenticated?.();
+      throw new ApiError(response.status, payload.error ?? "request_failed", {
+        fields: payload.fields,
+        currentRevision: payload.currentRevision,
+        retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
+      });
     }
+    if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
   }
 
-  return { getHealth: () => get<HealthResponse>("/api/v1/health") };
+  const get = <T>(path: string) => request<T>("GET", path);
+  const enc = encodeURIComponent;
+
+  return {
+    getHealth: () => get<HealthResponse>("/api/v1/health"),
+
+    async login(login: string, password: string): Promise<{ user: SessionUser }> {
+      const result = await request<{ user: SessionUser; token?: string | null }>("POST", "/api/v1/auth/login", {
+        body: { login, password, client: kind },
+        anonymous: true,
+      });
+      bearer = kind === "desktop" ? (result.token ?? null) : null;
+      return { user: result.user };
+    },
+    async logout(): Promise<void> {
+      try {
+        await request<void>("POST", "/api/v1/auth/logout", { anonymous: true });
+      } finally {
+        bearer = null;
+      }
+    },
+    status: () => request<AuthStatus>("GET", "/api/v1/auth/status", { anonymous: true }),
+
+    listCompanies: () => get<{ companies: CompanySummary[] }>("/api/v1/companies"),
+    selectCompany: (companyId: string) => request<{ companyId: string }>("POST", "/api/v1/session/company", { body: { companyId } }),
+    clearCompany: () => request<void>("DELETE", "/api/v1/session/company"),
+    accessMe: () => get<AccessMe>("/api/v1/access/me"),
+
+    getProfile: () => get<ProfileResponse>("/api/v1/company/profile"),
+    putProfile: (profile: ProfileFields, revision: number) => request<ProfileResponse>("PUT", "/api/v1/company/profile", { body: profile, ifMatch: revision }),
+    syncDisplayName: () => request<ProfileResponse>("POST", "/api/v1/company/profile/display-name-sync"),
+
+    getSettings: () => get<SettingsResponse>("/api/v1/company/settings"),
+    putSettings: (settings: SettingsFields, revision: number) => request<SettingsResponse>("PUT", "/api/v1/company/settings", { body: settings, ifMatch: revision }),
+
+    getCurrencies: () => get<CurrenciesResponse>("/api/v1/company/currencies"),
+    getCurrencyReference: () => get<{ currencies: CurrencyReference[] }>("/api/v1/company/currencies/reference"),
+    setCurrency: (code: string, state: { enabled: boolean; isBase: boolean }, revision: number) =>
+      request<CurrenciesResponse>("PUT", `/api/v1/company/currencies/${enc(code)}`, { body: state, ifMatch: revision }),
+
+    getHistory: (entity?: string, before?: number) =>
+      get<{ entries: HistoryEntry[] }>(`/api/v1/company/history?limit=50${entity ? `&entity=${enc(entity)}` : ""}${before ? `&before=${before}` : ""}`),
+    getEntitlements: () => get<EntitlementsResponse>("/api/v1/company/entitlements"),
+  };
 }
 
 export type ApiClient = ReturnType<typeof createApiClient>;

@@ -271,8 +271,9 @@ public class CompanyBusinessAuditTests : CompanyRuntimeTestBase
         foreach (var sql in new[] { $"UPDATE {B.Table} SET {B.Detail} = 'x'", $"DELETE FROM {B.Table}", $"TRUNCATE {B.Table}" })
         {
             var ex = await Assert.ThrowsAsync<PostgresException>(() => InCompany(s.Company.PhysicalDatabaseName, sql));
-            Assert.Equal("P0001", ex.SqlState);
-            Assert.Contains("append-only", ex.MessageText);
+            // TRUNCATE is refused even earlier since 3.1A-2: ConfigRevision references this table, and PostgreSQL rejects truncating a referenced table (0A000).
+            Assert.Equal(sql.StartsWith("TRUNCATE") ? "0A000" : "P0001", ex.SqlState);
+            if (!sql.StartsWith("TRUNCATE")) Assert.Contains("append-only", ex.MessageText);
         }
         Assert.Single(await Events(s));
     }

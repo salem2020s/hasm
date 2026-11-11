@@ -179,7 +179,7 @@ public class AccessApiTests : AccessTestBase
         var cookie = await SignIn(auditor);
         var companies = await Get("/api/v1/companies", cookie);
         Assert.Equal(company, companies.Json.GetProperty("companies")[0].GetProperty("id").GetGuid());
-        Assert.Equal(["id"], companies.Json.GetProperty("companies")[0].EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["id", "nameAr", "nameEn"], companies.Json.GetProperty("companies")[0].EnumerateObject().Select(p => p.Name));
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/api/v1/session/company", new { companyId = company }, cookie)).Status);
 
         var me = await Get("/api/v1/access/me", cookie);

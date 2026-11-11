@@ -183,7 +183,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
 
         // What it may do.
         Assert.Equal(c.Id, await Run<Guid>(conn, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(2L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(3L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
         Assert.Equal(0L, await Run<long>(conn, $"SELECT count(*) FROM {B.Table}"));
 
         // What it must not: modify or truncate audit events (a privilege failure, before any trigger runs).
@@ -265,7 +265,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
             foreach (var sql in new[] { $"UPDATE {B.Table} SET {B.Detail} = 'x'", $"DELETE FROM {B.Table}", $"TRUNCATE {B.Table}" })
             {
                 var ex = await Assert.ThrowsAsync<PostgresException>(async () => { await using var cmd = new NpgsqlCommand(sql, conn); await cmd.ExecuteNonQueryAsync(); });
-                Assert.Equal("P0001", ex.SqlState);
+                Assert.Equal(sql.StartsWith("TRUNCATE") ? "0A000" : "P0001", ex.SqlState);   // TRUNCATE hits the ConfigRevision foreign key first (0A000)
             }
         }
         // The API refuses to run against an over-privileged runtime role.
@@ -487,7 +487,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
 
         var first = await AdminTool.Run(Configured(), "migrate-companies");
         Assert.Equal(0, first.Exit);
-        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002)", first.Out);
+        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003)", first.Out);
         Assert.Contains($"Company {current.Id}: UpToDate", first.Out);
         Assert.Contains("grant-company-runtime", first.Out);                     // reminder to re-grant after a migration
 
@@ -512,7 +512,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
         Assert.Contains($"Company {bad.Id}: Failed [migration]", run.Out);
         Assert.Contains("1 failed", run.Out);
         AssertNoLeak([run.All], good, bad);
-        Assert.Equal(2L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(3L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]

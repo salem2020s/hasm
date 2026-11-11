@@ -38,6 +38,7 @@ public sealed record AuditEntry(long Id, DateTimeOffset OccurredAtUtc, Guid? Act
 
 /// <summary>The identity and company of a live session, read from the server-side session row (never from the client).</summary>
 public sealed record SessionContext(Guid UserId, Guid? CompanyId);
+public sealed record CompanySummary(Guid Id, string? NameAr, string? NameEn);
 
 /// <summary>
 /// Company access and role-based access control over the central system database.
@@ -94,6 +95,23 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         var list = new List<Guid>();
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) list.Add(r.GetGuid(0));
+        return list;
+    }
+
+    /// <summary>
+    /// The companies the user may select, with the PROJECTED display names (authoritative names live in the company databases). Only the
+    /// user's own active memberships are returned, so a name is never disclosed to a non-member. A null name = not projected yet.
+    /// </summary>
+    public async Task<IReadOnlyList<CompanySummary>> ListAccessibleCompanySummariesAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT m.{M.CompanyId}, c.{C.DisplayNameAr}, c.{C.DisplayNameEn} FROM {M.Table} m JOIN {C.Table} c ON c.{C.Id} = m.{M.CompanyId} JOIN {U.Table} u ON u.{U.Id} = m.{M.UserId} " +
+            $"WHERE m.{M.UserId} = @u AND m.{M.RevokedAtUtc} IS NULL AND c.{C.ProvisioningState} = {(short)ProvisioningState.Ready} AND u.{U.State} = 0 ORDER BY m.{M.GrantedAtUtc}, m.{M.CompanyId}", conn);
+        cmd.Parameters.AddWithValue("u", userId);
+        var list = new List<CompanySummary>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add(new CompanySummary(r.GetGuid(0), r.IsDBNull(1) ? null : r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2)));
         return list;
     }
 

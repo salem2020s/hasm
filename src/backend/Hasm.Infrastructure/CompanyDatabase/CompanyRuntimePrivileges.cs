@@ -25,6 +25,11 @@ public static class CompanyRuntimePrivileges
         (CoIdentity.Table, ["SELECT"]),
         (SystemSchema.MigrationJournalTable, ["SELECT"]),
         (BizAudit.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.Profile.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Settings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Currency.Table, ["SELECT"]),
+        (CompanySchema.CompanyCurrency.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ConfigRevision.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -72,6 +77,7 @@ public static class CompanyRuntimePrivileges
           UNION ALL SELECT 'schema_create' WHERE has_schema_privilege(@r::name, 'public', 'CREATE')
           UNION ALL SELECT 'owns_objects' FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = @r::name AND c.relnamespace = 'public'::regnamespace
           UNION ALL SELECT 'audit_modifiable' WHERE to_regclass(@audit) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@audit), p))
+          UNION ALL SELECT 'history_modifiable' WHERE to_regclass(@history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@history), p))
           UNION ALL SELECT 'state_modifiable' FROM unnest(@state_tables::text[]) t
               WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_state::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
         ) v
@@ -87,7 +93,8 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("r", roleName);
         cmd.Parameters.AddWithValue("audit", BizAudit.Table);
         cmd.Parameters.AddWithValue("forbidden_audit", ForbiddenOnAudit);
-        cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable });
+        cmd.Parameters.AddWithValue("history", CompanySchema.ConfigRevision.Table);
+        cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });
         cmd.Parameters.AddWithValue("forbidden_state", ForbiddenOnState);
         var codes = new SortedSet<string>(StringComparer.Ordinal);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -95,16 +102,18 @@ public static class CompanyRuntimePrivileges
         return [.. codes];
     }
 
-    /// <summary>True when the role can read the schema state and read and append business audit events (what the API needs to work at all).</summary>
+    /// <summary>True when the role holds every privilege of the catalog on every table that exists (what the API needs to work at all).</summary>
     public static async Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
     {
-        await using var cmd = new NpgsqlCommand(
-            "SELECT has_table_privilege(@r::name, to_regclass(@journal), 'SELECT') AND has_table_privilege(@r::name, to_regclass(@identity), 'SELECT') " +
-            "AND has_table_privilege(@r::name, to_regclass(@audit), 'SELECT') AND has_table_privilege(@r::name, to_regclass(@audit), 'INSERT')", conn);
-        cmd.Parameters.AddWithValue("r", roleName);
-        cmd.Parameters.AddWithValue("journal", SystemSchema.MigrationJournalTable);
-        cmd.Parameters.AddWithValue("identity", CoIdentity.Table);
-        cmd.Parameters.AddWithValue("audit", BizAudit.Table);
-        return await cmd.ExecuteScalarAsync(ct) is true;
+        foreach (var (table, privileges) in Tables)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL AND bool_and(has_table_privilege(@r::name, to_regclass(@t), p)) FROM unnest(@p::text[]) p", conn);
+            cmd.Parameters.AddWithValue("r", roleName);
+            cmd.Parameters.AddWithValue("t", table);
+            cmd.Parameters.AddWithValue("p", privileges);
+            // A table the database does not have yet (a migration this backend knows but the database lacks) is reported by the schema gate, not here.
+            if (await cmd.ExecuteScalarAsync(ct) is not true) return false;
+        }
+        return true;
     }
 }

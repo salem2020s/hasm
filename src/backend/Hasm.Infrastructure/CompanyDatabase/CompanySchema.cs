@@ -5,7 +5,7 @@ namespace Hasm.Infrastructure.CompanyDatabase;
 /// Backend-internal only; never exposed through APIs or clients. Fixed and committed: changing a
 /// value requires a new migration. Obfuscation for hygiene, not a security control (D-029).
 /// </summary>
-public static class CompanySchema
+public static partial class CompanySchema
 {
     /// <summary>Single-row table binding a company database to the company id of the central registry.</summary>
     public static class Identity
@@ -52,7 +52,12 @@ public static class CompanySchema
         public const string BindTrigger = "r_44f2cd47";
     }
 
-    public static IReadOnlyDictionary<string, string> Map { get; } = new Dictionary<string, string>
+    public static IReadOnlyDictionary<string, string> Map => map.Value;
+
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() =>
+        Phase1Map!.Concat(ConfigurationMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+
+    private static IReadOnlyDictionary<string, string> Phase1Map { get; } = new Dictionary<string, string>
     {
         ["BusinessAudit"] = BusinessAudit.Table,
         ["BusinessAudit.StreamKey"] = BusinessAudit.StreamKey,
