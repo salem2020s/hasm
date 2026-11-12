@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { ChevronIcon } from "./icons";
 import { useI18n } from "./i18n";
 
 export interface MenuItem {
@@ -6,6 +7,10 @@ export interface MenuItem {
   label: string;
   children?: MenuItem[];
   disabled?: boolean;
+  /** Decorative leading icon (top level of a vertical menu). */
+  icon?: ReactNode;
+  /** Short status text shown beside the label, e.g. "Coming soon". Part of the accessible name. */
+  badge?: string;
 }
 
 interface Props {
@@ -16,6 +21,8 @@ interface Props {
   currentId?: string;
   /** Hover-intent delay before a submenu expands (ms). */
   hoverDelayMs?: number;
+  /** "vertical" is the sidebar layout: submenus fly out toward the content area (inline-end of the sidebar). */
+  orientation?: "horizontal" | "vertical";
 }
 
 /**
@@ -23,7 +30,8 @@ interface Props {
  * moving the pointer across the menu never navigates. Keyboard: Left/Right (mirrored in RTL) move across the top level, Down/Up move in
  * a submenu, Enter/Space opens or selects, Escape closes and restores focus. Works identically in the web app and the Tauri window.
  */
-export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs = 150 }: Props) {
+export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs = 150, orientation = "horizontal" }: Props) {
+  const vertical = orientation === "vertical";
   const { direction } = useI18n();
   const [openPath, setOpenPath] = useState<string[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -82,7 +90,15 @@ export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs 
       (root.current?.querySelector("[role='menuitem']") as HTMLElement | null)?.focus();
       return;
     }
-    if (topLevel) {
+    if (topLevel && vertical) {
+      if (e.key === "ArrowDown") { e.preventDefault(); move(target, 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); move(target, -1); }
+      else if (e.key === forward && hasChildren) {
+        e.preventDefault();
+        setOpenPath(path);
+        requestAnimationFrame(() => target.parentElement?.querySelector<HTMLElement>("ul [role='menuitem']")?.focus());
+      }
+    } else if (topLevel) {
       if (e.key === forward) { e.preventDefault(); move(target, 1); }
       else if (e.key === backward) { e.preventDefault(); move(target, -1); }
       else if (e.key === "ArrowDown" && hasChildren) {
@@ -104,7 +120,7 @@ export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs 
   };
 
   const renderList = (list: MenuItem[], parent: string[], topLevel: boolean) => (
-    <ul role={topLevel ? "menubar" : "menu"} aria-label={topLevel ? label : undefined} className={topLevel ? "menu-bar" : "menu-list"} ref={topLevel ? root : undefined}>
+    <ul role={topLevel ? "menubar" : "menu"} aria-label={topLevel ? label : undefined} aria-orientation={topLevel && vertical ? "vertical" : undefined} className={topLevel ? "menu-bar" : "menu-list"} ref={topLevel ? root : undefined}>
       {list.map((item) => {
         const path = [...parent, item.id];
         const hasChildren = !!item.children?.length;
@@ -124,12 +140,16 @@ export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs 
               aria-haspopup={hasChildren ? "menu" : undefined}
               aria-expanded={hasChildren ? open : undefined}
               aria-disabled={item.disabled || undefined}
+              title={item.disabled ? item.badge : undefined}
               aria-current={currentId === item.id ? "page" : undefined}
               onClick={() => choose(item, path)}
               onKeyDown={(e) => onKeyDown(e, item, path, topLevel)}
             >
-              {item.label}
-              {hasChildren && <span aria-hidden="true" className="menu-caret">{topLevel ? "▾" : direction === "rtl" ? "◂" : "▸"}</span>}
+              {item.icon && <span className="menu-icon">{item.icon}</span>}
+              <span className="menu-label">{item.label}</span>
+              {/* The status stays in the accessible name and a hover tooltip, but is not drawn on every row (less clutter, no wrapping). */}
+              {item.badge && <> <span className="menu-badge">{item.badge}</span></>}
+              {hasChildren && <span aria-hidden="true" className="menu-caret">{topLevel && !vertical ? "▾" : <ChevronIcon />}</span>}
             </button>
             {hasChildren && open && renderList(item.children!, path, false)}
           </li>
@@ -138,5 +158,5 @@ export function CascadingMenu({ items, label, onSelect, currentId, hoverDelayMs 
     </ul>
   );
 
-  return <nav className="cascading-menu" onMouseLeave={clearTimer}>{renderList(items, [], true)}</nav>;
+  return <nav className={vertical ? "cascading-menu cascading-menu-vertical" : "cascading-menu"} onMouseLeave={clearTimer}>{renderList(items, [], true)}</nav>;
 }

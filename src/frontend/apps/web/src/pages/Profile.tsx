@@ -1,8 +1,8 @@
 import { ApiError, type ProfileFields, type ProfileResponse } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
-import { Banner, errorText, Field, fieldErrors, Loading } from "../components";
+import { Banner, Card, errorText, Field, fieldErrors, Loading, PageHeader } from "../components";
 import { COUNTRY_CODES, countryName } from "../countries";
 
 type Form = Record<keyof ProfileFields, string>;
@@ -13,8 +13,12 @@ const empty = (): Form => Object.fromEntries(KEYS.map((k) => [k, ""])) as Form;
 const toForm = (p: ProfileFields | null): Form => (p ? (Object.fromEntries(KEYS.map((k) => [k, p[k] ?? ""])) as Form) : empty());
 const blankToNull = (s: string) => (s.trim() ? s.trim() : null);
 
-export function ProfilePage() {
+/** `embedded`: rendered as a section of the unified Company Details & Settings page (no page header; reports unsaved edits to the parent). */
+export function ProfilePage({ embedded = false, onDirty }: { embedded?: boolean; onDirty?: (dirty: boolean) => void } = {}) {
   const { t, locale } = useI18n();
+  // The loader must not depend on the translation function: a language switch must never reload the data and overwrite unsaved edits.
+  const tRef = useRef(t);
+  tRef.current = t;
   const auth = useAuth();
   const canEdit = auth.can("company.profile.update");
   const [loaded, setLoaded] = useState<ProfileResponse | null>(null);
@@ -33,10 +37,13 @@ export function ProfilePage() {
       setForm(toForm(r.profile));
       setLoadError(null);
     } catch (e) {
-      if (!auth.handleError(e)) setLoadError(errorText(t, e));
+      if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e));
     }
-  }, [auth.api, auth.handleError, t]);
+  }, [auth.api, auth.handleError]);
   useEffect(() => { void load(); }, [load]);
+
+  const dirty = !!loaded && KEYS.some((k) => form[k] !== toForm(loaded.profile)[k]);
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
 
   if (loadError) return <Banner kind="error">{loadError}</Banner>;
   if (!loaded) return <Loading />;
@@ -86,9 +93,10 @@ export function ProfilePage() {
     </Field>
   );
 
+  const Root = embedded ? "div" : "section";
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title">{t("profile.title")}</h1>
+    <Root {...(embedded ? {} : { "aria-labelledby": "page-title" })}>
+      {!embedded && <PageHeader title={t("profile.title")} description={t("profile.subtitle")} />}
       {!loaded.profile && <Banner kind="info" testId="profile-new">{t("profile.not_set")}</Banner>}
       {!canEdit && <Banner kind="info" testId="read-only">{t("form.read_only")}</Banner>}
       {conflict && (
@@ -108,20 +116,21 @@ export function ProfilePage() {
         </Banner>
       )}
       <form onSubmit={submit} noValidate className="form-grid">
-        <fieldset>
-          <legend>{t("profile.names")}</legend>
-          <p className="hint">{t("profile.names_hint")}</p>
+        <Card title={t("profile.names")} hint={t("profile.names_hint")}>
+         <div className="fields">
           {text("nameAr", t("profile.name_ar"), { dir: "rtl" })}
           {text("nameEn", t("profile.name_en"), { dir: "ltr" })}
           {text("legalName", t("profile.legal_name"))}
-        </fieldset>
-        <fieldset>
-          <legend>{t("profile.identifiers")}</legend>
+         </div>
+        </Card>
+        <Card title={t("profile.identifiers")}>
+         <div className="fields">
           {text("commercialRegistrationNo", t("profile.registration_no"), { dir: "ltr" })}
           {text("taxRegistrationNo", t("profile.tax_no"), { dir: "ltr" })}
-        </fieldset>
-        <fieldset>
-          <legend>{t("profile.location")}</legend>
+         </div>
+        </Card>
+        <Card title={t("profile.location")}>
+         <div className="fields">
           <Field id="p-countryCode" label={t("profile.country")} error={errors.countryCode} required>
             {(aria) => (
               <select {...aria} name="countryCode" value={form.countryCode} onChange={set("countryCode")} disabled={!canEdit}>
@@ -135,15 +144,17 @@ export function ProfilePage() {
           {text("city", t("profile.city"))}
           {text("region", t("profile.region"))}
           {text("postalCode", t("profile.postal_code"), { dir: "ltr" })}
-        </fieldset>
-        <fieldset>
-          <legend>{t("profile.contact")}</legend>
+         </div>
+        </Card>
+        <Card title={t("profile.contact")}>
+         <div className="fields">
           {text("phone", t("profile.phone"), { dir: "ltr", type: "tel" })}
           {text("email", t("profile.email"), { dir: "ltr", type: "email" })}
           {text("website", t("profile.website"), { dir: "ltr", type: "url" })}
-        </fieldset>
+         </div>
+        </Card>
         {canEdit && <div className="actions"><button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("form.save")}</button></div>}
       </form>
-    </section>
+    </Root>
   );
 }

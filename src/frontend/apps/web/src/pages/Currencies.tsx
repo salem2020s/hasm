@@ -2,7 +2,7 @@ import { ApiError, type CurrenciesResponse, type CurrencyReference, type Entitle
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Banner, ConfirmDialog, errorText, Field, Loading } from "../components";
+import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { currencyName } from "../countries";
 
 type Pending = { code: string; enabled: boolean; isBase: boolean; revision: number; kind: "base" | "disable" };
@@ -74,10 +74,15 @@ export function CurrenciesPage() {
 
   return (
     <section aria-labelledby="page-title">
-      <h1 id="page-title">{t("currencies.title")}</h1>
+      <PageHeader title={t("currencies.title")} description={t("currencies.subtitle")} />
       {!data.baseCurrencySelected && <Banner kind="warning" testId="no-base">{t("currencies.base_required")}</Banner>}
-      {trialSingle && <Banner kind="info" testId="trial-note">{t("currencies.trial_note")}</Banner>}
-      {!data.baseCurrencyLock.checksImplemented && <Banner kind="info" testId="lock-note">{t("currencies.lock_unimplemented")}</Banner>}
+      {/* Informational notices side by side (one row on wide windows). Each keeps its own live region and test id; nothing is hidden or collapsed. */}
+      {(trialSingle || !data.baseCurrencyLock.checksImplemented) && (
+        <div className="notices">
+          {trialSingle && <Banner kind="info" testId="trial-note"><strong>{t("currencies.notice_trial")}</strong> {t("currencies.trial_note")}</Banner>}
+          {!data.baseCurrencyLock.checksImplemented && <Banner kind="warning" testId="lock-note"><strong>{t("currencies.notice_lock")}</strong> {t("currencies.lock_unimplemented")}</Banner>}
+        </div>
+      )}
       {!canEdit && <Banner kind="info" testId="read-only">{t("form.read_only")}</Banner>}
       {conflict && (
         <Banner kind="error" testId="conflict">
@@ -87,36 +92,55 @@ export function CurrenciesPage() {
       {error && <Banner kind="error">{error}</Banner>}
       {saved && <Banner kind="success" testId="saved">{t("form.saved")}</Banner>}
 
-      <h2>{t("currencies.base")}</h2>
-      <p data-testid="base-currency">
-        {data.baseCurrency
-          ? nameOf(data.baseCurrency, data.currencies.find((c) => c.isBase)?.nameEn ?? data.baseCurrency)
-          : t("currencies.base_none")}
-      </p>
-      {canEdit && (
-        <div className="inline-form">
-          <Field id="c-base" label={t("currencies.choose_base")}>
-            {(aria) => (
-              <select {...aria} value={baseChoice} onChange={(e) => setBaseChoice(e.target.value)}>
-                <option value="">{t("form.select")}</option>
-                {reference.filter((c) => c.code !== data.baseCurrency).map((c) => <option key={c.code} value={c.code}>{nameOf(c.code, c.nameEn)}</option>)}
-              </select>
-            )}
-          </Field>
-          <button type="button" className="primary" disabled={!baseChoice || busy} onClick={requestBase}>{t("currencies.set_base")}</button>
+      <Card title={t("currencies.base")}>
+        <div className="base-current">
+          <span className="base-label">{t("currencies.current_base")}</span>
+          <p data-testid="base-currency" className="base-value">
+            <bdi>
+              {data.baseCurrency
+                ? nameOf(data.baseCurrency, data.currencies.find((c) => c.isBase)?.nameEn ?? data.baseCurrency)
+                : t("currencies.base_none")}
+            </bdi>
+          </p>
+          {data.baseCurrency && <span className="chip chip-base">{t("currencies.is_base")}</span>}
         </div>
-      )}
+        {canEdit && (
+          <div className="change-base">
+            {/* A separate, explicitly labelled action: the control never reads as the current value. */}
+            {data.baseCurrencySelected && (
+              <>
+                <h3 className="subtitle">{t("currencies.change_base_heading")}</h3>
+                <p className="hint">{t("currencies.change_base_hint")}</p>
+              </>
+            )}
+            <div className="inline-form">
+              <Field id="c-base" label={data.baseCurrencySelected ? t("currencies.change_base_to") : t("currencies.choose_base")}>
+                {(aria) => (
+                  <select {...aria} value={baseChoice} onChange={(e) => setBaseChoice(e.target.value)}>
+                    <option value="">{data.baseCurrencySelected ? t("currencies.change_placeholder") : t("form.select")}</option>
+                    {reference.filter((c) => c.code !== data.baseCurrency).map((c) => <option key={c.code} value={c.code}>{nameOf(c.code, c.nameEn)}</option>)}
+                  </select>
+                )}
+              </Field>
+              <button type="button" className={data.baseCurrencySelected ? "" : "primary"} disabled={!baseChoice || busy} onClick={requestBase}>
+                {data.baseCurrencySelected ? t("currencies.change_base") : t("currencies.set_base")}
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
 
-      <h2>{t("currencies.enabled")}</h2>
-      <table>
+      <Card title={t("currencies.enabled")}>
+      <div className="table-wrap">
+      <table className="data-table">
         <caption className="visually-hidden">{t("currencies.enabled")}</caption>
         <thead><tr><th scope="col">{t("currencies.currency")}</th><th scope="col">{t("currencies.status")}</th><th scope="col">{t("currencies.actions")}</th></tr></thead>
         <tbody>
           {data.currencies.length === 0 && <tr><td colSpan={3}>{t("currencies.none")}</td></tr>}
           {data.currencies.map((c) => (
             <tr key={c.code}>
-              <td>{nameOf(c.code, c.nameEn)}</td>
-              <td>{c.isBase ? t("currencies.is_base") : c.enabled ? t("currencies.enabled_status") : t("currencies.disabled_status")}</td>
+              <td><bdi>{nameOf(c.code, c.nameEn)}</bdi></td>
+              <td><span className={`chip ${c.isBase ? "chip-base" : c.enabled ? "chip-ok" : "chip-off"}`}>{c.isBase ? t("currencies.is_base") : c.enabled ? t("currencies.enabled_status") : t("currencies.disabled_status")}</span></td>
               <td>
                 {canEdit && !c.isBase && c.enabled && (
                   <button type="button" disabled={busy} onClick={() => setPending({ code: c.code, enabled: false, isBase: false, revision: c.revision, kind: "disable" })}>{t("currencies.disable")}</button>
@@ -129,6 +153,7 @@ export function CurrenciesPage() {
           ))}
         </tbody>
       </table>
+      </div>
 
       {canEdit && data.baseCurrencySelected && (
         <div className="inline-form">
@@ -143,6 +168,7 @@ export function CurrenciesPage() {
           <button type="button" disabled={!extraChoice || busy} onClick={() => void apply({ code: extraChoice, enabled: true, isBase: false, revision: revisionOf(extraChoice), kind: "base" })}>{t("currencies.enable")}</button>
         </div>
       )}
+      </Card>
 
       {pending && (
         <ConfirmDialog

@@ -75,4 +75,31 @@ describe("CascadingMenu", () => {
     fireEvent.keyDown(home, { key: "ArrowRight" });
     expect(screen.getByRole("menuitem", { name: /Company/ })).toHaveFocus();
   });
+
+  it("vertical orientation: Up/Down move, the arrow facing the content opens a submenu (mirrored in RTL); Enter/click selects", () => {
+    for (const [locale, forward] of [["en", "ArrowRight"], ["ar", "ArrowLeft"]] as const) {
+      localStorage.setItem("hasm.locale", locale);
+      const onSelect = vi.fn();
+      const { unmount } = render(<I18nProvider catalog={catalog}><CascadingMenu orientation="vertical" items={items} label="Main" onSelect={onSelect} /></I18nProvider>);
+      expect(screen.getByRole("menubar")).toHaveAttribute("aria-orientation", "vertical");
+      const home = screen.getByRole("menuitem", { name: "Home" });
+      home.focus();
+      fireEvent.keyDown(home, { key: "ArrowDown" });
+      const company = screen.getByRole("menuitem", { name: /Company/ });
+      expect(document.activeElement).toBe(company);
+      fireEvent.keyDown(company, { key: forward });
+      expect(screen.getByRole("menuitem", { name: "Profile" })).toBeInTheDocument();
+      expect(onSelect).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
+  it("a disabled item with a badge never selects and exposes the badge in its name", () => {
+    const onSelect = vi.fn();
+    render(<I18nProvider catalog={catalog}><CascadingMenu orientation="vertical" items={[{ id: "x", label: "Sales", disabled: true, badge: "Soon" }]} label="Main" onSelect={onSelect} /></I18nProvider>);
+    const item = screen.getByRole("menuitem", { name: "Sales Soon" });
+    fireEvent.click(item);
+    fireEvent.keyDown(item, { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });

@@ -13,6 +13,31 @@ export function Banner({ kind, children, testId }: { kind: BannerKind; children:
   );
 }
 
+/** Consistent page title block: heading (also the aria label of the page section), optional one-line description and page-level actions. */
+export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
+  return (
+    <div className="page-header">
+      <div>
+        <h1 id="page-title">{title}</h1>
+        {description && <p className="page-description">{description}</p>}
+      </div>
+      {actions && <div className="page-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/** A titled surface that groups related content. Renders a labelled group when it has a title. */
+export function Card({ title, hint, children, className = "" }: { title?: string; hint?: string; children: ReactNode; className?: string }) {
+  const id = title ? `card-${title.replace(/\s+/g, "-")}` : undefined;
+  return (
+    <section className={`card ${className}`.trim()} aria-labelledby={id}>
+      {title && <h2 id={id} className="card-title">{title}</h2>}
+      {hint && <p className="hint card-hint">{hint}</p>}
+      {children}
+    </section>
+  );
+}
+
 export function Loading() {
   const { t } = useI18n();
   return <p role="status" className="loading">{t("loading")}</p>;
@@ -44,12 +69,14 @@ interface ConfirmProps {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Defaults to "Cancel"; the unsaved-changes dialog uses "Stay". */
+  cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
 /** Confirmation for sensitive actions. Focus starts on Cancel (the safe choice); Escape cancels. */
-export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCancel }: ConfirmProps) {
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: ConfirmProps) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
@@ -60,7 +87,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
         <h2 id="confirm-title">{title}</h2>
         <p id="confirm-message">{message}</p>
         <div className="actions">
-          <button type="button" ref={cancel} onClick={onCancel}>{t("cancel")}</button>
+          <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel ?? t("cancel")}</button>
           <button type="button" className="danger" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>

@@ -1,32 +1,54 @@
 import { createApiClient, type ApiClient } from "@hasm/api-client";
-import { CascadingMenu, LanguageSwitcher, useI18n, type MenuItem } from "@hasm/ui";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { AccountingIcon, AppShell, CascadingMenu, CompanyIcon, HomeIcon, LanguageSwitcher, PurchasesIcon, ReportsIcon, SalesIcon, SettingsIcon, WarehouseIcon, useI18n, type MenuItem } from "@hasm/ui";
+import "@hasm/ui/src/tokens.css";
+import { lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
 // Official branding assets, used unmodified (see assets/branding/BRANDING.md).
 import markUrl from "../../../../../assets/branding/hasm-mark.png";
 import { AuthProvider, createSessionBridge, useAuth, type SessionBridge } from "./auth";
 import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
+import { isTauri } from "./platform";
 import { CompanySelectPage } from "./pages/CompanySelect";
 import { CurrenciesPage } from "./pages/Currencies";
 import { HistoryPage } from "./pages/History";
 import { HomePage } from "./pages/Home";
 import { LoginPage } from "./pages/Login";
-import { ProfilePage } from "./pages/Profile";
-import { SettingsPage } from "./pages/Settings";
+import { CompanyDetailsPage } from "./pages/CompanyDetails";
 import { navigate, useRoute } from "./router";
+import { UnsavedProvider, useUnsaved } from "./unsaved";
 import "./app.css";
+import "./visual/visual.css";
 
 /** The Tauri window and the shared web app run THIS build; only the session transport differs (bearer in memory vs HttpOnly cookie). */
-export const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export { isTauri };
 
-interface RouteDef { path: string; permission?: string; element: ReactNode }
+interface RouteDef { path: string; permission?: string; /** Allowed when ANY of these is held (each section inside still enforces its own permission). */ anyOf?: string[]; element: ReactNode }
+
+/** Former pages that now live inside the unified Company Details & Settings page (old bookmarks keep working). */
+const REDIRECTS: Record<string, string> = { "/company/profile": "/company/details", "/company/settings": "/company/details/general" };
+
+/**
+ * DEVELOPMENT-ONLY design previews (Warehouses, Sales Invoices, gallery). Everything here sits behind the compile-time constant
+ * import.meta.env.DEV, which is false in production builds, so the preview code, routes and menu entries are removed from the bundle entirely.
+ */
+const DevPreviews = import.meta.env.DEV ? {
+  gallery: lazy(() => import("./previews/Gallery")),
+  warehouses: lazy(() => import("./previews/Warehouses")),
+  sales: lazy(() => import("./previews/SalesInvoices")),
+} : null;
 
 const ROUTES: RouteDef[] = [
   { path: "/", element: <HomePage /> },
-  { path: "/company/profile", permission: "company.profile.view", element: <ProfilePage /> },
-  { path: "/company/settings", permission: "company.settings.view", element: <SettingsPage /> },
+  // Both paths render the same element type in the same place, so switching tabs keeps the page (and unsaved edits) mounted.
+  { path: "/company/details", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
+  { path: "/company/details/general", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
   { path: "/company/currencies", permission: "company.currencies.view", element: <CurrenciesPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
+  ...(DevPreviews ? [
+    { path: "/dev/preview", element: <Suspense fallback={<Loading />}><DevPreviews.gallery /></Suspense> },
+    { path: "/dev/preview/warehouses", element: <Suspense fallback={<Loading />}><DevPreviews.warehouses /></Suspense> },
+    { path: "/dev/preview/sales-invoices", element: <Suspense fallback={<Loading />}><DevPreviews.sales /></Suspense> },
+  ] : []),
 ];
 
 function Brand() {
@@ -41,76 +63,128 @@ function Brand() {
 }
 
 function Shell() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const auth = useAuth();
   const route = useRoute();
+  const { guard } = useUnsaved();
 
   const menu: MenuItem[] = useMemo(() => {
     const company: MenuItem[] = [
-      { id: "/company/profile", label: t("nav.profile"), permission: "company.profile.view" },
-      { id: "/company/settings", label: t("nav.settings"), permission: "company.settings.view" },
+      { id: "/company/details", label: t("nav.details"), permission: "company.profile.view|company.settings.view" },
       { id: "/company/currencies", label: t("nav.currencies"), permission: "company.currencies.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
-    ].filter((i) => auth.can(i.permission)).map(({ id, label }) => ({ id, label }));
-    return [{ id: "/", label: t("nav.home") }, ...(company.length ? [{ id: "company", label: t("nav.company"), children: company }] : [])];
-  }, [t, auth]);
+    ].filter((i) => i.permission.split("|").some((p) => auth.can(p))).map(({ id, label }) => ({ id, label }));
+    // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
+    const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
+    return [
+      { id: "/", label: t("nav.home"), icon: <HomeIcon /> },
+      soon("accounting", t("nav.accounting"), <AccountingIcon />),
+      soon("warehouses", t("nav.warehouses"), <WarehouseIcon />),
+      soon("sales", t("nav.sales"), <SalesIcon />),
+      soon("purchases", t("nav.purchases"), <PurchasesIcon />),
+      soon("reports", t("nav.reports"), <ReportsIcon />),
+      ...(company.length ? [{ id: "company", label: t("nav.company"), icon: <CompanyIcon />, children: company }] : []),
+      soon("settings", t("nav.system_settings"), <SettingsIcon />),
+      // Development builds only: design previews of future modules (not part of the product; absent from production builds).
+      ...(import.meta.env.DEV ? [{
+        id: "dev", label: locale === "ar" ? "معاينات التصميم (تطوير)" : "Design previews (DEV)", icon: <SettingsIcon />,
+        children: [
+          { id: "/dev/preview", label: locale === "ar" ? "معرض التصميم" : "Design gallery" },
+          { id: "/dev/preview/warehouses", label: locale === "ar" ? "معاينة المستودعات" : "Warehouses preview" },
+          { id: "/dev/preview/sales-invoices", label: locale === "ar" ? "معاينة فواتير المبيعات" : "Sales invoices preview" },
+        ],
+      } as MenuItem] : []),
+    ];
+  }, [t, auth, locale]);
 
   // Move focus to the new page content on navigation (keyboard and screen-reader users).
-  useEffect(() => { document.getElementById("content")?.focus(); }, [route]);
+  useEffect(() => { document.getElementById("content")?.focus({ preventScroll: true }); }, [route]);
+
+  // Old Profile / Settings routes redirect (replace, so Back does not bounce) to the unified page.
+  useEffect(() => { const to = REDIRECTS[route]; if (to) window.location.replace(`#${to}`); }, [route]);
 
   const def = ROUTES.find((r) => r.path === route);
   // Protected navigation: a route is rendered only when the permission is held; the server enforces the same rule independently.
   const content = !def ? <Banner kind="error" testId="not-found">{t("error.not_found")}</Banner>
-    : def.permission && !auth.can(def.permission) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
+    : (def.permission && !auth.can(def.permission)) || (def.anyOf && !def.anyOf.some((p) => auth.can(p))) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
     : def.element;
 
   return (
-    <>
-      <header className="app-header">
-        <Brand />
-        <CascadingMenu items={menu} label={t("nav.main")} currentId={route} onSelect={(i) => navigate(i.id)} />
+    <AppShell
+      brand={<Brand />}
+      nav={<CascadingMenu orientation="vertical" items={menu} label={t("nav.main")} currentId={route.startsWith("/company/details") ? "/company/details" : route} onSelect={(i) => navigate(i.id)} />}
+      header={
         <div className="header-tools">
-          {auth.companyName && <span className="company-name" data-testid="company-name">{auth.companyName}</span>}
-          <button type="button" onClick={() => void auth.changeCompany()}>{t("nav.change_company")}</button>
+          {/* <bdi> isolates the company name so its own text direction is never reordered by the page direction. */}
+          {auth.companyName && <span className="company-name" data-testid="company-name"><bdi>{auth.companyName}</bdi></span>}
+          <button type="button" className="ghost" onClick={() => guard(() => void auth.changeCompany())}>{t("nav.change_company")}</button>
           <span className="user-name">{auth.user?.displayName}</span>
           <LanguageSwitcher />
-          <button type="button" onClick={() => void auth.logout()}>{t("nav.logout")}</button>
+          <button type="button" className="ghost" onClick={() => guard(() => void auth.logout())}>{t("nav.logout")}</button>
         </div>
-      </header>
+      }
+    >
       <main id="content" className="content" tabIndex={-1}>{content}</main>
-    </>
+    </AppShell>
+  );
+}
+
+/** Decorative background (aria-hidden, static inline SVG, no images/animation): soft turquoise waves, a thin gold curve and fine white / light-gray arcs on a mint field. Mirrored in RTL by CSS. */
+function AuthDecor() {
+  return (
+    <svg className="auth-deco" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="auth-wave-a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#14b8a6" stopOpacity="0.38" /><stop offset="0.55" stopColor="#14b8a6" stopOpacity="0.14" /><stop offset="1" stopColor="#14b8a6" stopOpacity="0.4" /></linearGradient>
+        <linearGradient id="auth-wave-b" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#14b8a6" stopOpacity="0.5" /><stop offset="0.5" stopColor="#14b8a6" stopOpacity="0.22" /><stop offset="1" stopColor="#0f766e" stopOpacity="0.75" /></linearGradient>
+      </defs>
+      <g fill="none" strokeWidth="1.2">
+        <circle cx="60" cy="40" r="250" stroke="#fff" strokeOpacity="0.85" />
+        <circle cx="60" cy="40" r="320" stroke="#fff" strokeOpacity="0.6" />
+        <circle cx="60" cy="40" r="390" stroke="#fff" strokeOpacity="0.4" />
+        <circle cx="1170" cy="30" r="230" stroke="#b6c0c9" strokeOpacity="0.45" />
+        <circle cx="1170" cy="30" r="300" stroke="#b6c0c9" strokeOpacity="0.3" />
+      </g>
+      <path d="M-60 520 C 180 470, 330 640, 600 690 S 1020 560, 1300 560 L1300 900 L-60 900 Z" fill="url(#auth-wave-a)" />
+      <path d="M-60 650 C 220 600, 420 780, 720 760 S 1100 650, 1300 700 L1300 900 L-60 900 Z" fill="url(#auth-wave-b)" />
+      <path d="M760 900 C 900 820, 1080 800, 1300 770 L1300 900 Z" fill="#0f766e" fillOpacity="0.85" />
+      <g fill="none" strokeLinecap="round">
+        <path d="M-60 600 C 200 590, 420 790, 700 790 S 1060 560, 1300 560" stroke="#f59e0b" strokeWidth="2.4" />
+        <path d="M-60 690 C 180 660, 300 700, 480 720" stroke="#fff" strokeOpacity="0.8" strokeWidth="1.4" />
+        <path d="M820 640 C 980 600, 1120 560, 1300 540" stroke="#fff" strokeOpacity="0.8" strokeWidth="1.4" />
+        <path d="M-60 560 C 160 540, 340 600, 520 650" stroke="#b6c0c9" strokeOpacity="0.5" strokeWidth="1.2" />
+      </g>
+    </svg>
+  );
+}
+
+/** Pre-sign-in layout (login, company selection): centred card on the brand backdrop, language switch always reachable. */
+function AuthLayout({ children, language = true }: { children: ReactNode; language?: boolean }) {
+  return (
+    <div className="auth-page">
+      <AuthDecor />
+      {language && <div className="auth-lang"><LanguageSwitcher /></div>}
+      <main className="auth-card">
+        <div className="auth-brand"><Brand /></div>
+        {children}
+      </main>
+    </div>
   );
 }
 
 function Gate() {
   const { t } = useI18n();
   const auth = useAuth();
-  if (auth.phase === "loading") return <main className="auth-card"><Loading /></main>;
+  if (auth.phase === "loading") return <AuthLayout language={false}><Loading /></AuthLayout>;
   if (auth.phase === "unreachable") {
     return (
-      <main className="auth-card">
-        <Brand />
+      <AuthLayout>
         <Banner kind="error" testId="unreachable">{t("error.unreachable")}</Banner>
-        <button type="button" onClick={() => window.location.reload()}>{t("retry")}</button>
-      </main>
+        <button type="button" className="primary block" onClick={() => window.location.reload()}>{t("retry")}</button>
+      </AuthLayout>
     );
   }
-  if (auth.phase === "anonymous") {
-    return (
-      <>
-        <header className="app-header"><Brand /><LanguageSwitcher /></header>
-        <LoginPage />
-      </>
-    );
-  }
-  if (auth.phase === "needCompany") {
-    return (
-      <>
-        <header className="app-header"><Brand /><LanguageSwitcher /></header>
-        <CompanySelectPage />
-      </>
-    );
-  }
+  if (auth.phase === "anonymous") return <AuthLayout><LoginPage /></AuthLayout>;
+  if (auth.phase === "needCompany") return <AuthLayout><CompanySelectPage /></AuthLayout>;
   return <Shell />;
 }
 
@@ -124,7 +198,7 @@ export function App({ client, bridge }: { client?: ApiClient; bridge?: SessionBr
   return (
     <AuthProvider api={own.api} bridge={own.bridge}>
       <a className="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById("content")?.focus(); }}>{t("skip_to_content")}</a>
-      <Gate />
+      <UnsavedProvider><Gate /></UnsavedProvider>
     </AuthProvider>
   );
 }
