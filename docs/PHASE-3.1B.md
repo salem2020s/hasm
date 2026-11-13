@@ -23,4 +23,13 @@ Warehouses (3.1C), fiscal years and periods (3.1D), inter-branch accounting entr
 | D | Branch Management UI (UI-1 design); Arabic RTL, English LTR, Web and Windows Desktop | report |
 | E | Relevant tests and phase review | before any GitHub delivery |
 
-No commit, push or merge happens without explicit approval at the relevant checkpoint.
+Push and merge require explicit owner authorization (push of this branch authorized 2026-11-13; merge is not).
+
+## Implemented (Checkpoints A–D)
+- Company migration 0004 (`Branch`, append-only `BranchRevision`, DB-enforced invariants, idempotent main-branch seed), system migration 0007 (`scope_epoch`, five permission codes), branch-scoped RBAC with activation epochs, Trial limit (1, counting all branches ever created), audited domain service with optimistic concurrency, `/api/v1/company/branches` API, shared Web/Desktop Branch Management screen, isolated PostgreSQL test cluster (5433) with cluster-identity safety gate.
+- Details: `docs/PHASE-3.1B-PROPOSAL.md`. No migration has been applied to any permanent development database.
+
+## Known limitations
+1. `BranchRevision` history is audited but is not yet displayed in the unified Configuration History screen (`/history` reads only `ConfigRevision`).
+2. Stale branch-role assignments (after deactivation/reactivation) may remain visible as records, but never grant access: authorization requires the branch to be active and the assignment's activation epoch to match, failing closed otherwise.
+3. Manual Web/Desktop visual validation is deferred to the final validation milestone.
