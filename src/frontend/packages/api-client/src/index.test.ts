@@ -329,3 +329,75 @@ describe("api client: chart of accounts (same endpoints for Web and Desktop)", (
       .rejects.toMatchObject({ status: 409, code: "account_has_postings" });
   });
 });
+
+describe("ledger endpoints (Phase 3.2B)", () => {
+  const make = () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({})));
+    return { fetchMock, client: createApiClient("https://x", fetchMock as unknown as typeof fetch) };
+  };
+  const h = (init: RequestInit) => init.headers as Record<string, string>;
+
+  it("sends the exchange-rate entry with the currency's latest id as If-Match and the exact decimal text", async () => {
+    const { fetchMock, client } = make();
+    await client.enterExchangeRate({ currencyCode: "USD", rate: "0.7100000000", validFrom: "2026-01-01", note: null }, 7);
+    const { url, init } = call(fetchMock);
+    expect(url).toBe("https://x/api/v1/company/exchange-rates");
+    expect(h(init)["If-Match"]).toBe('"7"');
+    expect(h(init)["X-Hasm-Request"]).toBe("1");
+    expect(JSON.parse(init.body as string)).toEqual({ currencyCode: "USD", rate: "0.7100000000", validFrom: "2026-01-01", note: null });
+  });
+
+  it("sends every journal workflow step with the entry revision and keeps amounts as text", async () => {
+    const { fetchMock, client } = make();
+    await client.createJournalEntry({ entryDate: "2026-03-10", branchId: "b", lines: [{ accountId: "a", debit: "100.125" }, { accountId: "c", credit: "100.125" }] });
+    await client.updateJournalEntry("j1", { entryDate: "2026-03-10", branchId: "b", lines: [] }, 3);
+    await client.submitJournalEntry("j1", 3);
+    await client.decideJournalEntry("j1", false, "no", 3);
+    await client.postJournalEntry("j1", 3);
+    await client.reverseJournalEntry("j1", "2026-04-01", null, 3);
+    expect(JSON.parse(call(fetchMock, 0).init.body as string).lines[0].debit).toBe("100.125");
+    const urls = [1, 2, 3, 4, 5].map((i) => call(fetchMock, i).url);
+    expect(urls).toEqual(["https://x/api/v1/company/journal/j1", "https://x/api/v1/company/journal/j1/submit", "https://x/api/v1/company/journal/j1/decision", "https://x/api/v1/company/journal/j1/post", "https://x/api/v1/company/journal/j1/reverse"]);
+    for (const i of [1, 2, 3, 4, 5]) expect(h(call(fetchMock, i).init)["If-Match"]).toBe('"3"');
+    expect(JSON.parse(call(fetchMock, 3).init.body as string)).toEqual({ approve: false, comment: "no" });
+  });
+
+  it("builds the list and report queries with encoded parameters", async () => {
+    const { fetchMock, client } = make();
+    await client.listJournal({ status: "posted", from: "2026-01-01", text: "a b" });
+    await client.getTrialBalance({ from: "2026-01-01", to: "2026-12-31", branchId: "b1", includeZero: true });
+    await client.getGeneralLedger("a 1", { from: "2026-01-01", to: "2026-12-31", costCenterId: "c1" }, 200);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/journal?status=posted&from=2026-01-01&q=a+b");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/reports/trial-balance?from=2026-01-01&to=2026-12-31&branchId=b1&includeZero=true");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/reports/general-ledger?accountId=a%201&from=2026-01-01&to=2026-12-31&costCenterId=c1&limit=200&offset=200");
+  });
+
+  it("downloads a CSV as a blob over the same transport rules and reports a failure with the server code", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response("a,b", { headers: { "Content-Type": "text/csv" } })).mockResolvedValueOnce(json({ error: "forbidden" }, { status: 403 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const blob = await client.downloadTrialBalanceCsv({ from: "2026-01-01", to: "2026-12-31" });
+    expect(await blob.text()).toBe("a,b");
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/reports/trial-balance?from=2026-01-01&to=2026-12-31&format=csv");
+    expect(call(fetchMock, 0).init.credentials).toBe("include");
+    await expect(client.downloadGeneralLedgerCsv("a1", { from: "2026-01-01", to: "2026-12-31" })).rejects.toMatchObject({ status: 403, code: "forbidden" });
+  });
+
+  it("sends the desktop bearer token on a download and never uses cookies there", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ user: { id: "u" }, token: "tok" })).mockResolvedValueOnce(new Response("x"));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    await client.login("amal", "pw");
+    await client.downloadTrialBalanceCsv({ from: "2026-01-01", to: "2026-12-31" });
+    const { init } = call(fetchMock, 1);
+    expect(h(init)["Authorization"]).toBe("Bearer tok");
+    expect(init.credentials).toBe("omit");
+  });
+
+  it("manages numbering, cost centers and approval policies with revision control", async () => {
+    const { fetchMock, client } = make();
+    await client.putNumberingRule("journal_entry", { prefix: "JV", separator: "-", width: 6, perBranch: false, perFiscalYear: true }, 2);
+    await client.moveCostCenter("c1", null, 4);
+    await client.updateApprovalPolicy("p1", { source: "any", minAmount: "10", requiredApprovals: 2, nameAr: null, nameEn: "x" }, 5);
+    expect([0, 1, 2].map((i) => h(call(fetchMock, i).init)["If-Match"])).toEqual(['"2"', '"4"', '"5"']);
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/cost-centers/c1/move");
+  });
+});

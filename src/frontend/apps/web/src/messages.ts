@@ -1,4 +1,5 @@
 import type { Catalog } from "@hasm/ui";
+import { ledgerAr, ledgerEn } from "./messages.ledger";
 
 export const catalog: Catalog = {
   ar: {
@@ -1198,3 +1199,7 @@ export const catalog: Catalog = {
     "field.immutable": "This value cannot be changed.",
   },
 };
+
+// General Ledger screens (Phase 3.2B) live in their own module; merged here so the whole catalog stays one object.
+Object.assign(catalog.ar, ledgerAr);
+Object.assign(catalog.en, ledgerEn);

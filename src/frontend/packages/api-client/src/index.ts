@@ -311,6 +311,84 @@ export interface AccountsResponse {
   /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
   can: { create: boolean; update: boolean; activate: boolean; recode: boolean; restructure: boolean; configure: boolean };
 }
+
+// ---------------------------------------------------------------- General Ledger foundation and journal (Phase 3.2B)
+/** Amounts, rates and thresholds travel as exact decimal STRINGS ("100.0000"); they are never converted to floating point for any calculation. */
+export interface NumberingRule { docType: string; prefix: string; separator: string; width: number; perBranch: boolean; perFiscalYear: boolean; revision: number; configured: boolean; numbersIssued: boolean }
+export interface NumberingResponse { rules: NumberingRule[]; can: { configure: boolean } }
+export type NumberingRuleInput = Pick<NumberingRule, "prefix" | "separator" | "width" | "perBranch" | "perFiscalYear">;
+
+export interface ExchangeRate { id: number; currencyCode: string; rate: string; validFrom: string; enteredAtUtc: string; enteredBy: string; note: string | null }
+export interface ExchangeRateCurrency { currencyCode: string; nameEn: string | null; minorUnits: number | null; latestId: number; latest: ExchangeRate | null }
+export interface ExchangeRatesOverview {
+  /** Always "base_per_foreign_unit": the number of base-currency units for ONE unit of the foreign currency. */
+  direction: string;
+  baseCurrency: string;
+  baseMinorUnits: number | null;
+  currencies: ExchangeRateCurrency[];
+  can: { create: boolean };
+}
+export interface ExchangeRateInput { currencyCode: string; rate: string | number; validFrom: string; note?: string | null }
+export interface AppliedRateInfo { rateId: number; currencyCode: string; rate: string; validFrom: string }
+
+export interface CostCenter {
+  id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; branchId: string | null;
+  isGroup: boolean; isActive: boolean; canReceiveAllocations: boolean; hasChildren: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface CostCentersResponse { costCenters: CostCenter[]; can: { create: boolean; update: boolean; activate: boolean; recode: boolean; restructure: boolean } }
+export interface CostCenterInput { code?: string | null; parentId?: string | null; nameAr: string | null; nameEn: string | null; branchId?: string | null; isGroup: boolean }
+export type CostCenterDetailsInput = Pick<CostCenterInput, "nameAr" | "nameEn" | "branchId" | "isGroup">;
+
+export type PolicySource = "manual" | "automatic" | "any";
+export interface ApprovalPolicy {
+  id: string; docType: string; source: PolicySource; branchId: string | null; minAmount: string; requiredApprovals: number;
+  nameAr: string | null; nameEn: string | null; isActive: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface ApprovalPoliciesResponse { policies: ApprovalPolicy[]; documentTypes: string[]; can: { create: boolean; update: boolean; activate: boolean } }
+export interface ApprovalPolicyInput { docType: string; source: PolicySource; branchId?: string | null; minAmount: string | number; requiredApprovals: number; nameAr: string | null; nameEn: string | null }
+export type ApprovalPolicyDetailsInput = Omit<ApprovalPolicyInput, "docType">;
+
+export type JournalStatus = "draft" | "pending_approval" | "approved" | "posted" | "reversed" | "cancelled";
+export interface JournalHeader {
+  id: string; number: string | null; status: JournalStatus; type: "normal" | "reversal" | "adjusting"; source: "manual" | "automatic"; sourceKey: string | null;
+  entryDate: string; description: string | null; branchId: string; baseCurrency: string; baseTotal: string; revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string;
+  submittedBy: string | null; submittedAtUtc: string | null; postedBy: string | null; postedAtUtc: string | null; periodId: string | null; postedInSoftClosedPeriod: boolean;
+  reversesId: string | null; adjustsId: string | null;
+}
+export interface JournalAllocation { costCenterId: string; amount: string; baseAmount: string }
+export interface JournalLine {
+  id: string; lineNo: number; accountId: string; description: string | null; currency: string; debit: string; credit: string; rate: string; rateId: number | null;
+  rateOverrideReason: string | null; baseDebit: string; baseCredit: string; branchId: string; isRounding: boolean; reversesLineId: string | null; allocations: JournalAllocation[];
+}
+export interface JournalApprovalDecision { id: number; documentRevision: number; approver: string; approved: boolean; decidedAtUtc: string; comment: string | null }
+export interface JournalEventInfo { id: number; kind: string; actor: string; atUtc: string; revision: number; detail: string | null }
+export interface JournalEntry {
+  entry: JournalHeader; balanced: boolean; baseDebitTotal: string; baseCreditTotal: string; requiredApprovals: number;
+  lines: JournalLine[]; approvals: JournalApprovalDecision[]; events: JournalEventInfo[];
+}
+export interface JournalListResponse {
+  entries: JournalHeader[];
+  can: { create: boolean; approve: boolean; post: boolean; reverse: boolean; rateOverride: boolean; postInSoftClosed: boolean };
+}
+export interface JournalAllocationInput { costCenterId: string; amount: string | number }
+export interface JournalLineInput {
+  accountId: string; description?: string | null; currency?: string | null; debit?: string | number | null; credit?: string | number | null; branchId?: string | null;
+  rateOverride?: string | number | null; rateOverrideReason?: string | null; allocations?: JournalAllocationInput[] | null;
+}
+export interface JournalInput { entryDate: string; description?: string | null; branchId: string; lines: JournalLineInput[]; adjustsId?: string | null }
+export interface LedgerSettings { roundingAccountId: string | null; revision: number; configured: boolean }
+
+export interface TrialBalanceRowInfo { accountId: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; level: number; isGroup: boolean; opening: string; debit: string; credit: string; closing: string }
+export interface TrialBalanceResponse { from: string; to: string; baseCurrency: string; balanced: boolean; totals: { opening: string; debit: string; credit: string; closing: string }; rows: TrialBalanceRowInfo[] }
+export interface GeneralLedgerLineInfo {
+  entryId: string; number: string; entryDate: string; entryType: string; entryDescription: string | null; lineDescription: string | null; accountId: string; currency: string;
+  debit: string; credit: string; rate: string; rateId: number | null; baseDebit: string; baseCredit: string; branchId: string; isRounding: boolean; runningBalance: string;
+}
+export interface GeneralLedgerResponse {
+  from: string; to: string; baseCurrency: string; accountId: string; includesDescendants: boolean; opening: string; totalDebit: string; totalCredit: string; closing: string;
+  totalLines: number; offset: number; lines: GeneralLedgerLineInfo[];
+}
+export interface ReportQuery { from: string; to: string; branchId?: string; costCenterId?: string }
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -363,6 +441,22 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
 
   const get = <T>(path: string) => request<T>("GET", path);
   const enc = encodeURIComponent;
+
+  /** Downloads a file (CSV report). Same transport rules as every other call; a failure is reported with the server's short error code. */
+  async function download(path: string): Promise<Blob> {
+    const headers: Record<string, string> = { Accept: "text/csv" };
+    if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+    const response = await fetchImpl(`${root}${path}`, { method: "GET", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store" });
+    if (!response.ok) {
+      let payload: { error?: string } = {};
+      try { payload = (await response.json()) as typeof payload; } catch { /* non-JSON error body */ }
+      if (response.status === 401) options.onUnauthenticated?.();
+      throw new ApiError(response.status, payload.error ?? "request_failed");
+    }
+    return await response.blob();
+  }
+  const reportQuery = (q: { from: string; to: string; branchId?: string; costCenterId?: string }) =>
+    `from=${enc(q.from)}&to=${enc(q.to)}${q.branchId ? `&branchId=${enc(q.branchId)}` : ""}${q.costCenterId ? `&costCenterId=${enc(q.costCenterId)}` : ""}`;
 
   return {
     getHealth: () => get<HealthResponse>("/api/v1/health"),
@@ -457,6 +551,58 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     putChartSettings: (settings: { segmentWidth: number; autoCodes: boolean }, revision: number) =>
       request<ChartSettings>("PUT", "/api/v1/company/accounts/settings", { body: settings, ifMatch: revision }),
     applyChartTemplate: (template: string) => request<{ accounts: Account[] }>("POST", "/api/v1/company/accounts/apply-template", { body: { template } }),
+    // Document numbering, exchange rates, cost centers and approval policies (Phase 3.2B). Changes carry the revision (or the currency's latest rate id) as If-Match.
+    getNumbering: () => get<NumberingResponse>("/api/v1/company/numbering"),
+    putNumberingRule: (docType: string, rule: NumberingRuleInput, revision: number) =>
+      request<NumberingRule>("PUT", `/api/v1/company/numbering/${enc(docType)}`, { body: rule, ifMatch: revision }),
+    getExchangeRates: () => get<ExchangeRatesOverview>("/api/v1/company/exchange-rates"),
+    getExchangeRateHistory: (currency?: string, from?: string, to?: string) =>
+      get<{ rates: ExchangeRate[] }>(`/api/v1/company/exchange-rates/history?limit=200${currency ? `&currency=${enc(currency)}` : ""}${from ? `&from=${enc(from)}` : ""}${to ? `&to=${enc(to)}` : ""}`),
+    resolveExchangeRate: (currency: string, date: string) => get<AppliedRateInfo>(`/api/v1/company/exchange-rates/resolve?currency=${enc(currency)}&date=${enc(date)}`),
+    /** `latestId` is the currency's latest entry id from the overview (0 when it has none): a concurrent entry makes this fail with 412. */
+    enterExchangeRate: (rate: ExchangeRateInput, latestId: number) => request<ExchangeRate>("POST", "/api/v1/company/exchange-rates", { body: rate, ifMatch: latestId }),
+    listCostCenters: () => get<CostCentersResponse>("/api/v1/company/cost-centers"),
+    createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
+    updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
+    recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),
+    moveCostCenter: (id: string, parentId: string | null, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/move`, { body: { parentId }, ifMatch: revision }),
+    deactivateCostCenter: (id: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateCostCenter: (id: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/activate`, { ifMatch: revision }),
+    listApprovalPolicies: () => get<ApprovalPoliciesResponse>("/api/v1/company/approval-policies"),
+    createApprovalPolicy: (p: ApprovalPolicyInput) => request<ApprovalPolicy>("POST", "/api/v1/company/approval-policies", { body: p }),
+    updateApprovalPolicy: (id: string, p: ApprovalPolicyDetailsInput, revision: number) => request<ApprovalPolicy>("PUT", `/api/v1/company/approval-policies/${enc(id)}`, { body: p, ifMatch: revision }),
+    deactivateApprovalPolicy: (id: string, revision: number) => request<ApprovalPolicy>("POST", `/api/v1/company/approval-policies/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateApprovalPolicy: (id: string, revision: number) => request<ApprovalPolicy>("POST", `/api/v1/company/approval-policies/${enc(id)}/activate`, { ifMatch: revision }),
+    // Journal (Phase 3.2B). Every workflow step sends the entry revision as If-Match; posting, approval and period rules are enforced by the server and PostgreSQL.
+    listJournal: (q: { status?: JournalStatus; from?: string; to?: string; branchId?: string; text?: string; offset?: number } = {}) => {
+      const p = new URLSearchParams();
+      if (q.status) p.set("status", q.status);
+      if (q.from) p.set("from", q.from);
+      if (q.to) p.set("to", q.to);
+      if (q.branchId) p.set("branchId", q.branchId);
+      if (q.text) p.set("q", q.text);
+      if (q.offset) p.set("offset", String(q.offset));
+      const s = p.toString();
+      return get<JournalListResponse>(`/api/v1/company/journal${s ? `?${s}` : ""}`);
+    },
+    getJournalEntry: (id: string) => get<JournalEntry>(`/api/v1/company/journal/${enc(id)}`),
+    createJournalEntry: (entry: JournalInput) => request<JournalEntry>("POST", "/api/v1/company/journal", { body: entry }),
+    updateJournalEntry: (id: string, entry: JournalInput, revision: number) => request<JournalEntry>("PUT", `/api/v1/company/journal/${enc(id)}`, { body: entry, ifMatch: revision }),
+    submitJournalEntry: (id: string, revision: number) => request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawJournalEntry: (id: string, revision: number) => request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/withdraw`, { ifMatch: revision }),
+    cancelJournalEntry: (id: string, revision: number) => request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/cancel`, { ifMatch: revision }),
+    decideJournalEntry: (id: string, approve: boolean, comment: string | null, revision: number) =>
+      request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/decision`, { body: { approve, comment }, ifMatch: revision }),
+    postJournalEntry: (id: string, revision: number) => request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/post`, { ifMatch: revision }),
+    reverseJournalEntry: (id: string, entryDate: string, description: string | null, revision: number) =>
+      request<JournalEntry>("POST", `/api/v1/company/journal/${enc(id)}/reverse`, { body: { entryDate, description }, ifMatch: revision }),
+    getLedgerSettings: () => get<LedgerSettings>("/api/v1/company/ledger-settings"),
+    putLedgerSettings: (roundingAccountId: string | null, revision: number) => request<LedgerSettings>("PUT", "/api/v1/company/ledger-settings", { body: { roundingAccountId }, ifMatch: revision }),
+    // Reports (read-only, computed from posted entries). The CSV download needs the separate export permission.
+    getTrialBalance: (q: ReportQuery & { includeZero?: boolean }) => get<TrialBalanceResponse>(`/api/v1/company/reports/trial-balance?${reportQuery(q)}${q.includeZero ? "&includeZero=true" : ""}`),
+    getGeneralLedger: (accountId: string, q: ReportQuery, offset = 0) => get<GeneralLedgerResponse>(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&limit=200&offset=${offset}`),
+    downloadTrialBalanceCsv: (q: ReportQuery & { includeZero?: boolean }) => download(`/api/v1/company/reports/trial-balance?${reportQuery(q)}${q.includeZero ? "&includeZero=true" : ""}&format=csv`),
+    downloadGeneralLedgerCsv: (accountId: string, q: ReportQuery) => download(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&format=csv`),
   };
 }
 

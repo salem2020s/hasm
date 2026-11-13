@@ -12,6 +12,12 @@ import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
+import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
+import { CostCentersPage } from "./pages/CostCenters";
+import { ExchangeRatesPage } from "./pages/ExchangeRates";
+import { JournalPage } from "./pages/Journal";
+import { LedgerReportsPage } from "./pages/LedgerReports";
+import { NumberingPage } from "./pages/Numbering";
 import { CompanySelectPage } from "./pages/CompanySelect";
 import { CurrenciesPage } from "./pages/Currencies";
 import { HistoryPage } from "./pages/History";
@@ -51,6 +57,12 @@ const ROUTES: RouteDef[] = [
   { path: "/company/warehouses", anyScope: "company.warehouses.view", element: <WarehousesPage /> },
   { path: "/company/fiscal-years", permission: "company.fiscalyears.view", element: <FiscalYearsPage /> },
   { path: "/company/accounts", permission: "company.accounts.view", element: <ChartOfAccountsPage /> },
+  { path: "/company/numbering", permission: "company.numbering.view", element: <NumberingPage /> },
+  { path: "/company/exchange-rates", permission: "company.exchangerates.view", element: <ExchangeRatesPage /> },
+  { path: "/company/cost-centers", permission: "company.costcenters.view", element: <CostCentersPage /> },
+  { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
+  { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
+  { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
   ...(DevPreviews ? [
     { path: "/dev/preview", element: <Suspense fallback={<Loading />}><DevPreviews.gallery /></Suspense> },
@@ -84,13 +96,21 @@ function Shell() {
       { id: "/company/warehouses", label: t("nav.warehouse_mgmt"), permission: "company.warehouses.view", anyScope: true },
       { id: "/company/fiscal-years", label: t("nav.fiscal"), permission: "company.fiscalyears.view" },
       { id: "/company/accounts", label: t("nav.accounts"), permission: "company.accounts.view" },
+      { id: "/company/numbering", label: t("nav.numbering"), permission: "company.numbering.view" },
+      { id: "/company/exchange-rates", label: t("nav.exchange_rates"), permission: "company.exchangerates.view" },
+      { id: "/company/cost-centers", label: t("nav.cost_centers"), permission: "company.costcenters.view" },
+      { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
+    const accounting: MenuItem[] = [
+      { id: "/accounting/journal", label: t("nav.journal"), permission: "company.journal.view" },
+      { id: "/accounting/reports", label: t("nav.gl_reports"), permission: "company.ledgerreports.view" },
+    ].filter((i) => auth.can(i.permission) || auth.canAny(i.permission)).map(({ id, label }) => ({ id, label }));
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
       { id: "/", label: t("nav.home"), icon: <HomeIcon /> },
-      soon("accounting", t("nav.accounting"), <AccountingIcon />),
+      ...(accounting.length ? [{ id: "accounting", label: t("nav.accounting"), icon: <AccountingIcon />, children: accounting } as MenuItem] : [soon("accounting", t("nav.accounting"), <AccountingIcon />)]),
       soon("warehouses", t("nav.warehouses"), <WarehouseIcon />),
       soon("sales", t("nav.sales"), <SalesIcon />),
       soon("purchases", t("nav.purchases"), <PurchasesIcon />),
