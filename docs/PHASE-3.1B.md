@@ -1,6 +1,6 @@
 # Phase 3.1B — Branch Management
 
-**Status:** scope APPROVED by the project owner (2026-11-13). Schema, migration and backfill are **not yet designed or approved** (Checkpoint B). Branch: `feature/phase-3-1b-branches`.
+**Status:** scope APPROVED (2026-11-13). Schema/migration/backfill design APPROVED and implemented on the disposable test cluster (Checkpoint B); not applied to any permanent database. Branch: `feature/phase-3-1b-branches`.
 
 ## Approved requirements
 A proper branch entity with: stable identifier; code unique within the company; Arabic and English names; active/inactive status; main-branch designation; optional address and contact information; optimistic concurrency and revision tracking; transactional audit events; explicit fine-grained RBAC. Existing security, database-naming, migration and audit conventions apply.

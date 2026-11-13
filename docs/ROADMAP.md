@@ -13,7 +13,7 @@ Status of this file: records the owner-confirmed phase sequence (confirmed 2026-
 ## Approved sequence (functional)
 | Phase | Content | State |
 |---|---|---|
-| **3.1B** | **Branch Management** — see `docs/PHASE-3.1B.md` | in progress (Checkpoint A) |
+| **3.1B** | **Branch Management** — see `docs/PHASE-3.1B.md` | in progress (Checkpoints A and B done locally; C-E pending) |
 | 3.1C | Warehouse Management | not started |
 | 3.1D | Fiscal Years and Periods | not started |
 

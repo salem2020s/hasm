@@ -23,6 +23,13 @@ public static class ConfigAuditEvents
     public const short CurrencyEnabled = 1004;
     public const short CurrencyDisabled = 1005;
     public const short BaseCurrencySet = 1006;
+    // Branch management (Phase 3.1B). The main branch created by migration 0004 has no event (it is not a user action).
+    public const short BranchCreated = 1007;
+    public const short BranchUpdated = 1008;
+    public const short BranchDeactivated = 1009;
+    public const short BranchReactivated = 1010;
+    public const short BranchMainDesignated = 1011;
+    public const short BranchMainRevoked = 1012;
 }
 
 /// <summary>Company profile values in their stored (normalised) form. Authoritative in the company database.</summary>

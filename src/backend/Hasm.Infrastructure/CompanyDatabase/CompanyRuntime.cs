@@ -69,6 +69,18 @@ public static class CompanySchemaGate
             throw new CompanyDatabaseException(CompanyDatabaseException.RuntimeNotProvisioned);
         if (!allowOverprivileged && (await CompanyRuntimePrivileges.FindViolationsAsync(conn, principal, ct)).Count > 0)
             throw new CompanyDatabaseException(CompanyDatabaseException.RuntimeOverprivileged);
+
+        // Branch invariant (migration 0004): a company is operational only with exactly one active main branch. PostgreSQL enforces this at
+        // every commit; the gate is the last, fail-closed line (a database altered outside the application is refused, never repaired here).
+        await using var exists = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL", conn);
+        exists.Parameters.AddWithValue("t", CompanySchema.Branch.Table);
+        if (await exists.ExecuteScalarAsync(ct) is true)   // absent only for a database/scripts pair that predates migration 0004
+        {
+            await using var count = new NpgsqlCommand(
+                $"SELECT count(*) FROM {CompanySchema.Branch.Table} WHERE {CompanySchema.Branch.IsMain} AND {CompanySchema.Branch.IsActive}", conn);
+            if (Convert.ToInt64(await count.ExecuteScalarAsync(ct)) != 1)
+                throw new CompanyDatabaseException(CompanyDatabaseException.SchemaIncompatible);
+        }
     }
 }
 

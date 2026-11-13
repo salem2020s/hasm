@@ -55,7 +55,7 @@ public static partial class CompanySchema
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 
     private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() =>
-        Phase1Map!.Concat(ConfigurationMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+        Phase1Map!.Concat(ConfigurationMap).Concat(BranchMap).ToDictionary(kv => kv.Key, kv => kv.Value));
 
     private static IReadOnlyDictionary<string, string> Phase1Map { get; } = new Dictionary<string, string>
     {

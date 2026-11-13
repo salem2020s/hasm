@@ -459,7 +459,8 @@ The company database is authoritative. After a successful commit the service wri
 |---|---|
 | 1 company | `Hasm.Admin register-company` + `provision-company` can create any number |
 | 2 users | `POST /api/v1/admin/users`, `Hasm.Admin bootstrap-admin`, `grant-company-admin`, and `POST /api/v1/access/members` (membership) have no user/membership limit |
-| 1 branch / 1 warehouse | modules do not exist (Phase 3.1B/3.1C) |
+| 1 branch | **enforced since Phase 3.1B** (backend, counted over every branch ever created); the API/UI of branch management arrive in Checkpoints C/D |
+| 1 warehouse | module does not exist (Phase 3.1C) |
 | 100 posted business transactions (read/export after the limit) | no posting module yet |
 Also missing: Trial module/report limits, attachment quota, licence keys, activation, purchasing. Production licensing is **not** ready.
 
@@ -508,3 +509,9 @@ CI runs the same checks (`.github/workflows/`).
 6. Role/permission changes are validated against the catalog compiled into the running Backend; rolling-upgrade skew between instances with different catalogs is not handled.
 7. Segregation of duties and approval workflows are not part of this phase.
 8. The remaining Phase 2.3A limitations (no MFA/reset/breached-password check, desktop credential-store handling, HTTPS-only cookie) are unchanged; the lockout denial of service and forwarded-header limitations were addressed in Phase 2.3C-1 (see its residual risks above).
+
+## Branches (Phase 3.1B, Checkpoint B: schema, initialization, domain service)
+Details and the approved decisions are in `docs/PHASE-3.1B-PROPOSAL.md`; the roadmap is `docs/ROADMAP.md`. **Company migration 0004** creates `Branch` and its append-only `BranchRevision` and creates the company's main branch (`MAIN`, `الفرع الرئيسي` / `Main Branch`) idempotently inside the migration: a new company gets it during provisioning (before it is Ready), an existing company at `migrate-companies`. PostgreSQL enforces: at most one main (partial unique index), exactly one active main at commit (deferred constraint trigger), upper-case unique immutable codes, no delete/truncate even for the owner, revision +1 per update, `activation_epoch` +1 on every activation-state change and never otherwise. The seeded branch has revision 1, `seed_migration = 4`, and **no** audit event or history row (it is not a user action); the first audited change writes revision 2. The schema gate refuses a company without exactly one active main branch. `CompanyBranchService` (no authorization yet - Checkpoint C wraps it) performs audited create/update/deactivate/reactivate/make-main under one advisory lock; Trial allows one branch counted over all branches ever created. `grant-company-runtime <id>` must be run again after `migrate-companies` (Branch SELECT/INSERT/UPDATE, BranchRevision SELECT/INSERT). **Upgrade of an existing development database requires explicit owner approval and the procedure in the proposal; it has not been applied to any permanent database.**
+
+## Shared Web/Desktop frontend (permanent requirement)
+One React + TypeScript frontend serves the Web app and the Windows Desktop app (Tauri 2); all features are implemented once on the UI-1 design system, with only small isolated platform adapters (authentication transport, native window, secure storage, printing/filesystem, packaging) and the same server-side APIs and rules for both clients. The binding policy is the section "Mandatory Shared Web/Desktop Frontend Architecture" in the root `CLAUDE.md`; the checks in "Checks" above (frontend typecheck, tests and build, Tauri build) apply to every feature and are not deferred.

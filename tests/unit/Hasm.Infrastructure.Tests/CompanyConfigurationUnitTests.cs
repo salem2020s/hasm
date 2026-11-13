@@ -172,7 +172,7 @@ public class EntitlementAndLockContractTests
     public void Restrictions_that_are_not_yet_enforced_are_declared_so_and_never_silently_allowed()
     {
         var notEnforced = TrialEntitlementPolicy.Instance.Restrictions.Where(r => r.Enforcement == Enforcement.NotEnforced).Select(r => r.Key).Order().ToArray();
-        Assert.Equal(["branches", "companies", "posted_business_transactions", "users", "warehouses"], notEnforced);
+        Assert.Equal(["companies", "posted_business_transactions", "users", "warehouses"], notEnforced);   // branches are enforced since Phase 3.1B
         Assert.All(TrialEntitlementPolicy.Instance.Restrictions.Where(r => r.Enforcement == Enforcement.NotEnforced), r => Assert.False(string.IsNullOrWhiteSpace(r.Note)));
     }
 
@@ -219,6 +219,7 @@ public class ConfigurationSchemaContractTests
     [
         CompanySchema.Identity.Table, CompanySchema.BusinessAudit.Table, CompanySchema.Profile.Table, CompanySchema.Settings.Table,
         CompanySchema.Currency.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.ConfigRevision.Table,
+        CompanySchema.Branch.Table, CompanySchema.BranchRevision.Table,   // Phase 3.1B (migration 0004)
     ];
 
     /// <summary>
