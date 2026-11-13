@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Http.Metadata;
 
 namespace Hasm.Api.Company;
 
+public sealed record DenyRequestBody(string? Note);
+
 public static class FiscalSetup
 {
     public static IServiceCollection AddHasmFiscalCalendar(this IServiceCollection services)
@@ -37,12 +39,17 @@ public static class FiscalEndpoints
         years.MapPost("", CreateYear).WithMetadata(new BodyLimit());
         years.MapGet("/{id:guid}", GetYear);
         years.MapPost("/{id:guid}/close", CloseYear);
-        years.MapPost("/{id:guid}/reopen", ReopenYear).WithMetadata(new BodyLimit());
+        years.MapPost("/{id:guid}/reopen-requests", RequestYearReopen).WithMetadata(new BodyLimit());
         var periods = app.MapGroup("/api/v1/company/fiscal-periods").RequireAuthorization();
         periods.MapPost("/{id:guid}/soft-close", SoftClose);
         periods.MapPost("/{id:guid}/reopen", Reopen);
         periods.MapPost("/{id:guid}/final-close", FinalClose);
-        periods.MapPost("/{id:guid}/reopen-final", ReopenFinal).WithMetadata(new BodyLimit());
+        periods.MapPost("/{id:guid}/reopen-requests", RequestPeriodReopen).WithMetadata(new BodyLimit());
+        var requests = app.MapGroup("/api/v1/company/fiscal-reopen-requests").RequireAuthorization();
+        requests.MapGet("", ListRequests);
+        requests.MapPost("/{id:guid}/approve", ApproveRequest);
+        requests.MapPost("/{id:guid}/deny", DenyRequest).WithMetadata(new BodyLimit());
+        requests.MapPost("/{id:guid}/cancel", CancelRequest);
     }
 
     private static object PeriodBody(FiscalPeriodView p) => new
@@ -78,11 +85,12 @@ public static class FiscalEndpoints
             {
                 create = eff.Has(PermissionCatalog.Codes.FiscalYearsCreate, ScopeTarget.Company),
                 closeYear = eff.Has(PermissionCatalog.Codes.FiscalYearsClose, ScopeTarget.Company),
-                reopenYear = eff.Has(PermissionCatalog.Codes.FiscalYearsReopen, ScopeTarget.Company),
+                requestReopen = eff.Has(PermissionCatalog.Codes.FiscalReopenRequest, ScopeTarget.Company),
+                approveReopen = eff.Has(PermissionCatalog.Codes.FiscalReopenApprove, ScopeTarget.Company),
+                viewRequests = eff.Has(PermissionCatalog.Codes.FiscalReopenView, ScopeTarget.Company),
                 softClose = eff.Has(PermissionCatalog.Codes.FiscalPeriodsClose, ScopeTarget.Company),
                 reopen = eff.Has(PermissionCatalog.Codes.FiscalPeriodsReopen, ScopeTarget.Company),
                 finalClose = eff.Has(PermissionCatalog.Codes.FiscalPeriodsFinalClose, ScopeTarget.Company),
-                reopenFinal = eff.Has(PermissionCatalog.Codes.FiscalPeriodsReopenFinal, ScopeTarget.Company),
             },
         });
     }
@@ -112,16 +120,57 @@ public static class FiscalEndpoints
 
     private static Task<IResult> CloseYear(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
         Run(http, access, (u, c, rev) => svc.CloseYearAsync(u, c, id, rev, http.RequestAborted), YearBody, v => v.Revision);
-    private static Task<IResult> ReopenYear(Guid id, ReasonInput? body, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
-        Run(http, access, (u, c, rev) => svc.ReopenYearAsync(u, c, id, rev, body, http.RequestAborted), YearBody, v => v.Revision);
     private static Task<IResult> SoftClose(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
         Run(http, access, (u, c, rev) => svc.SoftCloseAsync(u, c, id, rev, http.RequestAborted), PeriodBody, v => v.Revision);
     private static Task<IResult> Reopen(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
         Run(http, access, (u, c, rev) => svc.ReopenAsync(u, c, id, rev, http.RequestAborted), PeriodBody, v => v.Revision);
     private static Task<IResult> FinalClose(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
         Run(http, access, (u, c, rev) => svc.FinalCloseAsync(u, c, id, rev, http.RequestAborted), PeriodBody, v => v.Revision);
-    private static Task<IResult> ReopenFinal(Guid id, ReasonInput? body, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
-        Run(http, access, (u, c, rev) => svc.ReopenFinalAsync(u, c, id, rev, body, http.RequestAborted), PeriodBody, v => v.Revision);
+
+    // ---- exceptional reopening: request -> approval
+
+    private static object RequestBody(FiscalReopenRequestView r, Guid actor, bool mayApprove) => new
+    {
+        id = r.Id, target = r.Target == FiscalReopenTarget.Period ? "period" : "year", targetId = r.TargetId, yearName = r.YearName, periodNumber = r.PeriodNumber,
+        startDate = r.StartDate?.ToString("yyyy-MM-dd"), endDate = r.EndDate?.ToString("yyyy-MM-dd"), expectedRevision = r.ExpectedRevision, reason = r.Reason,
+        status = r.Status.ToString().ToLowerInvariant(), requestedAtUtc = r.RequestedAtUtc, decidedAtUtc = r.DecidedAtUtc, decisionNote = r.DecisionNote, revision = r.Revision,
+        // The server states who may do what; the user ids themselves are not exposed. Approving one's own request is never offered (and is refused by the server).
+        mine = r.RequestedBy == actor,
+        canApprove = mayApprove && r.Status == FiscalReopenStatus.Pending && r.RequestedBy != actor,
+        canCancel = r.Status == FiscalReopenStatus.Pending && r.RequestedBy == actor,
+    };
+
+    private static async Task<IResult> ListRequests(HttpContext http, AccessService access, FiscalCalendarManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        var list = await svc.ListRequestsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
+        if (!list.IsOk) return CompanyConfigurationEndpoints.Map(list, _ => new { });
+        var mayApprove = await access.IsAllowedAsync(actor.UserId, actor.CompanyId, PermissionCatalog.Codes.FiscalReopenApprove, ScopeTarget.Company, http.RequestAborted);
+        return Results.Json(new { requests = list.Value!.Select(r => RequestBody(r, actor.UserId, mayApprove)) });
+    }
+
+    private static async Task<IResult> RunRequest(HttpContext http, AccessService access, bool created, Func<Guid, Guid, long?, Task<ConfigResult<FiscalReopenRequestView>>> action)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        if (!CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
+        var r = await action(actor!.UserId, actor.CompanyId, expected);
+        // After this caller's own action the response never offers approval to them (they are the requester or already decided it).
+        object Body(FiscalReopenRequestView v) => RequestBody(v, actor.UserId, false);
+        return r.IsOk && created ? new CreatedEtag($"/api/v1/company/fiscal-reopen-requests/{r.Value!.Id}", r.Value.Revision, Body(r.Value)) : CompanyConfigurationEndpoints.Map(r, Body, v => v.Revision);
+    }
+
+    private static Task<IResult> RequestPeriodReopen(Guid id, ReasonInput? body, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
+        RunRequest(http, access, true, (u, c, rev) => svc.RequestPeriodReopenAsync(u, c, id, rev, body, http.RequestAborted));
+    private static Task<IResult> RequestYearReopen(Guid id, ReasonInput? body, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
+        RunRequest(http, access, true, (u, c, rev) => svc.RequestYearReopenAsync(u, c, id, rev, body, http.RequestAborted));
+    private static Task<IResult> ApproveRequest(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
+        RunRequest(http, access, false, (u, c, rev) => svc.ApproveRequestAsync(u, c, id, rev, http.RequestAborted));
+    private static Task<IResult> DenyRequest(Guid id, DenyRequestBody? body, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
+        RunRequest(http, access, false, (u, c, rev) => svc.DenyRequestAsync(u, c, id, rev, body?.Note, http.RequestAborted));
+    private static Task<IResult> CancelRequest(Guid id, HttpContext http, AccessService access, FiscalCalendarManagementService svc) =>
+        RunRequest(http, access, false, (u, c, rev) => svc.CancelRequestAsync(u, c, id, rev, http.RequestAborted));
 
     /// <summary>201 with the strong revision as ETag and the new resource location.</summary>
     private sealed class CreatedEtag(string location, long revision, object body) : IResult

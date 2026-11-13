@@ -40,6 +40,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.FiscalYear.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.FiscalPeriod.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.FiscalHistory.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.FiscalReopenRequest.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -117,7 +118,7 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("warehouse", CompanySchema.Warehouse.Table);
         cmd.Parameters.AddWithValue("warehouse_history", CompanySchema.WarehouseRevision.Table);
         cmd.Parameters.AddWithValue("fiscal_history", CompanySchema.FiscalHistory.Table);
-        cmd.Parameters.AddWithValue("fiscal_tables", new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table });
+        cmd.Parameters.AddWithValue("fiscal_tables", new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalReopenRequest.Table });
         cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });
         cmd.Parameters.AddWithValue("forbidden_state", ForbiddenOnState);
         var codes = new SortedSet<string>(StringComparer.Ordinal);

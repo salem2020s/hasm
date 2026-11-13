@@ -69,24 +69,30 @@ public class FiscalUnitTests
     public void Fiscal_audit_events_are_unique_business_events_after_the_warehouse_range()
     {
         short[] events = [ConfigAuditEvents.FiscalYearCreated, ConfigAuditEvents.FiscalYearClosed, ConfigAuditEvents.FiscalYearReopened, ConfigAuditEvents.FiscalPeriodSoftClosed,
-            ConfigAuditEvents.FiscalPeriodReopened, ConfigAuditEvents.FiscalPeriodFinalClosed, ConfigAuditEvents.FiscalPeriodFinalReopened];
+            ConfigAuditEvents.FiscalPeriodReopened, ConfigAuditEvents.FiscalPeriodFinalClosed, ConfigAuditEvents.FiscalPeriodFinalReopened,
+            ConfigAuditEvents.FiscalReopenRequested, ConfigAuditEvents.FiscalReopenApproved, ConfigAuditEvents.FiscalReopenDenied, ConfigAuditEvents.FiscalReopenCancelled];
         Assert.Equal(events.Length, events.Distinct().Count());
-        Assert.All(events, e => Assert.InRange(e, (short)1017, (short)1023));
+        Assert.All(events, e => Assert.InRange(e, (short)1017, (short)1027));
     }
 
     [Fact]
-    public void All_fiscal_permissions_are_company_wide_and_the_two_exceptional_ones_are_in_no_preset_role()
+    public void All_fiscal_permissions_are_company_wide_and_only_the_fiscal_approver_preset_can_approve_reopenings()
     {
-        string[] codes = ["company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close", "company.fiscalyears.reopen",
-            "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen", "company.fiscalperiods.reopenfinal"];
+        string[] codes = ["company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close",
+            "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen",
+            "company.fiscalreopen.view", "company.fiscalreopen.create", "company.fiscalreopen.approve"];
         foreach (var c in codes) Assert.Equal(ScopeKind.Company, PermissionCatalog.Default.Get(c).Resource.Scope);
         Assert.Equal(codes.Order(), PermissionCatalog.Default.All.Select(p => p.Code).Where(c => c.StartsWith("company.fiscal")).Order());
-        foreach (var preset in PresetRoles.Definitions.Values)
-        {
-            Assert.DoesNotContain(PermissionCatalog.Codes.FiscalYearsReopen, preset.Permissions);
-            Assert.DoesNotContain(PermissionCatalog.Codes.FiscalPeriodsReopenFinal, preset.Permissions);
-        }
-        Assert.Contains(PermissionCatalog.Codes.FiscalPeriodsFinalClose, PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions);
+        // There is no direct one-step reopening permission any more.
+        Assert.False(PermissionCatalog.Default.TryGet("company.fiscalperiods.reopenfinal", out _));
+        Assert.False(PermissionCatalog.Default.TryGet("company.fiscalyears.reopen", out _));
+        var holders = PresetRoles.Definitions.Where(d => d.Value.Permissions.Contains(PermissionCatalog.Codes.FiscalReopenApprove)).Select(d => d.Key).ToArray();
+        Assert.Equal([PresetRoles.FiscalApproverId], holders);
+        var admin = PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions;
+        Assert.Contains(PermissionCatalog.Codes.FiscalPeriodsFinalClose, admin);
+        Assert.Contains(PermissionCatalog.Codes.FiscalReopenRequest, admin);                          // may request ...
+        Assert.DoesNotContain(PermissionCatalog.Codes.FiscalReopenApprove, admin);                    // ... never approve
+        Assert.DoesNotContain(PermissionCatalog.Codes.FiscalReopenRequest, PresetRoles.Definitions[PresetRoles.FiscalApproverId].Permissions);   // the approver role cannot request
     }
 
     [Fact]
@@ -118,7 +124,8 @@ public class FiscalUnitTests
     public void Company_migration_0006_creates_exactly_the_fiscal_tables_seeds_nothing_grants_nothing_and_never_drops()
     {
         var created = Regex.Matches(CompanyCode, @"CREATE\s+TABLE\s+(\w+)", RegexOptions.IgnoreCase).Select(m => m.Groups[1].Value).Order().ToArray();
-        Assert.Equal(new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalHistory.Table }.Order(), created);
+        Assert.Equal(new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalHistory.Table, CompanySchema.FiscalReopenRequest.Table }.Order(), created);
+        Assert.Contains("requires an approved request", CompanyCode);                                   // the approval requirement is a database rule
         Assert.DoesNotMatch(@"\bINSERT\s+INTO\b", CompanyCode);
         Assert.DoesNotMatch(@"\bDROP\b", CompanyCode);
         Assert.DoesNotMatch(@"\bGRANT\b", CompanyCode);
@@ -130,7 +137,7 @@ public class FiscalUnitTests
     [Fact]
     public void All_fiscal_physical_names_are_opaque_unique_and_present_in_the_migration()
     {
-        var names = new[] { typeof(CompanySchema.FiscalYear), typeof(CompanySchema.FiscalPeriod), typeof(CompanySchema.FiscalHistory), typeof(CompanySchema.FiscalCalendar) }
+        var names = new[] { typeof(CompanySchema.FiscalYear), typeof(CompanySchema.FiscalPeriod), typeof(CompanySchema.FiscalHistory), typeof(CompanySchema.FiscalReopenRequest), typeof(CompanySchema.FiscalCalendar) }
             .SelectMany(t => t.GetFields()).Select(f => (string)f.GetRawConstantValue()!).ToArray();
         Assert.Equal(names.Length, names.Distinct().Count());
         Assert.All(names, n => Assert.Matches("^[tcfrk]_[0-9a-f]{8}$", n));
@@ -140,15 +147,19 @@ public class FiscalUnitTests
     }
 
     [Fact]
-    public void System_migration_0009_only_adds_the_routine_permissions_to_the_preset_and_restores_its_guard()
+    public void System_migration_0009_adds_the_fiscal_permissions_and_the_approver_role_and_keeps_approval_out_of_the_administrator_preset()
     {
         Assert.DoesNotMatch(@"\bDROP\b", SystemCode);
         Assert.DoesNotMatch(@"\bCREATE\s+TABLE\b", SystemCode);
         Assert.Contains("ENABLE TRIGGER", SystemCode);
         foreach (var code in new[] { "company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close", "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen" })
             Assert.Contains($"'{code}'", SystemCode);
-        Assert.DoesNotContain("reopenfinal", SystemCode);                                                // segregation of duties: kept out of the preset
-        Assert.DoesNotContain("company.fiscalyears.reopen'", SystemCode);
+        Assert.DoesNotContain("reopenfinal", SystemCode);                                                // no direct one-step reopening permission exists
+        Assert.Contains("('5c1b0f6e-0000-4a00-8000-000000000001', 'company.fiscalreopen.view')", SystemCode);       // the administrator may view and request ...
+        Assert.Contains("('5c1b0f6e-0000-4a00-8000-000000000001', 'company.fiscalreopen.create')", SystemCode);
+        Assert.DoesNotContain("('5c1b0f6e-0000-4a00-8000-000000000001', 'company.fiscalreopen.approve')", SystemCode);   // ... never approve
+        Assert.Contains("('5c1b0f6e-0000-4a00-8000-000000000004', 'company.fiscalreopen.approve')", SystemCode);         // the Fiscal Approver preset does
+        Assert.Contains("fiscal-approver", SystemCode);
     }
 
     [Fact]
@@ -158,5 +169,6 @@ public class FiscalUnitTests
         Assert.Equal(["INSERT", "SELECT", "UPDATE"], Privileges(CompanySchema.FiscalYear.Table));
         Assert.Equal(["INSERT", "SELECT", "UPDATE"], Privileges(CompanySchema.FiscalPeriod.Table));
         Assert.Equal(["INSERT", "SELECT"], Privileges(CompanySchema.FiscalHistory.Table));
+        Assert.Equal(["INSERT", "SELECT", "UPDATE"], Privileges(CompanySchema.FiscalReopenRequest.Table));
     }
 }

@@ -33,14 +33,14 @@ public class AccessModelTests
     }
 
     [Fact]
-    public void Preset_roles_only_reference_catalog_permissions_and_administrator_holds_everything_except_the_two_exceptional_reopenings()
+    public void Preset_roles_only_reference_catalog_permissions_and_administrator_holds_everything_except_the_approval_of_fiscal_reopenings()
     {
         foreach (var (_, (_, permissions)) in PresetRoles.Definitions)
             Assert.All(permissions, code => Assert.True(PermissionCatalog.Default.TryGet(code, out _), code));
-        // Segregation of duties: the two exceptional reopenings (a Final Closed period, a closed year) are in the catalog but in NO preset role.
-        string[] exceptional = [PermissionCatalog.Codes.FiscalPeriodsReopenFinal, PermissionCatalog.Codes.FiscalYearsReopen];
-        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(exceptional).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
-        Assert.All(PresetRoles.Definitions.Values, d => Assert.Empty(d.Permissions.Intersect(exceptional)));
+        // Segregation of duties: the APPROVAL of exceptional fiscal reopenings is in the catalog but never in the Company Administrator preset; only Fiscal Approver holds it.
+        string[] approval = [PermissionCatalog.Codes.FiscalReopenApprove];
+        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
+        Assert.Equal(PresetRoles.FiscalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.FiscalReopenApprove)).Key);
     }
 
     [Fact]

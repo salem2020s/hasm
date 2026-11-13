@@ -9,6 +9,7 @@ using Y = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalYear;
 using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using H = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalHistory;
 using S = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
+using RQ = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalReopenRequest;
 
 namespace Hasm.Infrastructure.CompanyConfiguration;
 
@@ -142,42 +143,32 @@ public sealed class FiscalCalendarService(
 
     /// <summary>Open -> Soft Closed.</summary>
     public Task<ConfigResult<FiscalPeriodView>> SoftCloseAsync(Guid actor, Guid companyId, Guid periodId, long? expectedRevision, CancellationToken ct = default) =>
-        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.Open, FiscalPeriodState.SoftClosed, ConfigAuditEvents.FiscalPeriodSoftClosed, "fiscal period soft closed", null, ct);
+        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.Open, FiscalPeriodState.SoftClosed, ConfigAuditEvents.FiscalPeriodSoftClosed, "fiscal period soft closed", ct);
 
     /// <summary>Soft Closed -> Open (routine reopening of a soft close).</summary>
     public Task<ConfigResult<FiscalPeriodView>> ReopenAsync(Guid actor, Guid companyId, Guid periodId, long? expectedRevision, CancellationToken ct = default) =>
-        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.SoftClosed, FiscalPeriodState.Open, ConfigAuditEvents.FiscalPeriodReopened, "fiscal period reopened", null, ct);
+        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.SoftClosed, FiscalPeriodState.Open, ConfigAuditEvents.FiscalPeriodReopened, "fiscal period reopened", ct);
 
     /// <summary>Soft Closed -> Final Closed. The period must have been Soft Closed first (Open never jumps to Final Closed).</summary>
     public Task<ConfigResult<FiscalPeriodView>> FinalCloseAsync(Guid actor, Guid companyId, Guid periodId, long? expectedRevision, CancellationToken ct = default) =>
-        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.SoftClosed, FiscalPeriodState.FinalClosed, ConfigAuditEvents.FiscalPeriodFinalClosed, "fiscal period final closed", null, ct);
+        ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.SoftClosed, FiscalPeriodState.FinalClosed, ConfigAuditEvents.FiscalPeriodFinalClosed, "fiscal period final closed", ct);
 
-    /// <summary>
-    /// Exceptional: Final Closed -> Soft Closed (never straight to Open), with a recorded reason, by someone other than the user who final-closed the
-    /// period. The caller (the authorized facade) has already checked the dedicated permission.
-    /// </summary>
-    public Task<ConfigResult<FiscalPeriodView>> ReopenFinalAsync(Guid actor, Guid companyId, Guid periodId, long? expectedRevision, ReasonInput? reason, CancellationToken ct = default)
-    {
-        if (!ConfigurationValidation.TryNormalizeReason(reason, out var text, out var errors)) return Task.FromResult(ConfigResult<FiscalPeriodView>.Invalid(errors));
-        return ChangePeriodAsync(actor, companyId, periodId, expectedRevision, FiscalPeriodState.FinalClosed, FiscalPeriodState.SoftClosed, ConfigAuditEvents.FiscalPeriodFinalReopened, "fiscal period final closed reopened", text, ct);
-    }
+    // Exceptional reopening (Final Closed period, closed year) is NOT a method here: it is an approval workflow (request -> approve/deny/cancel) below.
 
     private async Task<ConfigResult<FiscalPeriodView>> ChangePeriodAsync(
-        Guid actor, Guid companyId, Guid periodId, long? expectedRevision, FiscalPeriodState from, FiscalPeriodState to, short eventType, string label, string? reason, CancellationToken ct)
+        Guid actor, Guid companyId, Guid periodId, long? expectedRevision, FiscalPeriodState from, FiscalPeriodState to, short eventType, string label, CancellationToken ct)
     {
         if (expectedRevision is null) return ConfigResult<FiscalPeriodView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
-            var (current, finalBy) = await LoadPeriodAsync(work.Connection, work.Transaction, periodId, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "fiscal_period_not_found");
+            var (current, _) = await LoadPeriodAsync(work.Connection, work.Transaction, periodId, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "fiscal_period_not_found");
             if (current.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", current.Revision);
             var year = (await LoadYearsAsync(work.Connection, work.Transaction, current.YearId, true, ct)).Single();
             if (year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_closed");
             if (current.State != from) throw new Abort(ConfigStatus.Conflict, "invalid_period_state");
-            // Segregation of duties: the user who final-closed a period cannot be the one who reopens it.
-            if (from == FiscalPeriodState.FinalClosed && finalBy == actor) throw new Abort(ConfigStatus.Forbidden, "segregation_of_duties");
-            if (to is FiscalPeriodState.SoftClosed or FiscalPeriodState.FinalClosed && from is FiscalPeriodState.Open or FiscalPeriodState.SoftClosed
-                && await closeGuard.IsBlockedAsync(companyId, current, work.Connection, work.Transaction, ct))
+            var closing = to is FiscalPeriodState.SoftClosed or FiscalPeriodState.FinalClosed;
+            if (closing && await closeGuard.IsBlockedAsync(companyId, current, work.Connection, work.Transaction, ct))
                 throw new Abort(ConfigStatus.Conflict, "period_close_blocked");
             var now = clock.GetUtcNow().UtcDateTime;
             await using (var upd = new NpgsqlCommand(
@@ -193,8 +184,10 @@ public sealed class FiscalCalendarService(
                 ["status"] = new JsonObject { ["old"] = from.ToString(), ["new"] = to.ToString() },
                 ["periodNumber"] = current.Number,
             };
-            if (reason is not null) changes["reasonRecorded"] = true;   // the reason text lives in the history row, never in the audit detail
-            await RecordAsync(work, eventType, actor, 2, periodId, current.Revision + 1, changes, (short)from, (short)to, reason, label, ct);
+            // The record never claims more than was checked: while the modules behind the close checks do not exist, every close says so in its own history.
+            if (closing && closeGuard.UnimplementedDomains.Count > 0)
+                changes["closeChecksNotImplemented"] = new JsonArray([.. closeGuard.UnimplementedDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
+            await RecordAsync(work, eventType, actor, 2, periodId, current.Revision + 1, changes, (short)from, (short)to, null, label, ct);
             return (await LoadPeriodAsync(work.Connection, work.Transaction, periodId, false, ct))!.Value.View;
         }, ct);
     }
@@ -218,32 +211,243 @@ public sealed class FiscalCalendarService(
                 await upd.ExecuteNonQueryAsync(ct);
             }
             var changes = new JsonObject { ["status"] = new JsonObject { ["old"] = "Open", ["new"] = "Closed" } };
+            if (closeGuard.UnimplementedDomains.Count > 0)
+                changes["closeChecksNotImplemented"] = new JsonArray([.. closeGuard.UnimplementedDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
             await RecordAsync(work, ConfigAuditEvents.FiscalYearClosed, actor, 1, yearId, year.Revision + 1, changes, 1, 2, null, "fiscal year closed", ct);
             return (await LoadYearsAsync(work.Connection, work.Transaction, yearId, false, ct)).Single();
         }, ct);
     }
 
-    /// <summary>Exceptional: reopens a closed fiscal year, with a recorded reason. Its periods stay Final Closed (each needs its own exceptional reopening).</summary>
-    public async Task<ConfigResult<FiscalYearView>> ReopenYearAsync(Guid actor, Guid companyId, Guid yearId, long? expectedRevision, ReasonInput? reason, CancellationToken ct = default)
+    // ------------------------------------------------------------------------------------------------------------- exceptional reopening: request -> approval
+
+    private const short KindPeriod = 1, KindYear = 2;
+    private const short Pending = 1, Approved = 2, Denied = 3, Cancelled = 4;
+
+    private static readonly string RequestColumns =
+        $"{RQ.Id}, {RQ.TargetKind}, {RQ.TargetId}, {RQ.ExpectedRevision}, {RQ.Reason}, {RQ.Status}, {RQ.RequestedBy}, {RQ.RequestedAtUtc}, {RQ.DecidedBy}, {RQ.DecidedAtUtc}, {RQ.DecisionNote}, {RQ.Revision}";
+
+    /// <summary>Recent reopen requests of the company (newest first), with a readable target.</summary>
+    public async Task<IReadOnlyList<FiscalReopenRequestView>> ListRequestsAsync(Guid companyId, CancellationToken ct = default)
     {
-        if (!ConfigurationValidation.TryNormalizeReason(reason, out var text, out var errors)) return ConfigResult<FiscalYearView>.Invalid(errors);
-        if (expectedRevision is null) return ConfigResult<FiscalYearView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        return await LoadRequestsAsync(conn, null, null, false, ct);
+    }
+
+    public async Task<FiscalReopenRequestView?> GetRequestAsync(Guid companyId, Guid id, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        return (await LoadRequestsAsync(conn, null, id, false, ct)).SingleOrDefault();
+    }
+
+    /// <summary>
+    /// Requests the exceptional reopening of a Final Closed PERIOD. Nothing changes in the calendar: only a pending request is recorded, bound to the
+    /// period and the revision the requester saw. <paramref name="expectedRevision"/> must be the current one.
+    /// </summary>
+    public Task<ConfigResult<FiscalReopenRequestView>> RequestPeriodReopenAsync(Guid actor, Guid companyId, Guid periodId, long? expectedRevision, ReasonInput? reason, CancellationToken ct = default) =>
+        RequestAsync(actor, companyId, KindPeriod, periodId, expectedRevision, reason, ct);
+
+    /// <summary>Requests the exceptional reopening of a closed fiscal YEAR (same rules).</summary>
+    public Task<ConfigResult<FiscalReopenRequestView>> RequestYearReopenAsync(Guid actor, Guid companyId, Guid yearId, long? expectedRevision, ReasonInput? reason, CancellationToken ct = default) =>
+        RequestAsync(actor, companyId, KindYear, yearId, expectedRevision, reason, ct);
+
+    private async Task<ConfigResult<FiscalReopenRequestView>> RequestAsync(Guid actor, Guid companyId, short kind, Guid targetId, long? expectedRevision, ReasonInput? reason, CancellationToken ct)
+    {
+        if (!ConfigurationValidation.TryNormalizeReason(reason, out var text, out var errors)) return ConfigResult<FiscalReopenRequestView>.Invalid(errors);
+        if (expectedRevision is null) return ConfigResult<FiscalReopenRequestView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
-            var year = (await LoadYearsAsync(work.Connection, work.Transaction, yearId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "fiscal_year_not_found");
-            if (year.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", year.Revision);
-            if (!year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_not_closed");
-            await using (var upd = new NpgsqlCommand(
-                $"UPDATE {Y.Table} SET {Y.Status} = 1, {Y.ClosedAtUtc} = NULL, {Y.ClosedBy} = NULL, {Y.Revision} = {Y.Revision} + 1 WHERE {Y.Id} = @id", work.Connection, work.Transaction))
+            if (kind == KindPeriod)
             {
-                upd.Parameters.AddWithValue("id", yearId);
-                await upd.ExecuteNonQueryAsync(ct);
+                var (period, _) = await LoadPeriodAsync(work.Connection, work.Transaction, targetId, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "fiscal_period_not_found");
+                if (period.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", period.Revision);
+                if (period.State != FiscalPeriodState.FinalClosed) throw new Abort(ConfigStatus.Conflict, "invalid_period_state");
+                var year = (await LoadYearsAsync(work.Connection, work.Transaction, period.YearId, true, ct)).Single();
+                if (year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_closed");
             }
-            var changes = new JsonObject { ["status"] = new JsonObject { ["old"] = "Closed", ["new"] = "Open" }, ["reasonRecorded"] = true };
-            await RecordAsync(work, ConfigAuditEvents.FiscalYearReopened, actor, 1, yearId, year.Revision + 1, changes, 2, 1, text, "fiscal year reopened", ct);
-            return (await LoadYearsAsync(work.Connection, work.Transaction, yearId, false, ct)).Single();
+            else
+            {
+                var year = (await LoadYearsAsync(work.Connection, work.Transaction, targetId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "fiscal_year_not_found");
+                if (year.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", year.Revision);
+                if (!year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_not_closed");
+            }
+            var id = Guid.NewGuid();
+            try
+            {
+                await using var ins = new NpgsqlCommand(
+                    $"INSERT INTO {RQ.Table} ({RQ.Id}, {RQ.TargetKind}, {RQ.TargetId}, {RQ.ExpectedRevision}, {RQ.Reason}, {RQ.Status}, {RQ.RequestedBy}, {RQ.RequestedAtUtc}, {RQ.Revision}) " +
+                    "VALUES (@id, @k, @t, @r, @reason, 1, @actor, @now, 1)", work.Connection, work.Transaction);
+                ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("k", kind); ins.Parameters.AddWithValue("t", targetId);
+                ins.Parameters.AddWithValue("r", expectedRevision.Value); ins.Parameters.AddWithValue("reason", text);
+                ins.Parameters.AddWithValue("actor", actor); ins.Parameters.AddWithValue("now", clock.GetUtcNow().UtcDateTime);
+                await ins.ExecuteNonQueryAsync(ct);
+            }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                throw new Abort(ConfigStatus.Conflict, "reopen_request_pending");   // one pending request per target (also under concurrency)
+            }
+            var changes = new JsonObject
+            {
+                ["target"] = new JsonObject { ["kind"] = kind == KindPeriod ? "period" : "year", ["id"] = targetId.ToString(), ["expectedRevision"] = expectedRevision.Value },
+                ["status"] = new JsonObject { ["old"] = null, ["new"] = "Pending" },
+            };
+            await RecordAsync(work, ConfigAuditEvents.FiscalReopenRequested, actor, 3, id, 1, changes, null, Pending, text, "fiscal reopen requested", ct);
+            return (await LoadRequestsAsync(work.Connection, work.Transaction, id, false, ct)).Single();
         }, ct);
+    }
+
+    /// <summary>
+    /// Approves a pending request and EXECUTES the reopening in the same transaction, after re-validating everything now: the request is still pending
+    /// and at the revision the approver saw; the approver is not the requester and (for the object's own closer) not the user who closed it;
+    /// <paramref name="requesterStillAuthorized"/> (checked by the authorized facade against the live permissions) is true; and the target is still in
+    /// the state and at the revision the request was made for (otherwise <c>request_stale</c>: nothing changes). A Final Closed period returns to
+    /// Soft Closed (never straight to Open); a closed year reopens and its periods stay Final Closed.
+    /// </summary>
+    public async Task<ConfigResult<FiscalReopenRequestView>> ApproveRequestAsync(Guid approver, Guid companyId, Guid requestId, long? expectedRequestRevision, bool requesterStillAuthorized, CancellationToken ct = default)
+    {
+        if (expectedRequestRevision is null) return ConfigResult<FiscalReopenRequestView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
+        return await MutateAsync(companyId, async work =>
+        {
+            await LockAsync(work, ct);
+            var req = await RequirePendingAsync(work, requestId, expectedRequestRevision.Value, ct);
+            if (req.RequestedBy == approver) throw new Abort(ConfigStatus.Forbidden, "self_approval_forbidden");
+            if (!requesterStillAuthorized) throw new Abort(ConfigStatus.Conflict, "request_requester_not_authorized");
+            var now = clock.GetUtcNow().UtcDateTime;
+            long resultRevision;
+            if (req.Target == FiscalReopenTarget.Period)
+            {
+                var (period, finalBy) = await LoadPeriodAsync(work.Connection, work.Transaction, req.TargetId, true, ct) ?? throw new Abort(ConfigStatus.Conflict, "request_stale");
+                var year = (await LoadYearsAsync(work.Connection, work.Transaction, period.YearId, true, ct)).Single();
+                if (year.IsClosed || period.State != FiscalPeriodState.FinalClosed || period.Revision != req.ExpectedRevision) throw new Abort(ConfigStatus.Conflict, "request_stale");
+                if (finalBy == approver) throw new Abort(ConfigStatus.Forbidden, "segregation_of_duties");
+                await using (var upd = new NpgsqlCommand(
+                    $"UPDATE {P.Table} SET {P.Status} = 2, {P.StatusChangedAtUtc} = @now, {P.StatusChangedBy} = @a, {P.Revision} = {P.Revision} + 1 WHERE {P.Id} = @id", work.Connection, work.Transaction))
+                {
+                    upd.Parameters.AddWithValue("now", now); upd.Parameters.AddWithValue("a", approver); upd.Parameters.AddWithValue("id", period.Id);
+                    await upd.ExecuteNonQueryAsync(ct);
+                }
+                resultRevision = period.Revision + 1;
+                var changes = new JsonObject
+                {
+                    ["status"] = new JsonObject { ["old"] = "FinalClosed", ["new"] = "SoftClosed" }, ["periodNumber"] = period.Number,
+                    ["approvedRequest"] = requestId.ToString(), ["requestedBy"] = req.RequestedBy.ToString(), ["approvedBy"] = approver.ToString(),
+                };
+                await RecordAsync(work, ConfigAuditEvents.FiscalPeriodFinalReopened, approver, 2, period.Id, resultRevision, changes, 3, 2, req.Reason, "fiscal period final closed reopened (approved)", ct);
+            }
+            else
+            {
+                var year = (await LoadYearsAsync(work.Connection, work.Transaction, req.TargetId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.Conflict, "request_stale");
+                if (!year.IsClosed || year.Revision != req.ExpectedRevision) throw new Abort(ConfigStatus.Conflict, "request_stale");
+                Guid? closedBy;
+                await using (var q = new NpgsqlCommand($"SELECT {Y.ClosedBy} FROM {Y.Table} WHERE {Y.Id} = @id", work.Connection, work.Transaction))
+                {
+                    q.Parameters.AddWithValue("id", year.Id);
+                    closedBy = await q.ExecuteScalarAsync(ct) as Guid?;
+                }
+                if (closedBy == approver) throw new Abort(ConfigStatus.Forbidden, "segregation_of_duties");
+                await using (var upd = new NpgsqlCommand(
+                    $"UPDATE {Y.Table} SET {Y.Status} = 1, {Y.ClosedAtUtc} = NULL, {Y.ClosedBy} = NULL, {Y.Revision} = {Y.Revision} + 1 WHERE {Y.Id} = @id", work.Connection, work.Transaction))
+                {
+                    upd.Parameters.AddWithValue("id", year.Id);
+                    await upd.ExecuteNonQueryAsync(ct);
+                }
+                resultRevision = year.Revision + 1;
+                var changes = new JsonObject
+                {
+                    ["status"] = new JsonObject { ["old"] = "Closed", ["new"] = "Open" },
+                    ["approvedRequest"] = requestId.ToString(), ["requestedBy"] = req.RequestedBy.ToString(), ["approvedBy"] = approver.ToString(),
+                };
+                await RecordAsync(work, ConfigAuditEvents.FiscalYearReopened, approver, 1, year.Id, resultRevision, changes, 2, 1, req.Reason, "fiscal year reopened (approved)", ct);
+            }
+            await DecideAsync(work, requestId, Approved, approver, null, resultRevision, now, ct);
+            await RecordAsync(work, ConfigAuditEvents.FiscalReopenApproved, approver, 3, requestId, req.Revision + 1,
+                new JsonObject { ["status"] = new JsonObject { ["old"] = "Pending", ["new"] = "Approved" }, ["resultRevision"] = resultRevision }, Pending, Approved, null, "fiscal reopen approved", ct);
+            return (await LoadRequestsAsync(work.Connection, work.Transaction, requestId, false, ct)).Single();
+        }, ct);
+    }
+
+    /// <summary>Denies a pending request (by an approver who is not the requester). The calendar is not touched.</summary>
+    public Task<ConfigResult<FiscalReopenRequestView>> DenyRequestAsync(Guid decider, Guid companyId, Guid requestId, long? expectedRequestRevision, string? note, CancellationToken ct = default) =>
+        CloseRequestAsync(decider, companyId, requestId, expectedRequestRevision, Denied, note, ct);
+
+    /// <summary>Withdraws a pending request (only by its requester). The calendar is not touched.</summary>
+    public Task<ConfigResult<FiscalReopenRequestView>> CancelRequestAsync(Guid actor, Guid companyId, Guid requestId, long? expectedRequestRevision, CancellationToken ct = default) =>
+        CloseRequestAsync(actor, companyId, requestId, expectedRequestRevision, Cancelled, null, ct);
+
+    private async Task<ConfigResult<FiscalReopenRequestView>> CloseRequestAsync(Guid actor, Guid companyId, Guid requestId, long? expectedRequestRevision, short outcome, string? note, CancellationToken ct)
+    {
+        if (expectedRequestRevision is null) return ConfigResult<FiscalReopenRequestView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
+        var cleaned = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        if (cleaned is { Length: > 500 }) return ConfigResult<FiscalReopenRequestView>.Invalid([new("note", "too_long")]);
+        return await MutateAsync(companyId, async work =>
+        {
+            await LockAsync(work, ct);
+            var req = await RequirePendingAsync(work, requestId, expectedRequestRevision.Value, ct);
+            if (outcome == Cancelled && req.RequestedBy != actor) throw new Abort(ConfigStatus.Forbidden, "not_the_requester");
+            if (outcome == Denied && req.RequestedBy == actor) throw new Abort(ConfigStatus.Forbidden, "self_approval_forbidden");
+            await DecideAsync(work, requestId, outcome, actor, cleaned, null, clock.GetUtcNow().UtcDateTime, ct);
+            var name = outcome == Denied ? "Denied" : "Cancelled";
+            await RecordAsync(work, outcome == Denied ? ConfigAuditEvents.FiscalReopenDenied : ConfigAuditEvents.FiscalReopenCancelled, actor, 3, requestId, req.Revision + 1,
+                new JsonObject { ["status"] = new JsonObject { ["old"] = "Pending", ["new"] = name } }, Pending, outcome, cleaned, outcome == Denied ? "fiscal reopen denied" : "fiscal reopen cancelled", ct);
+            return (await LoadRequestsAsync(work.Connection, work.Transaction, requestId, false, ct)).Single();
+        }, ct);
+    }
+
+    private async Task<FiscalReopenRequestView> RequirePendingAsync(CompanyAuditedWork work, Guid id, long expectedRevision, CancellationToken ct)
+    {
+        var req = (await LoadRequestsAsync(work.Connection, work.Transaction, id, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "reopen_request_not_found");
+        if (req.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", req.Revision);
+        if (req.Status != FiscalReopenStatus.Pending) throw new Abort(ConfigStatus.Conflict, "request_not_pending");
+        return req;
+    }
+
+    private static async Task DecideAsync(CompanyAuditedWork work, Guid id, short status, Guid by, string? note, long? resultRevision, DateTime now, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE {RQ.Table} SET {RQ.Status} = @s, {RQ.DecidedBy} = @by, {RQ.DecidedAtUtc} = @now, {RQ.DecisionNote} = @note, {RQ.ResultRevision} = @rr, {RQ.Revision} = {RQ.Revision} + 1 WHERE {RQ.Id} = @id",
+            work.Connection, work.Transaction);
+        cmd.Parameters.AddWithValue("s", status); cmd.Parameters.AddWithValue("by", by); cmd.Parameters.AddWithValue("now", now); cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.Add(new NpgsqlParameter("note", NpgsqlDbType.Varchar) { Value = (object?)note ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("rr", NpgsqlDbType.Bigint) { Value = (object?)resultRevision ?? DBNull.Value });
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task<List<FiscalReopenRequestView>> LoadRequestsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid? id, bool forUpdate, CancellationToken ct)
+    {
+        // Target description is read separately so the row lock (FOR UPDATE) applies to the request row only.
+        var rows = new List<(Guid Id, short Kind, Guid Target, long Expected, string Reason, short Status, Guid By, DateTimeOffset At, Guid? DecBy, DateTimeOffset? DecAt, string? Note, long Rev)>();
+        await using (var cmd = new NpgsqlCommand($"SELECT {RequestColumns} FROM {RQ.Table} WHERE (@id::uuid IS NULL OR {RQ.Id} = @id) ORDER BY {RQ.RequestedAtUtc} DESC, {RQ.Id} LIMIT 200{(forUpdate ? " FOR UPDATE" : "")}", conn, tx))
+        {
+            cmd.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Uuid) { Value = (object?)id ?? DBNull.Value });
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct))
+                rows.Add((r.GetGuid(0), r.GetInt16(1), r.GetGuid(2), r.GetInt64(3), r.GetString(4), r.GetInt16(5), r.GetGuid(6), r.GetFieldValue<DateTimeOffset>(7),
+                    r.IsDBNull(8) ? null : r.GetGuid(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), r.IsDBNull(10) ? null : r.GetString(10), r.GetInt64(11)));
+        }
+        var list = new List<FiscalReopenRequestView>();
+        foreach (var x in rows)
+        {
+            string yearName; int? number = null; DateOnly? start = null, end = null;
+            if (x.Kind == KindPeriod)
+            {
+                await using var q = new NpgsqlCommand($"SELECT y.{Y.Name}, p.{P.Number}, p.{P.StartDate}, p.{P.EndDate} FROM {P.Table} p JOIN {Y.Table} y ON y.{Y.Id} = p.{P.YearId} WHERE p.{P.Id} = @t", conn, tx);
+                q.Parameters.AddWithValue("t", x.Target);
+                await using var r = await q.ExecuteReaderAsync(ct);
+                await r.ReadAsync(ct);
+                yearName = r.GetString(0); number = r.GetInt16(1); start = r.GetFieldValue<DateOnly>(2); end = r.GetFieldValue<DateOnly>(3);
+            }
+            else
+            {
+                await using var q = new NpgsqlCommand($"SELECT {Y.Name}, {Y.StartDate}, {Y.EndDate} FROM {Y.Table} WHERE {Y.Id} = @t", conn, tx);
+                q.Parameters.AddWithValue("t", x.Target);
+                await using var r = await q.ExecuteReaderAsync(ct);
+                await r.ReadAsync(ct);
+                yearName = r.GetString(0); start = r.GetFieldValue<DateOnly>(1); end = r.GetFieldValue<DateOnly>(2);
+            }
+            list.Add(new FiscalReopenRequestView(x.Id, x.Kind == KindPeriod ? FiscalReopenTarget.Period : FiscalReopenTarget.Year, x.Target, yearName, number, start, end,
+                x.Expected, x.Reason, (FiscalReopenStatus)x.Status, x.By, x.At, x.DecBy, x.DecAt, x.Note, x.Rev));
+        }
+        return list;
     }
 
     // ------------------------------------------------------------------------------------------------------------- plumbing

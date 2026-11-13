@@ -43,6 +43,10 @@ public static class ConfigAuditEvents
     public const short FiscalPeriodReopened = 1021;
     public const short FiscalPeriodFinalClosed = 1022;
     public const short FiscalPeriodFinalReopened = 1023;
+    public const short FiscalReopenRequested = 1024;
+    public const short FiscalReopenApproved = 1025;
+    public const short FiscalReopenDenied = 1026;
+    public const short FiscalReopenCancelled = 1027;
 }
 
 /// <summary>Company profile values in their stored (normalised) form. Authoritative in the company database.</summary>

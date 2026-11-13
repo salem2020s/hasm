@@ -136,3 +136,17 @@ public static partial class ConfigurationValidation
         return errors.Count == 0;
     }
 }
+
+public enum FiscalReopenTarget { Period = 1, Year = 2 }
+
+/// <summary>Persisted; never renumber. Pending is the only non-final state.</summary>
+public enum FiscalReopenStatus : short { Pending = 1, Approved = 2, Denied = 3, Cancelled = 4 }
+
+/// <summary>
+/// A request for the exceptional reopening of a Final Closed period or a closed year. It is bound to the exact object and the revision the requester saw;
+/// approval re-validates both. Only a DIFFERENT authorized user can approve it (never the requester), and approval executes the reopening.
+/// </summary>
+public sealed record FiscalReopenRequestView(
+    Guid Id, FiscalReopenTarget Target, Guid TargetId, string YearName, int? PeriodNumber, DateOnly? StartDate, DateOnly? EndDate,
+    long ExpectedRevision, string Reason, FiscalReopenStatus Status, Guid RequestedBy, DateTimeOffset RequestedAtUtc,
+    Guid? DecidedBy, DateTimeOffset? DecidedAtUtc, string? DecisionNote, long Revision);

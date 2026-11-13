@@ -10,11 +10,12 @@ using Fp = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 
 namespace Hasm.Database.IntegrationTests;
 
-/// <summary>Fiscal-calendar RBAC (company-wide, separate permissions, segregation of duties) and the HTTP API (system migration 0009, Phase 3.1D).</summary>
+/// <summary>Fiscal-calendar RBAC (company-wide, separate permissions), the reopening approval workflow and the offline approver delegation (migration 0009).</summary>
 public abstract class FiscalAccessTestBase : HttpApiTestBase
 {
     protected FiscalCalendarService Domain2 { get; private set; } = null!;
     protected FiscalCalendarManagementService FMgmt { get; private set; } = null!;
+    protected const string Why = "Correction of a posting error found in audit";
 
     protected async Task PrepareCalendar(bool configureTimeZone = true)
     {
@@ -32,61 +33,61 @@ public abstract class FiscalAccessTestBase : HttpApiTestBase
     protected static FiscalYearInput Year(string name, int year, string type = "monthly") => new(name, new DateOnly(year, 1, 1), type);
     protected Task<(UserRecord User, Guid RoleId)> Holder(params string[] permissions) => Member(permissions, ScopeKind.Company, null);
 
-    private int rawPeople;
+    private int approvers;
 
-    /// <summary>
-    /// A company-wide holder of permissions the preset administrator does NOT hold (the two exceptional reopenings). The service's "cannot grant what
-    /// you do not possess" rule correctly stops an administrator from granting them, so the role is arranged directly in the system database (as a
-    /// platform operator would): this is test setup only.
-    /// </summary>
-    protected async Task<UserRecord> RawHolder(params string[] permissions)
+    /// <summary>A company member who holds the preset Fiscal Approver role, delegated the supported way (offline tool): the only way such a role can be assigned.</summary>
+    protected async Task<UserRecord> NewApprover()
     {
-        var n = Interlocked.Increment(ref rawPeople);
-        var user = await NewUser($"rawholder{n}");
+        var user = await NewUser($"fiscalapprover{Interlocked.Increment(ref approvers)}");
         Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, user.Login)).IsOk);
-        var role = Guid.NewGuid();
-        await Exec($"INSERT INTO {SystemSchema.Role.Table} ({SystemSchema.Role.Id},{SystemSchema.Role.CompanyId},{SystemSchema.Role.PresetKey},{SystemSchema.Role.Name},{SystemSchema.Role.IsActive},{SystemSchema.Role.CreatedAtUtc},{SystemSchema.Role.CreatedBy},{SystemSchema.Role.UpdatedAtUtc}) VALUES (@i,@c,NULL,@n,true,now(),NULL,now())",
-            ("i", role), ("c", Company.Id), ("n", $"raw-role-{n}"));
-        foreach (var p in permissions)
-            await Exec($"INSERT INTO {SystemSchema.RolePermission.Table} ({SystemSchema.RolePermission.RoleId},{SystemSchema.RolePermission.Permission}) VALUES (@r,@p)", ("r", role), ("p", p));
-        await Exec($"INSERT INTO {SystemSchema.RoleAssignment.Table} ({SystemSchema.RoleAssignment.Id},{SystemSchema.RoleAssignment.UserId},{SystemSchema.RoleAssignment.CompanyId},{SystemSchema.RoleAssignment.RoleId},{SystemSchema.RoleAssignment.ScopeKind},{SystemSchema.RoleAssignment.GrantedAtUtc}) VALUES (@i,@u,@c,@r,0,now())",
-            ("i", Guid.NewGuid()), ("u", user.Id), ("c", Company.Id), ("r", role));
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantFiscalApproverOfflineAsync(user.Login, Company.Id));
         return user;
+    }
+
+    /// <summary>Soft closes and final closes period <paramref name="index"/> as <paramref name="closer"/>; returns the period at its current revision.</summary>
+    protected async Task<FiscalPeriodView> FinalClosed(FiscalYearView y, Guid closer, int index = 0)
+    {
+        var soft = Ok(await Domain2.SoftCloseAsync(closer, Company.Id, y.Periods[index].Id, 1));
+        return Ok(await Domain2.FinalCloseAsync(closer, Company.Id, y.Periods[index].Id, soft.Revision));
     }
 }
 
 public class FiscalAccessTests : FiscalAccessTestBase
 {
     [PostgresFact]
-    public async Task The_company_administrator_preset_holds_the_routine_fiscal_permissions_but_neither_exceptional_reopening()
+    public async Task The_company_administrator_may_run_the_calendar_and_request_a_reopening_but_never_approve_it()
     {
         await PrepareCalendar();
         var roles = (await Rbac.ListRolesAsync(Admin.Id, Company.Id)).Value!;
         var admin = roles.Single(r => r.PresetKey == "company-administrator");
-        foreach (var c in new[] { "company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close", "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen" })
+        foreach (var c in new[] { "company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close", "company.fiscalperiods.close", "company.fiscalperiods.finalclose",
+                                  "company.fiscalperiods.reopen", "company.fiscalreopen.view", "company.fiscalreopen.create" })
             Assert.Contains(c, admin.Permissions);
-        Assert.DoesNotContain("company.fiscalperiods.reopenfinal", admin.Permissions);
-        Assert.DoesNotContain("company.fiscalyears.reopen", admin.Permissions);
-        Assert.DoesNotContain(roles.Where(r => r.PresetKey != "company-administrator").SelectMany(r => r.Permissions), p => p.StartsWith("company.fiscal"));
+        Assert.DoesNotContain("company.fiscalreopen.approve", admin.Permissions);
+        var approver = roles.Single(r => r.PresetKey == "fiscal-approver");
+        Assert.Equal(["company.fiscalreopen.approve", "company.fiscalreopen.view", "company.fiscalyears.view"], approver.Permissions.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(roles.Where(r => r.PresetKey is not ("company-administrator" or "fiscal-approver")).SelectMany(r => r.Permissions), p => p.StartsWith("company.fiscal"));
         Assert.Empty(Ok(await FMgmt.ListAsync(Admin.Id, Company.Id)));
-        // The administrator therefore cannot perform the exceptional reopenings (a custom role must hold them).
+
         var y = Ok(await FMgmt.CreateYearAsync(Admin.Id, Company.Id, Year("FY2026", 2026)));
-        Ok(await FMgmt.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, 1));
-        Ok(await FMgmt.FinalCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, 2));
-        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenFinalAsync(Admin.Id, Company.Id, y.Periods[0].Id, 3, new ReasonInput("A documented reason here"))).Status);
-        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenYearAsync(Admin.Id, Company.Id, y.Id, 1, new ReasonInput("A documented reason here"))).Status);
+        var p = await FinalClosed(y, Admin.Id);
+        var request = Ok(await FMgmt.RequestPeriodReopenAsync(Admin.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why)));
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ApproveRequestAsync(Admin.Id, Company.Id, request.Id, request.Revision)).Status);   // no approval right (and never one's own)
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.DenyRequestAsync(Admin.Id, Company.Id, request.Id, request.Revision, null)).Status);
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await Domain2.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
     }
 
     [PostgresFact]
-    public async Task Every_kind_of_closing_and_reopening_is_a_separate_permission()
+    public async Task Every_kind_of_closing_and_the_reopening_workflow_are_separate_permissions()
     {
         await PrepareCalendar();
         var y = Ok(await FMgmt.CreateYearAsync(Admin.Id, Company.Id, Year("FY2026", 2026, "quarterly")));
         var (viewer, _) = await Holder(PermissionCatalog.Codes.FiscalYearsView);
         var (softOnly, _) = await Holder(PermissionCatalog.Codes.FiscalPeriodsClose);
         var (finalOnly, _) = await Holder(PermissionCatalog.Codes.FiscalPeriodsFinalClose);
-        var (reopenOnly, _) = await Holder(PermissionCatalog.Codes.FiscalPeriodsReopen);
         var (creator, _) = await Holder(PermissionCatalog.Codes.FiscalYearsCreate);
+        var (requestOnly, _) = await Holder(PermissionCatalog.Codes.FiscalReopenRequest);
+        var (viewRequests, _) = await Holder(PermissionCatalog.Codes.FiscalReopenView);
         var p = y.Periods[0];
 
         Assert.Equal(y.Id, Assert.Single(Ok(await FMgmt.ListAsync(viewer.Id, Company.Id))).Id);
@@ -98,32 +99,101 @@ public class FiscalAccessTests : FiscalAccessTestBase
         Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenAsync(softOnly.Id, Company.Id, p.Id, 2)).Status);                  // soft close does not include reopening it
         Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.SoftCloseAsync(finalOnly.Id, Company.Id, y.Periods[1].Id, 1)).Status);
         Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.CloseYearAsync(finalOnly.Id, Company.Id, y.Id, 1)).Status);
-        Ok(await FMgmt.FinalCloseAsync(finalOnly.Id, Company.Id, p.Id, 2));
-        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenFinalAsync(reopenOnly.Id, Company.Id, p.Id, 3, new ReasonInput("A documented reason here"))).Status);   // routine reopen is not the exceptional one
-        Assert.Equal("invalid_period_state", (await FMgmt.ReopenAsync(reopenOnly.Id, Company.Id, p.Id, 3)).Code);                   // allowed to try; the state machine refuses Final -> Open
+        var closed = Ok(await FMgmt.FinalCloseAsync(finalOnly.Id, Company.Id, p.Id, 2));
         Ok(await FMgmt.CreateYearAsync(creator.Id, Company.Id, Year("FY2027", 2027)));
+        // Requesting needs its own permission; viewing requests needs its own; neither includes the other, nor approving.
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.RequestPeriodReopenAsync(finalOnly.Id, Company.Id, p.Id, closed.Revision, new ReasonInput(Why))).Status);
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.RequestPeriodReopenAsync(viewRequests.Id, Company.Id, p.Id, closed.Revision, new ReasonInput(Why))).Status);
+        var request = Ok(await FMgmt.RequestPeriodReopenAsync(requestOnly.Id, Company.Id, p.Id, closed.Revision, new ReasonInput(Why)));
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ListRequestsAsync(requestOnly.Id, Company.Id)).Status);
+        Assert.Equal(request.Id, Assert.Single(Ok(await FMgmt.ListRequestsAsync(viewRequests.Id, Company.Id))).Id);
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ApproveRequestAsync(viewRequests.Id, Company.Id, request.Id, request.Revision)).Status);
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.DenyRequestAsync(requestOnly.Id, Company.Id, request.Id, request.Revision, null)).Status);
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.CancelRequestAsync(viewRequests.Id, Company.Id, request.Id, request.Revision)).Status);
+        Assert.Equal(FiscalReopenStatus.Cancelled, Ok(await FMgmt.CancelRequestAsync(requestOnly.Id, Company.Id, request.Id, request.Revision)).Status);   // the requester withdraws
     }
 
     [PostgresFact]
-    public async Task The_exceptional_reopening_works_for_a_dedicated_holder_who_is_not_the_user_who_final_closed()
+    public async Task A_separate_approver_approves_through_the_facade_and_a_requester_who_lost_the_right_is_refused()
     {
         await PrepareCalendar();
         var y = Ok(await FMgmt.CreateYearAsync(Admin.Id, Company.Id, Year("FY2026", 2026)));
-        var exceptional = await RawHolder(PermissionCatalog.Codes.FiscalPeriodsReopenFinal, PermissionCatalog.Codes.FiscalPeriodsFinalClose, PermissionCatalog.Codes.FiscalPeriodsClose);
-        var (closer, _) = await Holder(PermissionCatalog.Codes.FiscalPeriodsFinalClose, PermissionCatalog.Codes.FiscalPeriodsClose);
-        var p = y.Periods[0];
-        Ok(await FMgmt.SoftCloseAsync(closer.Id, Company.Id, p.Id, 1));
-        Ok(await FMgmt.FinalCloseAsync(closer.Id, Company.Id, p.Id, 2));
-        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenFinalAsync(closer.Id, Company.Id, p.Id, 3, new ReasonInput("A documented reason here"))).Status);   // no permission
-        Ok(await FMgmt.ReopenFinalAsync(exceptional.Id, Company.Id, p.Id, 3, new ReasonInput("A documented reason here")));
-        // A holder of BOTH final-closing and the exceptional reopening still cannot undo their own final close.
-        Ok(await FMgmt.FinalCloseAsync(exceptional.Id, Company.Id, p.Id, 4));
-        var own = await FMgmt.ReopenFinalAsync(exceptional.Id, Company.Id, p.Id, 5, new ReasonInput("A documented reason here"));
-        Assert.Equal("segregation_of_duties", own.Code);
+        var approver = await NewApprover();
+        var requester = await NewAdminOf(Company);
+        var p = await FinalClosed(y, Admin.Id);
+        var request = Ok(await FMgmt.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why)));
+
+        Assert.Equal(request.Id, Assert.Single(Ok(await FMgmt.ListRequestsAsync(approver.Id, Company.Id))).Id);
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.RequestPeriodReopenAsync(approver.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why))).Status);   // the approver role cannot request
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.SoftCloseAsync(approver.Id, Company.Id, y.Periods[1].Id, 1)).Status);     // and runs no calendar operation
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ApproveRequestAsync(requester.Id, Company.Id, request.Id, request.Revision)).Status);   // the requester holds no approval right
+
+        // The requester's role is revoked: their pending request can no longer be executed by anyone.
+        var assignment = (await Rbac.ListAssignmentsAsync(Admin.Id, Company.Id, requester.Id)).Value!.Single(a => a.RoleId == PresetRoles.CompanyAdministratorId);
+        Assert.True((await Rbac.RevokeAssignmentAsync(Admin.Id, Company.Id, assignment.Id)).IsOk);
+        var revoked = await FMgmt.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision);
+        Assert.Equal((ConfigStatus.Conflict, "request_requester_not_authorized"), (revoked.Status, revoked.Code));
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await Domain2.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+        Assert.Equal(FiscalReopenStatus.Pending, (await Domain2.GetRequestAsync(Company.Id, request.Id))!.Status);
+        Assert.Equal(FiscalReopenStatus.Denied, Ok(await FMgmt.DenyRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, "Requester no longer authorized")).Status);
     }
 
     [PostgresFact]
-    public async Task Branch_and_warehouse_grants_never_reach_the_company_wide_fiscal_calendar_and_strangers_get_nothing()
+    public async Task An_approver_who_is_removed_can_no_longer_approve_and_a_current_approver_executes_the_reopening()
+    {
+        await PrepareCalendar();
+        var y = Ok(await FMgmt.CreateYearAsync(Admin.Id, Company.Id, Year("FY2026", 2026)));
+        var approver = await NewApprover();
+        var removed = await NewApprover();
+        var p = await FinalClosed(y, Admin.Id);
+        var request = Ok(await FMgmt.RequestPeriodReopenAsync(Admin.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why)));
+        Assert.Equal(AccessService.FiscalApproverStatus.Revoked, await Rbac.RevokeFiscalApproverOfflineAsync(removed.Login, Company.Id));
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ApproveRequestAsync(removed.Id, Company.Id, request.Id, request.Revision)).Status);   // revocation is immediate (no cache)
+        Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ListRequestsAsync(removed.Id, Company.Id)).Status);
+        var done = Ok(await FMgmt.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision));
+        Assert.Equal(FiscalReopenStatus.Approved, done.Status);
+        Assert.Equal(FiscalPeriodState.SoftClosed, (await Domain2.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+    }
+
+    [PostgresFact]
+    public async Task The_fiscal_approver_role_can_only_be_delegated_offline_never_by_a_company_administrator()
+    {
+        await PrepareCalendar();
+        var member = await NewUser("future-approver");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, member.Login)).IsOk);
+        var viaService = await Rbac.AssignRoleAsync(Admin.Id, Company.Id, member.Id, PresetRoles.FiscalApproverId, ScopeKind.Company, null);
+        Assert.Equal((AccessStatus.Forbidden, "cannot_grant_permission"), (viaService.Status, viaService.Code));                    // an administrator cannot grant what they do not hold
+        var custom = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "sneaky-approver", [PermissionCatalog.Codes.FiscalReopenApprove]);   // nor smuggle it into a custom role
+        Assert.False(custom.IsOk);
+
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantFiscalApproverOfflineAsync(member.Login, Company.Id));
+        Assert.Equal(AccessService.FiscalApproverStatus.AlreadyApprover, await Rbac.GrantFiscalApproverOfflineAsync(member.Login.ToUpperInvariant(), Company.Id));
+        var assignment = (await Rbac.ListAssignmentsAsync(Admin.Id, Company.Id, member.Id)).Value!.Single(a => a.RoleId == PresetRoles.FiscalApproverId);
+        var revoke = await Rbac.RevokeAssignmentAsync(Admin.Id, Company.Id, assignment.Id);
+        Assert.Equal((AccessStatus.Forbidden, "target_has_higher_privileges"), (revoke.Status, revoke.Code));                       // nor can an administrator remove one
+
+        var audit = SystemSchema.AccessAudit.Table;
+        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {audit} WHERE {SystemSchema.AccessAudit.Detail} = 'scope: company; offline fiscal approver delegation' AND {SystemSchema.AccessAudit.ActorUserId} IS NULL AND {SystemSchema.AccessAudit.TargetUserId} = @u", ("u", member.Id)));
+        Assert.Equal(AccessService.FiscalApproverStatus.Revoked, await Rbac.RevokeFiscalApproverOfflineAsync(member.Login, Company.Id));
+        Assert.Equal(AccessService.FiscalApproverStatus.NotApprover, await Rbac.RevokeFiscalApproverOfflineAsync(member.Login, Company.Id));
+        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {audit} WHERE {SystemSchema.AccessAudit.Detail} = 'scope: company; offline fiscal approver removal' AND {SystemSchema.AccessAudit.ActorUserId} IS NULL AND {SystemSchema.AccessAudit.TargetUserId} = @u", ("u", member.Id)));
+    }
+
+    [PostgresFact]
+    public async Task The_offline_delegation_needs_an_active_member_of_a_ready_company_and_never_creates_membership()
+    {
+        await PrepareCalendar();
+        var outsider = await NewUser("outsider-approver");
+        Assert.Equal(AccessService.FiscalApproverStatus.NotMember, await Rbac.GrantFiscalApproverOfflineAsync(outsider.Login, Company.Id));
+        Assert.Equal(AccessService.FiscalApproverStatus.UserNotFound, await Rbac.GrantFiscalApproverOfflineAsync("nobody-with-this-login", Company.Id));
+        Assert.Equal(AccessService.FiscalApproverStatus.UserNotFound, await Rbac.GrantFiscalApproverOfflineAsync("   ", Company.Id));
+        Assert.Equal(AccessService.FiscalApproverStatus.CompanyUnavailable, await Rbac.GrantFiscalApproverOfflineAsync(outsider.Login, Guid.NewGuid()));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.UserCompanyAccess.Table} WHERE {SystemSchema.UserCompanyAccess.UserId} = @u", ("u", outsider.Id)));   // nothing was created
+        Assert.Equal(AccessService.FiscalApproverStatus.UserNotFound, await Rbac.RevokeFiscalApproverOfflineAsync("nobody-with-this-login", Company.Id));
+    }
+
+    [PostgresFact]
+    public async Task Branch_and_warehouse_grants_never_reach_the_company_wide_calendar_and_strangers_get_nothing()
     {
         await PrepareCalendar();
         Ok(await FMgmt.CreateYearAsync(Admin.Id, Company.Id, Year("FY2026", 2026)));
@@ -141,6 +211,12 @@ public class FiscalAccessTests : FiscalAccessTestBase
             Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.FinalCloseAsync(user.Id, Company.Id, Guid.NewGuid(), 1)).Status);
             Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ReopenAsync(user.Id, Company.Id, Guid.NewGuid(), 1)).Status);
             Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.CloseYearAsync(user.Id, Company.Id, Guid.NewGuid(), 1)).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ListRequestsAsync(user.Id, Company.Id)).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.RequestPeriodReopenAsync(user.Id, Company.Id, Guid.NewGuid(), 1, new ReasonInput(Why))).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.RequestYearReopenAsync(user.Id, Company.Id, Guid.NewGuid(), 1, new ReasonInput(Why))).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ApproveRequestAsync(user.Id, Company.Id, Guid.NewGuid(), 1)).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.DenyRequestAsync(user.Id, Company.Id, Guid.NewGuid(), 1, null)).Status);
+            Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.CancelRequestAsync(user.Id, Company.Id, Guid.NewGuid(), 1)).Status);
         }
         var other = await ReadyCompany();
         Assert.Equal(ConfigStatus.Forbidden, (await FMgmt.ListAsync(Admin.Id, other.Id)).Status);                                   // an administrator of company A has nothing in company B
@@ -148,11 +224,12 @@ public class FiscalAccessTests : FiscalAccessTestBase
     }
 }
 
-/// <summary>End-to-end HTTP tests of /api/v1/company/fiscal-years and /fiscal-periods (both clients use these endpoints).</summary>
+/// <summary>End-to-end HTTP tests of the fiscal endpoints, including the reopening approval workflow (both clients use these endpoints).</summary>
 public class FiscalApiTests : FiscalAccessTestBase
 {
     private const string Years = "/api/v1/company/fiscal-years";
     private const string Periods = "/api/v1/company/fiscal-periods";
+    private const string Requests = "/api/v1/company/fiscal-reopen-requests";
 
     private async Task Start(bool configureTimeZone = true)
     {
@@ -168,8 +245,9 @@ public class FiscalApiTests : FiscalAccessTestBase
         var id = Guid.NewGuid();
         var routes = new (HttpMethod, string)[]
         {
-            (HttpMethod.Get, Years), (HttpMethod.Post, Years), (HttpMethod.Get, $"{Years}/{id}"), (HttpMethod.Post, $"{Years}/{id}/close"), (HttpMethod.Post, $"{Years}/{id}/reopen"),
-            (HttpMethod.Post, $"{Periods}/{id}/soft-close"), (HttpMethod.Post, $"{Periods}/{id}/reopen"), (HttpMethod.Post, $"{Periods}/{id}/final-close"), (HttpMethod.Post, $"{Periods}/{id}/reopen-final"),
+            (HttpMethod.Get, Years), (HttpMethod.Post, Years), (HttpMethod.Get, $"{Years}/{id}"), (HttpMethod.Post, $"{Years}/{id}/close"), (HttpMethod.Post, $"{Years}/{id}/reopen-requests"),
+            (HttpMethod.Post, $"{Periods}/{id}/soft-close"), (HttpMethod.Post, $"{Periods}/{id}/reopen"), (HttpMethod.Post, $"{Periods}/{id}/final-close"), (HttpMethod.Post, $"{Periods}/{id}/reopen-requests"),
+            (HttpMethod.Get, Requests), (HttpMethod.Post, $"{Requests}/{id}/approve"), (HttpMethod.Post, $"{Requests}/{id}/deny"), (HttpMethod.Post, $"{Requests}/{id}/cancel"),
         };
         foreach (var (method, path) in routes)
         {
@@ -184,6 +262,10 @@ public class FiscalApiTests : FiscalAccessTestBase
             Assert.Equal(HttpStatusCode.Conflict, r.Status);
             Assert.Equal("company_not_selected", r.Error);
         }
+        // The old one-step endpoints no longer exist.
+        var cookie = await SignIn(Admin);
+        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Post, $"{Periods}/{id}/reopen-final", new { reason = Why }, cookie, ifMatch: "\"1\"")).Status);
+        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Post, $"{Years}/{id}/reopen", new { reason = Why }, cookie, ifMatch: "\"1\"")).Status);
     }
 
     [PostgresFact]
@@ -201,8 +283,8 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.True(can.GetProperty("create").GetBoolean());
         Assert.True(can.GetProperty("softClose").GetBoolean());
         Assert.True(can.GetProperty("finalClose").GetBoolean());
-        Assert.False(can.GetProperty("reopenFinal").GetBoolean());
-        Assert.False(can.GetProperty("reopenYear").GetBoolean());
+        Assert.True(can.GetProperty("requestReopen").GetBoolean());
+        Assert.False(can.GetProperty("approveReopen").GetBoolean());                                                                // the administrator never approves
 
         var created = await Send(HttpMethod.Post, Years, new { name = "FY 2026", startDate = "2026-01-01", periodType = "quarterly" }, cookie);
         Assert.Equal(HttpStatusCode.Created, created.Status);
@@ -211,9 +293,7 @@ public class FiscalApiTests : FiscalAccessTestBase
         var yearId = year.GetProperty("id").GetGuid();
         Assert.Contains($"{Years}/{yearId}", created.Headers.Location!.ToString());
         Assert.Equal("2026-12-31", year.GetProperty("endDate").GetString());
-        Assert.Equal("quarterly", year.GetProperty("periodType").GetString());
         Assert.Equal(4, year.GetProperty("periods").GetArrayLength());
-        Assert.Equal("open", year.GetProperty("periods")[0].GetProperty("status").GetString());
         Assert.Equal("\"1\"", Etag(await Send(HttpMethod.Get, $"{Years}/{yearId}", cookie: cookie)));
 
         foreach (var period in year.GetProperty("periods").EnumerateArray())
@@ -223,8 +303,7 @@ public class FiscalApiTests : FiscalAccessTestBase
             Assert.Equal(HttpStatusCode.OK, soft.Status);
             Assert.Equal("soft_closed", soft.Json.GetProperty("status").GetString());
             Assert.Equal("\"2\"", Etag(soft));
-            var back = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen", null, cookie, ifMatch: "\"2\"");
-            Assert.Equal("open", back.Json.GetProperty("status").GetString());
+            Assert.Equal("open", (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen", null, cookie, ifMatch: "\"2\"")).Json.GetProperty("status").GetString());
             Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Periods}/{pid}/soft-close", null, cookie, ifMatch: "\"3\"")).Status);
             var final = await Send(HttpMethod.Post, $"{Periods}/{pid}/final-close", null, cookie, ifMatch: "\"4\"");
             Assert.Equal(HttpStatusCode.OK, final.Status);
@@ -234,9 +313,6 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.Equal(HttpStatusCode.OK, closed.Status);
         Assert.True(closed.Json.GetProperty("closed").GetBoolean());
         Assert.Equal("\"2\"", Etag(closed));
-        var reopenYear = await Send(HttpMethod.Post, $"{Years}/{yearId}/reopen", new { reason = "Documented correction after year close" }, cookie, ifMatch: "\"2\"");
-        Assert.Equal(HttpStatusCode.Forbidden, reopenYear.Status);                                                                 // the preset administrator lacks it
-        Assert.Equal("forbidden", reopenYear.Error);
     }
 
     [PostgresFact]
@@ -247,7 +323,7 @@ public class FiscalApiTests : FiscalAccessTestBase
         var noZone = await Send(HttpMethod.Post, Years, new { name = "FY", startDate = "2026-01-01", periodType = "monthly" }, cookie);
         Assert.Equal(HttpStatusCode.Conflict, noZone.Status);
         Assert.Equal("company_time_zone_not_configured", noZone.Error);
-        Assert.Equal(JsonKindNull, (await Send(HttpMethod.Get, Years, cookie: cookie)).Json.GetProperty("today").ValueKind);        // nothing is ever defaulted
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, (await Send(HttpMethod.Get, Years, cookie: cookie)).Json.GetProperty("today").ValueKind);   // nothing is ever defaulted
         Ok(await Svc.PutSettingsAsync(Admin.Id, Company.Id, 0, new SettingsInput("en", "yyyy-MM-dd", "latin", "UTC")));
 
         Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, Years, new { name = "FY", startDate = "2026-01-15", periodType = "monthly" }, cookie)).Status);
@@ -257,8 +333,7 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.Equal(HttpStatusCode.Created, y.Status);
         var overlap = await Send(HttpMethod.Post, Years, new { name = "Other", startDate = "2026-07-01", periodType = "monthly" }, cookie);
         Assert.Equal((HttpStatusCode.Conflict, "fiscal_year_overlap"), (overlap.Status, overlap.Error));
-        var gap = await Send(HttpMethod.Post, Years, new { name = "Gap", startDate = "2028-01-01", periodType = "monthly" }, cookie);
-        Assert.Equal("fiscal_year_not_contiguous", gap.Error);
+        Assert.Equal("fiscal_year_not_contiguous", (await Send(HttpMethod.Post, Years, new { name = "Gap", startDate = "2028-01-01", periodType = "monthly" }, cookie)).Error);
 
         var pid = y.Json.GetProperty("periods")[0].GetProperty("id").GetGuid();
         Assert.Equal((HttpStatusCode)428, (await Send(HttpMethod.Post, $"{Periods}/{pid}/soft-close", null, cookie)).Status);
@@ -270,15 +345,12 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.Equal((HttpStatusCode.Conflict, "invalid_period_state"), (skip.Status, skip.Error));                                 // Open never jumps to Final Closed
         Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Post, $"{Periods}/{Guid.NewGuid()}/soft-close", null, cookie, ifMatch: "\"1\"")).Status);
         Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Get, $"{Years}/{Guid.NewGuid()}", cookie: cookie)).Status);
-        var yearClose = await Send(HttpMethod.Post, $"{Years}/{y.Json.GetProperty("id").GetGuid()}/close", null, cookie, ifMatch: "\"1\"");
-        Assert.Equal("fiscal_year_has_unfinalized_periods", yearClose.Error);
+        Assert.Equal("fiscal_year_has_unfinalized_periods", (await Send(HttpMethod.Post, $"{Years}/{y.Json.GetProperty("id").GetGuid()}/close", null, cookie, ifMatch: "\"1\"")).Error);
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Fy.Table}"));
     }
 
-    private const System.Text.Json.JsonValueKind JsonKindNull = System.Text.Json.JsonValueKind.Null;
-
     [PostgresFact]
-    public async Task The_exceptional_reopening_over_http_needs_its_permission_a_reason_and_a_different_user()
+    public async Task The_exceptional_reopening_over_http_is_a_request_that_a_separate_approver_decides()
     {
         await Start();
         var adminCookie = await SignIn(Admin);
@@ -286,21 +358,80 @@ public class FiscalApiTests : FiscalAccessTestBase
         var pid = y.Json.GetProperty("periods")[0].GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Periods}/{pid}/soft-close", null, adminCookie, ifMatch: "\"1\"")).Status);
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Periods}/{pid}/final-close", null, adminCookie, ifMatch: "\"2\"")).Status);
-        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-final", new { reason = "Documented correction needed" }, adminCookie, ifMatch: "\"3\"")).Status);
+        var requesterUser = await NewAdminOf(Company);                                                                              // the user who closed it is not the requester here
+        var requesterCookie = await SignIn(requesterUser);
 
-        var holder = await RawHolder(PermissionCatalog.Codes.FiscalPeriodsReopenFinal, PermissionCatalog.Codes.FiscalYearsView);
-        var cookie = await SignIn(holder);
-        var noReason = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-final", new { reason = "short" }, cookie, ifMatch: "\"3\"");
-        Assert.Equal(HttpStatusCode.BadRequest, noReason.Status);
-        Assert.Contains("reason", noReason.Body);
-        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-final", null, cookie, ifMatch: "\"3\"")).Status);
-        var ok = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-final", new { reason = "Documented correction needed" }, cookie, ifMatch: "\"3\"");
-        Assert.Equal(HttpStatusCode.OK, ok.Status);
-        Assert.Equal("soft_closed", ok.Json.GetProperty("status").GetString());                                                    // never straight to open
-        Assert.Equal("\"4\"", Etag(ok));
-        var list = await Send(HttpMethod.Get, Years, cookie: cookie);
-        Assert.True(list.Json.GetProperty("can").GetProperty("reopenFinal").GetBoolean());
-        Assert.False(list.Json.GetProperty("can").GetProperty("create").GetBoolean());
+        // Requesting: needs a reason and the revision the requester saw; nothing changes.
+        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = "short" }, requesterCookie, ifMatch: "\"3\"")).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", null, requesterCookie, ifMatch: "\"3\"")).Status);
+        Assert.Equal((HttpStatusCode)428, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, requesterCookie)).Status);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, requesterCookie, ifMatch: "\"2\"")).Status);
+        var requested = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, requesterCookie, ifMatch: "\"3\"");
+        Assert.Equal(HttpStatusCode.Created, requested.Status);
+        Assert.Equal("\"1\"", Etag(requested));
+        var rid = requested.Json.GetProperty("id").GetGuid();
+        Assert.Equal("pending", requested.Json.GetProperty("status").GetString());
+        Assert.True(requested.Json.GetProperty("mine").GetBoolean());
+        Assert.False(requested.Json.GetProperty("canApprove").GetBoolean());
+        Assert.Equal(1, requested.Json.GetProperty("periodNumber").GetInt32());
+        Assert.False(requested.Json.TryGetProperty("requestedBy", out _));                                                           // no user ids are exposed
+        Assert.Equal("reopen_request_pending", (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, adminCookie, ifMatch: "\"3\"")).Error);
+
+        // The requester can neither approve (no permission, and never their own) nor deny it.
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Requests}/{rid}/approve", null, requesterCookie, ifMatch: "\"1\"")).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Requests}/{rid}/deny", new { note = "no" }, requesterCookie, ifMatch: "\"1\"")).Status);
+        var ownList = await Send(HttpMethod.Get, Requests, cookie: requesterCookie);
+        Assert.True(ownList.Json.GetProperty("requests")[0].GetProperty("canCancel").GetBoolean());
+
+        var approver = await NewApprover();
+        var cookie = await SignIn(approver);
+        var list = await Send(HttpMethod.Get, Requests, cookie: cookie);
+        Assert.Equal(HttpStatusCode.OK, list.Status);
+        var item = list.Json.GetProperty("requests")[0];
+        Assert.True(item.GetProperty("canApprove").GetBoolean());
+        Assert.False(item.GetProperty("mine").GetBoolean());
+        Assert.Equal(Why, item.GetProperty("reason").GetString());
+        var years = await Send(HttpMethod.Get, Years, cookie: cookie);
+        Assert.True(years.Json.GetProperty("can").GetProperty("approveReopen").GetBoolean());
+        Assert.False(years.Json.GetProperty("can").GetProperty("create").GetBoolean());
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, cookie, ifMatch: "\"3\"")).Status);   // an approver cannot request
+        Assert.Equal((HttpStatusCode)428, (await Send(HttpMethod.Post, $"{Requests}/{rid}/approve", null, cookie)).Status);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await Send(HttpMethod.Post, $"{Requests}/{rid}/approve", null, cookie, ifMatch: "\"7\"")).Status);
+
+        var approved = await Send(HttpMethod.Post, $"{Requests}/{rid}/approve", null, cookie, ifMatch: "\"1\"");
+        Assert.Equal(HttpStatusCode.OK, approved.Status);
+        Assert.Equal("approved", approved.Json.GetProperty("status").GetString());
+        Assert.Equal("\"2\"", Etag(approved));
+        var after = await Send(HttpMethod.Get, $"{Years}/{y.Json.GetProperty("id").GetGuid()}", cookie: cookie);
+        Assert.Equal("soft_closed", after.Json.GetProperty("periods")[0].GetProperty("status").GetString());                      // never straight to open
+        var again = await Send(HttpMethod.Post, $"{Requests}/{rid}/approve", null, cookie, ifMatch: "\"2\"");
+        Assert.Equal((HttpStatusCode.Conflict, "request_not_pending"), (again.Status, again.Error));
+    }
+
+    [PostgresFact]
+    public async Task A_denied_or_cancelled_request_over_http_leaves_the_calendar_alone()
+    {
+        await Start();
+        var adminCookie = await SignIn(Admin);
+        var y = await Send(HttpMethod.Post, Years, new { name = "FY2026", startDate = "2026-01-01", periodType = "monthly" }, adminCookie);
+        var pid = y.Json.GetProperty("periods")[0].GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Periods}/{pid}/soft-close", null, adminCookie, ifMatch: "\"1\"")).Status);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Periods}/{pid}/final-close", null, adminCookie, ifMatch: "\"2\"")).Status);
+        var first = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, adminCookie, ifMatch: "\"3\"");
+        var approver = await NewApprover();
+        var cookie = await SignIn(approver);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Requests}/{first.Json.GetProperty("id").GetGuid()}/cancel", null, cookie, ifMatch: "\"1\"")).Status);   // only the requester cancels
+        var denied = await Send(HttpMethod.Post, $"{Requests}/{first.Json.GetProperty("id").GetGuid()}/deny", new { note = "Not justified" }, cookie, ifMatch: "\"1\"");
+        Assert.Equal("denied", denied.Json.GetProperty("status").GetString());
+        Assert.Equal("Not justified", denied.Json.GetProperty("decisionNote").GetString());
+        var second = await Send(HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }, adminCookie, ifMatch: "\"3\"");
+        Assert.Equal(HttpStatusCode.Created, second.Status);
+        var cancelled = await Send(HttpMethod.Post, $"{Requests}/{second.Json.GetProperty("id").GetGuid()}/cancel", null, adminCookie, ifMatch: "\"1\"");
+        Assert.Equal("cancelled", cancelled.Json.GetProperty("status").GetString());
+        Assert.Equal("request_not_pending", (await Send(HttpMethod.Post, $"{Requests}/{second.Json.GetProperty("id").GetGuid()}/approve", null, cookie, ifMatch: "\"2\"")).Error);
+        var state = await Send(HttpMethod.Get, $"{Years}/{y.Json.GetProperty("id").GetGuid()}", cookie: cookie);
+        Assert.Equal("final_closed", state.Json.GetProperty("periods")[0].GetProperty("status").GetString());
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Fp.Table} WHERE {Fp.Status} = 2"));
     }
 
     [PostgresFact]
@@ -314,14 +445,16 @@ public class FiscalApiTests : FiscalAccessTestBase
         var created = await Send(HttpMethod.Post, Years, new { name = "FY2026", startDate = "2026-01-01", periodType = "monthly" }, admin);
         var pid = created.Json.GetProperty("periods")[0].GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Periods}/{pid}/soft-close", null, admin, header: false, ifMatch: "\"1\"")).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Requests}/{Guid.NewGuid()}/approve", null, admin, header: false, ifMatch: "\"1\"")).Status);
 
         var plain = await NewUser("api-plain-fiscal");
         Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, plain.Login)).IsOk);
         var cookie = await SignIn(plain);
         foreach (var (method, path, body) in new (HttpMethod, string, object?)[]
         {
-            (HttpMethod.Get, Years, null), (HttpMethod.Post, Years, new { name = "X", startDate = "2027-01-01", periodType = "monthly" }),
+            (HttpMethod.Get, Years, null), (HttpMethod.Get, Requests, null), (HttpMethod.Post, Years, new { name = "X", startDate = "2027-01-01", periodType = "monthly" }),
             (HttpMethod.Post, $"{Periods}/{pid}/soft-close", null), (HttpMethod.Post, $"{Periods}/{pid}/final-close", null),
+            (HttpMethod.Post, $"{Periods}/{pid}/reopen-requests", new { reason = Why }), (HttpMethod.Post, $"{Requests}/{Guid.NewGuid()}/approve", null),
         })
         {
             var r = await Send(method, path, body, cookie, ifMatch: "\"1\"");

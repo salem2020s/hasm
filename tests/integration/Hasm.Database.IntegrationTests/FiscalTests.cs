@@ -9,6 +9,7 @@ using Fp = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using Fh = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalHistory;
 using Fc = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalCalendar;
 using Audit_ = Hasm.Infrastructure.CompanyDatabase.CompanySchema.BusinessAudit;
+using Rq = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalReopenRequest;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -194,7 +195,7 @@ public class FiscalConstraintTests : FiscalTestBase
         Assert.Null(await Fails(SetPeriod(p1.Id, $"{Fp.Status} = 3, {Fp.FinalClosedBy} = gen_random_uuid()")));                 // Soft -> Final
         Assert.Equal(Raised, await Fails(SetPeriod(p1.Id, $"{Fp.Status} = 1")));                                                // Final -> Open
         Assert.Equal(Raised, await Fails(SetPeriod(p1.Id, $"{Fp.Status} = 4")));
-        Assert.Null(await Fails(SetPeriod(p1.Id, $"{Fp.Status} = 2")));                                                         // Final -> Soft (exceptional)
+        Assert.Equal(Raised, await Fails(SetPeriod(p1.Id, $"{Fp.Status} = 2")));                                                // Final -> Soft needs an approved request (FiscalApprovalConstraintTests)
         Assert.Equal(Raised, await Fails($"UPDATE {Fp.Table} SET {Fp.StatusChangedAtUtc} = now() WHERE {Fp.Id} = '{p1.Id}'"));  // revision fence
     }
 
@@ -361,56 +362,184 @@ public class FiscalServiceTests : FiscalTestBase
         Assert.Null(await Calendar().FindPeriodAsync(Company.Id, new DateOnly(2030, 1, 1)));
     }
 
+    private const string Why = "Correction of a posting error found in audit";
+
+    /// <summary>Soft closes and final closes period <paramref name="index"/> of the year as <paramref name="closer"/>; returns the period at its current revision.</summary>
+    private async Task<FiscalPeriodView> FinalClose(FiscalYearView y, Guid closer, int index = 0)
+    {
+        var svc = Calendar();
+        var soft = Ok(await svc.SoftCloseAsync(closer, Company.Id, y.Periods[index].Id, 1));
+        return Ok(await svc.FinalCloseAsync(closer, Company.Id, y.Periods[index].Id, soft.Revision));
+    }
+
+    private async Task<FiscalReopenRequestView> RequestPeriod(FiscalPeriodView p, Guid requester) =>
+        Ok(await Calendar().RequestPeriodReopenAsync(requester, Company.Id, p.Id, p.Revision, new ReasonInput(Why)));
+
     [PostgresFact]
-    public async Task Reopening_a_final_closed_period_needs_a_reason_goes_to_soft_closed_and_a_different_user()
+    public async Task Reopening_a_final_closed_period_is_a_request_that_a_different_user_approves_and_nothing_changes_until_then()
     {
         await PrepareFiscal();
-        var p = (await NewYear("FY2026", 2026)).Periods[0];
+        var y = await NewYear("FY2026", 2026);
         var svc = Calendar();
-        var other = await NewAdminOf(Company);
-        Ok(await svc.SoftCloseAsync(Admin.Id, Company.Id, p.Id, 1));
-        Ok(await svc.FinalCloseAsync(Admin.Id, Company.Id, p.Id, 2));
-        Assert.Equal(ConfigStatus.Invalid, (await svc.ReopenFinalAsync(other.Id, Company.Id, p.Id, 3, null)).Status);
-        Assert.Equal(ConfigStatus.Invalid, (await svc.ReopenFinalAsync(other.Id, Company.Id, p.Id, 3, new ReasonInput("too short"))).Status);
-        var own = await svc.ReopenFinalAsync(Admin.Id, Company.Id, p.Id, 3, new ReasonInput("Correction of a posting error found in audit"));
-        Assert.Equal(ConfigStatus.Forbidden, own.Status);                                                                           // segregation of duties
-        Assert.Equal("segregation_of_duties", own.Code);
-        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
-        var reopened = Ok(await svc.ReopenFinalAsync(other.Id, Company.Id, p.Id, 3, new ReasonInput("Correction of a posting error found in audit")));
-        Assert.Equal(FiscalPeriodState.SoftClosed, reopened.State);                                                                 // never straight to Open
-        Assert.Equal("Correction of a posting error found in audit", await Sql<string>($"SELECT {Fh.Reason} FROM {Fh.Table} WHERE {Fh.FromStatus} = 3 AND {Fh.ToStatus} = 2"));
-        Assert.DoesNotContain("Correction", await Sql<string>($"SELECT string_agg({Audit_.Detail}, '|') FROM {Audit_.Table}"));   // the reason text stays out of the audit detail
-        Assert.Equal(ConfigAuditEvents.FiscalPeriodFinalReopened, await Sql<short>($"SELECT max({Audit_.EventType}) FROM {Audit_.Table}"));
+        var closer = Admin;
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
+        var p = await FinalClose(y, closer.Id);
+
+        // The request itself: validated, bound to the exact object and revision, and it changes nothing.
+        Assert.Equal(ConfigStatus.Invalid, (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, p.Revision, null)).Status);
+        Assert.Equal(ConfigStatus.Invalid, (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, p.Revision, new ReasonInput("too short"))).Status);
+        Assert.Equal(ConfigStatus.PreconditionRequired, (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, null, new ReasonInput(Why))).Status);
+        var stale = await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, p.Revision - 1, new ReasonInput(Why));
+        Assert.Equal((ConfigStatus.PreconditionFailed, p.Revision), (stale.Status, stale.CurrentRevision));
+        Assert.Equal("invalid_period_state", (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, y.Periods[1].Id, 1, new ReasonInput(Why))).Code);   // an Open period needs no exceptional reopening
+        Assert.Equal(ConfigStatus.NotFound, (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, Guid.NewGuid(), 1, new ReasonInput(Why))).Status);
+        var request = await RequestPeriod(p, requester.Id);
+        Assert.Equal((FiscalReopenStatus.Pending, p.Revision, FiscalReopenTarget.Period), (request.Status, request.ExpectedRevision, request.Target));
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);          // nothing changed
+        Assert.Equal("reopen_request_pending", (await svc.RequestPeriodReopenAsync(approver.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why))).Code);   // one pending request per target
+
+        // Approval re-validates everything and refuses what must be refused.
+        var self = await svc.ApproveRequestAsync(requester.Id, Company.Id, request.Id, request.Revision, true);
+        Assert.Equal((ConfigStatus.Forbidden, "self_approval_forbidden"), (self.Status, self.Code));
+        var byCloser = await svc.ApproveRequestAsync(closer.Id, Company.Id, request.Id, request.Revision, true);
+        Assert.Equal((ConfigStatus.Forbidden, "segregation_of_duties"), (byCloser.Status, byCloser.Code));
+        Assert.Equal("request_requester_not_authorized", (await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, false)).Code);   // the requester's right was revoked
+        Assert.Equal(ConfigStatus.PreconditionFailed, (await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, 9, true)).Status);
+        Assert.Equal(ConfigStatus.PreconditionRequired, (await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, null, true)).Status);
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);          // every refusal left the calendar alone
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Rq.Table} WHERE {Rq.Status} = 1"));
+
+        var approved = Ok(await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, true));
+        Assert.Equal(FiscalReopenStatus.Approved, approved.Status);
+        var reopened = (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!;
+        Assert.Equal(FiscalPeriodState.SoftClosed, reopened.State);                                                                  // never straight to Open
+        Assert.Equal(p.Revision + 1, reopened.Revision);
+        Assert.Equal(approver.Id, await Sql<Guid>($"SELECT {Rq.DecidedBy} FROM {Rq.Table}"));
+        Assert.Equal(Why, await Sql<string>($"SELECT {Fh.Reason} FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.FromStatus} = 3 AND {Fh.ToStatus} = 2"));
+        Assert.Contains(request.Id.ToString(), await Sql<string>($"SELECT {Fh.Changes}::text FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.FromStatus} = 3 AND {Fh.ToStatus} = 2"));   // the reopening names its approval
+        Assert.DoesNotContain("Correction", await Sql<string>($"SELECT string_agg({Audit_.Detail}, '|') FROM {Audit_.Table}"));      // reason text stays out of the audit detail
+        Assert.Equal(new[] { ConfigAuditEvents.FiscalReopenRequested, ConfigAuditEvents.FiscalPeriodFinalReopened, ConfigAuditEvents.FiscalReopenApproved },
+            await Sql<short[]>($"SELECT array_agg({Audit_.EventType} ORDER BY {Audit_.Seq}) FROM {Audit_.Table} WHERE {Audit_.EventType} IN (1023, 1024, 1025)"));
+        Assert.Equal("request_not_pending", (await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, approved.Revision, true)).Code);   // a request executes once
         Assert.Equal(AuditVerdict.Verified, (await Verifier(Company).VerifyAsync(AuditStream.ForBusiness(Company.Id))).Verdict);
     }
 
     [PostgresFact]
-    public async Task A_year_closes_only_when_every_period_is_final_closed_and_a_closed_year_freezes_its_periods()
+    public async Task A_denied_or_cancelled_request_changes_nothing_and_only_the_right_person_can_decide_it()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026);
+        var svc = Calendar();
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
+        var p = await FinalClose(y, Admin.Id);
+        var request = await RequestPeriod(p, requester.Id);
+
+        Assert.Equal("self_approval_forbidden", (await svc.DenyRequestAsync(requester.Id, Company.Id, request.Id, request.Revision, null)).Code);      // the requester withdraws, never denies
+        Assert.Equal("not_the_requester", (await svc.CancelRequestAsync(approver.Id, Company.Id, request.Id, request.Revision)).Code);
+        Assert.Equal(ConfigStatus.Invalid, (await svc.DenyRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, new string('x', 501))).Status);
+        var denied = Ok(await svc.DenyRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, "  Not justified  "));
+        Assert.Equal((FiscalReopenStatus.Denied, "Not justified"), (denied.Status, denied.DecisionNote));
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+        Assert.Equal("request_not_pending", (await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, denied.Revision, true)).Code);       // a denied request can never be revived
+        Assert.Equal("request_not_pending", (await svc.CancelRequestAsync(requester.Id, Company.Id, request.Id, denied.Revision)).Code);
+
+        var again = await RequestPeriod(p, requester.Id);                                                                           // a new request is possible after a decision
+        var cancelled = Ok(await svc.CancelRequestAsync(requester.Id, Company.Id, again.Id, again.Revision));
+        Assert.Equal(FiscalReopenStatus.Cancelled, cancelled.Status);
+        Assert.Equal("request_not_pending", (await svc.ApproveRequestAsync(approver.Id, Company.Id, again.Id, cancelled.Revision, true)).Code);
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.ToStatus} = 2 AND {Fh.FromStatus} = 3"));      // no reopening was ever recorded
+        Assert.Equal(new[] { ConfigAuditEvents.FiscalReopenDenied, ConfigAuditEvents.FiscalReopenCancelled }.Order(),
+            (await Sql<short[]>($"SELECT array_agg({Audit_.EventType}) FROM {Audit_.Table} WHERE {Audit_.EventType} IN (1026, 1027)")).Order());
+        Assert.Equal(AuditVerdict.Verified, (await Verifier(Company).VerifyAsync(AuditStream.ForBusiness(Company.Id))).Verdict);
+    }
+
+    [PostgresFact]
+    public async Task A_request_whose_object_changed_meanwhile_is_stale_and_cannot_reopen_anything()
     {
         await PrepareFiscal();
         var y = await NewYear("FY2026", 2026, type: "quarterly");
         var svc = Calendar();
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
+        FiscalPeriodView last = default!;
+        for (var i = 0; i < 4; i++) last = await FinalClose(y, Admin.Id, i);
+        var first = (await svc.GetAsync(Company.Id, y.Id))!.Periods[0];
+        var request = await RequestPeriod(first, requester.Id);
+        var closed = Ok(await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1));                                                   // the year is closed while the request waits
+        var stale = await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, true);
+        Assert.Equal((ConfigStatus.Conflict, "request_stale"), (stale.Status, stale.Code));
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await svc.GetAsync(Company.Id, y.Id))!.Periods[0].State);
+        Assert.Equal("fiscal_year_closed", (await svc.RequestPeriodReopenAsync(requester.Id, Company.Id, last.Id, last.Revision, new ReasonInput(Why))).Code);   // a closed year freezes its periods
+        Assert.Equal(FiscalReopenStatus.Pending, (await svc.GetRequestAsync(Company.Id, request.Id))!.Status);                       // the stale request stays visible until someone denies it
+        Ok(await svc.DenyRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, "Superseded by the year closing"));
+        Assert.True(closed.IsClosed);
+    }
+
+    [PostgresFact]
+    public async Task A_closed_year_reopens_only_through_an_approved_request_and_its_periods_stay_final_closed()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026, type: "quarterly");
+        var svc = Calendar();
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
         Assert.Equal("fiscal_year_has_unfinalized_periods", (await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1)).Code);
         for (var i = 0; i < 4; i++)
         {
-            Ok(await svc.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[i].Id, 1));
-            if (i < 3) Assert.Equal("fiscal_year_has_unfinalized_periods", (await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1)).Code);
-            Ok(await svc.FinalCloseAsync(Admin.Id, Company.Id, y.Periods[i].Id, 2));
+            if (i > 0) Assert.Equal("fiscal_year_has_unfinalized_periods", (await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1)).Code);
+            await FinalClose(y, Admin.Id, i);
         }
         Assert.Equal(ConfigStatus.PreconditionFailed, (await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 9)).Status);
         var closed = Ok(await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1));
         Assert.True(closed.IsClosed);
-        Assert.Equal(2, closed.Revision);
         Assert.Equal("fiscal_year_already_closed", (await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 2)).Code);
-        var other = await NewAdminOf(Company);
-        var frozen = await svc.ReopenFinalAsync(other.Id, Company.Id, y.Periods[0].Id, 3, new ReasonInput("Needs a correction after year close"));
-        Assert.Equal("fiscal_year_closed", frozen.Code);                                                                            // reopen the year first
-        Assert.Equal(ConfigStatus.Invalid, (await svc.ReopenYearAsync(other.Id, Company.Id, y.Id, 2, new ReasonInput("short"))).Status);
-        var reopened = Ok(await svc.ReopenYearAsync(other.Id, Company.Id, y.Id, 2, new ReasonInput("Needs a correction after year close")));
+        var next = await NewYear("FY2027", 2027);
+        Assert.Equal("fiscal_year_not_closed", (await svc.RequestYearReopenAsync(requester.Id, Company.Id, next.Id, 1, new ReasonInput(Why))).Code);   // an open year needs none
+        var request = Ok(await svc.RequestYearReopenAsync(requester.Id, Company.Id, y.Id, closed.Revision, new ReasonInput(Why)));
+        Assert.Equal(FiscalReopenTarget.Year, request.Target);
+        Assert.True((await svc.GetAsync(Company.Id, y.Id))!.IsClosed);                                                              // still closed
+        Assert.Equal("segregation_of_duties", (await svc.ApproveRequestAsync(Admin.Id, Company.Id, request.Id, request.Revision, true)).Code);   // the user who closed the year cannot approve its reopening
+        Assert.Equal("self_approval_forbidden", (await svc.ApproveRequestAsync(requester.Id, Company.Id, request.Id, request.Revision, true)).Code);
+        Ok(await svc.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, true));
+        var reopened = (await svc.GetAsync(Company.Id, y.Id))!;
         Assert.False(reopened.IsClosed);
-        Assert.All(reopened.Periods, p => Assert.Equal(FiscalPeriodState.FinalClosed, p.State));                                    // each period still needs its own exceptional reopening
-        Assert.Equal("fiscal_year_not_closed", (await svc.ReopenYearAsync(other.Id, Company.Id, y.Id, 3, new ReasonInput("Reason that is long enough"))).Code);
-        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Fh.Table} WHERE {Fh.Entity} = 1 AND {Fh.FromStatus} = 2 AND {Fh.ToStatus} = 1 AND {Fh.Reason} IS NOT NULL"));
+        Assert.Equal(closed.Revision + 1, reopened.Revision);
+        Assert.All(reopened.Periods, q => Assert.Equal(FiscalPeriodState.FinalClosed, q.State));                                    // each period needs its own approved request
+        Assert.Equal(Why, await Sql<string>($"SELECT {Fh.Reason} FROM {Fh.Table} WHERE {Fh.Entity} = 1 AND {Fh.FromStatus} = 2 AND {Fh.ToStatus} = 1"));
+        Assert.Equal(AuditVerdict.Verified, (await Verifier(Company).VerifyAsync(AuditStream.ForBusiness(Company.Id))).Verdict);
+    }
+
+    [PostgresFact]
+    public async Task Concurrent_requests_and_decisions_can_neither_multiply_nor_bypass_the_approval()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026);
+        var svc = Calendar();
+        var requester = await NewAdminOf(Company);
+        var approverA = await NewAdminOf(Company);
+        var approverB = await NewAdminOf(Company);
+        var p = await FinalClose(y, Admin.Id);
+
+        var requests = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => svc.RequestPeriodReopenAsync(requester.Id, Company.Id, p.Id, p.Revision, new ReasonInput(Why))));
+        Assert.Single(requests, r => r.IsOk);                                                                                       // exactly one pending request per target
+        Assert.All(requests.Where(r => !r.IsOk), r => Assert.Equal("reopen_request_pending", r.Code));
+        var request = requests.Single(r => r.IsOk).Value!;
+
+        // Two approvers (and a cancellation) race for the same request: exactly one decision wins; the calendar changes at most once.
+        var decisions = await Task.WhenAll(
+            svc.ApproveRequestAsync(approverA.Id, Company.Id, request.Id, request.Revision, true),
+            svc.ApproveRequestAsync(approverB.Id, Company.Id, request.Id, request.Revision, true),
+            svc.CancelRequestAsync(requester.Id, Company.Id, request.Id, request.Revision));
+        Assert.Single(decisions, r => r.IsOk);
+        Assert.All(decisions.Where(r => !r.IsOk), r => Assert.Contains(r.Status, new[] { ConfigStatus.PreconditionFailed, ConfigStatus.Conflict }));
+        var final = (await svc.GetRequestAsync(Company.Id, request.Id))!;
+        Assert.NotEqual(FiscalReopenStatus.Pending, final.Status);
+        var state = (await svc.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!;
+        Assert.Equal(final.Status == FiscalReopenStatus.Approved ? FiscalPeriodState.SoftClosed : FiscalPeriodState.FinalClosed, state.State);
+        Assert.Equal(final.Status == FiscalReopenStatus.Approved ? 1L : 0L, await Sql<long>($"SELECT count(*) FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.FromStatus} = 3 AND {Fh.ToStatus} = 2"));
         Assert.Equal(AuditVerdict.Verified, (await Verifier(Company).VerifyAsync(AuditStream.ForBusiness(Company.Id))).Verdict);
     }
 
@@ -492,7 +621,8 @@ public class FiscalPostingGateTests : FiscalTestBase
         Assert.Equal(PostingPeriodCheck.FinalClosed, final.Reason);
         Assert.Equal(FiscalPeriodState.FinalClosed, final.State);
         // The same decision after an exceptional reopening: Soft Closed again, never Open.
-        Ok(await svc.ReopenFinalAsync((await NewAdminOf(Company)).Id, Company.Id, y.Periods[0].Id, 3, new ReasonInput("Reopened for a documented correction")));
+        var req = Ok(await svc.RequestPeriodReopenAsync((await NewAdminOf(Company)).Id, Company.Id, y.Periods[0].Id, 3, new ReasonInput("Reopened for a documented correction")));
+        Ok(await svc.ApproveRequestAsync((await NewAdminOf(Company)).Id, Company.Id, req.Id, req.Revision, true));
         Assert.Equal(PostingPeriodCheck.SoftClosed, (await Check("2026-01-15", false)).Reason);
     }
 
@@ -512,5 +642,89 @@ public class FiscalPostingGateTests : FiscalTestBase
         await posting.CommitAsync();
         Assert.True((await closing).IsOk);
         Assert.Equal(PostingPeriodCheck.SoftClosed, (await Check("2026-01-10", false)).Reason);                                      // every later posting sees the closed period
+    }
+}
+
+/// <summary>The approval requirement as PostgreSQL enforces it: even a direct statement by the runtime or the owner cannot reopen without an approved request.</summary>
+public class FiscalApprovalConstraintTests : FiscalTestBase
+{
+    private const string CheckViolation = PostgresErrorCodes.CheckViolation;
+    private const string Raised = PostgresErrorCodes.RaiseException;
+    private const string Unique = PostgresErrorCodes.UniqueViolation;
+
+    private static string InsertRequest(int kind, Guid target, long expected, int status, Guid requester, Guid? decider, long? result) =>
+        $"INSERT INTO {Rq.Table} ({Rq.TargetKind}, {Rq.TargetId}, {Rq.ExpectedRevision}, {Rq.Reason}, {Rq.Status}, {Rq.RequestedBy}, {Rq.RequestedAtUtc}, {Rq.DecidedBy}, {Rq.DecidedAtUtc}, {Rq.ResultRevision}) " +
+        $"VALUES ({kind}, '{target}', {expected}, 'A documented reason', {status}, '{requester}', now(), {(decider is null ? "NULL" : $"'{decider}'")}, {(decider is null ? "NULL" : "now()")}, {(result is null ? "NULL" : result.ToString())})";
+
+    private async Task<(FiscalYearView Year, FiscalPeriodView Period)> FinalClosedPeriod()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026);
+        var svc = Calendar();
+        var soft = Ok(await svc.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, 1));
+        return (y, Ok(await svc.FinalCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, soft.Revision)));
+    }
+
+    [PostgresFact]
+    public async Task A_request_cannot_be_approved_by_its_requester_is_never_edited_and_cannot_be_multiplied_or_deleted()
+    {
+        var (_, p) = await FinalClosedPeriod();
+        var a = Guid.NewGuid(); var b = Guid.NewGuid();
+        Assert.Equal(CheckViolation, await Fails(InsertRequest(1, p.Id, 3, 2, a, a, 4)));                                           // approved by the requester
+        Assert.Equal(CheckViolation, await Fails(InsertRequest(1, p.Id, 3, 3, a, a, null)));                                        // denied by the requester
+        Assert.Equal(CheckViolation, await Fails(InsertRequest(1, p.Id, 3, 4, a, b, null)));                                        // cancelled by someone else
+        Assert.Equal(CheckViolation, await Fails(InsertRequest(1, p.Id, 3, 2, a, b, null)));                                        // approved without the resulting revision
+        Assert.Equal(CheckViolation, await Fails($"INSERT INTO {Rq.Table} ({Rq.TargetKind}, {Rq.TargetId}, {Rq.ExpectedRevision}, {Rq.Reason}, {Rq.RequestedBy}, {Rq.RequestedAtUtc}) VALUES (1, '{p.Id}', 3, 'short', '{a}', now())"));   // reason too short
+        Assert.Null(await Fails(InsertRequest(1, p.Id, 3, 1, a, null, null)));
+        Assert.Equal(Unique, await Fails(InsertRequest(1, p.Id, 3, 1, b, null, null)));                                             // one pending per target
+        Assert.Equal(Raised, await Fails($"UPDATE {Rq.Table} SET {Rq.Reason} = 'A different reason entirely', {Rq.Revision} = {Rq.Revision} + 1"));
+        Assert.Equal(Raised, await Fails($"UPDATE {Rq.Table} SET {Rq.RequestedBy} = '{b}', {Rq.Revision} = {Rq.Revision} + 1"));
+        Assert.Equal(CheckViolation, await Fails($"UPDATE {Rq.Table} SET {Rq.Status} = 2, {Rq.DecidedBy} = '{a}', {Rq.DecidedAtUtc} = now(), {Rq.ResultRevision} = 4, {Rq.Revision} = {Rq.Revision} + 1"));   // self-approval by update
+        Assert.Null(await Fails($"UPDATE {Rq.Table} SET {Rq.Status} = 3, {Rq.DecidedBy} = '{b}', {Rq.DecidedAtUtc} = now(), {Rq.Revision} = {Rq.Revision} + 1"));
+        Assert.Equal(Raised, await Fails($"UPDATE {Rq.Table} SET {Rq.Status} = 1, {Rq.DecidedBy} = NULL, {Rq.DecidedAtUtc} = NULL, {Rq.Revision} = {Rq.Revision} + 1"));   // a decision is final
+        Assert.Equal(Raised, await Fails($"DELETE FROM {Rq.Table}"));
+        Assert.Equal(Raised, await Fails($"TRUNCATE {Rq.Table}"));
+        Assert.Null(await Fails(InsertRequest(1, p.Id, 3, 1, b, null, null)));                                                      // a new pending request is fine after a decision
+    }
+
+    [PostgresFact]
+    public async Task A_final_closed_period_cannot_be_reopened_without_an_approved_request_for_exactly_that_revision_by_someone_else()
+    {
+        var (_, p) = await FinalClosedPeriod();
+        var requester = Guid.NewGuid(); var approver = Guid.NewGuid();
+        var reopen = SetPeriod(p.Id, $"{Fp.Status} = 2");
+        Assert.Equal(Raised, await InTx(reopen));                                                                                    // no request at all
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(1, p.Id, 3, 3, requester, approver, null)));                          // a DENIED request
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(1, p.Id, 3, 1, requester, null, null)));                              // a merely PENDING request
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(1, p.Id, 3, 2, requester, approver, 99)));                            // approved for a different resulting revision
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(1, Guid.NewGuid(), 3, 2, requester, approver, p.Revision + 1)));       // approved for a different object
+        var closer = await Sql<Guid>($"SELECT {Fp.FinalClosedBy} FROM {Fp.Table} WHERE {Fp.Id} = '{p.Id}'");
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(1, p.Id, 3, 2, requester, closer, p.Revision + 1)));                  // approved by the user who closed it
+        Assert.Equal(FiscalPeriodState.FinalClosed, (await Calendar().FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+        Assert.Null(await InTx(reopen, InsertRequest(1, p.Id, 3, 2, requester, approver, p.Revision + 1)));                         // the complete approval commits
+        Assert.Equal(FiscalPeriodState.SoftClosed, (await Calendar().FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);
+    }
+
+    [PostgresFact]
+    public async Task A_closed_year_cannot_reopen_without_an_approved_request_either()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026, type: "quarterly");
+        var svc = Calendar();
+        for (var i = 0; i < 4; i++)
+        {
+            var soft = Ok(await svc.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[i].Id, 1));
+            Ok(await svc.FinalCloseAsync(Admin.Id, Company.Id, y.Periods[i].Id, soft.Revision));
+        }
+        var closed = Ok(await svc.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1));
+        var requester = Guid.NewGuid(); var approver = Guid.NewGuid();
+        var reopen = $"UPDATE {Fy.Table} SET {Fy.Status} = 1, {Fy.ClosedAtUtc} = NULL, {Fy.ClosedBy} = NULL, {Fy.Revision} = {Fy.Revision} + 1 WHERE {Fy.Id} = '{y.Id}'";
+        Assert.Equal(Raised, await InTx(reopen));
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(2, y.Id, closed.Revision, 1, requester, null, null)));
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(2, y.Id, closed.Revision, 2, requester, approver, 99)));
+        Assert.Equal(Raised, await InTx(reopen, InsertRequest(2, y.Id, closed.Revision, 2, requester, Admin.Id, closed.Revision + 1)));   // approved by the user who closed the year
+        Assert.True((await svc.GetAsync(Company.Id, y.Id))!.IsClosed);
+        Assert.Null(await InTx(reopen, InsertRequest(2, y.Id, closed.Revision, 2, requester, approver, closed.Revision + 1)));
+        Assert.False((await svc.GetAsync(Company.Id, y.Id))!.IsClosed);
     }
 }

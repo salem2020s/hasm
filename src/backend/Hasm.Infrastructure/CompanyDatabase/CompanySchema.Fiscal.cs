@@ -96,6 +96,39 @@ public static partial class CompanySchema
         public const string GuardTruncate = "r_e67b01c2";
     }
 
+    public static class FiscalReopenRequest
+    {
+        public const string Table = "t_25054f2e";
+        public const string Id = "c_1eced29c";
+        public const string TargetKind = "c_7798c3db";
+        public const string TargetId = "c_3345af52";
+        public const string ExpectedRevision = "c_312b87b2";
+        public const string Reason = "c_da7514bd";
+        public const string Status = "c_ed2135ef";
+        public const string RequestedBy = "c_9db88086";
+        public const string RequestedAtUtc = "c_719ed99e";
+        public const string DecidedBy = "c_41405ef7";
+        public const string DecidedAtUtc = "c_e99809a4";
+        public const string DecisionNote = "c_2c65499b";
+        public const string ResultRevision = "c_c5619836";
+        public const string Revision = "c_ec8ff775";
+        public const string PrimaryKey = "k_6c7489d9";
+        public const string CheckKind = "k_964ae2de";
+        public const string CheckStatus = "k_8b0ab76d";
+        public const string CheckReason = "k_83c1eb68";
+        public const string CheckExpectedRevision = "k_c543d027";
+        public const string CheckRevision = "k_f39218f4";
+        public const string CheckDecision = "k_95f14c0a";
+        public const string UniquePending = "k_8aa5eb60";
+        public const string GuardFunction = "f_31c5ed18";
+        public const string GuardRow = "r_90326eb0";
+        public const string GuardTruncate = "r_4e75aafb";
+        public const string PeriodApprovalFunction = "f_e06e430a";
+        public const string YearApprovalFunction = "f_3db3b011";
+        public const string PeriodApprovalTrigger = "r_4ccf8aff";
+        public const string YearApprovalTrigger = "r_bb740a6b";
+    }
+
     private static IReadOnlyDictionary<string, string> FiscalMap => fiscalMap.Value;
 
     private static readonly Lazy<IReadOnlyDictionary<string, string>> fiscalMap = new(() => new Dictionary<string, string>
@@ -155,6 +188,35 @@ public static partial class CompanySchema
         ["FiscalCalendar.YearTrigger"] = FiscalCalendar.YearTrigger,
         ["FiscalCalendar.PeriodTrigger"] = FiscalCalendar.PeriodTrigger,
         ["FiscalCalendar.PostableFunction"] = FiscalCalendar.PostableFunction,
+        ["FiscalReopenRequest"] = FiscalReopenRequest.Table,
+        ["FiscalReopenRequest.Id"] = FiscalReopenRequest.Id,
+        ["FiscalReopenRequest.TargetKind"] = FiscalReopenRequest.TargetKind,
+        ["FiscalReopenRequest.TargetId"] = FiscalReopenRequest.TargetId,
+        ["FiscalReopenRequest.ExpectedRevision"] = FiscalReopenRequest.ExpectedRevision,
+        ["FiscalReopenRequest.Reason"] = FiscalReopenRequest.Reason,
+        ["FiscalReopenRequest.Status"] = FiscalReopenRequest.Status,
+        ["FiscalReopenRequest.RequestedBy"] = FiscalReopenRequest.RequestedBy,
+        ["FiscalReopenRequest.RequestedAtUtc"] = FiscalReopenRequest.RequestedAtUtc,
+        ["FiscalReopenRequest.DecidedBy"] = FiscalReopenRequest.DecidedBy,
+        ["FiscalReopenRequest.DecidedAtUtc"] = FiscalReopenRequest.DecidedAtUtc,
+        ["FiscalReopenRequest.DecisionNote"] = FiscalReopenRequest.DecisionNote,
+        ["FiscalReopenRequest.ResultRevision"] = FiscalReopenRequest.ResultRevision,
+        ["FiscalReopenRequest.Revision"] = FiscalReopenRequest.Revision,
+        ["FiscalReopenRequest.PrimaryKey"] = FiscalReopenRequest.PrimaryKey,
+        ["FiscalReopenRequest.CheckKind"] = FiscalReopenRequest.CheckKind,
+        ["FiscalReopenRequest.CheckStatus"] = FiscalReopenRequest.CheckStatus,
+        ["FiscalReopenRequest.CheckReason"] = FiscalReopenRequest.CheckReason,
+        ["FiscalReopenRequest.CheckExpectedRevision"] = FiscalReopenRequest.CheckExpectedRevision,
+        ["FiscalReopenRequest.CheckRevision"] = FiscalReopenRequest.CheckRevision,
+        ["FiscalReopenRequest.CheckDecision"] = FiscalReopenRequest.CheckDecision,
+        ["FiscalReopenRequest.UniquePending"] = FiscalReopenRequest.UniquePending,
+        ["FiscalReopenRequest.GuardFunction"] = FiscalReopenRequest.GuardFunction,
+        ["FiscalReopenRequest.GuardRow"] = FiscalReopenRequest.GuardRow,
+        ["FiscalReopenRequest.GuardTruncate"] = FiscalReopenRequest.GuardTruncate,
+        ["FiscalReopenRequest.PeriodApprovalFunction"] = FiscalReopenRequest.PeriodApprovalFunction,
+        ["FiscalReopenRequest.YearApprovalFunction"] = FiscalReopenRequest.YearApprovalFunction,
+        ["FiscalReopenRequest.PeriodApprovalTrigger"] = FiscalReopenRequest.PeriodApprovalTrigger,
+        ["FiscalReopenRequest.YearApprovalTrigger"] = FiscalReopenRequest.YearApprovalTrigger,
         ["FiscalHistory"] = FiscalHistory.Table,
         ["FiscalHistory.Id"] = FiscalHistory.Id,
         ["FiscalHistory.Entity"] = FiscalHistory.Entity,
