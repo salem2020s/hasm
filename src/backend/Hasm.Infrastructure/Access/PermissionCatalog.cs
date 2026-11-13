@@ -116,6 +116,8 @@ public sealed partial class PermissionCatalog
         new("company.journalsoftclosed", ScopeKind.Company, [PermissionAction.Post]),
         new("company.journalrate", ScopeKind.Company, [PermissionAction.Override]),
         new("company.ledgersettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Ledger reports (slice S6): branch-scoped (a branch grant sees only its own branches); export is separate.
+        new("company.ledgerreports", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export]),
     ]);
 
     public static class Codes
@@ -188,6 +190,8 @@ public sealed partial class PermissionCatalog
         public const string JournalRateOverride = "company.journalrate.override";
         public const string LedgerSettingsView = "company.ledgersettings.view";
         public const string LedgerSettingsConfigure = "company.ledgersettings.configure";
+        public const string LedgerReportsView = "company.ledgerreports.view";
+        public const string LedgerReportsExport = "company.ledgerreports.export";
     }
 
     public Permission Get(string code) =>

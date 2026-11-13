@@ -72,6 +72,7 @@ app.MapExchangeRateEndpoints();
 app.MapCostCenterEndpoints();
 app.MapApprovalPolicyEndpoints();
 app.MapJournalEndpoints();
+app.MapLedgerReportEndpoints();
 
 app.Run();
 

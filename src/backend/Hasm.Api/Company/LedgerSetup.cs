@@ -21,6 +21,8 @@ public static class LedgerSetup
         services.AddSingleton(sp => new JournalManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<JournalService>()));
         services.AddSingleton(sp => new LedgerSettingsService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new LedgerSettingsManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerSettingsService>()));
+        services.AddSingleton(sp => new LedgerReportService(sp.GetRequiredService<CompanyDatabaseResolver>()));
+        services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>()));
         return services;
     }
 }

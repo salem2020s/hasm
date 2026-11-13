@@ -34,6 +34,8 @@ INSERT INTO t_3e3d4119 (c_0258a1a8, c_27be2f9e) VALUES
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.journalrate.override'),
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.ledgersettings.view'),
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.ledgersettings.configure'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.ledgerreports.view'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.ledgerreports.export'),
     ('5c1b0f6e-0000-4a00-8000-000000000005', 'company.journal.view'),
     ('5c1b0f6e-0000-4a00-8000-000000000005', 'company.journal.approve');
 
