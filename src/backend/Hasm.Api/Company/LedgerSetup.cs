@@ -13,6 +13,8 @@ public static class LedgerSetup
         services.AddSingleton(sp => new NumberingManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<NumberingService>()));
         services.AddSingleton(sp => new ExchangeRateService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new ExchangeRateManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ExchangeRateService>()));
+        services.AddSingleton(sp => new CostCenterService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new CostCenterManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterService>()));
         return services;
     }
 }

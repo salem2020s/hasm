@@ -29,3 +29,26 @@ SRS section 5 (manual and automatic entries, balanced, atomic, never edited or d
 
 ## Delivery state
 Updated as slices land; see the commit log and the "As built" sections that each slice appends below.
+
+## As built — S1 document numbering (company migration 0008, system migration 0011)
+Rules per document type (`journal_entry` registered), number = non-empty segments joined by the separator: `[prefix] [fiscal-year label] [branch code] [zero-padded sequence]` (default `JV-2026-000001`). Counters are row-locked and allocated inside the posting transaction (gapless on rollback); the issue ledger is append-only with `UNIQUE(document type, number)`, so a voided number is never issued again. Branch/year scope is locked after the first number. Audit event 1036; permissions `company.numbering.view|configure`.
+
+## As built — S2 exchange rates (same migrations)
+Conventions (final for Release 1 unless the owner changes them):
+- **Direction:** `rate` = units of the BASE currency for ONE unit of the foreign currency (1 USD = 0.71 JOD). The base currency is implicitly 1 and never stored; only enabled non-base company currencies can have rates (PostgreSQL trigger).
+- **Precision:** `numeric(20,10)`, strictly positive; input with more than 10 decimals is refused, never rounded silently; no floating point anywhere (`decimal` in code, `numeric` in the database).
+- **Effective rate:** the entry with the latest `valid_from <= date`. **Deterministic tie-break:** among entries with the same `valid_from`, the one with the highest id (the latest entered) wins. The SQL function `f_…resolve(currency, date)` is the single implementation; the service and the future posting trigger both use it. No rate = no result (never an implicit 1); the authorized per-line override with reason is part of S5.
+- **Append-only:** rows are never updated or deleted; a correction is a new row and the old one stays in history. Re-entering the value already effective for that exact date is refused (`rate_unchanged`). Entry is guarded by the currency's latest entry id (`If-Match`), so concurrent entries cannot silently override each other. Audit event 1037; history entity 2; permissions `company.exchangerates.view|create`.
+- **Rounding:** base amounts = foreign amount x rate rounded half away from zero to the base currency's minor units (`CurrencyMath.ConvertToBase`); overflow throws.
+- **Requirement on S5 (posting snapshot):** every foreign-currency journal line MUST store the applied rate id, the rate value, the rate's valid-from date, the foreign amount and the converted base amount as part of the immutable posted line (not a join to the current rate). Posted amounts are therefore independent of later or backdated rate entries; the posting trigger re-resolves the rate with the SQL function and refuses a snapshot that is not the effective rate (or a recorded authorized override).
+
+## As built — S3 cost centers (same migrations)
+- Tree of cost centers (no fixed depth) with stable uuid ids, unique case-insensitive codes (upper-case, re-codable through a separate permission), Arabic/English names (one required), an active/inactive lifecycle (never deleted), controlled moves, PostgreSQL-enforced tree rules (parent is a group, no cycles judged at commit, a node with children is a group, active needs an active parent). Audit events 1038–1043; history entity 3 keeps every earlier name, code and parent; permissions `company.costcenters.view|create|update|activate|recode|restructure`.
+- **Branches are separate:** the optional `branch` link is informational and must reference an existing active branch when set; nothing forces a cost center's branch to equal a journal line's branch.
+- **Allocation compatibility:** only an ACTIVE LEAF (non-group) can receive allocations (`CanReceiveAllocations`); groups only organize, so roll-ups of leaves up the tree never double count. Allocations reference the stable id, so renaming, re-coding, moving or deactivating never rewrites posted history.
+- **Decisions deliberately deferred to posting integration (S5), with alternatives — not defined by the approved specification and not enforced yet:**
+  1. *Is a cost center mandatory on a line?* (a) never; (b) per account (profit-and-loss accounts require one); (c) company policy flag. Needs an owner decision; S5 will store a nullable allocation and a per-account/company policy hook once decided.
+  2. *Split allocation of one line across several cost centers:* percentages vs amounts; recommended: amounts in the line currency summing EXACTLY to the line amount, the last share absorbing the rounding remainder (largest-remainder), no tolerance. 
+  3. *Branch of the line vs branch of the cost center:* (a) no relation; (b) must match when the cost center has a branch (documented default in design decision 4); (c) warn only.
+  4. *Freezing attributes after use:* S5 adds a trigger so a cost center that has allocations can no longer change its group flag or branch (names, code, parent and activity stay changeable).
+  5. *Authorization to allocate:* "unauthorized cost centers cannot receive postings" needs a per-user or per-role cost-center restriction model that the SRS does not define; S5 enforces active-leaf in PostgreSQL and the post permission in the service; a restriction model is left to the owner.

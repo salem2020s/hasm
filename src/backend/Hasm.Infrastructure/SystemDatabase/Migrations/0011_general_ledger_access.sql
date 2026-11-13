@@ -8,6 +8,12 @@ INSERT INTO t_3e3d4119 (c_0258a1a8, c_27be2f9e) VALUES
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.numbering.view'),
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.numbering.configure'),
     ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.exchangerates.view'),
-    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.exchangerates.create');
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.exchangerates.create'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.view'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.create'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.update'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.activate'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.recode'),
+    ('5c1b0f6e-0000-4a00-8000-000000000001', 'company.costcenters.restructure');
 
 ALTER TABLE t_3e3d4119 ENABLE TRIGGER r_2601e368;

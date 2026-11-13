@@ -51,6 +51,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.NumberCounter.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.NumberIssue.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.ExchangeRate.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CostCenter.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -134,7 +135,7 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("fiscal_history", CompanySchema.FiscalHistory.Table);
         cmd.Parameters.AddWithValue("account_history", CompanySchema.AccountRevision.Table);
         cmd.Parameters.AddWithValue("ledger_history", CompanySchema.LedgerHistory.Table);
-        cmd.Parameters.AddWithValue("ledger_tables", new[] { CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table, CompanySchema.ExchangeRate.Table });
+        cmd.Parameters.AddWithValue("ledger_tables", new[] { CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table, CompanySchema.ExchangeRate.Table, CompanySchema.CostCenter.Table });
         cmd.Parameters.AddWithValue("account_tables", new[] { CompanySchema.Account.Table, CompanySchema.AccountSettings.Table });
         cmd.Parameters.AddWithValue("fiscal_tables", new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalReopenRequest.Table });
         cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });

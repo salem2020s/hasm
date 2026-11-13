@@ -17,6 +17,12 @@ public static class LedgerAuditEvents
 {
     public const short NumberingRuleChanged = 1036;
     public const short ExchangeRateEntered = 1037;
+    public const short CostCenterCreated = 1038;
+    public const short CostCenterUpdated = 1039;
+    public const short CostCenterCodeChanged = 1040;
+    public const short CostCenterMoved = 1041;
+    public const short CostCenterDeactivated = 1042;
+    public const short CostCenterReactivated = 1043;
 }
 
 /// <summary>

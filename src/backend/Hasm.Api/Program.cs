@@ -67,6 +67,7 @@ app.MapFiscalEndpoints();
 app.MapAccountEndpoints();
 app.MapNumberingEndpoints();
 app.MapExchangeRateEndpoints();
+app.MapCostCenterEndpoints();
 
 app.Run();
 

@@ -106,6 +106,8 @@ public sealed partial class PermissionCatalog
         new("company.numbering", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         // Exchange rates: manual company-wide master data; entering a rate is the only write (append-only history).
         new("company.exchangerates", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create]),
+        // Cost centers: company-wide, like the chart of accounts; re-coding and restructuring are separate, controlled permissions.
+        new("company.costcenters", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure]),
     ]);
 
     public static class Codes
@@ -157,6 +159,12 @@ public sealed partial class PermissionCatalog
         public const string NumberingConfigure = "company.numbering.configure";
         public const string ExchangeRatesView = "company.exchangerates.view";
         public const string ExchangeRatesCreate = "company.exchangerates.create";
+        public const string CostCentersView = "company.costcenters.view";
+        public const string CostCentersCreate = "company.costcenters.create";
+        public const string CostCentersUpdate = "company.costcenters.update";
+        public const string CostCentersActivate = "company.costcenters.activate";
+        public const string CostCentersRecode = "company.costcenters.recode";
+        public const string CostCentersRestructure = "company.costcenters.restructure";
     }
 
     public Permission Get(string code) =>

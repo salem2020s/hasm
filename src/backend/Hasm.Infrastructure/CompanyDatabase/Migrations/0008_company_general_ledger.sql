@@ -189,3 +189,80 @@ CREATE FUNCTION f_56eae1de(p_currency varchar, p_date date) RETURNS bigint LANGU
     SELECT c_e3463fc9 FROM t_eba5b513 WHERE c_3fdf88c5 = p_currency AND c_94455323 <= p_date ORDER BY c_94455323 DESC, c_e3463fc9 DESC LIMIT 1
 $$;
 REVOKE ALL ON TABLE t_eba5b513 FROM PUBLIC;
+
+-- ======================================================================================================================================
+-- Slice S3: cost centers
+-- ======================================================================================================================================
+-- Cost centers are an ORGANIZATIONAL-ANALYSIS tree that is separate from branches: a cost center MAY carry an optional branch link, but the two concepts are never
+-- interchangeable and no rule here forces them to match (how a journal line's branch relates to a cost center's branch is decided at posting integration).
+-- A GROUP cost center only organizes (it never receives allocations, so hierarchical totals never double count); a LEAF (non-group) one can receive allocations when
+-- ACTIVE. Cost centers are never deleted; the stable identifier is the id; codes can be changed by a controlled, audited operation. Revisions are kept in the
+-- ledger history table (entity 3).
+CREATE TABLE t_939ae118 (
+    c_0770cd8f uuid NOT NULL DEFAULT gen_random_uuid(),
+    c_157be526 varchar(30) NOT NULL,
+    c_9ce86e1c varchar(200) NULL,
+    c_fdaf9504 varchar(200) NULL,
+    c_28b981db uuid NULL,
+    c_8d396764 uuid NULL,
+    c_85d71877 boolean NOT NULL DEFAULT false,
+    c_8a8af184 boolean NOT NULL DEFAULT true,
+    c_0a692ced bigint NOT NULL DEFAULT 1,
+    c_ab43e719 timestamptz NOT NULL,
+    c_00a35896 timestamptz NOT NULL,
+    CONSTRAINT k_0abaccee PRIMARY KEY (c_0770cd8f),
+    CONSTRAINT k_b0879c0d FOREIGN KEY (c_28b981db) REFERENCES t_939ae118 (c_0770cd8f),
+    CONSTRAINT k_2e043fa2 FOREIGN KEY (c_8d396764) REFERENCES t_8ba6c27d (c_358158d2),
+    CONSTRAINT k_192f90d0 CHECK (c_157be526 ~ '^[A-Z0-9][A-Z0-9._-]{0,29}$'),
+    CONSTRAINT k_4b3cb87b CHECK (
+        (c_9ce86e1c IS NOT NULL OR c_fdaf9504 IS NOT NULL)
+        AND (c_9ce86e1c IS NULL OR char_length(btrim(c_9ce86e1c)) BETWEEN 1 AND 200)
+        AND (c_fdaf9504 IS NULL OR char_length(btrim(c_fdaf9504)) BETWEEN 1 AND 200)),
+    CONSTRAINT k_b107bf76 CHECK (c_28b981db IS NULL OR c_28b981db <> c_0770cd8f),
+    CONSTRAINT k_624f5166 CHECK (c_0a692ced > 0)
+);
+CREATE UNIQUE INDEX k_6268e18f ON t_939ae118 (upper(c_157be526));
+CREATE INDEX k_d04065b3 ON t_939ae118 (c_28b981db);
+
+CREATE FUNCTION f_0b7108b0() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP <> 'UPDATE' THEN RAISE EXCEPTION 'cost centers cannot be deleted'; END IF;
+    IF NEW.c_0770cd8f IS DISTINCT FROM OLD.c_0770cd8f THEN RAISE EXCEPTION 'cost center identifiers are immutable'; END IF;
+    IF NEW.c_ab43e719 IS DISTINCT FROM OLD.c_ab43e719 THEN RAISE EXCEPTION 'cost center provenance is immutable'; END IF;
+    IF NEW.c_0a692ced <> OLD.c_0a692ced + 1 THEN RAISE EXCEPTION 'revision must advance by one'; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_7f3a3310 BEFORE UPDATE OR DELETE ON t_939ae118 FOR EACH ROW EXECUTE FUNCTION f_0b7108b0();
+CREATE TRIGGER r_820f2fa2 BEFORE TRUNCATE ON t_939ae118 FOR EACH STATEMENT EXECUTE FUNCTION f_0b7108b0();
+
+-- Tree integrity judged at commit: the parent is an active-compatible GROUP, no cycles, a cost center with children is a group, active needs an active parent.
+CREATE FUNCTION f_4a0f86c6() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.c_28b981db IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM t_939ae118 p WHERE p.c_0770cd8f = NEW.c_28b981db AND p.c_85d71877) THEN
+            RAISE EXCEPTION 'the parent of a cost center must be a group cost center';
+        END IF;
+        IF NEW.c_8a8af184 AND EXISTS (SELECT 1 FROM t_939ae118 p WHERE p.c_0770cd8f = NEW.c_28b981db AND NOT p.c_8a8af184) THEN
+            RAISE EXCEPTION 'an active cost center requires an active parent';
+        END IF;
+        IF EXISTS (
+            WITH RECURSIVE up(id, parent) AS (
+                SELECT a.c_0770cd8f, a.c_28b981db FROM t_939ae118 a WHERE a.c_0770cd8f = NEW.c_28b981db
+                UNION
+                SELECT a.c_0770cd8f, a.c_28b981db FROM t_939ae118 a JOIN up ON a.c_0770cd8f = up.parent)
+            SELECT 1 FROM up WHERE up.id = NEW.c_0770cd8f) THEN
+            RAISE EXCEPTION 'a cost center cannot be its own ancestor';
+        END IF;
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_939ae118 c WHERE c.c_28b981db = NEW.c_0770cd8f) THEN
+        IF NOT NEW.c_85d71877 THEN RAISE EXCEPTION 'a cost center with children must be a group cost center'; END IF;
+        IF NOT NEW.c_8a8af184 AND EXISTS (SELECT 1 FROM t_939ae118 c WHERE c.c_28b981db = NEW.c_0770cd8f AND c.c_8a8af184) THEN
+            RAISE EXCEPTION 'a cost center with an active child must stay active';
+        END IF;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER r_f46df562 AFTER INSERT OR UPDATE ON t_939ae118 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION f_4a0f86c6();
+REVOKE ALL ON TABLE t_939ae118 FROM PUBLIC;
