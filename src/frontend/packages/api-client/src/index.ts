@@ -259,6 +259,58 @@ export interface FiscalReopenRequest {
   /** The caller may withdraw it (their own pending request). */
   canCancel: boolean;
 }
+
+export type AccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
+export type AccountNature = "debit" | "credit";
+export type AccountCurrencyPolicy = "base" | "any" | "specific";
+export interface Account {
+  /** The stable identifier: everything refers to it. The code below may be changed (audited). */
+  id: string;
+  code: string;
+  nameAr: string | null;
+  nameEn: string | null;
+  parentId: string | null;
+  type: AccountType;
+  nature: AccountNature;
+  statement: "balance_sheet" | "profit_and_loss";
+  /** A group (parent) account is never postable; only an active account that is not a group is. */
+  isGroup: boolean;
+  isActive: boolean;
+  postable: boolean;
+  hasChildren: boolean;
+  currencyPolicy: AccountCurrencyPolicy;
+  currencyCode: string | null;
+  template: string | null;
+  revision: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+export interface AccountInput {
+  /** Absent or blank = assigned automatically (when the company setting allows it). */
+  code?: string | null;
+  parentId?: string | null;
+  nameAr: string | null;
+  nameEn: string | null;
+  /** Required for a top-level account; inherited from the parent otherwise. */
+  type?: AccountType | null;
+  nature?: AccountNature | null;
+  isGroup: boolean;
+  currencyPolicy?: AccountCurrencyPolicy | null;
+  currencyCode?: string | null;
+}
+export type AccountDetailsInput = Pick<AccountInput, "nameAr" | "nameEn" | "nature" | "isGroup" | "currencyPolicy" | "currencyCode">;
+export interface ChartSettings { segmentWidth: number; autoCodes: boolean; revision: number; configured: boolean }
+export interface ChartTemplateInfo { key: string; nameAr: string; nameEn: string; accounts: number }
+export interface AccountsResponse {
+  accounts: Account[];
+  settings: ChartSettings | null;
+  /** Only the generic template exists; business-type templates and Excel import are outstanding Release 1 requirements. */
+  templates: ChartTemplateInfo[];
+  /** False until the General Ledger exists: whether an account has postings cannot be checked yet, and the UI must not present "no history" as verified. */
+  usageChecksImplemented: boolean;
+  /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
+  can: { create: boolean; update: boolean; activate: boolean; recode: boolean; restructure: boolean; configure: boolean };
+}
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -390,6 +442,21 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     denyFiscalReopen: (id: string, revision: number, note?: string) =>
       request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-reopen-requests/${enc(id)}/deny`, { body: note ? { note } : {}, ifMatch: revision }),
     cancelFiscalReopen: (id: string, revision: number) => request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-reopen-requests/${enc(id)}/cancel`, { ifMatch: revision }),
+    // Chart of Accounts (Phase 3.2A). Changes carry the account (or settings) revision as If-Match; the server enforces every rule.
+    listAccounts: () => get<AccountsResponse>("/api/v1/company/accounts"),
+    getAccount: (id: string) => get<Account>(`/api/v1/company/accounts/${enc(id)}`),
+    createAccount: (account: AccountInput) => request<Account>("POST", "/api/v1/company/accounts", { body: account }),
+    updateAccount: (id: string, details: AccountDetailsInput, revision: number) =>
+      request<Account>("PUT", `/api/v1/company/accounts/${enc(id)}`, { body: details, ifMatch: revision }),
+    recodeAccount: (id: string, code: string, revision: number) =>
+      request<Account>("POST", `/api/v1/company/accounts/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),
+    moveAccount: (id: string, parentId: string | null, revision: number) =>
+      request<Account>("POST", `/api/v1/company/accounts/${enc(id)}/move`, { body: { parentId }, ifMatch: revision }),
+    deactivateAccount: (id: string, revision: number) => request<Account>("POST", `/api/v1/company/accounts/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateAccount: (id: string, revision: number) => request<Account>("POST", `/api/v1/company/accounts/${enc(id)}/activate`, { ifMatch: revision }),
+    putChartSettings: (settings: { segmentWidth: number; autoCodes: boolean }, revision: number) =>
+      request<ChartSettings>("PUT", "/api/v1/company/accounts/settings", { body: settings, ifMatch: revision }),
+    applyChartTemplate: (template: string) => request<{ accounts: Account[] }>("POST", "/api/v1/company/accounts/apply-template", { body: { template } }),
   };
 }
 

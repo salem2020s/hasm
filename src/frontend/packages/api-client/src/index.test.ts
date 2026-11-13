@@ -274,3 +274,58 @@ describe("api client: fiscal calendar (same endpoints for Web and Desktop)", () 
     await expect(client.approveFiscalReopen("r1", 1)).rejects.toMatchObject({ status: 403, code: "segregation_of_duties" });
   });
 });
+
+describe("api client: chart of accounts (same endpoints for Web and Desktop)", () => {
+  const headersOf = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => call(fetchMock, n).init.headers as Record<string, string>;
+  const account = { id: "a1", code: "1", revision: 1 };
+
+  it("lists, reads and creates accounts with the anti-CSRF header on the state change only", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(account)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listAccounts();
+    await client.getAccount("a b");
+    await client.createAccount({ code: null, parentId: "p1", nameAr: null, nameEn: "Cash", isGroup: false });
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/accounts");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/accounts/a%20b");
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toMatchObject({ code: null, parentId: "p1", nameEn: "Cash", isGroup: false });
+    expect(headersOf(fetchMock, 0)["X-Hasm-Request"]).toBeUndefined();
+    expect(headersOf(fetchMock, 2)["X-Hasm-Request"]).toBe("1");
+  });
+
+  it("sends the revision as If-Match on update, re-coding, moving, activation and the settings, and the template without one", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(account)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.updateAccount("a1", { nameAr: "ا", nameEn: null, nature: "debit", isGroup: false, currencyPolicy: "base", currencyCode: null }, 2);
+    await client.recodeAccount("a1", "2001", 3);
+    await client.moveAccount("a1", null, 4);
+    await client.deactivateAccount("a1", 5);
+    await client.activateAccount("a1", 6);
+    await client.putChartSettings({ segmentWidth: 3, autoCodes: false }, 0);
+    await client.applyChartTemplate("generic");
+    const paths = [0, 1, 2, 3, 4, 5, 6].map((n) => call(fetchMock, n).url.replace("https://x/api/v1/company/accounts", "") || "/");
+    expect(paths).toEqual(["/a1", "/a1/recode", "/a1/move", "/a1/deactivate", "/a1/activate", "/settings", "/apply-template"]);
+    expect([0, 1, 2, 3, 4, 5].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"2"', '"3"', '"4"', '"5"', '"6"', '"0"']);
+    expect(headersOf(fetchMock, 6)["If-Match"]).toBeUndefined();
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ code: "2001" });
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toEqual({ parentId: null });
+    expect(JSON.parse(call(fetchMock, 6).init.body as string)).toEqual({ template: "generic" });
+  });
+
+  it("uses the bearer token and no cookies on Desktop for the same chart endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/auth/login") ? { user: { id: "u" }, token: "tok" } : { accounts: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    await client.login("a", "b");
+    await client.listAccounts();
+    const init = call(fetchMock, 1).init;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+    expect(init.credentials).toBe("omit");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/accounts");
+  });
+
+  it("surfaces the server's short code for chart refusals", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "account_has_postings" }, { status: 409 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.updateAccount("a1", { nameAr: "ا", nameEn: null, nature: "credit", isGroup: false, currencyPolicy: "base", currencyCode: null }, 1))
+      .rejects.toMatchObject({ status: 409, code: "account_has_postings" });
+  });
+});
