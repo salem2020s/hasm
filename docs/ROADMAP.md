@@ -17,6 +17,8 @@ Status of this file: records the owner-confirmed phase sequence (confirmed 2026-
 | 3.1C | Warehouse Management — see `docs/PHASE-3.1C.md` | merged (PR #14) |
 | 3.1D | Fiscal Years and Periods — see `docs/PHASE-3.1D.md` | merged (PR #15) |
 | **3.2A** | **Chart of Accounts** — see `docs/PHASE-3.2A.md` (business-type templates and Excel import remain OUTSTANDING Release 1 requirements) | implemented locally; PR pending |
+| 3.2A-2 | Business-type Chart of Accounts templates (mandatory Release 1; see `docs/PHASE-3.2A.md`) | not started |
+| 3.2A-3 | Chart of Accounts Excel import: validation, dry run, reconciliation, required approval (mandatory Release 1; no empty-chart-only restriction, merge and conflict rules defined with the import) | not started |
 | 3.2B | Journal entries and the posting engine, with its prerequisites (numbering, exchange rates, cost centers, approval policies) | not started |
 
 Rules: one phase at a time; no Warehouse or Fiscal-Period work inside 3.1B; no inter-branch accounting entries or branch financial reports before their accounting modules exist (the branch model must leave room for them).
