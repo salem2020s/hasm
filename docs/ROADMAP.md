@@ -14,7 +14,7 @@ Status of this file: records the owner-confirmed phase sequence (confirmed 2026-
 | Phase | Content | State |
 |---|---|---|
 | 3.1B | Branch Management — see `docs/PHASE-3.1B.md` | merged (PR #13) |
-| **3.1C** | **Warehouse Management** — see `docs/PHASE-3.1C.md` | in progress |
-| 3.1D | Fiscal Years and Periods | not started |
+| 3.1C | Warehouse Management — see `docs/PHASE-3.1C.md` | merged (PR #14) |
+| **3.1D** | **Fiscal Years and Periods** — see `docs/PHASE-3.1D.md` | implemented locally; PR pending |
 
 Rules: one phase at a time; no Warehouse or Fiscal-Period work inside 3.1B; no inter-branch accounting entries or branch financial reports before their accounting modules exist (the branch model must leave room for them).

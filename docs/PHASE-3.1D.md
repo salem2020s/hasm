@@ -1,6 +1,6 @@
 # Phase 3.1D — Fiscal Years and Accounting Periods
 
-**Status:** in progress on `feature/phase-3-1d-fiscal-periods` (from main after PR #14). Nothing is applied to any permanent database.
+**Status:** implemented locally on `feature/phase-3-1d-fiscal-periods` (from main after PR #14). Nothing is applied to any permanent database.
 
 ## Approved basis (SRS §5, §9, §16; ARCHITECTURE)
 Multiple fiscal years open at once; monthly or quarterly periods; states Open / Soft Closed / Final Closed; closing needs pending material differences and adjustments resolved; exceptional reopening needs approval, permissions and audit; no posting into a Final Closed period, and no bypass by automatic jobs; year balances carried forward without duplication or loss; posted entries are never edited. The company business time zone (3.1A-2) is never defaulted.
@@ -22,3 +22,16 @@ Journal entries, closing/year-end adjustment entries, balance carry-forward, ope
 
 ## Delivery
 Company migration 0006, system migration 0009; domain service, authorized facade, API; shared UI; tests on the disposable cluster only; CI count table updated.
+
+## As built
+- **Company migration 0006** (`FiscalYear`, `FiscalPeriod`, append-only `FiscalHistory`; nothing seeded). PostgreSQL enforces: 12-month years from the 1st of a month; year and period **exclusion constraints** (no overlap); at-commit consistency (exact monthly/quarterly spans, contiguous calendar without gaps, a closed year has only Final Closed periods); transition guard (only Open⇄Soft⇄Final); Final Closed always records its closer; immutable identity/dates; revision +1; no delete/truncate; a mandatory reason (≥10 chars) in the history row of the two exceptional reopenings. `f_…postable(date, allow_soft)` is the DB-side posting-availability check for the future ledger.
+- **System migration 0009:** six routine permissions on the preset Company Administrator; `fiscalperiods.reopenfinal` and `fiscalyears.reopen` are in no preset.
+- **Backend:** `FiscalCalendarService` (one advisory lock for all fiscal changes, audited transactions, close guard, segregation of duties), authorized `FiscalCalendarManagementService` (separate company-wide permission per action), `FiscalPeriodGate` (FOR SHARE lock so a close waits for in-flight postings; Final Closed never accepts postings), API `/api/v1/company/fiscal-years` and `/fiscal-periods` (ETag/If-Match, 428/412/404/409/403, anti-CSRF, no-store).
+- **UI:** one shared screen (`pages/FiscalYears.tsx`, Company → Fiscal calendar) with per-period actions driven by server capabilities, reason dialogs, create-year form, and an explicit notice while the close checks are not implemented.
+- **Tests:** 34 PostgreSQL integration tests (CI table now 502, all executed), 26 unit tests, 20 UI + 4 api-client tests.
+
+## Known limitations / deferred
+1. Everything in "Requires the future General Ledger" above; the close checks never block today and are reported as not implemented.
+2. `FiscalHistory` is audited but not shown in the unified Configuration History screen; periods created with a year have no individual revision-1 history row (the year's creation event covers them).
+3. Year length is fixed at 12 months (no short/long first year, no 13th adjustment period); a two-person approval workflow for exceptional reopening is a recommendation (item 7), not built.
+4. No migration has been applied to any permanent development database; manual Web/Desktop visual validation is deferred to the final milestone.
