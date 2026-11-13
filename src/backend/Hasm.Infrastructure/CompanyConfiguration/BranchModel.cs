@@ -18,4 +18,3 @@ public sealed record BranchInput(
 public sealed record BranchView(
     Guid Id, BranchData Data, bool IsActive, bool IsMain, long ActivationEpoch, short? SeedMigration, long Revision,
     DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
-
