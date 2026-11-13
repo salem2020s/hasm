@@ -138,7 +138,7 @@ public class AccessMigrationTests : AccessTestBase
         Assert.Empty(second.AppliedMigrations);
         Assert.Equal(checksum, await Scalar<string>($"SELECT checksum FROM {SystemSchema.MigrationJournalTable} WHERE version = 4"));
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {Co.Table}"));                // data preserved
-        Assert.Equal(3L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));                // presets seeded exactly once
+        Assert.Equal(4L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));                // presets seeded exactly once
     }
 
     [PostgresFact]
@@ -410,7 +410,7 @@ public class RoleTests : AccessTestBase
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.CompanyAdministratorId, []), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.AccessAuditorId, [Codes.RolesCreate]), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.DeactivateRoleAsync(adminA.Id, a, PresetRoles.AccessAuditorId), AccessStatus.Forbidden, "preset_role_immutable");
-        Assert.Equal(27, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);
+        Assert.Equal(35, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);
     }
 
     [PostgresFact]
@@ -457,7 +457,7 @@ public class RoleTests : AccessTestBase
         Fails(await Access.CreateRoleAsync(admin.Id, company, new string('n', 101), []), AccessStatus.Invalid, "invalid_name");
         Fails(await Access.CreateRoleAsync(admin.Id, company, "bad\nname", []), AccessStatus.Invalid, "invalid_name");
         Assert.Equal(before, await AuditCount(company));
-        Assert.Equal(3L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
+        Assert.Equal(4L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
     }
 
     [PostgresFact]

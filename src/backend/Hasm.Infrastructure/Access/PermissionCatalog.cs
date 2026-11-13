@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -93,6 +93,12 @@ public sealed partial class PermissionCatalog
         // (only for that warehouse; no inheritance from branch scope); creating and activating/deactivating change the company structure: company-wide only.
         new("company.warehouses", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Update]),
         new("company.warehousestructure", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate]),
+        // Fiscal calendar (Phase 3.1D, system migration 0009): company-wide only. Soft closing, reopening a soft close and final closing are separate permissions.
+        new("company.fiscalyears", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Close]),
+        new("company.fiscalperiods", ScopeKind.Company, [PermissionAction.Close, PermissionAction.FinalClose, PermissionAction.Reopen]),
+        // Exceptional reopening of a Final Closed period or a closed year is an APPROVAL workflow: Create = request it, Approve = approve (and execute) it.
+        // Approve is in no preset except Fiscal Approver, and never in the Company Administrator preset; self-approval is refused by the service and by PostgreSQL.
+        new("company.fiscalreopen", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Approve]),
     ]);
 
     public static class Codes
@@ -124,30 +130,45 @@ public sealed partial class PermissionCatalog
         public const string WarehousesUpdate = "company.warehouses.update";
         public const string WarehouseCreate = "company.warehousestructure.create";
         public const string WarehouseActivate = "company.warehousestructure.activate";
+        public const string FiscalYearsView = "company.fiscalyears.view";
+        public const string FiscalYearsCreate = "company.fiscalyears.create";
+        public const string FiscalYearsClose = "company.fiscalyears.close";
+        public const string FiscalPeriodsClose = "company.fiscalperiods.close";
+        public const string FiscalPeriodsFinalClose = "company.fiscalperiods.finalclose";
+        public const string FiscalPeriodsReopen = "company.fiscalperiods.reopen";
+        public const string FiscalReopenView = "company.fiscalreopen.view";
+        public const string FiscalReopenRequest = "company.fiscalreopen.create";
+        public const string FiscalReopenApprove = "company.fiscalreopen.approve";
     }
 
     public Permission Get(string code) =>
         TryGet(code, out var p) ? p : throw new KeyNotFoundException("Unknown permission.");
 }
 
-/// <summary>Preset roles shipped with the software (database rows are seeded by migration 0004 and must match this list).</summary>
+/// <summary>Preset roles shipped with the software (database rows are seeded by migration 0004 and the later versioned migrations, and must match this list).</summary>
 public static class PresetRoles
 {
     public static readonly Guid CompanyAdministratorId = new("5c1b0f6e-0000-4a00-8000-000000000001");
     public static readonly Guid AccessManagerId = new("5c1b0f6e-0000-4a00-8000-000000000002");
     public static readonly Guid AccessAuditorId = new("5c1b0f6e-0000-4a00-8000-000000000003");
+    public static readonly Guid FiscalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000004");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
     public static IReadOnlyDictionary<Guid, (string Key, IReadOnlySet<string> Permissions)> Definitions { get; } =
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).ToHashSet()),
+            // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
                 PermissionCatalog.Codes.RolesView,
                 PermissionCatalog.Codes.AssignmentsView, PermissionCatalog.Codes.AssignmentsCreate, PermissionCatalog.Codes.AssignmentsDelete,
+            }),
+            [FiscalApproverId] = ("fiscal-approver", new HashSet<string>
+            {
+                PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.FiscalReopenView, PermissionCatalog.Codes.FiscalYearsView,
             }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {

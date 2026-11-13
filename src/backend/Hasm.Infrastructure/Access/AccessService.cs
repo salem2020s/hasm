@@ -738,4 +738,74 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         await CommitAuditedAsync(tx, ct);
         return inserted ? BootstrapStatus.Granted : BootstrapStatus.AlreadyAdministrator;
     }
+
+    // ------------------------------------------------------------------ fiscal approver delegation (offline only)
+
+    public enum FiscalApproverStatus { Granted, AlreadyApprover, Revoked, NotApprover, UserNotFound, NotMember, CompanyUnavailable }
+
+    /// <summary>
+    /// Offline delegation of the preset Fiscal Approver role (company-wide). It is the ONLY way to create the first approver of a company and the recovery
+    /// procedure for a company with none, because no company user can grant it: the service refuses to grant permissions the actor does not hold, and the
+    /// Company Administrator preset deliberately lacks <c>company.fiscalreopen.approve</c>. Reachable only through the administrative tool with the
+    /// privileged database account (no HTTP endpoint); the target must already be an ACTIVE member of a Ready company (membership is never created here);
+    /// audited with no actor user. Per-request separation of duties still applies: an approver can never approve their own request.
+    /// </summary>
+    public async Task<FiscalApproverStatus> GrantFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default)
+    {
+        if (!LoginName.TryNormalize(login, out var normalized)) return FiscalApproverStatus.UserNotFound;
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await AdministratorContinuity.LockCompanyAsync(conn, tx, companyId, ct);
+        var (userId, status) = await FindMemberForDelegationAsync(conn, tx, normalized, companyId, ct);
+        if (userId is null) return status;
+        await using var ins = new NpgsqlCommand(
+            $"INSERT INTO {A.Table} ({A.Id}, {A.UserId}, {A.CompanyId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.GrantedAtUtc}, {A.GrantedBy}) VALUES (@i, @u, @c, @r, 0, NULL, @t, NULL) ON CONFLICT DO NOTHING", conn, tx);
+        ins.Parameters.AddWithValue("i", Guid.NewGuid()); ins.Parameters.AddWithValue("u", userId.Value); ins.Parameters.AddWithValue("c", companyId);
+        ins.Parameters.AddWithValue("r", PresetRoles.FiscalApproverId); ins.Parameters.AddWithValue("t", clock.GetUtcNow());
+        var inserted = await ins.ExecuteNonQueryAsync(ct) == 1;
+        if (inserted) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, PresetRoles.FiscalApproverId, AccessEvent.RoleAssigned, "scope: company; offline fiscal approver delegation", ct);
+        await CommitAuditedAsync(tx, ct);
+        return inserted ? FiscalApproverStatus.Granted : FiscalApproverStatus.AlreadyApprover;
+    }
+
+    /// <summary>Offline removal of the Fiscal Approver role (revoked, never deleted; audited with no actor user). Safe to repeat.</summary>
+    public async Task<FiscalApproverStatus> RevokeFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default)
+    {
+        if (!LoginName.TryNormalize(login, out var normalized)) return FiscalApproverStatus.UserNotFound;
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await AdministratorContinuity.LockCompanyAsync(conn, tx, companyId, ct);
+        Guid? userId;
+        await using (var find = new NpgsqlCommand($"SELECT u.{U.Id} FROM {U.Table} u JOIN {C.Table} c ON c.{C.Id} = @c WHERE u.{U.Login} = @l AND c.{C.ProvisioningState} = {(short)ProvisioningState.Ready}", conn, tx))
+        {
+            find.Parameters.AddWithValue("l", normalized); find.Parameters.AddWithValue("c", companyId);
+            userId = await find.ExecuteScalarAsync(ct) as Guid?;
+        }
+        if (userId is null) return FiscalApproverStatus.UserNotFound;
+        await using var rev = new NpgsqlCommand(
+            $"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t WHERE {A.UserId} = @u AND {A.CompanyId} = @c AND {A.RoleId} = @r AND {A.RevokedAtUtc} IS NULL", conn, tx);
+        rev.Parameters.AddWithValue("t", clock.GetUtcNow()); rev.Parameters.AddWithValue("u", userId.Value);
+        rev.Parameters.AddWithValue("c", companyId); rev.Parameters.AddWithValue("r", PresetRoles.FiscalApproverId);
+        var revoked = await rev.ExecuteNonQueryAsync(ct) > 0;
+        if (revoked) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, PresetRoles.FiscalApproverId, AccessEvent.RoleAssignmentRevoked, "scope: company; offline fiscal approver removal", ct);
+        await CommitAuditedAsync(tx, ct);
+        return revoked ? FiscalApproverStatus.Revoked : FiscalApproverStatus.NotApprover;
+    }
+
+    private static async Task<(Guid? UserId, FiscalApproverStatus Status)> FindMemberForDelegationAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string login, Guid companyId, CancellationToken ct)
+    {
+        await using (var ready = new NpgsqlCommand($"SELECT 1 FROM {C.Table} WHERE {C.Id} = @c AND {C.ProvisioningState} = {(short)ProvisioningState.Ready}", conn, tx))
+        {
+            ready.Parameters.AddWithValue("c", companyId);
+            if (await ready.ExecuteScalarAsync(ct) is null) return (null, FiscalApproverStatus.CompanyUnavailable);
+        }
+        Guid? userId;
+        await using (var find = new NpgsqlCommand($"SELECT {U.Id} FROM {U.Table} WHERE {U.Login} = @l AND {U.State} = 0", conn, tx))
+        {
+            find.Parameters.AddWithValue("l", login);
+            userId = await find.ExecuteScalarAsync(ct) as Guid?;
+        }
+        if (userId is null) return (null, FiscalApproverStatus.UserNotFound);
+        return await IsActiveMemberAsync(conn, tx, userId.Value, companyId, ct) ? (userId, FiscalApproverStatus.Granted) : (null, FiscalApproverStatus.NotMember);
+    }
 }

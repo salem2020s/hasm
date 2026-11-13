@@ -203,3 +203,74 @@ describe("api client: warehouses (same endpoints for Web and Desktop)", () => {
     await expect(client.createWarehouse({ ...input, code: "X", branchId: "b" })).rejects.toMatchObject({ status: 409, code: "branch_inactive" });
   });
 });
+
+describe("api client: fiscal calendar (same endpoints for Web and Desktop)", () => {
+  const headersOf = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => call(fetchMock, n).init.headers as Record<string, string>;
+
+  it("lists, reads and creates years with the anti-CSRF header on the state change only", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "y1", revision: 1 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listFiscalYears();
+    await client.getFiscalYear("a b");
+    await client.createFiscalYear({ name: "FY2026", startDate: "2026-01-01", periodType: "monthly" });
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/fiscal-years");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/fiscal-years/a%20b");
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toEqual({ name: "FY2026", startDate: "2026-01-01", periodType: "monthly" });
+    expect(headersOf(fetchMock, 0)["X-Hasm-Request"]).toBeUndefined();
+    expect(headersOf(fetchMock, 2)["X-Hasm-Request"]).toBe("1");
+  });
+
+  it("sends the revision as If-Match on every closing and routine reopening", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "x", revision: 1 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.softCloseFiscalPeriod("p1", 1);
+    await client.reopenFiscalPeriod("p1", 2);
+    await client.finalCloseFiscalPeriod("p1", 3);
+    await client.closeFiscalYear("y1", 4);
+    const paths = [0, 1, 2, 3].map((n) => call(fetchMock, n).url.replace("https://x/api/v1/company/", ""));
+    expect(paths).toEqual(["fiscal-periods/p1/soft-close", "fiscal-periods/p1/reopen", "fiscal-periods/p1/final-close", "fiscal-years/y1/close"]);
+    expect([0, 1, 2, 3].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"1"', '"2"', '"3"', '"4"']);
+  });
+
+  it("has no one-step exceptional reopening: only a request, then a decision by someone else", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "r1", revision: 1 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch) as unknown as Record<string, unknown>;
+    expect(client.reopenFinalFiscalPeriod).toBeUndefined();
+    expect(client.reopenFiscalYear).toBeUndefined();
+    const api = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await api.requestFiscalPeriodReopen("p1", 3, "A documented reason");
+    await api.requestFiscalYearReopen("y1", 4, "Another documented reason");
+    await api.listFiscalReopenRequests();
+    await api.approveFiscalReopen("r1", 1);
+    await api.denyFiscalReopen("r1", 2, "Not justified");
+    await api.denyFiscalReopen("r1", 3);
+    await api.cancelFiscalReopen("r1", 4);
+    const paths = [0, 1, 2, 3, 4, 5, 6].map((n) => call(fetchMock, n).url.replace("https://x/api/v1/company/", ""));
+    expect(paths).toEqual(["fiscal-periods/p1/reopen-requests", "fiscal-years/y1/reopen-requests", "fiscal-reopen-requests", "fiscal-reopen-requests/r1/approve",
+      "fiscal-reopen-requests/r1/deny", "fiscal-reopen-requests/r1/deny", "fiscal-reopen-requests/r1/cancel"]);
+    expect([0, 1, 3, 4, 5, 6].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"3"', '"4"', '"1"', '"2"', '"3"', '"4"']);
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ reason: "A documented reason" });
+    expect(JSON.parse(call(fetchMock, 4).init.body as string)).toEqual({ note: "Not justified" });
+    expect(JSON.parse(call(fetchMock, 5).init.body as string)).toEqual({});
+    expect(headersOf(fetchMock, 2)["X-Hasm-Request"]).toBeUndefined();
+    expect(headersOf(fetchMock, 3)["X-Hasm-Request"]).toBe("1");
+  });
+
+
+  it("uses the bearer token and no cookies on Desktop for the same fiscal endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/auth/login") ? { user: { id: "u" }, token: "tok" } : { years: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    await client.login("a", "b");
+    await client.listFiscalYears();
+    const init = call(fetchMock, 1).init;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+    expect(init.credentials).toBe("omit");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/fiscal-years");
+  });
+
+  it("surfaces the server's short code for fiscal refusals", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "segregation_of_duties" }, { status: 403 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.approveFiscalReopen("r1", 1)).rejects.toMatchObject({ status: 403, code: "segregation_of_duties" });
+  });
+});
