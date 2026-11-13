@@ -54,3 +54,12 @@ Hasm is an accounting and inventory management software project.
 
 \- Do not claim tests passed unless executed.
 
+
+\## Mandatory Shared Web/Desktop Frontend Architecture
+
+\- HASM is one application with one shared React + TypeScript frontend, delivered by two clients: the Web app (browser) and the Windows Desktop app (Tauri 2). This applies to every phase and module.
+\- Implement all business functionality once in the shared frontend (screens, forms, tables, dialogs, navigation, validation, translations, state, components) on the approved UI-1 design system. Never build separate Web and Windows implementations or accept platform-specific feature gaps.
+\- Platform adapters are allowed only where genuinely required (cookie vs bearer-token authentication, native window management, secure desktop storage/OS integration, printing/filesystem, startup and packaging). They must keep equivalent business behavior, authorization, validation and UX, and stay small and isolated.
+\- Both clients use the same ASP.NET Core APIs and server-side rules. Neither may bypass RBAC and company-scoped authorization, Trial/paid license limits, audit, optimistic concurrency, validation or multi-company isolation. Security-critical logic is never frontend-only.
+\- For every feature: build the UI once; make it available through Web and Tauri; add shared component/interaction tests; run frontend typecheck and production build; run the Tauri compilation/build check; run the required backend and integration tests; confirm no platform-specific gap. Routine manual visual review may wait for the final validation milestone; automated Web/Desktop compatibility checks may not be deferred.
+\- This section adds to, and never weakens, the security, testing and database-safety rules above.
