@@ -66,6 +66,18 @@ jobs:
           CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD :'pw';
           CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD :'rpw';
           SQL
+          # Cluster identity marker: the integration-test gate requires the server to prove it is this disposable service
+          # (marker database + per-run secret fingerprint), in addition to the loopback/acknowledgement checks.
+          FINGERPRINT="$(openssl rand -hex 32)"
+          echo "::add-mask::${FINGERPRINT}"
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE hasm_test_cluster_identity"
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d hasm_test_cluster_identity -v ON_ERROR_STOP=1 -v fp="${FINGERPRINT}" <<'SQL'
+          CREATE TABLE cluster_identity(fingerprint text NOT NULL, purpose text NOT NULL);
+          INSERT INTO cluster_identity VALUES (:'fp', 'hasm-disposable-test-cluster');
+          REVOKE ALL ON cluster_identity FROM PUBLIC;
+          GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;
+          SQL
+          echo "HASM_TEST_PG_CLUSTER_FINGERPRINT=${FINGERPRINT}" >> "$GITHUB_ENV"
           # The container has no TLS; non-TLS is confined to this disposable loopback service (see DEVELOPMENT.md).
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
           echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
