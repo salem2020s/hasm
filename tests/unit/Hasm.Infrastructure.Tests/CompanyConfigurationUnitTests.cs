@@ -273,6 +273,7 @@ public class ConfigurationSchemaContractTests
     }
 
     private static readonly string[] BranchCodes = ["company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate"];
+    private static readonly string[] WarehouseCodes = ["company.warehouses.view", "company.warehouses.update", "company.warehousestructure.create", "company.warehousestructure.activate"];
 
     [Fact]
     public void Company_administration_permissions_are_in_the_catalog_and_scoped_to_the_company()
@@ -283,7 +284,7 @@ public class ConfigurationSchemaContractTests
             Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c);
             Assert.Equal(ScopeKind.Company, p.Resource.Scope);
         }
-        Assert.Equal(codes.Concat(BranchCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
+        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
         Assert.Equal(["company.config.view"], PresetRoles.Definitions[PresetRoles.AccessAuditorId].Permissions.Where(c => c.StartsWith("company.")));
         Assert.Empty(PresetRoles.Definitions[PresetRoles.AccessManagerId].Permissions.Where(c => c.StartsWith("company.")));
     }

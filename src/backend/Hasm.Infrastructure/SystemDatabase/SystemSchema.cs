@@ -173,6 +173,10 @@ public static class SystemSchema
         public const string IndexMember = "k_5f919f68";
         public const string ScopeEpoch = "c_f18dd4c7";
         public const string CheckScopeEpoch = "k_57b77fbb";
+        public const string WarehouseScopeEpoch = "c_6bdbb40f";
+        public const string CheckWarehouseScopeEpoch = "k_163f9a59";
+        public const string WarehouseEpochGuardFunction = "f_248f918f";
+        public const string WarehouseEpochGuardTrigger = "r_771e0081";
         public const string EpochGuardFunction = "f_1f99d034";
         public const string EpochGuardTrigger = "r_1f9a28a4";
         public const string GuardFunction = "f_69804ba6";
@@ -360,6 +364,10 @@ public static class SystemSchema
         ["RoleAssignment.IndexMember"] = RoleAssignment.IndexMember,
         ["RoleAssignment.ScopeEpoch"] = RoleAssignment.ScopeEpoch,
         ["RoleAssignment.CheckScopeEpoch"] = RoleAssignment.CheckScopeEpoch,
+        ["RoleAssignment.WarehouseScopeEpoch"] = RoleAssignment.WarehouseScopeEpoch,
+        ["RoleAssignment.CheckWarehouseScopeEpoch"] = RoleAssignment.CheckWarehouseScopeEpoch,
+        ["RoleAssignment.WarehouseEpochGuardFunction"] = RoleAssignment.WarehouseEpochGuardFunction,
+        ["RoleAssignment.WarehouseEpochGuardTrigger"] = RoleAssignment.WarehouseEpochGuardTrigger,
         ["RoleAssignment.EpochGuardFunction"] = RoleAssignment.EpochGuardFunction,
         ["RoleAssignment.EpochGuardTrigger"] = RoleAssignment.EpochGuardTrigger,
         ["RoleAssignment.GuardFunction"] = RoleAssignment.GuardFunction,

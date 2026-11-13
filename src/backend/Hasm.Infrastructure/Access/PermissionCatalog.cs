@@ -89,6 +89,10 @@ public sealed partial class PermissionCatalog
         // (only for that branch); creating, activating/deactivating and designating the main branch change the company structure and are company-wide only.
         new("company.branches", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Update]),
         new("company.branchstructure", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate, PermissionAction.Designate]),
+        // Warehouse management (Phase 3.1C, system migration 0008). Viewing and editing a warehouse are exercisable through a warehouse-scoped assignment
+        // (only for that warehouse; no inheritance from branch scope); creating and activating/deactivating change the company structure: company-wide only.
+        new("company.warehouses", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Update]),
+        new("company.warehousestructure", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate]),
     ]);
 
     public static class Codes
@@ -116,6 +120,10 @@ public sealed partial class PermissionCatalog
         public const string BranchCreate = "company.branchstructure.create";
         public const string BranchActivate = "company.branchstructure.activate";
         public const string BranchDesignate = "company.branchstructure.designate";
+        public const string WarehousesView = "company.warehouses.view";
+        public const string WarehousesUpdate = "company.warehouses.update";
+        public const string WarehouseCreate = "company.warehousestructure.create";
+        public const string WarehouseActivate = "company.warehousestructure.activate";
     }
 
     public Permission Get(string code) =>
@@ -217,7 +225,7 @@ public interface IScopeTargetValidator
         await ExistsAsync(companyId, kind, id, ct) ? new ScopeTargetState(true, 1) : null;
 }
 
-/// <summary>The current state of a branch as far as access control is concerned. <paramref name="Epoch"/> is its activation epoch.</summary>
+/// <summary>The current state of a branch or warehouse as far as access control is concerned. <paramref name="Epoch"/> is its activation epoch.</summary>
 public sealed record ScopeTargetState(bool Active, long Epoch);
 
 public sealed class DenyAllScopeTargetValidator : IScopeTargetValidator

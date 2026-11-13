@@ -487,7 +487,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
 
         var first = await AdminTool.Run(Configured(), "migrate-companies");
         Assert.Equal(0, first.Exit);
-        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004)", first.Out);
+        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004, 0005)", first.Out);
         Assert.Contains($"Company {current.Id}: UpToDate", first.Out);
         Assert.Contains("grant-company-runtime", first.Out);                     // reminder to re-grant after a migration
 

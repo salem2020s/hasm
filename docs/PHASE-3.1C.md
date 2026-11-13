@@ -22,3 +22,18 @@ Stock quantities and movements, transfers, valuation/costing, purchasing, sales,
 
 ## Delivery
 Commits: (1) docs/plan, (2) company migration 0005 + schema/service/audit, (3) system migration 0008 + RBAC + facade + API, (4) shared UI, (5) verification/docs. Integration tests only on the disposable cluster (5433); CI count table updated.
+
+## As built
+- **Company migration 0005** (`Warehouse`, append-only `WarehouseRevision`; no seed, no existing data touched). PostgreSQL enforces: branch FK, immutable code (upper case, case-insensitively unique) and branch, no delete/truncate (owner included), revision +1 fence, epoch rule, and — through deferred constraint triggers on **both** tables — that no active warehouse lives in an inactive branch. `CompanyBranchService.DeactivateAsync` refuses (`branch_has_active_warehouses`) before PostgreSQL has to.
+- **Concurrency:** warehouse operations take the **same transaction-level advisory lock** as branch-structure changes (then the audit-stream lock), so a warehouse change and a branch deactivation can never interleave; verified by a race test.
+- **System migration 0008:** separate `warehouse_scope_epoch` column (own CHECK and immutability trigger; the branch CHECK of 0007 is untouched because migrations may not `DROP`); the four warehouse permission codes are added to the preset Company Administrator. `AccessService` reads one logical epoch (`COALESCE` of both columns), drops warehouse grants unless the warehouse is active with the recorded epoch (fail closed, never widened), records the epoch on assignment and retires stale-epoch assignments (audited).
+- **Permissions:** `company.warehouses.view/update` (warehouse granularity), `company.warehousestructure.create/activate` (company-wide). No inheritance in either direction between branch and warehouse access.
+- **API:** `/api/v1/company/warehouses` (list with `can`, minimal branch refs, limit; create 201+ETag; get; update; deactivate; activate) with `If-Match`/ETag, 428/412/404/409/403 `entitlement_denied`, anti-CSRF and `no-store` like branches.
+- **UI:** one shared screen (`pages/Warehouses.tsx`) for Web and Windows Desktop; menu entry Company → Warehouses (the "Warehouses" inventory module entry stays "coming soon").
+- **Tests:** 34 new PostgreSQL integration tests (CI table now 468, all executed), 16 unit tests, 23 UI + 4 api-client tests. Existing expectations updated for company migration 0005, system migration 0008, 27 preset-admin permissions.
+
+## Known limitations
+1. `WarehouseRevision` history is audited but not shown in the unified Configuration History screen (same as `BranchRevision`).
+2. Stale warehouse-role assignments may remain visible as records but never grant access.
+3. A warehouse cannot be moved to another branch (by design until inventory/accounting rules exist); no seeded or "main" warehouse; Access Auditor/Manager presets receive no warehouse permissions.
+4. No migration has been applied to any permanent development database; manual Web/Desktop visual validation is deferred to the final validation milestone.
