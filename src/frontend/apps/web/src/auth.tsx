@@ -87,6 +87,24 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanies((await api.listCompanies()).companies);
   }, [api]);
 
+  /**
+   * Exactly one accessible company: enter it through the normal select-company API (the server re-checks membership and company
+   * state; nothing is manufactured in the frontend). Any failure simply leaves the user on the Company Selection screen, where
+   * choosing the company retries the same call. More than one (or none) always shows the selection screen.
+   * Returns true when the company was entered.
+   */
+  const autoEnterSole = useCallback(async (list: CompanySummary[]): Promise<boolean> => {
+    if (list.length !== 1) return false;
+    try {
+      await api.selectCompany(list[0].id);
+      await enterCompany();
+      return true;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) throw e;
+      return false;
+    }
+  }, [api, enterCompany]);
+
   // Session restoration: the server decides (cookie), the client keeps no session data of its own.
   useEffect(() => {
     mounted.current = true;
@@ -96,10 +114,12 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
         if (!mounted.current) return;
         if (!status.authenticated || !status.user) { setPhase("anonymous"); return; }
         setUser(status.user);
-        await loadCompanies();
+        const list = (await api.listCompanies()).companies;
+        setCompanies(list);
         try { await enterCompany(); } catch (e) {
           if (e instanceof ApiError && e.status === 401) throw e;
-          setPhase("needCompany"); // 409 company_not_selected (or no usable selection)
+          // 409 company_not_selected (or no usable selection): enter the only company, otherwise ask.
+          if (!(await autoEnterSole(list))) setPhase("needCompany");
         }
       } catch (e) {
         if (!mounted.current) return;
@@ -108,15 +128,16 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
       }
     })();
     return () => { mounted.current = false; };
-  }, [api, enterCompany, loadCompanies]);
+  }, [api, enterCompany, autoEnterSole]);
 
   const login = useCallback(async (loginName: string, password: string) => {
     const result = await api.login(loginName, password); // throws ApiError: the form shows the mapped message
     setUser(result.user);
     setNotice(null);
-    await loadCompanies();
-    setPhase("needCompany");
-  }, [api, loadCompanies]);
+    const list = (await api.listCompanies()).companies;
+    setCompanies(list);
+    if (!(await autoEnterSole(list))) setPhase("needCompany");
+  }, [api, autoEnterSole]);
 
   const logout = useCallback(async () => {
     try { await api.logout(); } catch { /* the server session may already be gone; the local state is cleared regardless */ }

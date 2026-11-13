@@ -1,0 +1,27 @@
+/* DEVELOPMENT-ONLY preview styles (loaded only with the preview chunk; never part of a production build). */
+.chip-sample { background: #fff7e6; color: #7a4a00; border: 1px dashed var(--color-gold); }
+.gallery-h { margin-block: var(--space-5) var(--space-3); color: var(--color-navy); }
+.gallery-hero h3 { font-size: var(--text-xl); }
+
+.pv-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-3); }
+.pv-actions, .pv-chips, .pv-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.pv-tabs { margin-block-end: var(--space-3); }
+.pv-btn { display: inline-flex; align-items: center; gap: var(--space-2); }
+.pv-btn[aria-disabled="true"] { cursor: default; }
+.pv-chip { border-radius: 999px; min-height: 2.25rem; padding-inline: var(--space-4); background: var(--color-card); }
+.pv-chip.is-active { background: var(--color-mint); border-color: var(--color-primary); color: var(--color-primary-strong); }
+.pv-search { display: flex; align-items: center; gap: var(--space-2); flex: 1 1 16rem; max-width: 28rem; min-height: var(--touch-target); padding-inline: var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-card); color: var(--color-text-muted); }
+.pv-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font: inherit; color: var(--color-text); }
+.pv-search:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgb(15 118 110 / 0.2); }
+
+.data-table .num { text-align: end; font-variant-numeric: tabular-nums; }
+.st-ok { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.st-low, .st-bad { background: var(--color-danger-soft); color: var(--color-danger); border-color: var(--color-danger); }
+.st-near { background: var(--color-warning-soft); color: var(--color-warning); border-color: var(--color-warning); }
+.chip::before { content: ""; display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: currentColor; margin-inline-end: var(--space-1); }
+.chip-sample::before, .chip-base::before, .chip-ok::before, .chip-off::before { display: none; }
+
+.pv-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-start: var(--space-3); }
+.pv-pages { display: flex; gap: var(--space-1); }
+.pv-page { min-width: 2rem; height: 2rem; display: inline-grid; place-items: center; border-radius: var(--radius-sm); border: 1px solid var(--color-border); font-size: var(--text-sm); background: var(--color-card); }
+.pv-page.is-current { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: var(--weight-bold); }

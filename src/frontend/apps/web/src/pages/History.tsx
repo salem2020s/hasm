@@ -2,17 +2,21 @@ import type { HistoryEntry } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth";
-import { Banner, errorText, Field, Loading } from "../components";
+import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
+import { formatDateTime } from "../format";
+import { useDisplayFormat } from "../useDisplayFormat";
 
 const show = (v: unknown, none: string) => (v === null || v === undefined ? none : String(v));
 
 export function HistoryPage() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const auth = useAuth();
   const [entity, setEntity] = useState("");
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [more, setMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Dates follow the company settings (date format, numerals, business time zone); defaults apply without settings.view. Display only.
+  const { format } = useDisplayFormat();
 
   const load = useCallback(async (before?: number, append = false) => {
     try {
@@ -27,12 +31,13 @@ export function HistoryPage() {
   useEffect(() => { setEntries(null); void load(); }, [load]);
 
   if (error) return <Banner kind="error">{error}</Banner>;
-  const when = (iso: string) => new Date(iso).toLocaleString(locale === "ar" ? "ar-u-nu-latn" : "en");
+  const when = (iso: string) => formatDateTime(iso, format);
 
   return (
     <section aria-labelledby="page-title">
-      <h1 id="page-title">{t("history.title")}</h1>
-      <p className="hint">{t("history.note")}</p>
+      <PageHeader title={t("history.title")} description={t("history.note")} />
+      <Card>
+      <div className="toolbar">
       <Field id="h-entity" label={t("history.filter")}>
         {(aria) => (
           <select {...aria} value={entity} onChange={(e) => setEntity(e.target.value)}>
@@ -43,26 +48,41 @@ export function HistoryPage() {
           </select>
         )}
       </Field>
+      <p className="hint toolbar-note">{t("history.time_note", { zone: format.timeZone ?? "UTC" })}</p>
+      </div>
       {!entries ? <Loading /> : entries.length === 0 ? <Banner kind="info" testId="history-empty">{t("history.empty")}</Banner> : (
-        <ol className="history">
-          {entries.map((e) => (
-            <li key={e.id}>
-              <p>
-                <strong>{t(`history.entity.${e.entity}`)}{e.key ? ` ${e.key}` : ""}</strong> · {t("history.revision", { n: e.revision })} · <time dateTime={e.changedAtUtc}>{when(e.changedAtUtc)}</time>
-              </p>
-              <ul>
-                {Object.entries(e.changes).map(([field, c]) => (
-                  <li key={field}>
-                    <span className="change-field">{t(`history.field.${field}`)}</span>:{" "}
-                    {c.changed ? t("history.changed") : <>{show(c.old, t("history.empty_value"))} → {show(c.new, t("history.empty_value"))}</>}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ol>
+        <div className="table-wrap">
+        <table className="data-table history-table">
+          <caption className="visually-hidden">{t("history.title")}</caption>
+          <thead><tr>
+            <th scope="col">{t("history.col_when")}</th><th scope="col">{t("history.col_item")}</th><th scope="col">{t("history.col_changes")}</th>
+          </tr></thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id}>
+                <td className="nowrap"><time dateTime={e.changedAtUtc} className="ltr-value">{when(e.changedAtUtc)}</time></td>
+                <td>
+                  <strong>{t(`history.entity.${e.entity}`)}</strong>{e.key ? <> <bdi className="ltr-value">{e.key}</bdi></> : null}
+                  <div className="hint">{t("history.revision", { n: e.revision })}</div>
+                </td>
+                <td>
+                  <ul className="change-list">
+                    {Object.entries(e.changes).map(([field, c]) => (
+                      <li key={field}>
+                        <span className="change-field">{t(`history.field.${field}`)}</span>:{" "}
+                        {c.changed ? <span className="hint">{t("history.changed")}</span> : <><bdi>{show(c.old, t("history.empty_value"))}</bdi> → <bdi>{show(c.new, t("history.empty_value"))}</bdi></>}
+                      </li>
+                    ))}
+                  </ul>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
       )}
-      {more && entries && <button type="button" onClick={() => void load(entries[entries.length - 1].id, true)}>{t("history.more")}</button>}
+      {more && entries && <div className="actions"><button type="button" onClick={() => void load(entries[entries.length - 1].id, true)}>{t("history.more")}</button></div>}
+      </Card>
     </section>
   );
 }

@@ -113,7 +113,7 @@ describe("company profile screen", () => {
     await go("#/company/profile");
     await screen.findByTestId("profile-new");
     fireEvent.click(screen.getByRole("button", { name: "English" }));
-    expect(await screen.findByRole("heading", { name: "Company profile" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Company Details & Settings" })).toBeInTheDocument();
     expect(document.documentElement.dir).toBe("ltr");
   });
 });
@@ -196,8 +196,13 @@ describe("currencies screen", () => {
     const setCurrency = vi.fn().mockResolvedValue(current);
     renderApp(signedIn({ getCurrencies: vi.fn().mockResolvedValue(current), setCurrency }));
     await go("#/company/currencies");
-    await userEvent.selectOptions(await screen.findByLabelText("اختر العملة الأساسية"), "USD");
-    await userEvent.click(screen.getByRole("button", { name: "تعيين كعملة أساسية" }));
+    // UI-01: the current base is shown separately; the picker is an explicit "change" action and never auto-selects.
+    expect(await screen.findByTestId("base-currency")).toHaveTextContent("SAR");
+    const picker = await screen.findByLabelText("العملة الأساسية الجديدة");
+    expect(picker).toHaveValue("");
+    expect(screen.getByRole("button", { name: "تغيير العملة الأساسية" })).toBeDisabled();
+    await userEvent.selectOptions(picker, "USD");
+    await userEvent.click(screen.getByRole("button", { name: "تغيير العملة الأساسية" }));
     expect(setCurrency).not.toHaveBeenCalled();
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "تأكيد" }));
     await waitFor(() => expect(setCurrency).toHaveBeenCalledWith("USD", { enabled: true, isBase: true }, 0));
@@ -222,6 +227,7 @@ describe("currencies screen", () => {
     await go("#/company/currencies");
     expect(await screen.findByTestId("read-only")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "تعيين كعملة أساسية" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "تغيير العملة الأساسية" })).toBeNull();
   });
 });
 
@@ -238,6 +244,31 @@ describe("history screen", () => {
     await screen.findByText(/تغيّر/);
     expect(document.body.textContent).toContain("Riyadh → Jeddah");
     expect(screen.getByText(/تغيّر \(القيمة غير معروضة\)/)).toBeInTheDocument();
+  });
+
+  it("formats dates with the company date format and time zone (UI-02), leaving the stored UTC value in dateTime", async () => {
+    const getSettings = vi.fn().mockResolvedValue({
+      settings: { defaultLanguage: "ar", dateFormat: "dd/MM/yyyy", numeralSystem: "latin", timeZone: "Asia/Damascus" }, revision: 2, exists: true, setupComplete: true,
+      updatedAtUtc: null, options: { languages: ["ar"], dateFormats: ["dd/MM/yyyy"], numeralSystems: ["latin"] },
+    });
+    const getHistory = vi.fn().mockResolvedValue({
+      entries: [{ id: 1, entity: "profile", key: "", revision: 1, actorUserId: "u1", changedAtUtc: "2026-03-09T21:05:00Z", auditSeq: 1, changes: { city: { old: "a", new: "b" } } }],
+    });
+    renderApp(signedIn({ getHistory, getSettings }));
+    await go("#/company/history");
+    await waitFor(() => expect(document.querySelector("time")).toHaveTextContent("10/03/2026 00:05"));
+    expect(document.querySelector("time")).toHaveAttribute("datetime", "2026-03-09T21:05:00Z");
+  });
+
+  it("falls back to UTC and yyyy-MM-dd when the settings cannot be viewed", async () => {
+    const getSettings = vi.fn();
+    const getHistory = vi.fn().mockResolvedValue({
+      entries: [{ id: 1, entity: "profile", key: "", revision: 1, actorUserId: "u1", changedAtUtc: "2026-03-09T21:05:00Z", auditSeq: 1, changes: { city: { old: "a", new: "b" } } }],
+    });
+    renderApp(signedIn({ getHistory, getSettings }, ["company.config.view"]));
+    await go("#/company/history");
+    await waitFor(() => expect(document.querySelector("time")).toHaveTextContent("2026-03-09 21:05"));
+    expect(getSettings).not.toHaveBeenCalled();
   });
 
   it("shows an empty state", async () => {

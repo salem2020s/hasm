@@ -36,8 +36,9 @@ export function LoginPage() {
   }
 
   return (
-    <main className="auth-card">
-      <h1>{t("login.title")}</h1>
+    <section aria-labelledby="page-title">
+      <h1 id="page-title" className="auth-title">{t("login.title")}</h1>
+      <p className="page-description auth-sub">{t("tagline")}</p>
       {auth.notice === "session_expired" && <Banner kind="warning" testId="notice-expired">{t("login.session_expired")}</Banner>}
       {auth.notice === "logged_out" && <Banner kind="success" testId="notice-logged-out">{t("login.logged_out")}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
@@ -48,8 +49,8 @@ export function LoginPage() {
         <Field id="password" label={t("login.password")} error={fieldError.password} required>
           {(aria) => <input {...aria} name="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} dir="ltr" />}
         </Field>
-        <button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("login.submit")}</button>
+        <button type="submit" className="primary block" disabled={busy}>{busy ? t("loading") : t("login.submit")}</button>
       </form>
-    </main>
+    </section>
   );
 }

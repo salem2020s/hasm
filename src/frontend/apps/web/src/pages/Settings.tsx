@@ -1,12 +1,16 @@
 import { ApiError, type SettingsFields, type SettingsResponse } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
-import { Banner, ConfirmDialog, errorText, Field, fieldErrors, Loading } from "../components";
+import { Banner, Card, ConfirmDialog, errorText, Field, fieldErrors, Loading, PageHeader } from "../components";
 import { timeZones } from "../countries";
 
-export function SettingsPage() {
+/** `embedded`: rendered as a section of the unified Company Details & Settings page (no page header; reports unsaved edits to the parent). */
+export function SettingsPage({ embedded = false, onDirty }: { embedded?: boolean; onDirty?: (dirty: boolean) => void } = {}) {
   const { t } = useI18n();
+  // The loader must not depend on the translation function: a language switch must never reload the data and overwrite unsaved edits.
+  const tRef = useRef(t);
+  tRef.current = t;
   const auth = useAuth();
   const canEdit = auth.can("company.settings.update");
   const [loaded, setLoaded] = useState<SettingsResponse | null>(null);
@@ -26,10 +30,13 @@ export function SettingsPage() {
       setForm(r.settings);
       setLoadError(null);
     } catch (e) {
-      if (!auth.handleError(e)) setLoadError(errorText(t, e));
+      if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e));
     }
-  }, [auth.api, auth.handleError, t]);
+  }, [auth.api, auth.handleError]);
   useEffect(() => { void load(); }, [load]);
+
+  const dirty = !!loaded && !!form && JSON.stringify(form) !== JSON.stringify(loaded.settings);
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
 
   if (loadError) return <Banner kind="error">{loadError}</Banner>;
   if (!loaded || !form) return <Loading />;
@@ -69,9 +76,10 @@ export function SettingsPage() {
   const zones = timeZones();
   const optionLabel = (group: string, v: string) => t(`settings.${group}.${v}`);
 
+  const Root = embedded ? "div" : "section";
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title">{t("settings.title")}</h1>
+    <Root {...(embedded ? {} : { "aria-labelledby": "page-title" })}>
+      {!embedded && <PageHeader title={t("settings.title")} description={t("settings.subtitle")} />}
       {!loaded.setupComplete && <Banner kind="warning" testId="setup-incomplete">{t("settings.setup_incomplete")}</Banner>}
       {!canEdit && <Banner kind="info" testId="read-only">{t("form.read_only")}</Banner>}
       {conflict && (
@@ -83,6 +91,8 @@ export function SettingsPage() {
       {error && <Banner kind="error">{error}</Banner>}
       {saved && <Banner kind="success" testId="saved">{t("form.saved")}</Banner>}
       <form onSubmit={submit} noValidate className="form-grid">
+       <Card title={t("settings.group_regional")}>
+        <div className="fields">
         <Field id="s-lang" label={t("settings.default_language")} hint={t("settings.default_language_hint")} error={errors.defaultLanguage}>
           {(aria) => (
             <select {...aria} value={form.defaultLanguage} disabled={!canEdit} onChange={(e) => setForm({ ...form, defaultLanguage: e.target.value })}>
@@ -112,6 +122,8 @@ export function SettingsPage() {
             </select>
           )}
         </Field>
+        </div>
+       </Card>
         {canEdit && <div className="actions"><button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("form.save")}</button></div>}
       </form>
       {confirm && (
@@ -123,6 +135,6 @@ export function SettingsPage() {
           onConfirm={() => { setConfirm(false); void save(); }}
         />
       )}
-    </section>
+    </Root>
   );
 }
