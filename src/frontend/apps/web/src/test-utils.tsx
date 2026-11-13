@@ -51,6 +51,12 @@ export function fakeClient(overrides: Partial<Record<keyof ApiClient, unknown>> 
     deactivateBranch: vi.fn(),
     activateBranch: vi.fn(),
     makeMainBranch: vi.fn(),
+    listWarehouses: vi.fn().mockResolvedValue({ warehouses: [], branches: [], limit: null, everCreated: null, can: { create: false, activate: false, update: [] } }),
+    getWarehouse: vi.fn(),
+    createWarehouse: vi.fn(),
+    updateWarehouse: vi.fn(),
+    deactivateWarehouse: vi.fn(),
+    activateWarehouse: vi.fn(),
   };
   return { ...base, ...overrides } as unknown as ApiClient;
 }

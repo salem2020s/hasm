@@ -154,3 +154,52 @@ describe("api client: branches (same endpoints for Web and Desktop)", () => {
       .rejects.toMatchObject({ status: 409, code: "branch_code_taken" });
   });
 });
+
+describe("api client: warehouses (same endpoints for Web and Desktop)", () => {
+  const warehouse = { id: "w1", code: "WH1", revision: 1 };
+  const headersOf = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => call(fetchMock, n).init.headers as Record<string, string>;
+  const input = { nameAr: null, nameEn: "North", addressLine1: null, addressLine2: null, city: null, region: null, postalCode: null, phone: null, email: null, website: null };
+
+  it("lists, reads and creates warehouses with the anti-CSRF header on the state change only", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(warehouse)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listWarehouses();
+    await client.getWarehouse("a b");
+    await client.createWarehouse({ ...input, code: "N1", branchId: "b1" });
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/warehouses");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/warehouses/a%20b");
+    expect(call(fetchMock, 2)).toMatchObject({ url: "https://x/api/v1/company/warehouses", init: { method: "POST" } });
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toMatchObject({ code: "N1", branchId: "b1", nameEn: "North" });
+    expect(headersOf(fetchMock, 0)["X-Hasm-Request"]).toBeUndefined();
+    expect(headersOf(fetchMock, 2)["X-Hasm-Request"]).toBe("1");
+  });
+
+  it("sends the warehouse revision as If-Match on update, activation and deactivation", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(warehouse)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.updateWarehouse("w1", input, 4);
+    await client.deactivateWarehouse("w1", 5);
+    await client.activateWarehouse("w1", 6);
+    const urls = [0, 1, 2].map((n) => call(fetchMock, n).url.replace("https://x/api/v1/company/warehouses/", ""));
+    expect(urls).toEqual(["w1", "w1/deactivate", "w1/activate"]);
+    expect([0, 1, 2].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"4"', '"5"', '"6"']);
+    expect(call(fetchMock, 0).init.method).toBe("PUT");
+  });
+
+  it("uses the bearer token and no cookies on Desktop for the same warehouse endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/auth/login") ? { user: { id: "u" }, token: "tok" } : { warehouses: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    await client.login("a", "b");
+    await client.listWarehouses();
+    const init = call(fetchMock, 1).init;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+    expect(init.credentials).toBe("omit");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/warehouses");
+  });
+
+  it("surfaces the server's short code for warehouse refusals", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "branch_inactive" }, { status: 409 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.createWarehouse({ ...input, code: "X", branchId: "b" })).rejects.toMatchObject({ status: 409, code: "branch_inactive" });
+  });
+});
