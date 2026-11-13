@@ -34,6 +34,9 @@ jobs:
           # restricted test role below. Not a real secret and unreachable outside this runner.
           POSTGRES_USER: ci_bootstrap
           POSTGRES_PASSWORD: ci-bootstrap-throwaway
+          # Without this the image creates a database named after POSTGRES_USER (ci_bootstrap), which the cluster-identity gate
+          # correctly refuses as a non-test database. The bootstrap database carries the disposable test prefix instead.
+          POSTGRES_DB: hasm_test_bootstrap
         ports:
           - 5432:5432
         options: >-
@@ -78,6 +81,10 @@ jobs:
           GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;
           SQL
           echo "HASM_TEST_PG_CLUSTER_FINGERPRINT=${FINGERPRINT}" >> "$GITHUB_ENV"
+          # Fail-fast inventory assertion: exactly the built-in databases, the bootstrap database and the identity marker may exist.
+          INVENTORY="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SELECT datname FROM pg_database ORDER BY 1" | tr '\n' ' ')"
+          echo "Database inventory before tests: ${INVENTORY}"
+          [ "${INVENTORY}" = "hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1 " ] || { echo "::error::Unexpected database inventory in the disposable CI service"; exit 1; }
           # The container has no TLS; non-TLS is confined to this disposable loopback service (see DEVELOPMENT.md).
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
           echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"

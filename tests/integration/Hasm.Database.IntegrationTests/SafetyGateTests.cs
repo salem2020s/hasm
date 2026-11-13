@@ -165,4 +165,27 @@ public class SafetyGateTests
         Assert.DoesNotContain("TopSecret", reason);
         Assert.DoesNotContain("db.prod.example.com", reason);
     }
+    // ---- GitHub Actions bootstrap inventory (PR #13 regression: the image's default database was named after POSTGRES_USER) ----
+    [Fact]
+    public void Identity_accepts_the_exact_github_service_inventory_and_rejects_the_default_user_named_database()
+    {
+        var inventory = new[] { "postgres", "template0", "template1", "hasm_test_bootstrap", PostgresClusterIdentity.MarkerDatabase };
+        Assert.Null(PostgresClusterIdentity.Decide(5432, true, Fp, new ClusterObservation(5432, inventory, Fp)));
+        // The previous, failing inventory (extra database named after the bootstrap user) stays refused, also inside a GitHub job.
+        Assert.NotNull(PostgresClusterIdentity.Decide(5432, true, Fp, new ClusterObservation(5432, [.. inventory, "ci_bootstrap"], Fp)));
+        // Unexpected databases are refused in CI as well as locally.
+        Assert.NotNull(PostgresClusterIdentity.Decide(5432, true, Fp, Observed(5432, extra: "customer_data")));
+    }
+
+    [Fact]
+    public void Workflow_names_the_bootstrap_database_with_the_test_prefix()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, ".github", "workflows", "backend.yml"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        var yml = File.ReadAllText(Path.Combine(dir!.FullName, ".github", "workflows", "backend.yml"));
+        var m = System.Text.RegularExpressions.Regex.Match(yml, @"^\s*POSTGRES_DB:\s*(\S+)\s*$", System.Text.RegularExpressions.RegexOptions.Multiline);
+        Assert.True(m.Success, "The CI PostgreSQL service must name its bootstrap database explicitly.");
+        Assert.StartsWith(PostgresTestEnvironment.DatabasePrefix, m.Groups[1].Value, StringComparison.Ordinal);
+    }
 }
