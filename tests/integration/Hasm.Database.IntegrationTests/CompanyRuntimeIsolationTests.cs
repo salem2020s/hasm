@@ -183,7 +183,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
 
         // What it may do.
         Assert.Equal(c.Id, await Run<Guid>(conn, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(4L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(5L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
         Assert.Equal(0L, await Run<long>(conn, $"SELECT count(*) FROM {B.Table}"));
 
         // What it must not: modify or truncate audit events (a privilege failure, before any trigger runs).
@@ -512,7 +512,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
         Assert.Contains($"Company {bad.Id}: Failed [migration]", run.Out);
         Assert.Contains("1 failed", run.Out);
         AssertNoLeak([run.All], good, bad);
-        Assert.Equal(4L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(5L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]

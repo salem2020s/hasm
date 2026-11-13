@@ -27,8 +27,8 @@ namespace Hasm.Infrastructure.CompanyConfiguration;
 public sealed class CompanyBranchService(
     CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, IEntitlementPolicy entitlements, TimeProvider clock)
 {
-    private const int LockKey1 = 0x48425243;   // "HBRC": advisory-lock namespace of branch structure
-    private const int LockKey2 = 1;
+    internal const int LockKey1 = 0x48425243;   // "HBRC": advisory-lock namespace of branch structure
+    internal const int LockKey2 = 1;
 
     private static readonly string Columns =
         $"{B.Id}, {B.Code}, {B.NameAr}, {B.NameEn}, {B.IsActive}, {B.IsMain}, {B.ActivationEpoch}, {B.Address1}, {B.Address2}, {B.City}, {B.Region}, " +
@@ -144,6 +144,13 @@ public sealed class CompanyBranchService(
             await LockAsync(work, ct);
             var current = await RequireAsync(work, id, expectedRevision.Value, ct);
             if (!current.IsActive) throw new Abort(null, ConfigStatus.Conflict, "branch_already_inactive");
+            // Phase 3.1C: a branch cannot be deactivated while it still has active warehouses (the structure lock serialises this check
+            // against warehouse changes; PostgreSQL re-checks at commit).
+            await using (var wh = new NpgsqlCommand($"SELECT count(*) FROM {CompanySchema.Warehouse.Table} WHERE {CompanySchema.Warehouse.BranchId} = @b AND {CompanySchema.Warehouse.IsActive}", work.Connection, work.Transaction))
+            {
+                wh.Parameters.AddWithValue("b", id);
+                if (Convert.ToInt64(await wh.ExecuteScalarAsync(ct)) > 0) throw new Abort(null, ConfigStatus.Conflict, "branch_has_active_warehouses");
+            }
             BranchView? successor = null;
             if (current.IsMain)
             {

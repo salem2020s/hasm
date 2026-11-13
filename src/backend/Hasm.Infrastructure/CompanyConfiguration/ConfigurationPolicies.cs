@@ -23,6 +23,8 @@ public interface IEntitlementPolicy
     int MaxEnabledCurrencies { get; }
     /// <summary>Maximum branches EVER created (inactive ones count; branches are never deleted). The default is the Trial limit; a paid edition overrides it.</summary>
     int MaxBranches => 1;
+    /// <summary>Maximum warehouses EVER created (inactive ones count; warehouses are never deleted). Trial default 1.</summary>
+    int MaxWarehouses => 1;
     IReadOnlyList<TrialRestriction> Restrictions { get; }
 }
 
@@ -32,6 +34,7 @@ public sealed class TrialEntitlementPolicy : IEntitlementPolicy
     public string Edition => "trial";
     public int MaxEnabledCurrencies => 1;
     public int MaxBranches => 1;
+    public int MaxWarehouses => 1;
 
     public IReadOnlyList<TrialRestriction> Restrictions { get; } =
     [
@@ -39,7 +42,7 @@ public sealed class TrialEntitlementPolicy : IEntitlementPolicy
         new("companies", 1, Enforcement.NotEnforced, "register-company / provision-company (Hasm.Admin) can create more companies."),
         new("users", 2, Enforcement.NotEnforced, "POST /api/v1/admin/users, Hasm.Admin bootstrap-admin and company memberships can exceed two users."),
         new("branches", 1, Enforcement.Enforced, "Every branch ever created counts, inactive ones included; the main branch created with the company is the one allowed branch."),
-        new("warehouses", 1, Enforcement.NotEnforced, "Warehouse management does not exist yet (Phase 3.1C)."),
+        new("warehouses", 1, Enforcement.Enforced, "Every warehouse ever created counts, inactive ones included."),
         new("posted_business_transactions", 100, Enforcement.NotEnforced, "No posting module exists yet."),
     ];
 }
