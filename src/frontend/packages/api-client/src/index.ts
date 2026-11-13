@@ -197,6 +197,43 @@ export interface WarehousesResponse {
   /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
   can: { create: boolean; activate: boolean; update: string[] };
 }
+
+export type FiscalPeriodStatus = "open" | "soft_closed" | "final_closed";
+export interface FiscalPeriod {
+  id: string;
+  yearId: string;
+  number: number;
+  /** Calendar dates (yyyy-MM-dd) in the company's business time zone. */
+  startDate: string;
+  endDate: string;
+  status: FiscalPeriodStatus;
+  statusChangedAtUtc: string | null;
+  revision: number;
+}
+export interface FiscalYear {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  periodType: "monthly" | "quarterly";
+  /** The business time zone the calendar was created under (informational snapshot). */
+  timeZone: string;
+  closed: boolean;
+  closedAtUtc: string | null;
+  revision: number;
+  createdAtUtc: string;
+  periods: FiscalPeriod[];
+}
+export interface FiscalYearInput { name: string; startDate: string; periodType: "monthly" | "quarterly" }
+export interface FiscalYearsResponse {
+  years: FiscalYear[];
+  /** Today in the company's business time zone; null until the time zone is chosen (a year cannot be created before that). */
+  today: string | null;
+  /** False while the modules whose pending items must block a close do not exist: closing records the state only and is not "verified". */
+  closeChecksImplemented: boolean;
+  /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
+  can: { create: boolean; closeYear: boolean; reopenYear: boolean; softClose: boolean; reopen: boolean; finalClose: boolean; reopenFinal: boolean };
+}
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -310,6 +347,18 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       request<Warehouse>("PUT", `/api/v1/company/warehouses/${enc(id)}`, { body: warehouse, ifMatch: revision }),
     deactivateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/deactivate`, { ifMatch: revision }),
     activateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/activate`, { ifMatch: revision }),
+    // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
+    listFiscalYears: () => get<FiscalYearsResponse>("/api/v1/company/fiscal-years"),
+    getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),
+    createFiscalYear: (year: FiscalYearInput) => request<FiscalYear>("POST", "/api/v1/company/fiscal-years", { body: year }),
+    closeFiscalYear: (id: string, revision: number) => request<FiscalYear>("POST", `/api/v1/company/fiscal-years/${enc(id)}/close`, { ifMatch: revision }),
+    reopenFiscalYear: (id: string, revision: number, reason: string) =>
+      request<FiscalYear>("POST", `/api/v1/company/fiscal-years/${enc(id)}/reopen`, { body: { reason }, ifMatch: revision }),
+    softCloseFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/soft-close`, { ifMatch: revision }),
+    reopenFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/reopen`, { ifMatch: revision }),
+    finalCloseFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/final-close`, { ifMatch: revision }),
+    reopenFinalFiscalPeriod: (id: string, revision: number, reason: string) =>
+      request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/reopen-final`, { body: { reason }, ifMatch: revision }),
   };
 }
 
