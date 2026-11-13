@@ -99,7 +99,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 502 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 513 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -132,10 +132,10 @@ jobs:
               "WarehouseMigrationTests": 4, "WarehouseConstraintTests": 6, "WarehouseServiceTests": 8,
               "WarehouseAccessTests": 6, "WarehouseEpochTests": 4, "WarehouseApiTests": 6,
               # Phase 3.1D fiscal calendar (company migration 0006, system migration 0009).
-              "FiscalMigrationTests": 4, "FiscalConstraintTests": 8, "FiscalServiceTests": 11, "FiscalPostingGateTests": 2,
-              "FiscalAccessTests": 4, "FiscalApiTests": 5,
+              "FiscalMigrationTests": 4, "FiscalConstraintTests": 8, "FiscalApprovalConstraintTests": 3, "FiscalServiceTests": 15, "FiscalPostingGateTests": 2,
+              "FiscalAccessTests": 7, "FiscalApiTests": 6,
           }
-          TOTAL = sum(EXPECTED.values())  # 502
+          TOTAL = sum(EXPECTED.values())  # 513
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

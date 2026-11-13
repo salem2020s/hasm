@@ -203,8 +203,8 @@ public sealed class FiscalCalendarService(
             var year = (await LoadYearsAsync(work.Connection, work.Transaction, yearId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "fiscal_year_not_found");
             if (year.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", year.Revision);
             if (year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_already_closed");
-            if (year.Periods.Any(p => p.State != FiscalPeriodState.FinalClosed)) throw new Abort(ConfigStatus.Conflict, "fiscal_year_has_unfinalized_periods");
             await EnsureCloseChecksCanBeTrustedAsync(work, companyId, ct);
+            if (year.Periods.Any(p => p.State != FiscalPeriodState.FinalClosed)) throw new Abort(ConfigStatus.Conflict, "fiscal_year_has_unfinalized_periods");
             var now = clock.GetUtcNow().UtcDateTime;
             await using (var upd = new NpgsqlCommand(
                 $"UPDATE {Y.Table} SET {Y.Status} = 2, {Y.ClosedAtUtc} = @now, {Y.ClosedBy} = @actor, {Y.Revision} = {Y.Revision} + 1 WHERE {Y.Id} = @id", work.Connection, work.Transaction))

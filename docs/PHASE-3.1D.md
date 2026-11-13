@@ -28,7 +28,7 @@ Company migration 0006, system migration 0009; domain service, authorized facade
 - **System migration 0009:** routine fiscal permissions plus `fiscalreopen.view/create` on the preset Company Administrator; new preset role **Fiscal Approver** (`fiscalreopen.approve`, `fiscalreopen.view`, `fiscalyears.view`).
 - **Backend:** `FiscalCalendarService` (one advisory lock for all fiscal changes, audited transactions, close guard, segregation of duties), authorized `FiscalCalendarManagementService` (separate company-wide permission per action), `FiscalPeriodGate` (FOR SHARE lock so a close waits for in-flight postings; Final Closed never accepts postings), API `/api/v1/company/fiscal-years` and `/fiscal-periods` (ETag/If-Match, 428/412/404/409/403, anti-CSRF, no-store).
 - **UI:** one shared screen (`pages/FiscalYears.tsx`, Company → Fiscal calendar) with per-period actions driven by server capabilities, reason dialogs, create-year form, and an explicit notice while the close checks are not implemented.
-- **Tests:** 34 PostgreSQL integration tests (CI table now 502, all executed), 26 unit tests, 20 UI + 4 api-client tests.
+- **Tests:** 45 PostgreSQL integration tests (CI table now 513, all executed), unit tests for validation, permissions, presets and migration shape, 25 UI + 5 api-client tests.
 
 ## Known limitations / deferred
 1. Everything in "Requires the future General Ledger" above; the close checks never block today and are reported as not implemented.
