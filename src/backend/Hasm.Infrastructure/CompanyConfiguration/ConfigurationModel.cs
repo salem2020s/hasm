@@ -47,6 +47,15 @@ public static class ConfigAuditEvents
     public const short FiscalReopenApproved = 1025;
     public const short FiscalReopenDenied = 1026;
     public const short FiscalReopenCancelled = 1027;
+    // Chart of Accounts (Phase 3.2A).
+    public const short AccountCreated = 1028;
+    public const short AccountUpdated = 1029;
+    public const short AccountCodeChanged = 1030;
+    public const short AccountMoved = 1031;
+    public const short AccountDeactivated = 1032;
+    public const short AccountReactivated = 1033;
+    public const short ChartSettingsChanged = 1034;
+    public const short ChartTemplateApplied = 1035;
 }
 
 /// <summary>Company profile values in their stored (normalised) form. Authoritative in the company database.</summary>

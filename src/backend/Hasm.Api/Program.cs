@@ -31,6 +31,7 @@ builder.Services.AddHasmCompanyConfiguration(builder.Configuration);
 builder.Services.AddHasmBranches();
 builder.Services.AddHasmWarehouses();
 builder.Services.AddHasmFiscalCalendar();
+builder.Services.AddHasmChartOfAccounts();
 
 var app = builder.Build();
 
@@ -62,6 +63,7 @@ app.MapCompanyConfigurationEndpoints();
 app.MapBranchEndpoints();
 app.MapWarehouseEndpoints();
 app.MapFiscalEndpoints();
+app.MapAccountEndpoints();
 
 app.Run();
 

@@ -11,6 +11,7 @@ import { isTauri } from "./platform";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
 import { FiscalYearsPage } from "./pages/FiscalYears";
+import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { CompanySelectPage } from "./pages/CompanySelect";
 import { CurrenciesPage } from "./pages/Currencies";
 import { HistoryPage } from "./pages/History";
@@ -49,6 +50,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/branches", anyScope: "company.branches.view", element: <BranchesPage /> },
   { path: "/company/warehouses", anyScope: "company.warehouses.view", element: <WarehousesPage /> },
   { path: "/company/fiscal-years", permission: "company.fiscalyears.view", element: <FiscalYearsPage /> },
+  { path: "/company/accounts", permission: "company.accounts.view", element: <ChartOfAccountsPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
   ...(DevPreviews ? [
     { path: "/dev/preview", element: <Suspense fallback={<Loading />}><DevPreviews.gallery /></Suspense> },
@@ -81,6 +83,7 @@ function Shell() {
       { id: "/company/branches", label: t("nav.branches"), permission: "company.branches.view", anyScope: true },
       { id: "/company/warehouses", label: t("nav.warehouse_mgmt"), permission: "company.warehouses.view", anyScope: true },
       { id: "/company/fiscal-years", label: t("nav.fiscal"), permission: "company.fiscalyears.view" },
+      { id: "/company/accounts", label: t("nav.accounts"), permission: "company.accounts.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.

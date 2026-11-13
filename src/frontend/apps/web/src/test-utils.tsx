@@ -70,6 +70,16 @@ export function fakeClient(overrides: Partial<Record<keyof ApiClient, unknown>> 
     approveFiscalReopen: vi.fn(),
     denyFiscalReopen: vi.fn(),
     cancelFiscalReopen: vi.fn(),
+    listAccounts: vi.fn().mockResolvedValue({ accounts: [], settings: { segmentWidth: 2, autoCodes: true, revision: 0, configured: false }, templates: [], usageChecksImplemented: false, can: { create: false, update: false, activate: false, recode: false, restructure: false, configure: false } }),
+    getAccount: vi.fn(),
+    createAccount: vi.fn(),
+    updateAccount: vi.fn(),
+    recodeAccount: vi.fn(),
+    moveAccount: vi.fn(),
+    deactivateAccount: vi.fn(),
+    activateAccount: vi.fn(),
+    putChartSettings: vi.fn(),
+    applyChartTemplate: vi.fn(),
   };
   return { ...base, ...overrides } as unknown as ApiClient;
 }
