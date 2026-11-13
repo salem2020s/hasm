@@ -28,6 +28,18 @@ public static class LedgerAuditEvents
     public const short ApprovalPolicyDeactivated = 1046;
     public const short ApprovalPolicyReactivated = 1047;
     public const short ApprovalDecisionRecorded = 1048;
+    public const short JournalCreated = 1049;
+    public const short JournalUpdated = 1050;
+    public const short JournalSubmitted = 1051;
+    public const short JournalReturnedToDraft = 1052;
+    public const short JournalCancelled = 1053;
+    public const short JournalApproved = 1054;
+    public const short JournalRejected = 1055;
+    public const short JournalPosted = 1056;
+    public const short JournalReversalDrafted = 1057;
+    public const short JournalAdjustingDrafted = 1058;
+    public const short JournalEventLogged = 1059;
+    public const short LedgerSettingsChanged = 1060;
 }
 
 /// <summary>

@@ -17,6 +17,10 @@ public static class LedgerSetup
         services.AddSingleton(sp => new CostCenterManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterService>()));
         services.AddSingleton(sp => new ApprovalPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new ApprovalPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ApprovalPolicyService>()));
+        services.AddSingleton(sp => new JournalService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new JournalManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<JournalService>()));
+        services.AddSingleton(sp => new LedgerSettingsService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new LedgerSettingsManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerSettingsService>()));
         return services;
     }
 }

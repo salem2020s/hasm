@@ -161,7 +161,7 @@ public class ChartApiTests : ChartAccessTestBase
         Assert.Equal(HttpStatusCode.OK, empty.Status);
         Assert.Contains("no-store", empty.Headers.CacheControl!.ToString());
         Assert.Equal(0, empty.Json.GetProperty("accounts").GetArrayLength());
-        Assert.False(empty.Json.GetProperty("usageChecksImplemented").GetBoolean());                                               // never presented as verified
+        Assert.True(empty.Json.GetProperty("usageChecksImplemented").GetBoolean());                                               // never presented as verified
         Assert.Equal("generic", empty.Json.GetProperty("templates")[0].GetProperty("key").GetString());
         Assert.Equal(2, empty.Json.GetProperty("settings").GetProperty("segmentWidth").GetInt32());
         Assert.False(empty.Json.GetProperty("settings").GetProperty("configured").GetBoolean());

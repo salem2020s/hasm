@@ -179,7 +179,7 @@ public class ExchangeRateDatabaseGuardTests : ExchangeRateTestBase
         await Enter("USD", "0.7100000000", "2026-01-01");
         Assert.Equal("P0001", await RawFails($"UPDATE {Xr.Table} SET {Xr.Rate} = 1"));
         Assert.Equal("P0001", await RawFails($"DELETE FROM {Xr.Table}"));
-        Assert.Equal("P0001", await RawFails($"TRUNCATE {Xr.Table}"));
+        Assert.Equal("0A000", await RawFails($"TRUNCATE {Xr.Table}"));   // referenced by journal lines: PostgreSQL itself refuses
         string Insert(string cur, string rate = "1", string date = "2026-01-01") =>
             $"INSERT INTO {Xr.Table} ({Xr.CurrencyCode}, {Xr.Rate}, {Xr.ValidFrom}, {Xr.EnteredAtUtc}, {Xr.EnteredBy}, {Xr.AuditStream}, {Xr.AuditSeq}) " +
             $"SELECT '{cur}', {rate}, '{date}', now(), gen_random_uuid(), {Xr.AuditStream}, {Xr.AuditSeq} FROM {Xr.Table} LIMIT 1";

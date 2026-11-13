@@ -355,3 +355,377 @@ CREATE FUNCTION f_7cdbb48f(p_doc varchar, p_id uuid, p_rev bigint, p_required in
         NOT EXISTS (SELECT 1 FROM t_3fa074e5 d WHERE d.c_9adee5c9 = p_doc AND d.c_175a20c9 = p_id AND d.c_f399e237 = p_rev AND d.c_3a789977 = 2)
         AND (SELECT count(DISTINCT d.c_942d312c) FROM t_3fa074e5 d WHERE d.c_9adee5c9 = p_doc AND d.c_175a20c9 = p_id AND d.c_f399e237 = p_rev AND d.c_3a789977 = 1) >= p_required)
 $$;
+
+-- ======================================================================================================================================
+-- Slice S5: journal entries and the posting engine
+-- ======================================================================================================================================
+-- Invariants enforced by PostgreSQL (the application is never the only guard):
+--   * a journal entry moves only along Draft(1) -> Pending approval(2) / Approved(3) / Cancelled(6); Pending -> Draft / Approved / Cancelled; Approved -> Draft / Posted(4) /
+--     Cancelled; Posted -> Reversed(5). Posted, Reversed and Cancelled entries never change otherwise, and nothing is ever deleted;
+--   * lines and allocations change only while the entry is a Draft; leaving Pending/Approved for Draft advances the document revision, so earlier approvals stop counting;
+--   * Pending/Approved/Posted entries are balanced EXACTLY in base currency (sum of base debits = sum of base credits > 0), with at least two lines;
+--   * posting requires: a number, the strictest matching approval policy satisfied for exactly this revision, an open (or authorized Soft Closed) fiscal period,
+--     active postable accounts honoring their currency policy, enabled currencies, the effective exchange rate (or a recorded authorized override) and active leaf cost centers;
+--   * a reversal mirrors every line of one posted entry (same accounts, currencies and rates, sides swapped) and the original becomes Reversed in the same transaction; because it only cancels earlier
+--     postings it is exempt from the active-state and currency-policy checks of accounts, branches, currencies and cost centers (never from the period, approval and balance checks);
+--   * a source key (automatic entries) is unique among non-cancelled entries, so a business event cannot be posted twice.
+
+-- Ledger settings (singleton, created on the first write): the account that absorbs base-currency rounding differences of multi-currency entries.
+CREATE TABLE t_d8f3ea94 (
+    c_1b115900 boolean NOT NULL DEFAULT true,
+    c_946b25e2 uuid NULL,
+    c_5d6ede30 bigint NOT NULL DEFAULT 1,
+    c_b500974f timestamptz NOT NULL,
+    CONSTRAINT k_e98861e6 PRIMARY KEY (c_1b115900),
+    CONSTRAINT k_050add4c CHECK (c_1b115900 AND c_5d6ede30 > 0),
+    CONSTRAINT k_15a8f12e FOREIGN KEY (c_946b25e2) REFERENCES t_11d107a9 (c_29a86598)
+);
+CREATE FUNCTION f_164bf90a() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP <> 'UPDATE' THEN RAISE EXCEPTION 'ledger settings cannot be deleted'; END IF;
+    IF NEW.c_5d6ede30 <> OLD.c_5d6ede30 + 1 THEN RAISE EXCEPTION 'revision must advance by one'; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_d545f73e BEFORE UPDATE OR DELETE ON t_d8f3ea94 FOR EACH ROW EXECUTE FUNCTION f_164bf90a();
+CREATE TRIGGER r_5beeca3c BEFORE TRUNCATE ON t_d8f3ea94 FOR EACH STATEMENT EXECUTE FUNCTION f_164bf90a();
+REVOKE ALL ON TABLE t_d8f3ea94 FROM PUBLIC;
+
+-- Journal entry header.
+CREATE TABLE t_f3158869 (
+    c_14f317c6 uuid NOT NULL DEFAULT gen_random_uuid(),
+    c_5337d7b9 varchar(80) NULL,
+    c_4e4c6448 smallint NOT NULL DEFAULT 1,
+    c_960dbf25 smallint NOT NULL DEFAULT 1,
+    c_41c437ea smallint NOT NULL DEFAULT 1,
+    c_9882fcfa varchar(100) NULL,
+    c_4cb99522 date NOT NULL,
+    c_a05818cd varchar(500) NULL,
+    c_59a672dc uuid NOT NULL,
+    c_429fabdf char(3) NOT NULL,
+    c_225ac5cd numeric(20,4) NOT NULL DEFAULT 0,
+    c_dfe6b7c5 bigint NOT NULL DEFAULT 1,
+    c_2a51947a uuid NOT NULL,
+    c_12ff75c5 timestamptz NOT NULL,
+    c_f0e21870 timestamptz NOT NULL,
+    c_41579554 uuid NULL,
+    c_7c479dc6 timestamptz NULL,
+    c_7e5c5517 uuid NULL,
+    c_84bcfb07 timestamptz NULL,
+    c_dc0c9baf uuid NULL,
+    c_e5cc9a38 boolean NOT NULL DEFAULT false,
+    c_e11acf50 uuid NULL,
+    c_f509b5de uuid NULL,
+    CONSTRAINT k_d9694054 PRIMARY KEY (c_14f317c6),
+    CONSTRAINT k_4677dcab FOREIGN KEY (c_59a672dc) REFERENCES t_8ba6c27d (c_358158d2),
+    CONSTRAINT k_0e8f8ebe FOREIGN KEY (c_429fabdf) REFERENCES t_451e91be (c_b6064cf1),
+    CONSTRAINT k_d69e8b1c FOREIGN KEY (c_dc0c9baf) REFERENCES t_ae996edc (c_d61cbb9c),
+    CONSTRAINT k_7c9d7b49 FOREIGN KEY (c_e11acf50) REFERENCES t_f3158869 (c_14f317c6),
+    CONSTRAINT k_ae9028b2 FOREIGN KEY (c_f509b5de) REFERENCES t_f3158869 (c_14f317c6),
+    CONSTRAINT k_eb8d49c6 CHECK (
+        c_4e4c6448 BETWEEN 1 AND 6 AND c_960dbf25 BETWEEN 1 AND 3 AND c_41c437ea IN (1, 2) AND c_dfe6b7c5 > 0 AND c_225ac5cd >= 0
+        AND (c_41c437ea = 1 OR c_9882fcfa IS NOT NULL)
+        AND (c_9882fcfa IS NULL OR char_length(btrim(c_9882fcfa)) BETWEEN 1 AND 100)
+        AND (c_a05818cd IS NULL OR char_length(btrim(c_a05818cd)) BETWEEN 1 AND 500)
+        AND ((c_960dbf25 = 2) = (c_e11acf50 IS NOT NULL)) AND ((c_960dbf25 = 3) = (c_f509b5de IS NOT NULL))
+        AND ((c_4e4c6448 IN (4, 5)) = (c_5337d7b9 IS NOT NULL))
+        AND ((c_4e4c6448 IN (4, 5)) = (c_7e5c5517 IS NOT NULL AND c_84bcfb07 IS NOT NULL AND c_dc0c9baf IS NOT NULL))
+        AND (c_e5cc9a38 = false OR c_4e4c6448 IN (4, 5))
+        AND c_4cb99522 BETWEEN DATE '2000-01-01' AND DATE '2100-12-31')
+);
+CREATE UNIQUE INDEX k_3218238f ON t_f3158869 (c_5337d7b9) WHERE c_5337d7b9 IS NOT NULL;
+CREATE UNIQUE INDEX k_f559dc87 ON t_f3158869 (c_9882fcfa) WHERE c_9882fcfa IS NOT NULL AND c_4e4c6448 <> 6;
+CREATE UNIQUE INDEX k_dc49cb81 ON t_f3158869 (c_e11acf50) WHERE c_e11acf50 IS NOT NULL AND c_4e4c6448 <> 6;
+CREATE INDEX k_ac858588 ON t_f3158869 (c_4cb99522, c_4e4c6448);
+CREATE INDEX k_4e35cc09 ON t_f3158869 (c_4e4c6448, c_59a672dc);
+
+-- Journal line. Amounts are in the line currency; the base amounts are the converted, rounded amounts and are fixed here at save time together with the applied rate
+-- (value, id and, for an authorized override, the reason), so posted amounts never depend on later rate changes.
+CREATE TABLE t_783c8d98 (
+    c_5ffa4fb6 uuid NOT NULL DEFAULT gen_random_uuid(),
+    c_39596059 uuid NOT NULL,
+    c_d6ebd9a0 integer NOT NULL,
+    c_e6bfb072 uuid NOT NULL,
+    c_31339018 varchar(500) NULL,
+    c_7a2c36af char(3) NOT NULL,
+    c_d0e33fe9 numeric(20,4) NOT NULL,
+    c_a1befb78 numeric(20,4) NOT NULL,
+    c_62c9d327 numeric(20,10) NOT NULL,
+    c_2fc5b902 bigint NULL,
+    c_7931ab9f varchar(200) NULL,
+    c_c560d388 numeric(20,4) NOT NULL,
+    c_03200b86 numeric(20,4) NOT NULL,
+    c_147d3982 uuid NOT NULL,
+    c_781e3043 boolean NOT NULL DEFAULT false,
+    c_b75ddd12 uuid NULL,
+    CONSTRAINT k_397c59a3 PRIMARY KEY (c_5ffa4fb6),
+    CONSTRAINT k_55c6626a FOREIGN KEY (c_39596059) REFERENCES t_f3158869 (c_14f317c6),
+    CONSTRAINT k_c91cc298 FOREIGN KEY (c_e6bfb072) REFERENCES t_11d107a9 (c_29a86598),
+    CONSTRAINT k_d98922ee FOREIGN KEY (c_7a2c36af) REFERENCES t_451e91be (c_b6064cf1),
+    CONSTRAINT k_be9adc08 FOREIGN KEY (c_2fc5b902) REFERENCES t_eba5b513 (c_e3463fc9),
+    CONSTRAINT k_0bd82149 FOREIGN KEY (c_147d3982) REFERENCES t_8ba6c27d (c_358158d2),
+    CONSTRAINT k_f475ca55 FOREIGN KEY (c_b75ddd12) REFERENCES t_783c8d98 (c_5ffa4fb6),
+    CONSTRAINT k_bac36c16 UNIQUE (c_39596059, c_d6ebd9a0),
+    CONSTRAINT k_433f8d1c CHECK (
+        c_d6ebd9a0 > 0 AND c_d0e33fe9 >= 0 AND c_a1befb78 >= 0 AND (c_d0e33fe9 = 0) <> (c_a1befb78 = 0)
+        AND c_c560d388 >= 0 AND c_03200b86 >= 0 AND (c_c560d388 = 0) <> (c_03200b86 = 0)
+        AND (c_d0e33fe9 > 0) = (c_c560d388 > 0) AND c_62c9d327 > 0
+        AND (c_2fc5b902 IS NULL OR c_7931ab9f IS NULL)
+        AND (c_7931ab9f IS NULL OR char_length(btrim(c_7931ab9f)) BETWEEN 5 AND 200)
+        AND (c_31339018 IS NULL OR char_length(btrim(c_31339018)) BETWEEN 1 AND 500))
+);
+CREATE INDEX k_76363ffa ON t_783c8d98 (c_e6bfb072);
+
+-- Cost-center allocation of a line: amounts in the line currency AND in base currency; each set sums EXACTLY to the line (checked at commit).
+CREATE TABLE t_58417560 (
+    c_55521d90 bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    c_0146172b uuid NOT NULL,
+    c_71376e84 uuid NOT NULL,
+    c_f811132c numeric(20,4) NOT NULL,
+    c_aacf931e numeric(20,4) NOT NULL,
+    CONSTRAINT k_7e2bee77 PRIMARY KEY (c_55521d90),
+    CONSTRAINT k_0de6a859 FOREIGN KEY (c_0146172b) REFERENCES t_783c8d98 (c_5ffa4fb6),
+    CONSTRAINT k_9226c56b FOREIGN KEY (c_71376e84) REFERENCES t_939ae118 (c_0770cd8f),
+    CONSTRAINT k_80d4e1cf UNIQUE (c_0146172b, c_71376e84),
+    CONSTRAINT k_0fbdfaad CHECK (c_f811132c > 0 AND c_aacf931e > 0)
+);
+
+-- Journal event log (append-only): every state change of an entry, with its audit event.
+-- event: 1 created, 2 updated, 3 submitted, 4 returned to draft, 5 cancelled, 6 approved (entry), 7 rejected, 8 posted, 9 reversal drafted, 10 adjusting drafted, 11 reversed (original), 12 decision recorded.
+CREATE TABLE t_b6491d4d (
+    c_f8942dfa bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    c_27d80de0 uuid NOT NULL,
+    c_e9c92b2a smallint NOT NULL,
+    c_9dd85d91 uuid NOT NULL,
+    c_8b0a36c1 timestamptz NOT NULL,
+    c_39a332da bigint NOT NULL,
+    c_a8566788 varchar(300) NULL,
+    c_4fae4433 varchar(48) NOT NULL,
+    c_90ad2c77 bigint NOT NULL,
+    CONSTRAINT k_d449a216 PRIMARY KEY (c_f8942dfa),
+    CONSTRAINT k_64dc210e FOREIGN KEY (c_27d80de0) REFERENCES t_f3158869 (c_14f317c6),
+    CONSTRAINT k_30d47901 UNIQUE (c_4fae4433, c_90ad2c77),
+    CONSTRAINT k_f04d6c2f FOREIGN KEY (c_4fae4433, c_90ad2c77) REFERENCES t_2db8cf1f (c_839d1168, c_689dc6c4),
+    CONSTRAINT k_2e340a81 CHECK (c_e9c92b2a BETWEEN 1 AND 12 AND c_39a332da > 0)
+);
+CREATE FUNCTION f_1669dc9b() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'the journal event log is append-only';
+END;
+$$;
+CREATE TRIGGER r_c48bbad2 BEFORE UPDATE OR DELETE ON t_b6491d4d FOR EACH ROW EXECUTE FUNCTION f_1669dc9b();
+CREATE TRIGGER r_ff06334f BEFORE TRUNCATE ON t_b6491d4d FOR EACH STATEMENT EXECUTE FUNCTION f_1669dc9b();
+
+-- ------------------------------------------------------------------------------------------------------------------ posting-grade validation of one entry
+-- Used for the transitions to Pending/Approved (p_post = false) and Posted (p_post = true). Lines cannot change once the entry leaves Draft, so the answer is stable.
+CREATE FUNCTION f_ba4c6a0d(e t_f3158869, p_post boolean) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_base char(3);
+    v_lines integer; v_deb numeric; v_cre numeric; v_req integer; v_orig t_f3158869; v_status smallint; v_period uuid; v_pstatus smallint;
+BEGIN
+    SELECT cc.c_6da45b20 INTO v_base FROM t_f5bc326a cc WHERE cc.c_5cdc1bc7 AND cc.c_702730ab;
+    IF v_base IS NULL OR v_base <> e.c_429fabdf THEN RAISE EXCEPTION 'the entry base currency is not the company base currency'; END IF;
+
+    SELECT count(*), COALESCE(sum(l.c_c560d388), 0), COALESCE(sum(l.c_03200b86), 0) INTO v_lines, v_deb, v_cre FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6;
+    IF v_lines < 2 THEN RAISE EXCEPTION 'a journal entry needs at least two lines'; END IF;
+    IF v_deb <> v_cre OR v_deb <= 0 THEN RAISE EXCEPTION 'the entry is not balanced in base currency'; END IF;
+    IF e.c_225ac5cd <> v_deb THEN RAISE EXCEPTION 'the recorded base total does not match the lines'; END IF;
+
+    -- Currencies enabled for the company; base-currency lines are exact; foreign lines carry a rate and a base amount consistent with their own fields.
+    IF e.c_960dbf25 <> 2 AND EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND NOT EXISTS (SELECT 1 FROM t_f5bc326a cc WHERE cc.c_6da45b20 = l.c_7a2c36af AND cc.c_702730ab)) THEN
+        RAISE EXCEPTION 'a line currency is not enabled for the company';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_7a2c36af = v_base
+               AND (l.c_62c9d327 <> 1 OR l.c_2fc5b902 IS NOT NULL OR l.c_7931ab9f IS NOT NULL OR l.c_c560d388 <> l.c_d0e33fe9 OR l.c_03200b86 <> l.c_a1befb78)) THEN
+        RAISE EXCEPTION 'a base-currency line must use rate 1 and equal base amounts';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_7a2c36af <> v_base AND l.c_2fc5b902 IS NULL AND l.c_7931ab9f IS NULL) THEN
+        RAISE EXCEPTION 'a foreign-currency line needs an effective rate or a recorded override reason';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_eba5b513 x ON x.c_e3463fc9 = l.c_2fc5b902 WHERE l.c_39596059 = e.c_14f317c6 AND (x.c_3fdf88c5 <> l.c_7a2c36af OR x.c_515a2107 <> l.c_62c9d327)) THEN
+        RAISE EXCEPTION 'the applied rate does not match its rate record';
+    END IF;
+
+    -- Accounts: active, postable (not a group), currency policy respected.
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 WHERE l.c_39596059 = e.c_14f317c6 AND ((NOT a.c_9761052f AND e.c_960dbf25 <> 2) OR a.c_57d34c8a)) THEN
+        RAISE EXCEPTION 'every account must be active and postable';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 WHERE l.c_39596059 = e.c_14f317c6
+               AND e.c_960dbf25 <> 2 AND ((a.c_dfab26fd = 1 AND l.c_7a2c36af <> v_base) OR (a.c_dfab26fd = 3 AND l.c_7a2c36af <> a.c_76c4ece0))) THEN
+        RAISE EXCEPTION 'a line currency violates the currency policy of its account';
+    END IF;
+    IF e.c_960dbf25 <> 2 AND EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_8ba6c27d b ON b.c_358158d2 = l.c_147d3982 WHERE l.c_39596059 = e.c_14f317c6 AND NOT b.c_6605fbbc) THEN
+        RAISE EXCEPTION 'every line branch must be active';
+    END IF;
+    -- Allocations: complete sums (also checked at commit) and only active leaf cost centers.
+    IF EXISTS (SELECT 1 FROM t_58417560 al JOIN t_783c8d98 l ON l.c_5ffa4fb6 = al.c_0146172b JOIN t_939ae118 c ON c.c_0770cd8f = al.c_71376e84 WHERE l.c_39596059 = e.c_14f317c6 AND (c.c_85d71877 OR (NOT c.c_8a8af184 AND e.c_960dbf25 <> 2))) THEN
+        RAISE EXCEPTION 'allocations may only target active leaf cost centers';
+    END IF;
+
+    -- A reversal mirrors exactly the lines of one posted entry; an adjusting entry references a posted one.
+    IF e.c_960dbf25 = 2 THEN
+        SELECT * INTO v_orig FROM t_f3158869 WHERE c_14f317c6 = e.c_e11acf50;
+        IF v_orig.c_4e4c6448 NOT IN (4, 5) THEN RAISE EXCEPTION 'only a posted entry can be reversed'; END IF;
+        IF (SELECT count(*) FROM t_783c8d98 WHERE c_39596059 = v_orig.c_14f317c6) <> v_lines THEN RAISE EXCEPTION 'a reversal must mirror every line of the original'; END IF;
+        IF EXISTS (SELECT 1 FROM t_783c8d98 l LEFT JOIN t_783c8d98 o ON o.c_5ffa4fb6 = l.c_b75ddd12 AND o.c_39596059 = v_orig.c_14f317c6
+                   WHERE l.c_39596059 = e.c_14f317c6 AND (o.c_5ffa4fb6 IS NULL OR o.c_e6bfb072 <> l.c_e6bfb072 OR o.c_7a2c36af <> l.c_7a2c36af OR o.c_62c9d327 <> l.c_62c9d327
+                       OR o.c_2fc5b902 IS DISTINCT FROM l.c_2fc5b902 OR o.c_d0e33fe9 <> l.c_a1befb78 OR o.c_a1befb78 <> l.c_d0e33fe9
+                       OR o.c_c560d388 <> l.c_03200b86 OR o.c_03200b86 <> l.c_c560d388)) THEN
+            RAISE EXCEPTION 'a reversal line must mirror its original line';
+        END IF;
+        IF (SELECT count(DISTINCT c_b75ddd12) FROM t_783c8d98 WHERE c_39596059 = e.c_14f317c6) <> v_lines THEN RAISE EXCEPTION 'every original line must be reversed exactly once'; END IF;
+    ELSE
+        IF EXISTS (SELECT 1 FROM t_783c8d98 WHERE c_39596059 = e.c_14f317c6 AND c_b75ddd12 IS NOT NULL) THEN RAISE EXCEPTION 'only a reversal may reference original lines'; END IF;
+        IF e.c_960dbf25 = 3 THEN
+            SELECT c_4e4c6448 INTO v_status FROM t_f3158869 WHERE c_14f317c6 = e.c_f509b5de;
+            IF v_status NOT IN (4, 5) THEN RAISE EXCEPTION 'an adjusting entry must reference a posted entry'; END IF;
+        END IF;
+        -- The applied rate must be the CURRENT effective rate for the entry date (a newer rate entered since the draft was saved forces a refresh) unless it is a recorded override.
+        IF p_post AND EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_2fc5b902 IS NOT NULL AND l.c_2fc5b902 IS DISTINCT FROM f_56eae1de(l.c_7a2c36af, e.c_4cb99522)) THEN
+            RAISE EXCEPTION 'the applied exchange rate is no longer the effective rate';
+        END IF;
+    END IF;
+
+    IF p_post THEN
+        v_req := f_660e4c73('journal_entry', e.c_41c437ea, e.c_59a672dc, e.c_225ac5cd);
+        IF NOT f_7cdbb48f('journal_entry', e.c_14f317c6, e.c_dfe6b7c5, v_req) THEN RAISE EXCEPTION 'the required approvals for this revision are missing'; END IF;
+        SELECT fp.c_d61cbb9c, fp.c_0a0b7f19 INTO v_period, v_pstatus FROM t_ae996edc fp WHERE e.c_4cb99522 BETWEEN fp.c_8299fb3d AND fp.c_c0322bcf FOR SHARE;
+        IF v_period IS NULL THEN RAISE EXCEPTION 'the entry date is outside every fiscal period'; END IF;
+        IF v_pstatus = 3 THEN RAISE EXCEPTION 'the fiscal period is final closed'; END IF;
+        IF v_pstatus = 2 AND NOT e.c_e5cc9a38 THEN RAISE EXCEPTION 'the fiscal period is soft closed'; END IF;
+        IF v_pstatus = 1 AND e.c_e5cc9a38 THEN RAISE EXCEPTION 'the soft-closed flag is only valid for a soft-closed period'; END IF;
+        IF e.c_dc0c9baf IS DISTINCT FROM v_period THEN RAISE EXCEPTION 'the recorded fiscal period is not the period of the entry date'; END IF;
+    END IF;
+END;
+$$;
+
+-- Header guard: transitions, immutability, revision rules and the posting checks.
+CREATE FUNCTION f_2dc99411() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP <> 'UPDATE' THEN RAISE EXCEPTION 'journal entries cannot be deleted'; END IF;
+    IF NEW.c_14f317c6 IS DISTINCT FROM OLD.c_14f317c6 OR NEW.c_2a51947a IS DISTINCT FROM OLD.c_2a51947a OR NEW.c_12ff75c5 IS DISTINCT FROM OLD.c_12ff75c5
+       OR NEW.c_960dbf25 IS DISTINCT FROM OLD.c_960dbf25 OR NEW.c_41c437ea IS DISTINCT FROM OLD.c_41c437ea OR NEW.c_9882fcfa IS DISTINCT FROM OLD.c_9882fcfa
+       OR NEW.c_429fabdf IS DISTINCT FROM OLD.c_429fabdf OR NEW.c_e11acf50 IS DISTINCT FROM OLD.c_e11acf50 OR NEW.c_f509b5de IS DISTINCT FROM OLD.c_f509b5de THEN
+        RAISE EXCEPTION 'the identity, provenance and references of a journal entry are immutable';
+    END IF;
+    IF OLD.c_4e4c6448 = 4 AND NEW.c_4e4c6448 = 5 THEN
+        -- A posted entry only becomes Reversed; nothing else about it changes.
+        IF NEW.c_5337d7b9 IS DISTINCT FROM OLD.c_5337d7b9 OR NEW.c_4cb99522 IS DISTINCT FROM OLD.c_4cb99522 OR NEW.c_a05818cd IS DISTINCT FROM OLD.c_a05818cd
+           OR NEW.c_59a672dc IS DISTINCT FROM OLD.c_59a672dc OR NEW.c_225ac5cd IS DISTINCT FROM OLD.c_225ac5cd OR NEW.c_dfe6b7c5 IS DISTINCT FROM OLD.c_dfe6b7c5
+           OR NEW.c_7e5c5517 IS DISTINCT FROM OLD.c_7e5c5517 OR NEW.c_84bcfb07 IS DISTINCT FROM OLD.c_84bcfb07 OR NEW.c_dc0c9baf IS DISTINCT FROM OLD.c_dc0c9baf
+           OR NEW.c_e5cc9a38 IS DISTINCT FROM OLD.c_e5cc9a38 OR NEW.c_41579554 IS DISTINCT FROM OLD.c_41579554 OR NEW.c_7c479dc6 IS DISTINCT FROM OLD.c_7c479dc6 THEN
+            RAISE EXCEPTION 'a posted journal entry is immutable';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF OLD.c_4e4c6448 IN (4, 5, 6) THEN RAISE EXCEPTION 'a posted, reversed or cancelled journal entry is immutable'; END IF;
+    IF NOT ((OLD.c_4e4c6448 = 1 AND NEW.c_4e4c6448 IN (1, 2, 3, 6)) OR (OLD.c_4e4c6448 = 2 AND NEW.c_4e4c6448 IN (1, 3, 6)) OR (OLD.c_4e4c6448 = 3 AND NEW.c_4e4c6448 IN (1, 4, 6))) THEN
+        RAISE EXCEPTION 'this journal entry state change is not allowed';
+    END IF;
+    -- Revision: +1 on every Draft content change and on every return to Draft (so earlier approvals no longer count); unchanged otherwise.
+    IF NEW.c_dfe6b7c5 <> OLD.c_dfe6b7c5 THEN
+        IF NEW.c_dfe6b7c5 <> OLD.c_dfe6b7c5 + 1 OR NEW.c_4e4c6448 <> 1 THEN RAISE EXCEPTION 'the revision may only advance by one on a draft'; END IF;
+    ELSIF OLD.c_4e4c6448 IN (2, 3) AND NEW.c_4e4c6448 = 1 THEN
+        RAISE EXCEPTION 'returning an entry to draft must advance its revision';
+    END IF;
+    IF OLD.c_4e4c6448 IN (2, 3) AND NEW.c_4e4c6448 IN (2, 3, 4, 6) AND (NEW.c_4cb99522 IS DISTINCT FROM OLD.c_4cb99522 OR NEW.c_a05818cd IS DISTINCT FROM OLD.c_a05818cd
+       OR NEW.c_59a672dc IS DISTINCT FROM OLD.c_59a672dc OR NEW.c_225ac5cd IS DISTINCT FROM OLD.c_225ac5cd) THEN
+        RAISE EXCEPTION 'the content of a submitted journal entry cannot change';
+    END IF;
+    IF NEW.c_4e4c6448 <> 4 AND (NEW.c_5337d7b9 IS NOT NULL OR NEW.c_7e5c5517 IS NOT NULL OR NEW.c_dc0c9baf IS NOT NULL OR NEW.c_e5cc9a38) THEN
+        RAISE EXCEPTION 'posting fields are set only when the entry is posted';
+    END IF;
+    IF NEW.c_4e4c6448 IN (2, 3) AND OLD.c_4e4c6448 = 1 THEN
+        IF NEW.c_41579554 IS NULL OR NEW.c_7c479dc6 IS NULL THEN RAISE EXCEPTION 'a submission records its submitter'; END IF;
+    END IF;
+    IF NEW.c_4e4c6448 IN (2, 3, 4) THEN PERFORM f_ba4c6a0d(NEW, false); END IF;
+    IF NEW.c_4e4c6448 = 3 THEN
+        IF NOT f_7cdbb48f('journal_entry', NEW.c_14f317c6, NEW.c_dfe6b7c5, f_660e4c73('journal_entry', NEW.c_41c437ea, NEW.c_59a672dc, NEW.c_225ac5cd)) THEN
+            RAISE EXCEPTION 'the required approvals for this revision are missing';
+        END IF;
+    END IF;
+    IF NEW.c_4e4c6448 = 4 THEN
+        IF NEW.c_5337d7b9 IS NULL THEN RAISE EXCEPTION 'a posted entry needs its official number'; END IF;
+        PERFORM f_ba4c6a0d(NEW, true);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_bb0333e0 BEFORE UPDATE OR DELETE ON t_f3158869 FOR EACH ROW EXECUTE FUNCTION f_2dc99411();
+CREATE TRIGGER r_54fc2d18 BEFORE TRUNCATE ON t_f3158869 FOR EACH STATEMENT EXECUTE FUNCTION f_2dc99411();
+
+-- At commit: a posted reversal requires its original to be Reversed, and a Reversed entry requires its posted reversal.
+CREATE FUNCTION f_47233bbd() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.c_4e4c6448 = 4 AND NEW.c_960dbf25 = 2 THEN
+        IF NOT EXISTS (SELECT 1 FROM t_f3158869 o WHERE o.c_14f317c6 = NEW.c_e11acf50 AND o.c_4e4c6448 = 5) THEN RAISE EXCEPTION 'posting a reversal marks the original entry as reversed'; END IF;
+    END IF;
+    IF NEW.c_4e4c6448 = 5 THEN
+        IF NOT EXISTS (SELECT 1 FROM t_f3158869 r WHERE r.c_e11acf50 = NEW.c_14f317c6 AND r.c_4e4c6448 = 4) THEN RAISE EXCEPTION 'an entry is reversed only by a posted reversal'; END IF;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER r_fa0e9ea3 AFTER INSERT OR UPDATE ON t_f3158869 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION f_47233bbd();
+REVOKE ALL ON TABLE t_f3158869 FROM PUBLIC;
+
+-- Lines: only while the parent entry is a Draft; never deleted outside a draft edit; identity of the parent never changes.
+CREATE FUNCTION f_f9323807() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_status smallint; v_entry uuid;
+BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.c_39596059 IS DISTINCT FROM OLD.c_39596059 THEN RAISE EXCEPTION 'a journal line cannot move to another entry'; END IF;
+    v_entry := CASE WHEN TG_OP = 'DELETE' THEN OLD.c_39596059 ELSE NEW.c_39596059 END;
+    SELECT c_4e4c6448 INTO v_status FROM t_f3158869 WHERE c_14f317c6 = v_entry;
+    IF v_status IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'journal lines can only change while the entry is a draft'; END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+CREATE TRIGGER r_9f0254e3 BEFORE INSERT OR UPDATE OR DELETE ON t_783c8d98 FOR EACH ROW EXECUTE FUNCTION f_f9323807();
+CREATE FUNCTION f_ad8bda4d() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'journal lines cannot be truncated';
+END;
+$$;
+CREATE TRIGGER r_bab00893 BEFORE TRUNCATE ON t_783c8d98 FOR EACH STATEMENT EXECUTE FUNCTION f_ad8bda4d();
+CREATE TRIGGER r_f53a91f3 BEFORE TRUNCATE ON t_58417560 FOR EACH STATEMENT EXECUTE FUNCTION f_ad8bda4d();
+REVOKE ALL ON TABLE t_783c8d98 FROM PUBLIC;
+
+CREATE FUNCTION f_b6ad8e29() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_status smallint; v_line uuid;
+BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.c_0146172b IS DISTINCT FROM OLD.c_0146172b THEN RAISE EXCEPTION 'an allocation cannot move to another line'; END IF;
+    v_line := CASE WHEN TG_OP = 'DELETE' THEN OLD.c_0146172b ELSE NEW.c_0146172b END;
+    SELECT e.c_4e4c6448 INTO v_status FROM t_783c8d98 l JOIN t_f3158869 e ON e.c_14f317c6 = l.c_39596059 WHERE l.c_5ffa4fb6 = v_line;
+    IF v_status IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'allocations can only change while the entry is a draft'; END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+CREATE TRIGGER r_0c17708a BEFORE INSERT OR UPDATE OR DELETE ON t_58417560 FOR EACH ROW EXECUTE FUNCTION f_b6ad8e29();
+
+-- At commit: the allocations of a line sum EXACTLY to the line amount and to the line base amount (a line without allocations is allowed).
+CREATE FUNCTION f_b79be4c8() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_line uuid; n integer; s numeric; sb numeric; l t_783c8d98;
+BEGIN
+    v_line := CASE WHEN TG_OP = 'DELETE' THEN OLD.c_0146172b ELSE NEW.c_0146172b END;
+    SELECT * INTO l FROM t_783c8d98 WHERE c_5ffa4fb6 = v_line;
+    IF NOT FOUND THEN RETURN NULL; END IF;
+    SELECT count(*), COALESCE(sum(c_f811132c), 0), COALESCE(sum(c_aacf931e), 0) INTO n, s, sb FROM t_58417560 WHERE c_0146172b = v_line;
+    IF n > 0 AND (s <> l.c_d0e33fe9 + l.c_a1befb78 OR sb <> l.c_c560d388 + l.c_03200b86) THEN RAISE EXCEPTION 'the allocations of a line must sum exactly to the line amount'; END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER r_787dfce2 AFTER INSERT OR UPDATE OR DELETE ON t_58417560 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION f_b79be4c8();
+CREATE FUNCTION f_81b496df() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM t_58417560 a WHERE a.c_0146172b = NEW.c_5ffa4fb6 GROUP BY a.c_0146172b
+               HAVING sum(a.c_f811132c) <> NEW.c_d0e33fe9 + NEW.c_a1befb78 OR sum(a.c_aacf931e) <> NEW.c_c560d388 + NEW.c_03200b86) THEN
+        RAISE EXCEPTION 'the allocations of a line must sum exactly to the line amount';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER r_aee5d9ca AFTER UPDATE ON t_783c8d98 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    WHEN (OLD.c_d0e33fe9 IS DISTINCT FROM NEW.c_d0e33fe9 OR OLD.c_a1befb78 IS DISTINCT FROM NEW.c_a1befb78 OR OLD.c_c560d388 IS DISTINCT FROM NEW.c_c560d388 OR OLD.c_03200b86 IS DISTINCT FROM NEW.c_03200b86)
+    EXECUTE FUNCTION f_81b496df();
+REVOKE ALL ON TABLE t_58417560 FROM PUBLIC;
+REVOKE ALL ON TABLE t_b6491d4d FROM PUBLIC;

@@ -210,7 +210,7 @@ public class CostCenterConstraintTests : CostCenterTestBase
         await PrepareCenters();
         await New("A");
         Assert.Equal("P0001", await RawFails($"DELETE FROM {Cc.Table}"));
-        Assert.Equal("P0001", await RawFails($"TRUNCATE {Cc.Table}"));
+        Assert.Equal("0A000", await RawFails($"TRUNCATE {Cc.Table}"));   // referenced by journal allocations: PostgreSQL itself refuses
         Assert.Equal("P0001", await RawFails($"UPDATE {Cc.Table} SET {Cc.Id} = gen_random_uuid(), {Cc.Revision} = {Cc.Revision} + 1"));
         Assert.Equal("P0001", await RawFails($"UPDATE {Cc.Table} SET {Cc.CreatedAtUtc} = now() + interval '1 day', {Cc.Revision} = {Cc.Revision} + 1"));
         Assert.Equal("P0001", await RawFails($"UPDATE {Cc.Table} SET {Cc.NameEn} = 'z'"));                                              // revision must advance

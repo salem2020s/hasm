@@ -226,7 +226,7 @@ public class FiscalConstraintTests : FiscalTestBase
         Assert.Equal(Raised, await Fails($"DELETE FROM {Fy.Table}"));
         Assert.Equal(Raised, await Fails($"DELETE FROM {Fp.Table}"));
         Assert.Equal(Raised, await Fails($"TRUNCATE {Fy.Table} CASCADE"));
-        Assert.Equal(Raised, await Fails($"TRUNCATE {Fp.Table}"));
+        Assert.Equal("0A000", await Fails($"TRUNCATE {Fp.Table}"));   // referenced by journal entries: PostgreSQL itself refuses
         Assert.Equal(1L, await YearRows());
         Assert.Equal(1L, await Count(Company, Fh.Table));
         Assert.Equal(Raised, await Fails($"UPDATE {Fh.Table} SET {Fh.Revision} = 9"));
