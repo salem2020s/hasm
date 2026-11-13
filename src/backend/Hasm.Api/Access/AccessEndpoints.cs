@@ -1,6 +1,7 @@
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Http.Metadata;
@@ -28,7 +29,8 @@ public static class AccessSetup
             },
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<PermissionCatalog>(),
-            sp.GetRequiredService<AuditTrail>()));
+            sp.GetRequiredService<AuditTrail>(),
+            sp.GetRequiredService<CompanyBranchScopeValidator>()));   // branch scope is confirmed against the real branches (and their activation epochs)
         return services;
     }
 }

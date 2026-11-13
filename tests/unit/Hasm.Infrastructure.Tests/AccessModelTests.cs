@@ -43,8 +43,8 @@ public class AccessModelTests
     [Fact]
     public void Migration_seed_equals_the_code_defined_preset_roles()
     {
-        // The preset roles are seeded by migration 0004 and extended by the versioned migration 0006 (company administration permissions).
-        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6).Select(s => s.Sql));
+        // The preset roles are seeded by migration 0004 and extended by the versioned migrations 0006 (company administration) and 0007 (branches).
+        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6 or 7).Select(s => s.Sql));
         var seeded = Regex.Matches(sql, @"^\s*\('(?<id>5c1b0f6e-[0-9a-f-]+)', '(?<perm>[a-z.]+)'\)", RegexOptions.Multiline)
             .GroupBy(m => Guid.Parse(m.Groups["id"].Value))
             .ToDictionary(g => g.Key, g => g.Select(m => m.Groups["perm"].Value).Order().ToArray());

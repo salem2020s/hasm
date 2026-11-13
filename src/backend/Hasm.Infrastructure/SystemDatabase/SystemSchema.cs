@@ -171,6 +171,10 @@ public static class SystemSchema
         public const string CheckRevocation = "k_77a2fff4";
         public const string UniqueActive = "k_faf323d8";
         public const string IndexMember = "k_5f919f68";
+        public const string ScopeEpoch = "c_f18dd4c7";
+        public const string CheckScopeEpoch = "k_57b77fbb";
+        public const string EpochGuardFunction = "f_1f99d034";
+        public const string EpochGuardTrigger = "r_1f9a28a4";
         public const string GuardFunction = "f_69804ba6";
         public const string GuardTrigger = "r_3bdbbc04";
     }
@@ -354,6 +358,10 @@ public static class SystemSchema
         ["RoleAssignment.CheckRevocation"] = RoleAssignment.CheckRevocation,
         ["RoleAssignment.UniqueActive"] = RoleAssignment.UniqueActive,
         ["RoleAssignment.IndexMember"] = RoleAssignment.IndexMember,
+        ["RoleAssignment.ScopeEpoch"] = RoleAssignment.ScopeEpoch,
+        ["RoleAssignment.CheckScopeEpoch"] = RoleAssignment.CheckScopeEpoch,
+        ["RoleAssignment.EpochGuardFunction"] = RoleAssignment.EpochGuardFunction,
+        ["RoleAssignment.EpochGuardTrigger"] = RoleAssignment.EpochGuardTrigger,
         ["RoleAssignment.GuardFunction"] = RoleAssignment.GuardFunction,
         ["RoleAssignment.GuardTrigger"] = RoleAssignment.GuardTrigger,
         ["AccessAudit.Table"] = AccessAudit.Table,

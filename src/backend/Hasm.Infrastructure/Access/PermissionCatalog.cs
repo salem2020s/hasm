@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -85,6 +85,10 @@ public sealed partial class PermissionCatalog
         new("company.settings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         new("company.currencies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         new("company.config", ScopeKind.Company, [PermissionAction.View]),
+        // Branch management (Phase 3.1B, system migration 0007). Viewing and editing a branch are exercisable through a branch-scoped assignment
+        // (only for that branch); creating, activating/deactivating and designating the main branch change the company structure and are company-wide only.
+        new("company.branches", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Update]),
+        new("company.branchstructure", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate, PermissionAction.Designate]),
     ]);
 
     public static class Codes
@@ -107,6 +111,11 @@ public sealed partial class PermissionCatalog
         public const string CurrenciesView = "company.currencies.view";
         public const string CurrenciesUpdate = "company.currencies.update";
         public const string ConfigView = "company.config.view";
+        public const string BranchesView = "company.branches.view";
+        public const string BranchesUpdate = "company.branches.update";
+        public const string BranchCreate = "company.branchstructure.create";
+        public const string BranchActivate = "company.branchstructure.activate";
+        public const string BranchDesignate = "company.branchstructure.designate";
     }
 
     public Permission Get(string code) =>
@@ -199,7 +208,17 @@ public sealed class EffectivePermissions(PermissionCatalog catalog, IReadOnlyLis
 public interface IScopeTargetValidator
 {
     Task<bool> ExistsAsync(Guid companyId, ScopeKind kind, Guid id, CancellationToken ct);
+
+    /// <summary>
+    /// Existence, activity and activation epoch of the target (null = not found or not verifiable: fail closed). The default derives a constant
+    /// state from <see cref="ExistsAsync"/> for validators that know no epochs (tests); the production branch validator reads the real epoch.
+    /// </summary>
+    async Task<ScopeTargetState?> GetStateAsync(Guid companyId, ScopeKind kind, Guid id, CancellationToken ct) =>
+        await ExistsAsync(companyId, kind, id, ct) ? new ScopeTargetState(true, 1) : null;
 }
+
+/// <summary>The current state of a branch as far as access control is concerned. <paramref name="Epoch"/> is its activation epoch.</summary>
+public sealed record ScopeTargetState(bool Active, long Epoch);
 
 public sealed class DenyAllScopeTargetValidator : IScopeTargetValidator
 {

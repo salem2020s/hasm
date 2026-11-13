@@ -340,7 +340,7 @@ public class BranchServiceTests : BranchTestBase
         Assert.Equal(2, stale.CurrentRevision);
         Assert.Equal("A", (await Branches().GetAsync(Company.Id, b.Id))!.Data.NameEn);
         Assert.Equal(ConfigStatus.PreconditionFailed, (await Branches().DeactivateAsync(Admin.Id, Company.Id, b.Id, 1)).Status);
-        Assert.Equal(ConfigStatus.Conflict, (await Branches().UpdateAsync(Admin.Id, Company.Id, Guid.NewGuid(), 1, NewBranch("ZZ"))).Status);
+        Assert.Equal(ConfigStatus.NotFound, (await Branches().UpdateAsync(Admin.Id, Company.Id, Guid.NewGuid(), 1, NewBranch("ZZ"))).Status);
     }
 
     [PostgresFact]
@@ -567,7 +567,7 @@ public class BranchServiceTests : BranchTestBase
         var mine = await Make("MINE");
         Assert.Equal(1L, await Count(other, Br.Table));
         Assert.Null(await Branches(company: other).GetAsync(other.Id, mine.Id));
-        Assert.Equal(ConfigStatus.Conflict, (await Branches(company: other).UpdateAsync(Admin.Id, other.Id, mine.Id, 1, NewBranch("MINE", en: "x"))).Status);
+        Assert.Equal(ConfigStatus.NotFound, (await Branches(company: other).UpdateAsync(Admin.Id, other.Id, mine.Id, 1, NewBranch("MINE", en: "x"))).Status);
         Assert.Equal(1L, await Count(other, Br.Table));
         Assert.Equal(0L, await Count(other, Audit_.Table));
     }

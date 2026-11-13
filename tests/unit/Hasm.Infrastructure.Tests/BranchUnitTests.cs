@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.SystemDatabase;
@@ -132,5 +133,80 @@ public class BranchUnitTests
         Assert.Equal(names.Count, names.Distinct().Count());
         Assert.Equal(CompanySchema.Map.Count, CompanySchema.Map.Values.Distinct().Count());
         Assert.All(names, n => Assert.Matches("^[tcfkr]_[0-9a-f]{8}$", n));
+    }
+}
+
+/// <summary>Phase 3.1B Checkpoint C: branch permissions, scope rules and the shape of system migration 0007 (no database needed).</summary>
+public class BranchAccessUnitTests
+{
+    private static readonly Guid BranchA = Guid.NewGuid();
+    private static readonly Guid BranchB = Guid.NewGuid();
+    private static EffectivePermissions Eff(params GrantedRole[] grants) => new(PermissionCatalog.Default, grants);
+    private static GrantedRole Grant(ScopeKind scope, Guid? id, params string[] codes) => new(Guid.NewGuid(), Guid.NewGuid(), scope, id, codes.ToHashSet());
+
+    [Fact]
+    public void Branch_permissions_are_in_the_catalog_with_the_approved_granularity()
+    {
+        foreach (var c in new[] { "company.branches.view", "company.branches.update" })
+        { Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c); Assert.Equal(ScopeKind.Branch, p.Resource.Scope); }
+        foreach (var c in new[] { "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate" })
+        { Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c); Assert.Equal(ScopeKind.Company, p.Resource.Scope); }
+    }
+
+    [Fact]
+    public void A_branch_grant_reaches_only_its_own_branch_and_never_the_structure_permissions()
+    {
+        var eff = Eff(Grant(ScopeKind.Branch, BranchA, "company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate"));
+        Assert.True(eff.Has("company.branches.view", ScopeTarget.Branch(BranchA)));
+        Assert.True(eff.Has("company.branches.update", ScopeTarget.Branch(BranchA)));
+        Assert.False(eff.Has("company.branches.view", ScopeTarget.Branch(BranchB)));
+        Assert.False(eff.Has("company.branches.view", ScopeTarget.Company));                    // no automatic inheritance to company level
+        Assert.False(eff.Has("company.branchstructure.create", ScopeTarget.Company));           // company-level resource: inert under a branch assignment
+        Assert.False(eff.Has("company.branchstructure.activate", ScopeTarget.Company));
+        Assert.False(eff.Has("company.branchstructure.activate", ScopeTarget.Branch(BranchA)));
+    }
+
+    [Fact]
+    public void A_company_wide_grant_covers_every_branch()
+    {
+        var eff = Eff(Grant(ScopeKind.Company, null, "company.branches.view", "company.branchstructure.designate"));
+        Assert.True(eff.Has("company.branches.view", ScopeTarget.Branch(BranchB)));
+        Assert.True(eff.Has("company.branchstructure.designate", ScopeTarget.Company));
+        Assert.False(eff.Has("company.branches.update", ScopeTarget.Branch(BranchB)));         // only what the role contains
+    }
+
+    [Fact]
+    public void Only_the_company_administrator_preset_holds_the_branch_permissions()
+    {
+        var all = new[] { "company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate" };
+        Assert.True(all.All(PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Contains));
+        Assert.DoesNotContain(PresetRoles.Definitions[PresetRoles.AccessManagerId].Permissions, p => p.StartsWith("company.branch"));
+        Assert.DoesNotContain(PresetRoles.Definitions[PresetRoles.AccessAuditorId].Permissions, p => p.StartsWith("company.branch"));
+    }
+
+    [Fact]
+    public void The_default_scope_validator_knows_no_branches_and_fails_closed()
+    {
+        Assert.Null(((IScopeTargetValidator)DenyAllScopeTargetValidator.Instance).GetStateAsync(Guid.NewGuid(), ScopeKind.Branch, BranchA, default).Result);
+        IScopeTargetValidator known = new Known();
+        Assert.Equal(new ScopeTargetState(true, 1), known.GetStateAsync(Guid.NewGuid(), ScopeKind.Branch, BranchA, default).Result);   // validators without epochs: constant epoch 1
+    }
+
+    private sealed class Known : IScopeTargetValidator
+    {
+        public Task<bool> ExistsAsync(Guid companyId, ScopeKind kind, Guid id, CancellationToken ct) => Task.FromResult(true);
+    }
+
+    [Fact]
+    public void System_migration_0007_adds_the_epoch_and_the_permissions_without_destruction()
+    {
+        var sql = Regex.Replace(MigrationScript.LoadEmbedded().Single(s => s.Version == 7).Sql, "--[^\n]*", "");
+        Assert.Contains($"ADD COLUMN {SystemSchema.RoleAssignment.ScopeEpoch} bigint NULL", sql);
+        Assert.Contains("branch-scoped role assignments already exist", sql);                                   // refuses to run over existing branch grants
+        Assert.Contains("the activation epoch of an assignment is immutable", sql);
+        Assert.Contains("ENABLE TRIGGER", sql);                                                                  // the preset-role guard is restored
+        foreach (var c in new[] { "company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate" })
+            Assert.Contains($"'{c}'", sql);
+        Assert.DoesNotContain("GRANT", sql);
     }
 }

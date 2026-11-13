@@ -60,9 +60,9 @@ public static class CompanyConfigurationEndpoints
         g.MapGet("/entitlements", GetEntitlements);
     }
 
-    private static IResult Error(int status, string code) => AccessEndpoints.Error(status, code);
+    internal static IResult Error(int status, string code) => AccessEndpoints.Error(status, code);
 
-    private static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null)
+    internal static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null)
     {
         switch (r.Status)
         {
@@ -76,12 +76,13 @@ public static class CompanyConfigurationEndpoints
             case ConfigStatus.PreconditionRequired: return Error(428, "precondition_required");
             case ConfigStatus.PreconditionFailed: return Results.Json(new { error = "revision_conflict", currentRevision = r.CurrentRevision }, statusCode: 412);
             case ConfigStatus.EntitlementDenied: return Error(403, "entitlement_denied");
+            case ConfigStatus.NotFound: return Error(404, r.Code ?? "not_found");
             default: return Error(409, r.Code ?? "conflict");
         }
     }
 
     /// <summary>JSON response carrying the strong revision as <c>ETag</c>.</summary>
-    private sealed class EtagResult(long revision, object body) : IResult
+    internal sealed class EtagResult(long revision, object body) : IResult
     {
         public Task ExecuteAsync(HttpContext httpContext)
         {
@@ -91,7 +92,7 @@ public static class CompanyConfigurationEndpoints
     }
 
     /// <summary>Parses <c>If-Match: "n"</c>. Absent = null (the service answers 428); a malformed value is a client error.</summary>
-    private static bool TryReadIfMatch(HttpContext http, out long? revision)
+    internal static bool TryReadIfMatch(HttpContext http, out long? revision)
     {
         revision = null;
         var raw = http.Request.Headers.IfMatch.ToString().Trim();

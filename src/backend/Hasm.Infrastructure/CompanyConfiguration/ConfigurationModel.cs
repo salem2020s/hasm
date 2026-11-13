@@ -1,6 +1,6 @@
 namespace Hasm.Infrastructure.CompanyConfiguration;
 
-public enum ConfigStatus { Ok, Forbidden, Invalid, PreconditionRequired, PreconditionFailed, EntitlementDenied, Conflict }
+public enum ConfigStatus { Ok, Forbidden, Invalid, PreconditionRequired, PreconditionFailed, EntitlementDenied, Conflict, NotFound }
 
 public sealed record FieldError(string Field, string Code);
 

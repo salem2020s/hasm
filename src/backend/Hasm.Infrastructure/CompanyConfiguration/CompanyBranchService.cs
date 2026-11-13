@@ -44,6 +44,8 @@ public sealed class CompanyBranchService(
         new("phone", false, d => d.Phone), new("email", false, d => d.Email), new("website", false, d => d.Website),
     ];
 
+    public int MaxBranches => entitlements.MaxBranches;
+
     private sealed class Abort(ConfigResult<BranchView>? result, ConfigStatus status, string code, long? currentRevision = null) : Exception(code)
     {
         public ConfigResult<BranchView> ToResult() => result ?? ConfigResult<BranchView>.Fail(status, code, currentRevision);
@@ -147,7 +149,7 @@ public sealed class CompanyBranchService(
             {
                 if (newMainId is null || newMainId == id) throw new Abort(null, ConfigStatus.Conflict, "main_branch_deactivation_denied");
                 successor = await LoadAsync(work.Connection, work.Transaction, newMainId.Value, true, ct);
-                if (successor is null) throw new Abort(null, ConfigStatus.Conflict, "branch_not_found");
+                if (successor is null) throw new Abort(null, ConfigStatus.NotFound, "branch_not_found");
                 if (!successor.IsActive) throw new Abort(null, ConfigStatus.Conflict, "branch_inactive");
             }
             var now = clock.GetUtcNow().UtcDateTime;
@@ -259,7 +261,7 @@ public sealed class CompanyBranchService(
     /// <summary>Loads the row (locked when it is going to be changed) and applies the optimistic-concurrency check.</summary>
     private async Task<BranchView> RequireAsync(CompanyAuditedWork work, Guid id, long expectedRevision, CancellationToken ct)
     {
-        var current = await LoadAsync(work.Connection, work.Transaction, id, true, ct) ?? throw new Abort(null, ConfigStatus.Conflict, "branch_not_found");
+        var current = await LoadAsync(work.Connection, work.Transaction, id, true, ct) ?? throw new Abort(null, ConfigStatus.NotFound, "branch_not_found");
         if (current.Revision != expectedRevision) throw new Abort(null, ConfigStatus.PreconditionFailed, "revision_conflict", current.Revision);
         return current;
     }
