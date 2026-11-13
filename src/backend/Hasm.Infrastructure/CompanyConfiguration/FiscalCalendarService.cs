@@ -28,7 +28,7 @@ namespace Hasm.Infrastructure.CompanyConfiguration;
 /// </list>
 /// </summary>
 public sealed class FiscalCalendarService(
-    CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, PeriodCloseGuard closeGuard, TimeProvider clock)
+    CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, PeriodCloseGuard closeGuard, FinancialHistoryGuard financialHistory, TimeProvider clock)
 {
     internal const int LockKey1 = 0x48464341;   // "HFCA": advisory-lock namespace of the fiscal calendar
     internal const int LockKey2 = 1;
@@ -168,6 +168,7 @@ public sealed class FiscalCalendarService(
             if (year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_closed");
             if (current.State != from) throw new Abort(ConfigStatus.Conflict, "invalid_period_state");
             var closing = to is FiscalPeriodState.SoftClosed or FiscalPeriodState.FinalClosed;
+            if (closing) await EnsureCloseChecksCanBeTrustedAsync(work, companyId, ct);
             if (closing && await closeGuard.IsBlockedAsync(companyId, current, work.Connection, work.Transaction, ct))
                 throw new Abort(ConfigStatus.Conflict, "period_close_blocked");
             var now = clock.GetUtcNow().UtcDateTime;
@@ -203,6 +204,7 @@ public sealed class FiscalCalendarService(
             if (year.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", year.Revision);
             if (year.IsClosed) throw new Abort(ConfigStatus.Conflict, "fiscal_year_already_closed");
             if (year.Periods.Any(p => p.State != FiscalPeriodState.FinalClosed)) throw new Abort(ConfigStatus.Conflict, "fiscal_year_has_unfinalized_periods");
+            await EnsureCloseChecksCanBeTrustedAsync(work, companyId, ct);
             var now = clock.GetUtcNow().UtcDateTime;
             await using (var upd = new NpgsqlCommand(
                 $"UPDATE {Y.Table} SET {Y.Status} = 2, {Y.ClosedAtUtc} = @now, {Y.ClosedBy} = @actor, {Y.Revision} = {Y.Revision} + 1 WHERE {Y.Id} = @id", work.Connection, work.Transaction))
@@ -450,6 +452,19 @@ public sealed class FiscalCalendarService(
         return list;
     }
 
+
+    /// <summary>
+    /// No silent bypass of the mandatory close checks: once ANY accounting or inventory module reports financial history for the company (its
+    /// <see cref="IFinancialHistoryProbe"/>), closing a period or a year is refused while any close-check domain is still an unimplemented placeholder.
+    /// A module that holds data therefore cannot ship without also registering its <see cref="IPeriodCloseProbe"/>; until such data exists the
+    /// placeholders are harmless and every close is recorded as "checks not implemented" in its history.
+    /// </summary>
+    private async Task EnsureCloseChecksCanBeTrustedAsync(CompanyAuditedWork work, Guid companyId, CancellationToken ct)
+    {
+        if (closeGuard.UnimplementedDomains.Count == 0) return;
+        var info = await financialHistory.EvaluateAsync(companyId, work.Connection, work.Transaction, ct);
+        if (info.Locked) throw new Abort(ConfigStatus.Conflict, "period_close_checks_not_implemented");
+    }
     // ------------------------------------------------------------------------------------------------------------- plumbing
 
     private async Task<ConfigResult<T>> MutateAsync<T>(Guid companyId, Func<CompanyAuditedWork, Task<T>> work, CancellationToken ct)

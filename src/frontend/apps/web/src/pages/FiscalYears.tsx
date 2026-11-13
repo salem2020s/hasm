@@ -1,4 +1,4 @@
-import { ApiError, type FiscalPeriod, type FiscalYear, type FiscalYearsResponse } from "@hasm/api-client";
+import { ApiError, type FiscalPeriod, type FiscalReopenRequest, type FiscalYear, type FiscalYearsResponse } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -16,10 +16,15 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const addDay = (iso: string) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
 
 type Dialog =
-  | { kind: "soft" | "reopen" | "final"; period: FiscalPeriod }
+  | { kind: "soft"; period: FiscalPeriod }
+  | { kind: "reopen"; period: FiscalPeriod }
+  | { kind: "final"; period: FiscalPeriod }
   | { kind: "year"; year: FiscalYear }
-  | { kind: "reopen-final"; period: FiscalPeriod }
-  | { kind: "reopen-year"; year: FiscalYear };
+  | { kind: "request-period"; period: FiscalPeriod }
+  | { kind: "request-year"; year: FiscalYear }
+  | { kind: "approve"; request: FiscalReopenRequest }
+  | { kind: "cancel"; request: FiscalReopenRequest }
+  | { kind: "deny"; request: FiscalReopenRequest };
 
 export function FiscalYearsPage() {
   const { t } = useI18n();
@@ -28,6 +33,7 @@ export function FiscalYearsPage() {
   const auth = useAuth();
   const { guard } = useUnsaved();
   const [data, setData] = useState<FiscalYearsResponse | null>(null);
+  const [requests, setRequests] = useState<FiscalReopenRequest[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -38,7 +44,9 @@ export function FiscalYearsPage() {
 
   const load = useCallback(async () => {
     try {
-      setData(await auth.api.listFiscalYears());
+      const years = await auth.api.listFiscalYears();
+      setRequests(years.can.viewRequests ? (await auth.api.listFiscalReopenRequests()).requests : []);
+      setData(years);
       setLoadError(null);
     } catch (e) {
       if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "fiscal.error."));
@@ -50,9 +58,9 @@ export function FiscalYearsPage() {
   if (!data) return <Loading />;
 
   const can = data.can;
-  const anyAction = can.create || can.closeYear || can.reopenYear || can.softClose || can.reopen || can.finalClose || can.reopenFinal;
+  const anyAction = can.create || can.closeYear || can.softClose || can.reopen || can.finalClose || can.requestReopen || can.approveReopen;
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<unknown>, message = t("fiscal.changed")) {
     setBusy(true);
     setError(null);
     setConflict(false);
@@ -60,7 +68,7 @@ export function FiscalYearsPage() {
     try {
       await action();
       await load();
-      setNotice(t("fiscal.changed"));
+      setNotice(message);
     } catch (err) {
       if (auth.handleError(err)) return;
       if (err instanceof ApiError && err.status === 412) setConflict(true);
@@ -77,8 +85,11 @@ export function FiscalYearsPage() {
       case "reopen": return void run(() => auth.api.reopenFiscalPeriod(d.period.id, d.period.revision));
       case "final": return void run(() => auth.api.finalCloseFiscalPeriod(d.period.id, d.period.revision));
       case "year": return void run(() => auth.api.closeFiscalYear(d.year.id, d.year.revision));
-      case "reopen-final": return void run(() => auth.api.reopenFinalFiscalPeriod(d.period.id, d.period.revision, reason ?? ""));
-      case "reopen-year": return void run(() => auth.api.reopenFiscalYear(d.year.id, d.year.revision, reason ?? ""));
+      case "request-period": return void run(() => auth.api.requestFiscalPeriodReopen(d.period.id, d.period.revision, reason ?? ""), t("fiscal.request_sent"));
+      case "request-year": return void run(() => auth.api.requestFiscalYearReopen(d.year.id, d.year.revision, reason ?? ""), t("fiscal.request_sent"));
+      case "approve": return void run(() => auth.api.approveFiscalReopen(d.request.id, d.request.revision));
+      case "deny": return void run(() => auth.api.denyFiscalReopen(d.request.id, d.request.revision, reason || undefined));
+      case "cancel": return void run(() => auth.api.cancelFiscalReopen(d.request.id, d.request.revision));
     }
   };
 
@@ -121,7 +132,7 @@ export function FiscalYearsPage() {
             </p>
             <div className="actions">
               {can.closeYear && !y.closed && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "year", year: y })}>{t("fiscal.close_year")}</button>}
-              {can.reopenYear && y.closed && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "reopen-year", year: y })}>{t("fiscal.reopen_year")}</button>}
+              {can.requestReopen && y.closed && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "request-year", year: y })}>{t("fiscal.request_reopen")}</button>}
             </div>
             <div className="table-wrap">
               <table className="data-table">
@@ -143,7 +154,7 @@ export function FiscalYearsPage() {
                         {!y.closed && p.status === "open" && can.softClose && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "soft", period: p })}>{t("fiscal.soft_close")}</button>}
                         {!y.closed && p.status === "soft_closed" && can.reopen && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "reopen", period: p })}>{t("fiscal.reopen")}</button>}{" "}
                         {!y.closed && p.status === "soft_closed" && can.finalClose && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "final", period: p })}>{t("fiscal.final_close")}</button>}
-                        {!y.closed && p.status === "final_closed" && can.reopenFinal && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "reopen-final", period: p })}>{t("fiscal.reopen_final")}</button>}
+                        {!y.closed && p.status === "final_closed" && can.requestReopen && <button type="button" disabled={busy} onClick={() => setDialog({ kind: "request-period", period: p })}>{t("fiscal.request_reopen")}</button>}
                       </td>
                     </tr>
                   ))}
@@ -154,18 +165,37 @@ export function FiscalYearsPage() {
         </Card>
       ))}
 
-      {dialog && (dialog.kind === "reopen-final" || dialog.kind === "reopen-year") ? (
+      {requests.length > 0 || can.viewRequests ? (
+        <RequestsCard requests={requests} busy={busy} onAction={setDialog} />
+      ) : null}
+
+      {dialog && (dialog.kind === "request-period" || dialog.kind === "request-year") && (
         <ReasonDialog
-          title={dialog.kind === "reopen-final" ? t("fiscal.reopen_final_title") : t("fiscal.reopen_year_title")}
-          message={dialog.kind === "reopen-final" ? t("fiscal.reopen_final_message", { n: String(dialog.period.number) }) : t("fiscal.reopen_year_message", { name: dialog.year.name })}
-          confirmLabel={dialog.kind === "reopen-final" ? t("fiscal.reopen_final") : t("fiscal.reopen_year")}
+          title={dialog.kind === "request-period" ? t("fiscal.request_period_title") : t("fiscal.request_year_title")}
+          message={dialog.kind === "request-period" ? t("fiscal.request_period_message", { n: String(dialog.period.number) }) : t("fiscal.request_year_message", { name: dialog.year.name })}
+          label={t("fiscal.request_reason_label")}
+          confirmLabel={t("fiscal.request_reopen")}
+          minLength={10}
           onCancel={() => setDialog(null)}
           onConfirm={(reason) => apply(dialog, reason)}
         />
-      ) : dialog && (
+      )}
+      {dialog?.kind === "deny" && (
+        <ReasonDialog
+          title={t("fiscal.deny_title")}
+          message={t("fiscal.deny_message")}
+          label={t("fiscal.deny_note_label")}
+          confirmLabel={t("fiscal.deny")}
+          minLength={0}
+          onCancel={() => setDialog(null)}
+          onConfirm={(note) => apply(dialog, note)}
+        />
+      )}
+      {dialog && dialog.kind !== "request-period" && dialog.kind !== "request-year" && dialog.kind !== "deny" && (
         <ConfirmDialog
-          title={dialog.kind === "soft" ? t("fiscal.soft_close_title") : dialog.kind === "reopen" ? t("fiscal.reopen_title") : dialog.kind === "final" ? t("fiscal.final_close_title") : t("fiscal.close_year_title")}
-          message={dialog.kind === "year" ? t("fiscal.close_year_message", { name: dialog.year.name })
+          title={dialog.kind === "soft" ? t("fiscal.soft_close_title") : dialog.kind === "reopen" ? t("fiscal.reopen_title") : dialog.kind === "final" ? t("fiscal.final_close_title")
+            : dialog.kind === "year" ? t("fiscal.close_year_title") : dialog.kind === "approve" ? t("fiscal.approve_title") : t("fiscal.cancel_title")}
+          message={dialog.kind === "approve" ? t("fiscal.approve_message") : dialog.kind === "cancel" ? t("fiscal.cancel_message") : dialog.kind === "year" ? t("fiscal.close_year_message", { name: dialog.year.name })
             : t(dialog.kind === "soft" ? "fiscal.soft_close_message" : dialog.kind === "reopen" ? "fiscal.reopen_message" : "fiscal.final_close_message", { n: String(dialog.period.number) })}
           confirmLabel={t("form.confirm")}
           onCancel={() => setDialog(null)}
@@ -176,8 +206,8 @@ export function FiscalYearsPage() {
   );
 }
 
-/** An exceptional reopening: the reason (at least 10 characters) is mandatory and is recorded by the server with the change. */
-function ReasonDialog({ title, message, confirmLabel, onCancel, onConfirm }: { title: string; message: string; confirmLabel: string; onCancel: () => void; onConfirm: (reason: string) => void }) {
+/** A reason dialog: a request needs at least 10 characters (recorded by the server with the request); a denial note is optional. */
+function ReasonDialog({ title, message, label, confirmLabel, minLength, onCancel, onConfirm }: { title: string; message: string; label: string; confirmLabel: string; minLength: number; onCancel: () => void; onConfirm: (reason: string) => void }) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   const [reason, setReason] = useState("");
@@ -188,12 +218,12 @@ function ReasonDialog({ title, message, confirmLabel, onCancel, onConfirm }: { t
       <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" className="dialog" onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}>
         <h2 id="confirm-title">{title}</h2>
         <p id="confirm-message">{message}</p>
-        <Field id="f-reason" label={t("fiscal.reason_label")} error={error} required>
+        <Field id="f-reason" label={label} error={error} required={minLength > 0}>
           {(aria) => <textarea {...aria} rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />}
         </Field>
         <div className="actions">
           <button type="button" ref={cancel} onClick={onCancel}>{t("cancel")}</button>
-          <button type="button" className="danger" onClick={() => { if (reason.trim().length < 10) setError(t("fiscal.reason_required")); else onConfirm(reason.trim()); }}>{confirmLabel}</button>
+          <button type="button" className="danger" onClick={() => { if (reason.trim().length < minLength) setError(t("fiscal.reason_required")); else onConfirm(reason.trim()); }}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -275,6 +305,43 @@ function YearForm({ years, today, onClose, onSaved }: { years: FiscalYear[]; tod
           <button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("fiscal.save")}</button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+/** Pending and decided reopening requests. What each viewer may do comes from the server (canApprove / canCancel); approving one's own request is never offered. */
+function RequestsCard({ requests, busy, onAction }: { requests: FiscalReopenRequest[]; busy: boolean; onAction: (d: Dialog) => void }) {
+  const { t, locale } = useI18n();
+  const when = (iso: string) => new Intl.DateTimeFormat(locale === "en" ? "en" : "ar", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+  return (
+    <Card title={t("fiscal.requests_title")} hint={t("fiscal.requests_hint")}>
+      <div className="table-wrap" data-testid="reopen-requests">
+        <table className="data-table">
+          <caption className="visually-hidden">{t("fiscal.requests_title")}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{t("fiscal.requests_col_target")}</th><th scope="col">{t("fiscal.requests_col_reason")}</th><th scope="col">{t("fiscal.requests_col_status")}</th>
+              <th scope="col">{t("fiscal.requests_col_date")}</th><th scope="col">{t("fiscal.requests_col_actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {requests.length === 0 && <tr><td colSpan={5}>{t("fiscal.requests_none")}</td></tr>}
+            {requests.map((r) => (
+              <tr key={r.id} data-testid={`request-${r.id}`}>
+                <td><bdi>{r.target === "period" ? t("fiscal.target_period", { year: r.yearName, n: String(r.periodNumber ?? "") }) : t("fiscal.target_year", { year: r.yearName })}</bdi>{r.mine && <> <span className="chip chip-base">{t("fiscal.mine")}</span></>}</td>
+                <td><bdi>{r.reason}</bdi>{r.decisionNote && <p className="hint"><bdi>{r.decisionNote}</bdi></p>}</td>
+                <td><span className={`chip ${r.status === "pending" ? "chip-base" : r.status === "approved" ? "chip-ok" : "chip-off"}`}>{t(`fiscal.request_status.${r.status}`)}</span></td>
+                <td><bdi dir="ltr">{when(r.requestedAtUtc)}</bdi></td>
+                <td>
+                  {r.canApprove && <button type="button" disabled={busy} onClick={() => onAction({ kind: "approve", request: r })}>{t("fiscal.approve")}</button>}{" "}
+                  {r.canApprove && <button type="button" disabled={busy} onClick={() => onAction({ kind: "deny", request: r })}>{t("fiscal.deny")}</button>}
+                  {r.canCancel && <button type="button" disabled={busy} onClick={() => onAction({ kind: "cancel", request: r })}>{t("fiscal.cancel_request")}</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }

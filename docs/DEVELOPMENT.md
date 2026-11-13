@@ -169,6 +169,13 @@ dotnet run --project src/backend/Hasm.Admin -- grant-company-admin <login> <comp
 ```
 It grants membership and the preset Company Administrator role company-wide (audited with no actor user), is idempotent, and doubles as the recovery path. The user must already exist (`bootstrap-admin` or the admin API) and the company must be `Ready`. No HTTP route can grant a first administrator, and identity administrators get no company access from their flag.
 
+**Fiscal approver delegation (Phase 3.1D, offline only).** Approving the exceptional reopening of a Final Closed fiscal period or a closed year needs `company.fiscalreopen.approve`, which the Company Administrator deliberately lacks and no company user can grant. The supported, audited way (and the recovery for a company with no approver) is:
+```
+dotnet run --project src/backend/Hasm.Admin -- grant-fiscal-approver <login> <company-id>
+dotnet run --project src/backend/Hasm.Admin -- revoke-fiscal-approver <login> <company-id>
+```
+The user must already be an active member of a `Ready` company (membership is never created); the preset Fiscal Approver role is assigned company-wide and both commands are audited with no actor user. See `docs/PHASE-3.1D.md`.
+
 **Runtime privileges** added for the API account (grants are not automated; Phase 2.3C-2 adds `SELECT, INSERT` on the audit-event table, see "Upgrade and compatibility" under Cryptographic audit integrity): `SELECT` on the company registry table; `SELECT, INSERT, UPDATE` on `UserCompanyAccess` (replaces the 2.3A `SELECT`-only grant), `Role` and `RoleAssignment`; `SELECT, INSERT, DELETE` on `RolePermission`; `SELECT, INSERT` on `AccessAudit`. `Session` needs the `UPDATE` it already has (selection column).
 
 **Tests:** unit tests (`AccessModelTests`: catalog, presets versus migration seed, scope evaluation, escalation primitives) and real-PostgreSQL integration tests (`AccessMigrationTests`, `MembershipTests`, `RoleTests`, `AssignmentAndScopeTests`, `AccessRevocationTests`, `AccessAuditTests`, `OfflineAdministrationTests`, `ConcurrentAccessChangeTests`, `AccessApiTests`) under the same safety gate as above.

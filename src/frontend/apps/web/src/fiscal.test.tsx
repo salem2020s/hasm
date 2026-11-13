@@ -1,4 +1,4 @@
-import type { FiscalPeriod, FiscalPeriodStatus, FiscalYear, FiscalYearsResponse } from "@hasm/api-client";
+import type { FiscalPeriod, FiscalPeriodStatus, FiscalReopenRequest, FiscalYear, FiscalYearsResponse } from "@hasm/api-client";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,8 +21,8 @@ const year = (over: Partial<FiscalYear> = {}, periods: FiscalPeriod[] = [period(
   revision: 1, createdAtUtc: "2026-01-01T00:00:00Z", periods, ...over,
 });
 
-const ALL = { create: true, closeYear: true, reopenYear: true, softClose: true, reopen: true, finalClose: true, reopenFinal: true };
-const NONE = { create: false, closeYear: false, reopenYear: false, softClose: false, reopen: false, finalClose: false, reopenFinal: false };
+const ALL = { create: true, closeYear: true, softClose: true, reopen: true, finalClose: true, requestReopen: true, approveReopen: false, viewRequests: true };
+const NONE = { create: false, closeYear: false, softClose: false, reopen: false, finalClose: false, requestReopen: false, approveReopen: false, viewRequests: false };
 const response = (years: FiscalYear[], over: Partial<FiscalYearsResponse> = {}, can: Partial<FiscalYearsResponse["can"]> = {}): FiscalYearsResponse => ({
   years, today: "2026-11-09", closeChecksImplemented: false, can: { ...ALL, ...can }, ...over,
 });
@@ -70,12 +70,12 @@ describe("fiscal calendar screen: permissions", () => {
     render(vi.fn().mockResolvedValue(response([year()], {}, NONE)));
     await go("#/company/fiscal-years");
     expect(await screen.findByTestId("read-only")).toBeInTheDocument();
-    for (const name of ["سنة مالية جديدة", "إقفال مؤقت", "إعادة فتح", "إقفال نهائي", "إعادة فتح استثنائية", "إقفال السنة"])
+    for (const name of ["سنة مالية جديدة", "إقفال مؤقت", "إعادة فتح", "إقفال نهائي", "طلب إعادة فتح استثنائية", "إقفال السنة"])
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
   });
 
   it("offers each action only for the matching state and permission", async () => {
-    render(vi.fn().mockResolvedValue(response([year()], {}, { reopenFinal: false })));
+    render(vi.fn().mockResolvedValue(response([year()], {}, { requestReopen: false })));
     await go("#/company/fiscal-years");
     await screen.findByTestId("year-FY2026");
     expect(within(screen.getByTestId("period-FY2026-1")).getByRole("button", { name: "إقفال مؤقت" })).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe("fiscal calendar screen: permissions", () => {
     expect(within(soft).getByRole("button", { name: "إعادة فتح" })).toBeInTheDocument();
     expect(within(soft).getByRole("button", { name: "إقفال نهائي" })).toBeInTheDocument();
     const final = screen.getByTestId("period-FY2026-3");
-    expect(within(final).queryByRole("button")).not.toBeInTheDocument();                                                        // exceptional reopening needs its own permission
+    expect(within(final).queryByRole("button")).not.toBeInTheDocument();                                                        // requesting an exceptional reopening needs its own permission
     expect(screen.getByRole("button", { name: "إقفال السنة" })).toBeInTheDocument();
   });
 
@@ -103,14 +103,14 @@ describe("fiscal calendar screen: permissions", () => {
     expect(await screen.findByTestId("forbidden")).toBeInTheDocument();
   });
 
-  it("offers no period action in a closed year (its periods are frozen) but offers reopening the year to a holder", async () => {
+  it("offers no period action in a closed year (its periods are frozen) but offers requesting its reopening to a holder", async () => {
     const closed = year({ closed: true, closedAtUtc: "2027-01-05T00:00:00Z" }, [period(1, "final_closed")]);
     render(vi.fn().mockResolvedValue(response([closed])));
     await go("#/company/fiscal-years");
     await screen.findByTestId("year-FY2026");
     expect(within(screen.getByTestId("period-FY2026-1")).queryByRole("button")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "إقفال السنة" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "إعادة فتح السنة" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "طلب إعادة فتح استثنائية" })).toBeInTheDocument();
   });
 });
 
@@ -156,34 +156,6 @@ describe("fiscal calendar screen: closing and reopening", () => {
     await waitFor(() => expect(closeFiscalYear).toHaveBeenCalledWith("y1", 1));
   });
 
-  it("requires a reason of at least 10 characters for the exceptional reopening and sends it", async () => {
-    const reopenFinalFiscalPeriod = vi.fn().mockResolvedValue(period(3, "soft_closed"));
-    render(vi.fn().mockResolvedValue(response([year()])), { reopenFinalFiscalPeriod });
-    await go("#/company/fiscal-years");
-    await userEvent.click(within(await screen.findByTestId("period-FY2026-3")).getByRole("button", { name: "إعادة فتح استثنائية" }));
-    const dialog = screen.getByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: "إعادة فتح استثنائية" }));
-    expect(within(dialog).getByText("اكتب سبباً من 10 أحرف على الأقل.")).toBeInTheDocument();
-    expect(reopenFinalFiscalPeriod).not.toHaveBeenCalled();
-    await userEvent.type(within(dialog).getByLabelText(/سبب إعادة الفتح/), "short");
-    await userEvent.click(within(dialog).getByRole("button", { name: "إعادة فتح استثنائية" }));
-    expect(reopenFinalFiscalPeriod).not.toHaveBeenCalled();
-    await userEvent.clear(within(dialog).getByLabelText(/سبب إعادة الفتح/));
-    await userEvent.type(within(dialog).getByLabelText(/سبب إعادة الفتح/), "Correction of an error found in audit");
-    await userEvent.click(within(dialog).getByRole("button", { name: "إعادة فتح استثنائية" }));
-    await waitFor(() => expect(reopenFinalFiscalPeriod).toHaveBeenCalledWith("p3", 1, "Correction of an error found in audit"));
-  });
-
-  it("reopens a closed year with a recorded reason", async () => {
-    const reopenFiscalYear = vi.fn().mockResolvedValue(year());
-    render(vi.fn().mockResolvedValue(response([year({ closed: true, revision: 4 }, [period(1, "final_closed")])])), { reopenFiscalYear });
-    await go("#/company/fiscal-years");
-    await userEvent.click(await screen.findByRole("button", { name: "إعادة فتح السنة" }));
-    const dialog = screen.getByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText(/سبب إعادة الفتح/), "Documented correction after year close");
-    await userEvent.click(within(dialog).getByRole("button", { name: "إعادة فتح السنة" }));
-    await waitFor(() => expect(reopenFiscalYear).toHaveBeenCalledWith("y1", 4, "Documented correction after year close"));
-  });
 
   it("shows the server's refusals in words and a stale-revision conflict banner that reloads", async () => {
     const softCloseFiscalPeriod = vi.fn()
@@ -205,6 +177,109 @@ describe("fiscal calendar screen: closing and reopening", () => {
     await userEvent.click(within(screen.getByTestId("period-FY2026-2")).getByRole("button", { name: "إقفال نهائي" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
     expect(await screen.findByText("لا يجوز لمن أقفل الفترة نهائياً أن يعيد فتحها (فصل المهام).")).toBeInTheDocument();
+  });
+});
+
+const request = (over: Partial<FiscalReopenRequest> = {}): FiscalReopenRequest => ({
+  id: "r1", target: "period", targetId: "p3", yearName: "FY2026", periodNumber: 3, startDate: "2026-03-01", endDate: "2026-03-28", expectedRevision: 1,
+  reason: "Correction of an error found in audit", status: "pending", requestedAtUtc: "2026-11-09T10:00:00Z", decidedAtUtc: null, decisionNote: null,
+  revision: 1, mine: false, canApprove: false, canCancel: false, ...over,
+});
+
+const renderWithRequests = (requests: FiscalReopenRequest[], can: Partial<FiscalYearsResponse["can"]>, extra: Record<string, unknown> = {}, years: FiscalYear[] = [year()]) =>
+  render(vi.fn().mockResolvedValue(response(years, {}, can)), { listFiscalReopenRequests: vi.fn().mockResolvedValue({ requests }), ...extra });
+
+describe("fiscal calendar screen: exceptional reopening is a request that someone else approves", () => {
+  it("sends a reopening REQUEST (not a reopening) with a reason of at least 10 characters", async () => {
+    const requestFiscalPeriodReopen = vi.fn().mockResolvedValue(request({ mine: true, canCancel: true }));
+    renderWithRequests([], {}, { requestFiscalPeriodReopen });
+    await go("#/company/fiscal-years");
+    await userEvent.click(within(await screen.findByTestId("period-FY2026-3")).getByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("حتى يوافق مستخدم آخر مخوَّل");
+    await userEvent.click(within(dialog).getByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    expect(within(dialog).getByText("اكتب سبباً من 10 أحرف على الأقل.")).toBeInTheDocument();
+    expect(requestFiscalPeriodReopen).not.toHaveBeenCalled();
+    await userEvent.type(within(dialog).getByLabelText(/سبب الطلب/), "short");
+    await userEvent.click(within(dialog).getByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    expect(requestFiscalPeriodReopen).not.toHaveBeenCalled();
+    await userEvent.clear(within(dialog).getByLabelText(/سبب الطلب/));
+    await userEvent.type(within(dialog).getByLabelText(/سبب الطلب/), "Correction of an error found in audit");
+    await userEvent.click(within(dialog).getByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    await waitFor(() => expect(requestFiscalPeriodReopen).toHaveBeenCalledWith("p3", 1, "Correction of an error found in audit"));
+    expect(await screen.findByTestId("saved")).toHaveTextContent("لم يتغير التقويم");
+  });
+
+  it("requests the reopening of a closed year the same way", async () => {
+    const requestFiscalYearReopen = vi.fn().mockResolvedValue(request({ target: "year", periodNumber: null }));
+    renderWithRequests([], {}, { requestFiscalYearReopen }, [year({ closed: true, revision: 4 }, [period(1, "final_closed")])]);
+    await go("#/company/fiscal-years");
+    await userEvent.click(await screen.findByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(/سبب الطلب/), "Documented correction after year close");
+    await userEvent.click(within(dialog).getByRole("button", { name: "طلب إعادة فتح استثنائية" }));
+    await waitFor(() => expect(requestFiscalYearReopen).toHaveBeenCalledWith("y1", 4, "Documented correction after year close"));
+  });
+
+  it("offers approve and deny only where the server says the caller may decide, never for the caller's own request", async () => {
+    renderWithRequests([request({ id: "r1", canApprove: true }), request({ id: "r2", mine: true, canApprove: false, canCancel: true }), request({ id: "r3", status: "approved" })],
+      { approveReopen: true, requestReopen: false });
+    await go("#/company/fiscal-years");
+    const other = await screen.findByTestId("request-r1");
+    expect(within(other).getByRole("button", { name: "موافقة وتنفيذ" })).toBeInTheDocument();
+    expect(within(other).getByRole("button", { name: "رفض" })).toBeInTheDocument();
+    const own = screen.getByTestId("request-r2");
+    expect(within(own).getByText("طلبك")).toBeInTheDocument();
+    expect(within(own).queryByRole("button", { name: "موافقة وتنفيذ" })).not.toBeInTheDocument();
+    expect(within(own).getByRole("button", { name: "سحب الطلب" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("request-r3")).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("request-r3")).getByText("تمت الموافقة")).toBeInTheDocument();
+  });
+
+  it("approves after a confirmation that says the checks are repeated now, sending the request revision", async () => {
+    const approveFiscalReopen = vi.fn().mockResolvedValue(request({ status: "approved", revision: 2 }));
+    renderWithRequests([request({ canApprove: true, revision: 1 })], { approveReopen: true }, { approveFiscalReopen });
+    await go("#/company/fiscal-years");
+    await userEvent.click(within(await screen.findByTestId("request-r1")).getByRole("button", { name: "موافقة وتنفيذ" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("بعد مراجعة الصلاحيات وحالة الهدف الآن");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(approveFiscalReopen).toHaveBeenCalledWith("r1", 1));
+  });
+
+  it("denies with an optional note and withdraws one's own request after confirmation", async () => {
+    const denyFiscalReopen = vi.fn().mockResolvedValue(request({ status: "denied" }));
+    const cancelFiscalReopen = vi.fn().mockResolvedValue(request({ status: "cancelled" }));
+    renderWithRequests([request({ id: "r1", canApprove: true }), request({ id: "r2", mine: true, canCancel: true, revision: 3 })], { approveReopen: true }, { denyFiscalReopen, cancelFiscalReopen });
+    await go("#/company/fiscal-years");
+    await userEvent.click(within(await screen.findByTestId("request-r1")).getByRole("button", { name: "رفض" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(/ملاحظة/), "Not justified");
+    await userEvent.click(within(dialog).getByRole("button", { name: "رفض" }));
+    await waitFor(() => expect(denyFiscalReopen).toHaveBeenCalledWith("r1", 1, "Not justified"));
+    await userEvent.click(within(screen.getByTestId("request-r2")).getByRole("button", { name: "سحب الطلب" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(cancelFiscalReopen).toHaveBeenCalledWith("r2", 3));
+  });
+
+  it("explains the refusals of the approval in words (self-approval, stale request, revoked requester)", async () => {
+    const approveFiscalReopen = vi.fn()
+      .mockRejectedValueOnce(apiError(403, "self_approval_forbidden"))
+      .mockRejectedValueOnce(apiError(409, "request_stale"))
+      .mockRejectedValueOnce(apiError(409, "request_requester_not_authorized"));
+    renderWithRequests([request({ canApprove: true })], { approveReopen: true }, { approveFiscalReopen });
+    await go("#/company/fiscal-years");
+    for (const text of ["لا يجوز البت في طلبك بنفسك", "تغيّر الهدف منذ الطلب", "لم يعد صاحب الطلب مخوَّلاً"]) {
+      await userEvent.click(within(await screen.findByTestId("request-r1")).getByRole("button", { name: "موافقة وتنفيذ" }));
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+      expect(await screen.findByText(new RegExp(text))).toBeInTheDocument();
+    }
+  });
+
+  it("hides the requests section from a caller who may not view requests", async () => {
+    render(vi.fn().mockResolvedValue(response([year()], {}, { viewRequests: false, requestReopen: true })));
+    await go("#/company/fiscal-years");
+    await screen.findByTestId("year-FY2026");
+    expect(screen.queryByTestId("reopen-requests")).not.toBeInTheDocument();
   });
 });
 

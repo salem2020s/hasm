@@ -21,15 +21,23 @@ internal sealed class BlockingProbe(string domain, bool blocks) : IPeriodClosePr
     public Task<bool> HasBlockersAsync(Guid companyId, FiscalPeriodView period, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct) => Task.FromResult(blocks);
 }
 
+/// <summary>A test-only financial-history probe: stands in for a general ledger that already holds data. Never registered in the API.</summary>
+internal sealed class LedgerHistoryProbe(string domain, bool has) : IFinancialHistoryProbe
+{
+    public string Domain => domain;
+    public bool Implemented => true;
+    public Task<bool> HasHistoryAsync(Guid companyId, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct) => Task.FromResult(has);
+}
+
 /// <summary>Fiscal calendar (company migration 0006, Phase 3.1D) against real PostgreSQL; runs only on the verified disposable cluster.</summary>
 public abstract class FiscalTestBase : BranchTestBase
 {
     protected const string Open = "1";
 
-    protected FiscalCalendarService Calendar(PeriodCloseGuard? guard = null, CompanyRecord? company = null)
+    protected FiscalCalendarService Calendar(PeriodCloseGuard? guard = null, CompanyRecord? company = null, FinancialHistoryGuard? history = null)
     {
         var resolver = SinglePrincipalResolver(company ?? Company);
-        return new FiscalCalendarService(resolver, new CompanyAuditedTransactions(resolver, Audit, Clock), guard ?? new PeriodCloseGuard(), Clock);
+        return new FiscalCalendarService(resolver, new CompanyAuditedTransactions(resolver, Audit, Clock), guard ?? new PeriodCloseGuard(), history ?? new FinancialHistoryGuard(), Clock);
     }
 
     /// <summary>Prepares the company and chooses its business time zone (nothing is ever defaulted, and a fiscal year needs one).</summary>
@@ -558,6 +566,36 @@ public class FiscalServiceTests : FiscalTestBase
         Ok(await Calendar(new PeriodCloseGuard([new BlockingProbe("pending_accounting_postings", false)])).SoftCloseAsync(Admin.Id, Company.Id, p.Id, 1));
         Assert.Equal("period_close_blocked", (await Calendar(blocking).FinalCloseAsync(Admin.Id, Company.Id, p.Id, 2)).Code);
         Ok(await Calendar(blocking).ReopenAsync(Admin.Id, Company.Id, p.Id, 2));                                                    // reopening is never blocked
+    }
+
+    [PostgresFact]
+    public async Task Once_financial_history_exists_no_close_can_proceed_on_placeholder_checks_and_every_close_records_the_missing_checks_before_that()
+    {
+        await PrepareFiscal();
+        var y = await NewYear("FY2026", 2026, type: "quarterly");
+        var closer = Calendar();
+        // Before any module holds data the placeholders are harmless, and the close says so in its own history record.
+        var soft = Ok(await closer.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, 1));
+        var recorded = await Sql<string>($"SELECT {Fh.Changes}::text FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.ToStatus} = 2 ORDER BY {Fh.Id} DESC LIMIT 1");
+        Assert.Contains("closeChecksNotImplemented", recorded);
+        Assert.Contains("pending_accounting_postings", recorded);
+
+        // A general ledger that already holds data (its probe says so) but has not registered its close checks: nothing can be closed.
+        var ledgerWithData = new FinancialHistoryGuard([new LedgerHistoryProbe("general_ledger", true)]);
+        var unsafeCalendar = Calendar(history: ledgerWithData);
+        var r1 = await unsafeCalendar.SoftCloseAsync(Admin.Id, Company.Id, y.Periods[1].Id, 1);
+        var r2 = await unsafeCalendar.FinalCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, soft.Revision);
+        var r3 = await unsafeCalendar.CloseYearAsync(Admin.Id, Company.Id, y.Id, 1);
+        foreach (var refused in new[] { (r1.Status, r1.Code), (r2.Status, r2.Code), (r3.Status, r3.Code) })
+            Assert.Equal((ConfigStatus.Conflict, "period_close_checks_not_implemented"), refused);
+        Assert.Equal(FiscalPeriodState.SoftClosed, (await closer.FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);       // nothing changed
+        Assert.Equal(FiscalPeriodState.Open, (await closer.FindPeriodAsync(Company.Id, new DateOnly(2026, 4, 5)))!.State);
+
+        // With every close-check domain really implemented, the same ledger may close.
+        var all = new PeriodCloseGuard([.. PeriodCloseGuard.RequiredDomains.Select(d => (IPeriodCloseProbe)new BlockingProbe(d, false))]);
+        Assert.Empty(all.UnimplementedDomains);
+        Ok(await Calendar(all, history: ledgerWithData).FinalCloseAsync(Admin.Id, Company.Id, y.Periods[0].Id, soft.Revision));
+        Assert.DoesNotContain("closeChecksNotImplemented", await Sql<string>($"SELECT {Fh.Changes}::text FROM {Fh.Table} WHERE {Fh.Entity} = 2 AND {Fh.ToStatus} = 3 ORDER BY {Fh.Id} DESC LIMIT 1"));
     }
 
     [PostgresFact]

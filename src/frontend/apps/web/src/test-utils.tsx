@@ -57,15 +57,19 @@ export function fakeClient(overrides: Partial<Record<keyof ApiClient, unknown>> 
     updateWarehouse: vi.fn(),
     deactivateWarehouse: vi.fn(),
     activateWarehouse: vi.fn(),
-    listFiscalYears: vi.fn().mockResolvedValue({ years: [], today: "2026-11-09", closeChecksImplemented: false, can: { create: false, closeYear: false, reopenYear: false, softClose: false, reopen: false, finalClose: false, reopenFinal: false } }),
+    listFiscalYears: vi.fn().mockResolvedValue({ years: [], today: "2026-11-09", closeChecksImplemented: false, can: { create: false, closeYear: false, softClose: false, reopen: false, finalClose: false, requestReopen: false, approveReopen: false, viewRequests: false } }),
     getFiscalYear: vi.fn(),
     createFiscalYear: vi.fn(),
     closeFiscalYear: vi.fn(),
-    reopenFiscalYear: vi.fn(),
     softCloseFiscalPeriod: vi.fn(),
     reopenFiscalPeriod: vi.fn(),
     finalCloseFiscalPeriod: vi.fn(),
-    reopenFinalFiscalPeriod: vi.fn(),
+    listFiscalReopenRequests: vi.fn().mockResolvedValue({ requests: [] }),
+    requestFiscalPeriodReopen: vi.fn(),
+    requestFiscalYearReopen: vi.fn(),
+    approveFiscalReopen: vi.fn(),
+    denyFiscalReopen: vi.fn(),
+    cancelFiscalReopen: vi.fn(),
   };
   return { ...base, ...overrides } as unknown as ApiClient;
 }

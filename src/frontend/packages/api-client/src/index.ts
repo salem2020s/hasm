@@ -232,7 +232,32 @@ export interface FiscalYearsResponse {
   /** False while the modules whose pending items must block a close do not exist: closing records the state only and is not "verified". */
   closeChecksImplemented: boolean;
   /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
-  can: { create: boolean; closeYear: boolean; reopenYear: boolean; softClose: boolean; reopen: boolean; finalClose: boolean; reopenFinal: boolean };
+  can: { create: boolean; closeYear: boolean; softClose: boolean; reopen: boolean; finalClose: boolean; requestReopen: boolean; approveReopen: boolean; viewRequests: boolean };
+}
+export type FiscalReopenStatus = "pending" | "approved" | "denied" | "cancelled";
+/** A request for the exceptional reopening of a Final Closed period or a closed year. Only a different authorized user can approve it. */
+export interface FiscalReopenRequest {
+  id: string;
+  target: "period" | "year";
+  targetId: string;
+  yearName: string;
+  periodNumber: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  /** The revision of the target the request was made for; approval is refused when the target has moved on. */
+  expectedRevision: number;
+  reason: string;
+  status: FiscalReopenStatus;
+  requestedAtUtc: string;
+  decidedAtUtc: string | null;
+  decisionNote: string | null;
+  revision: number;
+  /** The caller made this request. */
+  mine: boolean;
+  /** The server says the caller may approve or deny it now (never their own request). */
+  canApprove: boolean;
+  /** The caller may withdraw it (their own pending request). */
+  canCancel: boolean;
 }
 export type ClientKind = "web" | "desktop";
 
@@ -352,13 +377,19 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),
     createFiscalYear: (year: FiscalYearInput) => request<FiscalYear>("POST", "/api/v1/company/fiscal-years", { body: year }),
     closeFiscalYear: (id: string, revision: number) => request<FiscalYear>("POST", `/api/v1/company/fiscal-years/${enc(id)}/close`, { ifMatch: revision }),
-    reopenFiscalYear: (id: string, revision: number, reason: string) =>
-      request<FiscalYear>("POST", `/api/v1/company/fiscal-years/${enc(id)}/reopen`, { body: { reason }, ifMatch: revision }),
     softCloseFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/soft-close`, { ifMatch: revision }),
     reopenFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/reopen`, { ifMatch: revision }),
     finalCloseFiscalPeriod: (id: string, revision: number) => request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/final-close`, { ifMatch: revision }),
-    reopenFinalFiscalPeriod: (id: string, revision: number, reason: string) =>
-      request<FiscalPeriod>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/reopen-final`, { body: { reason }, ifMatch: revision }),
+    // Exceptional reopening is an approval workflow: request (reason + the revision seen), then a DIFFERENT authorized user approves/denies; the requester may cancel.
+    listFiscalReopenRequests: () => get<{ requests: FiscalReopenRequest[] }>("/api/v1/company/fiscal-reopen-requests"),
+    requestFiscalPeriodReopen: (id: string, revision: number, reason: string) =>
+      request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-periods/${enc(id)}/reopen-requests`, { body: { reason }, ifMatch: revision }),
+    requestFiscalYearReopen: (id: string, revision: number, reason: string) =>
+      request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-years/${enc(id)}/reopen-requests`, { body: { reason }, ifMatch: revision }),
+    approveFiscalReopen: (id: string, revision: number) => request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-reopen-requests/${enc(id)}/approve`, { ifMatch: revision }),
+    denyFiscalReopen: (id: string, revision: number, note?: string) =>
+      request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-reopen-requests/${enc(id)}/deny`, { body: note ? { note } : {}, ifMatch: revision }),
+    cancelFiscalReopen: (id: string, revision: number) => request<FiscalReopenRequest>("POST", `/api/v1/company/fiscal-reopen-requests/${enc(id)}/cancel`, { ifMatch: revision }),
   };
 }
 

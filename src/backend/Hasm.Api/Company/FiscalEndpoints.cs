@@ -15,7 +15,7 @@ public static class FiscalSetup
         services.AddSingleton(new PeriodCloseGuard());   // placeholders only: the modules whose pending items must block a close do not exist yet
         services.AddSingleton(sp => new FiscalCalendarService(
             sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
-            sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<FinancialHistoryGuard>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new FiscalCalendarManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<FiscalCalendarService>()));
         return services;
     }

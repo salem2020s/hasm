@@ -26,7 +26,7 @@ public abstract class FiscalAccessTestBase : HttpApiTestBase
 
     protected void BuildFacade()
     {
-        Domain2 = new FiscalCalendarService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), new PeriodCloseGuard(), Clock);
+        Domain2 = new FiscalCalendarService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), new PeriodCloseGuard(), new FinancialHistoryGuard(), Clock);
         FMgmt = new FiscalCalendarManagementService(Rbac, Domain2);
     }
 
