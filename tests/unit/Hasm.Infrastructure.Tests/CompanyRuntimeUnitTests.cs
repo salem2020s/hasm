@@ -191,9 +191,11 @@ public class CompanyRuntimePrivilegeCatalogTests
         Assert.Empty(all.Intersect(["ALL", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]));
         // UPDATE is granted ONLY on the optimistic-concurrency configuration tables (revision-fenced by triggers); never on audit, history, reference or state.
         var updatable = CompanyRuntimePrivileges.Tables.Where(t => t.Privileges.Contains("UPDATE")).Select(t => t.Table).Order().ToArray();
-        Assert.Equal(new[] { CompanySchema.Profile.Table, CompanySchema.Settings.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.Branch.Table }.Order(), updatable);
+        Assert.Equal(new[] { CompanySchema.Profile.Table, CompanySchema.Settings.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.Branch.Table, CompanySchema.Warehouse.Table }.Order(), updatable);
         Assert.Equal(["INSERT", "SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.BranchRevision.Table).Privileges.Order());
         Assert.Equal(["INSERT", "SELECT", "UPDATE"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.Branch.Table).Privileges.Order());
+        Assert.Equal(["INSERT", "SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.WarehouseRevision.Table).Privileges.Order());
+        Assert.Equal(["INSERT", "SELECT", "UPDATE"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.Warehouse.Table).Privileges.Order());
         Assert.Equal(["INSERT", "SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.ConfigRevision.Table).Privileges.Order());
         Assert.Equal(["SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.Currency.Table).Privileges);
     }

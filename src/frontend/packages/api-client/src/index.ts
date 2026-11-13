@@ -161,6 +161,42 @@ export interface BranchesResponse {
   /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
   can: { create: boolean; activate: boolean; designate: boolean; update: string[] };
 }
+
+export interface Warehouse {
+  id: string;
+  /** The branch the warehouse belongs to; fixed for life. */
+  branchId: string;
+  code: string;
+  nameAr: string | null;
+  nameEn: string | null;
+  isActive: boolean;
+  /** Advances on every deactivation and reactivation (warehouse-scoped access assignments depend on it). */
+  activationEpoch: number;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  revision: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+/** The editable fields of a warehouse (the code and the branch are sent on create only and can never change afterwards). */
+export type WarehouseInput = Pick<Warehouse, "nameAr" | "nameEn" | "addressLine1" | "addressLine2" | "city" | "region" | "postalCode" | "phone" | "email" | "website"> & { code?: string; branchId?: string };
+/** Minimal branch facts for the branch picker and the branch column (never address or contact data). */
+export interface WarehouseBranchRef { id: string; code: string; nameAr: string | null; nameEn: string | null; isActive: boolean }
+export interface WarehousesResponse {
+  warehouses: Warehouse[];
+  branches: WarehouseBranchRef[];
+  /** Edition limit of warehouses ever created, and how many exist (inactive ones count). */
+  limit: number | null;
+  everCreated: number | null;
+  /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
+  can: { create: boolean; activate: boolean; update: string[] };
+}
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -266,6 +302,14 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/deactivate`, { body: newMainId ? { newMainId } : {}, ifMatch: revision }),
     activateBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/activate`, { ifMatch: revision }),
     makeMainBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/make-main`, { ifMatch: revision }),
+    // Warehouse management (Phase 3.1C). Same conventions as branches: the warehouse revision is sent as If-Match; the server enforces every rule.
+    listWarehouses: () => get<WarehousesResponse>("/api/v1/company/warehouses"),
+    getWarehouse: (id: string) => get<Warehouse>(`/api/v1/company/warehouses/${enc(id)}`),
+    createWarehouse: (warehouse: WarehouseInput) => request<Warehouse>("POST", "/api/v1/company/warehouses", { body: warehouse }),
+    updateWarehouse: (id: string, warehouse: WarehouseInput, revision: number) =>
+      request<Warehouse>("PUT", `/api/v1/company/warehouses/${enc(id)}`, { body: warehouse, ifMatch: revision }),
+    deactivateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/activate`, { ifMatch: revision }),
   };
 }
 

@@ -264,14 +264,14 @@ public class BranchEpochTests : BranchAccessTestBase
 }
 
 /// <summary>End-to-end HTTP tests of /api/v1/company/branches (both clients use these endpoints).</summary>
-public class BranchApiTests : BranchAccessTestBase
+public abstract class HttpApiTestBase : BranchAccessTestBase
 {
-    private const string CookieName = "__Host-hasm_session";
-    private WebApplicationFactory<Program>? factory;
-    private HttpClient client = null!;
-    private readonly LogCapture apiLogs = new();
+    protected const string CookieName = "__Host-hasm_session";
+    protected WebApplicationFactory<Program>? factory;
+    protected HttpClient client = null!;
+    protected readonly LogCapture apiLogs = new();
 
-    private async Task StartApi(IEntitlementPolicy? policy = null)
+    protected async Task StartApi(IEntitlementPolicy? policy = null)
     {
         await PrepareRbac();
         var resolver = Resolver;
@@ -307,7 +307,7 @@ public class BranchApiTests : BranchAccessTestBase
         await base.DisposeAsync();
     }
 
-    private async Task<ApiResponse> Send(HttpMethod method, string path, object? body = null, string? cookie = null, bool header = true, string? ifMatch = null)
+    protected async Task<ApiResponse> Send(HttpMethod method, string path, object? body = null, string? cookie = null, bool header = true, string? ifMatch = null)
     {
         using var request = new HttpRequestMessage(method, path);
         if (body is not null) request.Content = JsonContent.Create(body);
@@ -318,7 +318,7 @@ public class BranchApiTests : BranchAccessTestBase
         return new ApiResponse(response.StatusCode, response.Headers, await response.Content.ReadAsStringAsync());
     }
 
-    private async Task<string> SignIn(UserRecord user, bool selectCompany = true)
+    protected async Task<string> SignIn(UserRecord user, bool selectCompany = true)
     {
         var r = await Send(HttpMethod.Post, "/api/v1/auth/login", new { login = user.Login, password = Pw });
         Assert.Equal(HttpStatusCode.OK, r.Status);
@@ -327,7 +327,11 @@ public class BranchApiTests : BranchAccessTestBase
         return cookie;
     }
 
-    private static string Etag(ApiResponse r) => r.Headers.ETag!.Tag;
+    protected static string Etag(ApiResponse r) => r.Headers.ETag!.Tag;
+}
+
+public class BranchApiTests : HttpApiTestBase
+{
 
     [PostgresFact]
     public async Task Every_branch_endpoint_needs_authentication_and_a_selected_company()

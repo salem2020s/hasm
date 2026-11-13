@@ -30,6 +30,11 @@ public static class ConfigAuditEvents
     public const short BranchReactivated = 1010;
     public const short BranchMainDesignated = 1011;
     public const short BranchMainRevoked = 1012;
+    // Warehouse management (Phase 3.1C).
+    public const short WarehouseCreated = 1013;
+    public const short WarehouseUpdated = 1014;
+    public const short WarehouseDeactivated = 1015;
+    public const short WarehouseReactivated = 1016;
 }
 
 /// <summary>Company profile values in their stored (normalised) form. Authoritative in the company database.</summary>

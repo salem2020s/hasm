@@ -91,9 +91,9 @@ public abstract class AccessTestBase : IdentityTestBase
 
     protected async Task SeedAssignment(Guid user, Guid company, Guid role, ScopeKind kind = ScopeKind.Company, Guid? scopeId = null) =>
         // A branch assignment records the activation epoch (system migration 0007, required by a CHECK); 1 matches the constant state of the test validators.
-        await Exec($"INSERT INTO {Ra.Table} ({Ra.Id},{Ra.UserId},{Ra.CompanyId},{Ra.RoleId},{Ra.ScopeKind},{Ra.ScopeId},{Ra.ScopeEpoch},{Ra.GrantedAtUtc}) VALUES (@i,@u,@c,@r,@k,@s,@e,now())",
+        await Exec($"INSERT INTO {Ra.Table} ({Ra.Id},{Ra.UserId},{Ra.CompanyId},{Ra.RoleId},{Ra.ScopeKind},{Ra.ScopeId},{Ra.ScopeEpoch},{Ra.WarehouseScopeEpoch},{Ra.GrantedAtUtc}) VALUES (@i,@u,@c,@r,@k,@s,@e,@w,now())",
             ("i", Guid.NewGuid()), ("u", user), ("c", company), ("r", role), ("k", (short)kind), ("s", (object?)scopeId ?? DBNull.Value),
-            ("e", kind == ScopeKind.Branch ? 1L : DBNull.Value));
+            ("e", kind == ScopeKind.Branch ? 1L : DBNull.Value), ("w", kind == ScopeKind.Warehouse ? 1L : DBNull.Value));
 
     /// <summary>Company Administrator that additionally holds every test-catalog permission company-wide (a future "everything" preset).</summary>
     protected async Task<UserRecord> NewSuper(Guid company, string prefix = "super")
@@ -149,7 +149,7 @@ public class AccessMigrationTests : AccessTestBase
         {
             [Ro.Table] = [Ro.Id, Ro.CompanyId, Ro.PresetKey, Ro.Name, Ro.IsActive, Ro.CreatedAtUtc, Ro.CreatedBy, Ro.UpdatedAtUtc],
             [Rp.Table] = [Rp.RoleId, Rp.Permission],
-            [Ra.Table] = [Ra.Id, Ra.UserId, Ra.CompanyId, Ra.RoleId, Ra.ScopeKind, Ra.ScopeId, Ra.GrantedAtUtc, Ra.GrantedBy, Ra.RevokedAtUtc, Ra.RevokedBy, Ra.ScopeEpoch],
+            [Ra.Table] = [Ra.Id, Ra.UserId, Ra.CompanyId, Ra.RoleId, Ra.ScopeKind, Ra.ScopeId, Ra.GrantedAtUtc, Ra.GrantedBy, Ra.RevokedAtUtc, Ra.RevokedBy, Ra.ScopeEpoch, Ra.WarehouseScopeEpoch],
             [Au.Table] = [Au.Id, Au.OccurredAtUtc, Au.ActorUserId, Au.CompanyId, Au.TargetUserId, Au.RoleId, Au.EventCode, Au.Detail],
         };
         foreach (var (table, columns) in expected)
@@ -179,7 +179,9 @@ public class AccessMigrationTests : AccessTestBase
         foreach (var (id, (key, permissions)) in PresetRoles.Definitions)
         {
             Assert.Equal(key, await Scalar<string>($"SELECT {Ro.PresetKey} FROM {Ro.Table} WHERE {Ro.Id}=@i AND {Ro.CompanyId} IS NULL AND {Ro.IsActive}", ("i", id)));
-            var stored = await Scalar<string[]>($"SELECT array_agg({Rp.Permission} ORDER BY {Rp.Permission}) FROM {Rp.Table} WHERE {Rp.RoleId}=@i", ("i", id));
+            // Collection equality, independent of the database collation (the CI image sorts by locale, ignoring punctuation): both sides are ordinal-sorted in C#.
+            // Duplicates, missing and unexpected codes still fail: the comparison is element-by-element over the full sorted lists.
+            var stored = (await Scalar<string[]>($"SELECT array_agg({Rp.Permission}) FROM {Rp.Table} WHERE {Rp.RoleId}=@i", ("i", id))).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(permissions.Order(StringComparer.Ordinal), stored);
         }
         Assert.Equal(PresetRoles.Definitions.Count, (int)await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
@@ -408,7 +410,7 @@ public class RoleTests : AccessTestBase
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.CompanyAdministratorId, []), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.AccessAuditorId, [Codes.RolesCreate]), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.DeactivateRoleAsync(adminA.Id, a, PresetRoles.AccessAuditorId), AccessStatus.Forbidden, "preset_role_immutable");
-        Assert.Equal(23, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);
+        Assert.Equal(27, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);
     }
 
     [PostgresFact]

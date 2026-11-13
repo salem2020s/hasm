@@ -172,7 +172,7 @@ public class EntitlementAndLockContractTests
     public void Restrictions_that_are_not_yet_enforced_are_declared_so_and_never_silently_allowed()
     {
         var notEnforced = TrialEntitlementPolicy.Instance.Restrictions.Where(r => r.Enforcement == Enforcement.NotEnforced).Select(r => r.Key).Order().ToArray();
-        Assert.Equal(["companies", "posted_business_transactions", "users", "warehouses"], notEnforced);   // branches are enforced since Phase 3.1B
+        Assert.Equal(["companies", "posted_business_transactions", "users"], notEnforced);   // branches (3.1B) and warehouses (3.1C) are enforced
         Assert.All(TrialEntitlementPolicy.Instance.Restrictions.Where(r => r.Enforcement == Enforcement.NotEnforced), r => Assert.False(string.IsNullOrWhiteSpace(r.Note)));
     }
 
@@ -220,6 +220,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.Identity.Table, CompanySchema.BusinessAudit.Table, CompanySchema.Profile.Table, CompanySchema.Settings.Table,
         CompanySchema.Currency.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.ConfigRevision.Table,
         CompanySchema.Branch.Table, CompanySchema.BranchRevision.Table,   // Phase 3.1B (migration 0004)
+        CompanySchema.Warehouse.Table, CompanySchema.WarehouseRevision.Table,   // Phase 3.1C (migration 0005)
     ];
 
     /// <summary>
@@ -272,6 +273,7 @@ public class ConfigurationSchemaContractTests
     }
 
     private static readonly string[] BranchCodes = ["company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate"];
+    private static readonly string[] WarehouseCodes = ["company.warehouses.view", "company.warehouses.update", "company.warehousestructure.create", "company.warehousestructure.activate"];
 
     [Fact]
     public void Company_administration_permissions_are_in_the_catalog_and_scoped_to_the_company()
@@ -282,7 +284,7 @@ public class ConfigurationSchemaContractTests
             Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c);
             Assert.Equal(ScopeKind.Company, p.Resource.Scope);
         }
-        Assert.Equal(codes.Concat(BranchCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
+        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
         Assert.Equal(["company.config.view"], PresetRoles.Definitions[PresetRoles.AccessAuditorId].Permissions.Where(c => c.StartsWith("company.")));
         Assert.Empty(PresetRoles.Definitions[PresetRoles.AccessManagerId].Permissions.Where(c => c.StartsWith("company.")));
     }

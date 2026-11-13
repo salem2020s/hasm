@@ -29,6 +29,7 @@ builder.Services.AddHasmAccess(builder.Configuration);
 builder.Services.AddHasmCompanyRuntime(builder.Configuration);
 builder.Services.AddHasmCompanyConfiguration(builder.Configuration);
 builder.Services.AddHasmBranches();
+builder.Services.AddHasmWarehouses();
 
 var app = builder.Build();
 
@@ -58,6 +59,7 @@ app.MapAuthEndpoints();
 app.MapAccessEndpoints();
 app.MapCompanyConfigurationEndpoints();
 app.MapBranchEndpoints();
+app.MapWarehouseEndpoints();
 
 app.Run();
 
