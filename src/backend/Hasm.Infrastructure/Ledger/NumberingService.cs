@@ -23,6 +23,11 @@ public static class LedgerAuditEvents
     public const short CostCenterMoved = 1041;
     public const short CostCenterDeactivated = 1042;
     public const short CostCenterReactivated = 1043;
+    public const short ApprovalPolicyCreated = 1044;
+    public const short ApprovalPolicyUpdated = 1045;
+    public const short ApprovalPolicyDeactivated = 1046;
+    public const short ApprovalPolicyReactivated = 1047;
+    public const short ApprovalDecisionRecorded = 1048;
 }
 
 /// <summary>

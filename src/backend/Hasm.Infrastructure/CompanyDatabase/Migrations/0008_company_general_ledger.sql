@@ -266,3 +266,92 @@ END;
 $$;
 CREATE CONSTRAINT TRIGGER r_f46df562 AFTER INSERT OR UPDATE ON t_939ae118 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION f_4a0f86c6();
 REVOKE ALL ON TABLE t_939ae118 FROM PUBLIC;
+
+-- ======================================================================================================================================
+-- Slice S4: approval policies and document approval decisions
+-- ======================================================================================================================================
+-- A policy says: documents of a type (and source: 1 manual, 2 automatic, 3 either), of one branch (or every branch), whose BASE-currency amount is at least a
+-- threshold, need N distinct approvers. With NO matching active policy nothing requires approval (the company decides). When several policies match, the
+-- STRICTEST (highest N) applies. One SQL function evaluates this, so the service and the posting trigger (slice S5) can never disagree; automatic documents are
+-- subject to the same policies. Policies are never deleted (deactivate); editing one never alters recorded decisions.
+CREATE TABLE t_8f2462c5 (
+    c_a2b53e06 uuid NOT NULL DEFAULT gen_random_uuid(),
+    c_9c04c465 varchar(40) NOT NULL,
+    c_b130782f smallint NOT NULL,
+    c_5d70e226 uuid NULL,
+    c_a0b367ec numeric(20,4) NOT NULL,
+    c_a874380a smallint NOT NULL,
+    c_2de53c75 varchar(200) NULL,
+    c_e5bbb507 varchar(200) NULL,
+    c_61d707fd boolean NOT NULL DEFAULT true,
+    c_c9bff476 bigint NOT NULL DEFAULT 1,
+    c_bc3b07c1 timestamptz NOT NULL,
+    c_4fb325f1 timestamptz NOT NULL,
+    CONSTRAINT k_202ebd22 PRIMARY KEY (c_a2b53e06),
+    CONSTRAINT k_9d1f135b FOREIGN KEY (c_5d70e226) REFERENCES t_8ba6c27d (c_358158d2),
+    CONSTRAINT k_ecd43dd2 CHECK (c_9c04c465 ~ '^[a-z][a-z_]{0,39}$' AND c_b130782f IN (1, 2, 3) AND c_a0b367ec >= 0 AND c_a874380a BETWEEN 1 AND 5),
+    CONSTRAINT k_511df159 CHECK (
+        (c_2de53c75 IS NOT NULL OR c_e5bbb507 IS NOT NULL)
+        AND (c_2de53c75 IS NULL OR char_length(btrim(c_2de53c75)) BETWEEN 1 AND 200)
+        AND (c_e5bbb507 IS NULL OR char_length(btrim(c_e5bbb507)) BETWEEN 1 AND 200)),
+    CONSTRAINT k_3c36b22b CHECK (c_c9bff476 > 0)
+);
+CREATE INDEX k_6d354b7e ON t_8f2462c5 (c_9c04c465) WHERE c_61d707fd;
+
+CREATE FUNCTION f_25cf6e1b() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP <> 'UPDATE' THEN RAISE EXCEPTION 'approval policies cannot be deleted'; END IF;
+    IF NEW.c_a2b53e06 IS DISTINCT FROM OLD.c_a2b53e06 OR NEW.c_9c04c465 IS DISTINCT FROM OLD.c_9c04c465 OR NEW.c_bc3b07c1 IS DISTINCT FROM OLD.c_bc3b07c1 THEN
+        RAISE EXCEPTION 'the identity and document type of an approval policy are immutable';
+    END IF;
+    IF NEW.c_c9bff476 <> OLD.c_c9bff476 + 1 THEN RAISE EXCEPTION 'revision must advance by one'; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_1fa261cf BEFORE UPDATE OR DELETE ON t_8f2462c5 FOR EACH ROW EXECUTE FUNCTION f_25cf6e1b();
+CREATE TRIGGER r_0fceb20e BEFORE TRUNCATE ON t_8f2462c5 FOR EACH STATEMENT EXECUTE FUNCTION f_25cf6e1b();
+REVOKE ALL ON TABLE t_8f2462c5 FROM PUBLIC;
+
+-- Approval decisions (append-only). One decision per approver per document REVISION: editing a document creates a new revision, so earlier approvals no longer count.
+-- decision 1 = approve, 2 = reject (a rejection needs a comment). The document is polymorphic (type + id), so it is not a foreign key.
+CREATE TABLE t_3fa074e5 (
+    c_6aeb80ff bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    c_9adee5c9 varchar(40) NOT NULL,
+    c_175a20c9 uuid NOT NULL,
+    c_f399e237 bigint NOT NULL,
+    c_942d312c uuid NOT NULL,
+    c_3a789977 smallint NOT NULL,
+    c_9d1b7065 timestamptz NOT NULL,
+    c_a3ecb6f1 varchar(500) NULL,
+    c_17279abc varchar(48) NOT NULL,
+    c_0d6e0bbc bigint NOT NULL,
+    CONSTRAINT k_3b3caa4b PRIMARY KEY (c_6aeb80ff),
+    CONSTRAINT k_d6960f83 UNIQUE (c_9adee5c9, c_175a20c9, c_f399e237, c_942d312c),
+    CONSTRAINT k_e6168660 UNIQUE (c_17279abc, c_0d6e0bbc),
+    CONSTRAINT k_0bfb0744 FOREIGN KEY (c_17279abc, c_0d6e0bbc) REFERENCES t_2db8cf1f (c_839d1168, c_689dc6c4),
+    CONSTRAINT k_d0d8b4b2 CHECK (c_f399e237 > 0 AND c_3a789977 IN (1, 2)
+        AND (c_a3ecb6f1 IS NULL OR char_length(btrim(c_a3ecb6f1)) > 0)
+        AND (c_3a789977 = 1 OR c_a3ecb6f1 IS NOT NULL))
+);
+CREATE FUNCTION f_e2da8d13() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'approval decisions are append-only';
+END;
+$$;
+CREATE TRIGGER r_2356bf28 BEFORE UPDATE OR DELETE ON t_3fa074e5 FOR EACH ROW EXECUTE FUNCTION f_e2da8d13();
+CREATE TRIGGER r_518d224c BEFORE TRUNCATE ON t_3fa074e5 FOR EACH STATEMENT EXECUTE FUNCTION f_e2da8d13();
+REVOKE ALL ON TABLE t_3fa074e5 FROM PUBLIC;
+
+-- Number of approvals a document needs: the strictest matching active policy (0 = none configured / none matches).
+CREATE FUNCTION f_660e4c73(p_doc varchar, p_source smallint, p_branch uuid, p_amount numeric) RETURNS integer LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(max(p.c_a874380a), 0)::integer FROM t_8f2462c5 p
+    WHERE p.c_61d707fd AND p.c_9c04c465 = p_doc AND (p.c_b130782f = 3 OR p.c_b130782f = p_source)
+      AND (p.c_5d70e226 IS NULL OR p.c_5d70e226 = p_branch) AND p_amount >= p.c_a0b367ec
+$$;
+
+-- True when the document REVISION has at least the required number of distinct approvers and nobody rejected it (0 required = always satisfied).
+CREATE FUNCTION f_7cdbb48f(p_doc varchar, p_id uuid, p_rev bigint, p_required integer) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT p_required <= 0 OR (
+        NOT EXISTS (SELECT 1 FROM t_3fa074e5 d WHERE d.c_9adee5c9 = p_doc AND d.c_175a20c9 = p_id AND d.c_f399e237 = p_rev AND d.c_3a789977 = 2)
+        AND (SELECT count(DISTINCT d.c_942d312c) FROM t_3fa074e5 d WHERE d.c_9adee5c9 = p_doc AND d.c_175a20c9 = p_id AND d.c_f399e237 = p_rev AND d.c_3a789977 = 1) >= p_required)
+$$;

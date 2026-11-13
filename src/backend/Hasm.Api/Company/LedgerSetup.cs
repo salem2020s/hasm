@@ -15,6 +15,8 @@ public static class LedgerSetup
         services.AddSingleton(sp => new ExchangeRateManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ExchangeRateService>()));
         services.AddSingleton(sp => new CostCenterService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new CostCenterManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterService>()));
+        services.AddSingleton(sp => new ApprovalPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new ApprovalPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ApprovalPolicyService>()));
         return services;
     }
 }

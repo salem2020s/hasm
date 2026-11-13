@@ -68,6 +68,7 @@ app.MapAccountEndpoints();
 app.MapNumberingEndpoints();
 app.MapExchangeRateEndpoints();
 app.MapCostCenterEndpoints();
+app.MapApprovalPolicyEndpoints();
 
 app.Run();
 

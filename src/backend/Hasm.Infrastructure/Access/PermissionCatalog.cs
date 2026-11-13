@@ -108,6 +108,8 @@ public sealed partial class PermissionCatalog
         new("company.exchangerates", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create]),
         // Cost centers: company-wide, like the chart of accounts; re-coding and restructuring are separate, controlled permissions.
         new("company.costcenters", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure]),
+        // Approval policies (configuration only). Approving a DOCUMENT is a separate journal permission (slice S5) that is never in the Company Administrator preset.
+        new("company.approvalpolicies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
     ]);
 
     public static class Codes
@@ -165,6 +167,10 @@ public sealed partial class PermissionCatalog
         public const string CostCentersActivate = "company.costcenters.activate";
         public const string CostCentersRecode = "company.costcenters.recode";
         public const string CostCentersRestructure = "company.costcenters.restructure";
+        public const string ApprovalPoliciesView = "company.approvalpolicies.view";
+        public const string ApprovalPoliciesCreate = "company.approvalpolicies.create";
+        public const string ApprovalPoliciesUpdate = "company.approvalpolicies.update";
+        public const string ApprovalPoliciesActivate = "company.approvalpolicies.activate";
     }
 
     public Permission Get(string code) =>
