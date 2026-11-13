@@ -21,6 +21,8 @@ public interface IEntitlementPolicy
     string Edition { get; }
     /// <summary>Maximum currencies enabled at the same time (the base currency included).</summary>
     int MaxEnabledCurrencies { get; }
+    /// <summary>Maximum branches EVER created (inactive ones count; branches are never deleted). The default is the Trial limit; a paid edition overrides it.</summary>
+    int MaxBranches => 1;
     IReadOnlyList<TrialRestriction> Restrictions { get; }
 }
 
@@ -29,13 +31,14 @@ public sealed class TrialEntitlementPolicy : IEntitlementPolicy
     public static TrialEntitlementPolicy Instance { get; } = new();
     public string Edition => "trial";
     public int MaxEnabledCurrencies => 1;
+    public int MaxBranches => 1;
 
     public IReadOnlyList<TrialRestriction> Restrictions { get; } =
     [
         new("multi_currency", 1, Enforcement.Enforced, "Only the base currency may be enabled."),
         new("companies", 1, Enforcement.NotEnforced, "register-company / provision-company (Hasm.Admin) can create more companies."),
         new("users", 2, Enforcement.NotEnforced, "POST /api/v1/admin/users, Hasm.Admin bootstrap-admin and company memberships can exceed two users."),
-        new("branches", 1, Enforcement.NotEnforced, "Branch management does not exist yet (Phase 3.1B)."),
+        new("branches", 1, Enforcement.Enforced, "Every branch ever created counts, inactive ones included; the main branch created with the company is the one allowed branch."),
         new("warehouses", 1, Enforcement.NotEnforced, "Warehouse management does not exist yet (Phase 3.1C)."),
         new("posted_business_transactions", 100, Enforcement.NotEnforced, "No posting module exists yet."),
     ];

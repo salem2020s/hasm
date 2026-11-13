@@ -20,9 +20,17 @@ public static class PostgresRoleTestEnvironment
 
     public static bool Required => Environment.GetEnvironmentVariable(RequireVar) == "1";
 
-    public static string? Evaluate() => Evaluate(
-        Environment.GetEnvironmentVariable(PostgresTestEnvironment.ConnectionVar), Environment.GetEnvironmentVariable(RoleAdminConnectionVar),
-        Environment.GetEnvironmentVariable(PostgresTestEnvironment.DisposableVar));
+    public static string? Evaluate()
+    {
+        var roleAdmin = Environment.GetEnvironmentVariable(RoleAdminConnectionVar);
+        var staticReason = Evaluate(Environment.GetEnvironmentVariable(PostgresTestEnvironment.ConnectionVar), roleAdmin,
+            Environment.GetEnvironmentVariable(PostgresTestEnvironment.DisposableVar));
+        if (staticReason is not null) return staticReason;
+        var basic = PostgresTestEnvironment.Evaluate();   // identity of the ordinary connection
+        if (basic is not null) return basic;
+        var identity = PostgresClusterIdentity.Verify(roleAdmin!);
+        return identity is null ? null : "Role-administration connection: " + identity;
+    }
 
     /// <summary>Returns null when the role gate is open: the ordinary gate holds AND a role-administration connection on the same safe terms is supplied.</summary>
     public static string? Evaluate(string? adminConnection, string? roleAdminConnection, string? acknowledgement)

@@ -281,7 +281,14 @@ public class ScopeFailClosedTests : AccessTestBase
         Assert.False(await Allowed(member, company, DocView, ScopeTarget.Warehouse(unverified)));
         Assert.False(await Allowed(member, company, StockView, ScopeTarget.Warehouse(unverified)));
         Assert.False(await Allowed(member, company, StockView, ScopeTarget.Branch(unverified)));
-        Assert.True(await Allowed(member, company, DocView, ScopeTarget.Branch(unverified)));                                   // exactly its own target only
+        // A branch that cannot be verified (unknown to the company data) authorizes NOTHING, not even its own id: such a row is dropped (fail closed).
+        Assert.False(await Allowed(member, company, DocView, ScopeTarget.Branch(unverified)));
+        // A raw row for a VERIFIABLE branch (with its activation epoch) authorizes exactly its own target and nothing else.
+        var other = await NewMember(company, admin);
+        await SeedAssignment(other.Id, company, docs, ScopeKind.Branch, BranchA);
+        Assert.True(await Allowed(other, company, DocView, ScopeTarget.Branch(BranchA)));
+        Assert.False(await Allowed(other, company, DocView, ScopeTarget.Branch(KnownBranchB)));
+        Assert.False(await Allowed(other, company, DocView));
         Fails(await Access.ListMembersAsync(member.Id, company), AccessStatus.Forbidden);
         Fails(await Access.CreateRoleAsync(member.Id, company, "x", []), AccessStatus.Forbidden);
         Fails(await Access.ListAuditAsync(member.Id, company), AccessStatus.Forbidden);

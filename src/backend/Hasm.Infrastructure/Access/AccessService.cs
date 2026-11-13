@@ -33,7 +33,7 @@ public enum AccessEvent : short
 
 public sealed record MemberView(Guid UserId, string Login, string DisplayName, UserState State, DateTimeOffset GrantedAtUtc);
 public sealed record RoleView(Guid Id, string Name, bool IsPreset, string? PresetKey, bool IsActive, IReadOnlyList<string> Permissions);
-public sealed record AssignmentView(Guid Id, Guid UserId, Guid RoleId, ScopeKind Scope, Guid? ScopeId, DateTimeOffset GrantedAtUtc);
+public sealed record AssignmentView(Guid Id, Guid UserId, Guid RoleId, ScopeKind Scope, Guid? ScopeId, DateTimeOffset GrantedAtUtc, long? ScopeEpoch = null);
 public sealed record AuditEntry(long Id, DateTimeOffset OccurredAtUtc, Guid? ActorUserId, Guid? TargetUserId, Guid? RoleId, AccessEvent Event, string? Detail);
 
 /// <summary>The identity and company of a live session, read from the server-side session row (never from the client).</summary>
@@ -148,7 +148,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
-            $"SELECT a.{A.Id}, a.{A.RoleId}, a.{A.ScopeKind}, a.{A.ScopeId}, rp.{RP.Permission} " +
+            $"SELECT a.{A.Id}, a.{A.RoleId}, a.{A.ScopeKind}, a.{A.ScopeId}, rp.{RP.Permission}, a.{A.ScopeEpoch} " +
             $"FROM {A.Table} a " +
             $"JOIN {M.Table} m ON m.{M.UserId} = a.{A.UserId} AND m.{M.CompanyId} = a.{A.CompanyId} AND m.{M.RevokedAtUtc} IS NULL " +
             $"JOIN {U.Table} u ON u.{U.Id} = a.{A.UserId} " +
@@ -160,16 +160,34 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         cmd.Parameters.AddWithValue("c", companyId);
         cmd.Parameters.AddWithValue("anyUser", !requireActiveUser);
 
-        var grants = new Dictionary<Guid, (Guid Role, ScopeKind Scope, Guid? ScopeId, HashSet<string> Permissions)>();
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct))
+        var grants = new Dictionary<Guid, (Guid Role, ScopeKind Scope, Guid? ScopeId, long? Epoch, HashSet<string> Permissions)>();
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
         {
-            var id = r.GetGuid(0);
-            if (!grants.TryGetValue(id, out var g))
-                grants[id] = g = (r.GetGuid(1), (ScopeKind)r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), []);
-            if (!r.IsDBNull(4)) g.Permissions.Add(r.GetString(4));
+            while (await r.ReadAsync(ct))
+            {
+                var id = r.GetGuid(0);
+                if (!grants.TryGetValue(id, out var g))
+                    grants[id] = g = (r.GetGuid(1), (ScopeKind)r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(5) ? null : r.GetInt64(5), []);
+                if (!r.IsDBNull(4)) g.Permissions.Add(r.GetString(4));
+            }
         }
+        // Branch-scoped grants are effective only while the branch exists in THIS company, is active and still has the activation epoch the
+        // assignment recorded. Anything else (deactivated, reactivated since, unknown, company database unavailable) drops the grant:
+        // fail closed, never reinterpreted as company-wide access. Company-wide grants are unaffected. Evaluated on every call (no cache).
+        foreach (var (grantId, g) in grants.Where(kv => kv.Value.Scope == ScopeKind.Branch).ToList())
+            if (!await BranchGrantIsLiveAsync(companyId, g.ScopeId, g.Epoch, ct)) grants.Remove(grantId);
         return new EffectivePermissions(catalog, [.. grants.Select(kv => new GrantedRole(kv.Key, kv.Value.Role, kv.Value.Scope, kv.Value.ScopeId, kv.Value.Permissions))]);
+    }
+
+    private async Task<bool> BranchGrantIsLiveAsync(Guid companyId, Guid? branchId, long? recordedEpoch, CancellationToken ct)
+    {
+        if (branchId is not { } id || recordedEpoch is not { } epoch) return false;
+        try
+        {
+            var state = await scopeValidator.GetStateAsync(companyId, ScopeKind.Branch, id, ct);
+            return state is { Active: true } && state.Epoch == epoch;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
     }
 
     private static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
@@ -526,14 +544,14 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         var actor = await LoadEffectiveAsync(conn, null, actorUserId, companyId, true, ct);
         if (!actor.HasCompanyWide(PermissionCatalog.Codes.AssignmentsView)) return Denied<IReadOnlyList<AssignmentView>>();
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {A.Id}, {A.UserId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.GrantedAtUtc} FROM {A.Table} " +
+            $"SELECT {A.Id}, {A.UserId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.GrantedAtUtc}, {A.ScopeEpoch} FROM {A.Table} " +
             $"WHERE {A.CompanyId} = @c AND {A.RevokedAtUtc} IS NULL AND (@u::uuid IS NULL OR {A.UserId} = @u) ORDER BY {A.GrantedAtUtc}, {A.Id}", conn);
         cmd.Parameters.AddWithValue("c", companyId);
         cmd.Parameters.Add(new NpgsqlParameter("u", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = (object?)userId ?? DBNull.Value });
         var list = new List<AssignmentView>();
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
-            list.Add(new AssignmentView(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), (ScopeKind)r.GetInt16(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetFieldValue<DateTimeOffset>(5)));
+            list.Add(new AssignmentView(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), (ScopeKind)r.GetInt16(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetFieldValue<DateTimeOffset>(5), r.IsDBNull(6) ? null : r.GetInt64(6)));
         return AccessResult<IReadOnlyList<AssignmentView>>.Ok(list);
     }
 
@@ -545,9 +563,16 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         if (!actor.HasCompanyWide(PermissionCatalog.Codes.AssignmentsCreate)) return Denied<AssignmentView>();
         var scope = new ScopeTarget(scopeKind, scopeId);
         if (!Enum.IsDefined(scopeKind) || !scope.IsWellFormed) return AccessResult<AssignmentView>.Fail(AccessStatus.Invalid, "invalid_scope");
-        // Fail closed: a Branch/Warehouse id is accepted only if the (future) company data confirms it exists in this company.
-        if (scopeKind != ScopeKind.Company && !await ScopeExistsAsync(companyId, scope, ct))
-            return AccessResult<AssignmentView>.Fail(AccessStatus.Invalid, "scope_not_verifiable");
+        // Fail closed: a Branch/Warehouse id is accepted only if the company data confirms it exists in this company. A branch must also be ACTIVE;
+        // the activation epoch it has right now is recorded on the assignment (a later deactivation/reactivation makes the assignment inert for good).
+        long? scopeEpoch = null;
+        if (scopeKind != ScopeKind.Company)
+        {
+            var state = await ScopeStateAsync(companyId, scope, ct);
+            if (state is null || (scopeKind == ScopeKind.Branch && !state.Active))
+                return AccessResult<AssignmentView>.Fail(AccessStatus.Invalid, "scope_not_verifiable");
+            if (scopeKind == ScopeKind.Branch) scopeEpoch = state.Epoch;
+        }
         if (targetUserId == actorUserId) return Denied<AssignmentView>("cannot_modify_self");
         if (!await IsActiveMemberAsync(conn, tx, targetUserId, companyId, ct)) return AccessResult<AssignmentView>.Fail(AccessStatus.NotFound, "member_not_found");
         var role = await FindRoleAsync(conn, tx, companyId, roleId, ct);
@@ -556,10 +581,29 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
         var id = Guid.NewGuid();
         var now = clock.GetUtcNow();
+        if (scopeKind == ScopeKind.Branch)
+        {
+            // Retire assignments of the SAME user, role and branch recorded under an older epoch: they are already inert (never effective again)
+            // and would otherwise block this explicit new assignment through the one-active-assignment index. Audited as revocations.
+            var stale = new List<Guid>();
+            await using (var find = new NpgsqlCommand(
+                $"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t, {A.RevokedBy} = @a WHERE {A.UserId} = @u AND {A.CompanyId} = @c AND {A.RoleId} = @r AND {A.ScopeKind} = 1 AND {A.ScopeId} = @s " +
+                $"AND {A.RevokedAtUtc} IS NULL AND {A.ScopeEpoch} IS DISTINCT FROM @e RETURNING {A.Id}", conn, tx))
+            {
+                find.Parameters.AddWithValue("t", now); find.Parameters.AddWithValue("a", actorUserId); find.Parameters.AddWithValue("u", targetUserId);
+                find.Parameters.AddWithValue("c", companyId); find.Parameters.AddWithValue("r", roleId); find.Parameters.AddWithValue("s", scopeId!.Value);
+                find.Parameters.AddWithValue("e", scopeEpoch!.Value);
+                await using var rr = await find.ExecuteReaderAsync(ct);
+                while (await rr.ReadAsync(ct)) stale.Add(rr.GetGuid(0));
+            }
+            foreach (var _ in stale)
+                await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, roleId, AccessEvent.RoleAssignmentRevoked, $"{ScopeText(scope)} (stale activation epoch)", ct);
+        }
         try
         {
             await using var ins = new NpgsqlCommand(
-                $"INSERT INTO {A.Table} ({A.Id}, {A.UserId}, {A.CompanyId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.GrantedAtUtc}, {A.GrantedBy}) VALUES (@i, @u, @c, @r, @k, @s, @t, @a)", conn, tx);
+                $"INSERT INTO {A.Table} ({A.Id}, {A.UserId}, {A.CompanyId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.ScopeEpoch}, {A.GrantedAtUtc}, {A.GrantedBy}) VALUES (@i, @u, @c, @r, @k, @s, @e, @t, @a)", conn, tx);
+            ins.Parameters.Add(new NpgsqlParameter("e", NpgsqlTypes.NpgsqlDbType.Bigint) { Value = (object?)scopeEpoch ?? DBNull.Value });
             ins.Parameters.AddWithValue("i", id);
             ins.Parameters.AddWithValue("u", targetUserId);
             ins.Parameters.AddWithValue("c", companyId);
@@ -576,7 +620,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         }
         await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, roleId, AccessEvent.RoleAssigned, ScopeText(scope), ct);
         await CommitAuditedAsync(tx, ct);
-        return AccessResult<AssignmentView>.Ok(new AssignmentView(id, targetUserId, roleId, scopeKind, scopeId, now));
+        return AccessResult<AssignmentView>.Ok(new AssignmentView(id, targetUserId, roleId, scopeKind, scopeId, now, scopeEpoch));
     }
 
     private static string ScopeText(ScopeTarget scope) => scope.Kind == ScopeKind.Company ? "scope: company" : $"scope: {scope.Kind.ToString().ToLowerInvariant()} {scope.Id}";
@@ -621,6 +665,13 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     // ------------------------------------------------------------------ safeguards
 
     /// <summary>Fail-closed scope check: any validator error or refusal means "not verifiable".</summary>
+    /// <summary>Fail-closed state lookup: any validator error or refusal means "not verifiable" (null).</summary>
+    private async Task<ScopeTargetState?> ScopeStateAsync(Guid companyId, ScopeTarget scope, CancellationToken ct)
+    {
+        try { return scope.Id is { } id ? await scopeValidator.GetStateAsync(companyId, scope.Kind, id, ct) : null; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+    }
+
     private async Task<bool> ScopeExistsAsync(Guid companyId, ScopeTarget scope, CancellationToken ct)
     {
         try { return scope.Id is { } id && await scopeValidator.ExistsAsync(companyId, scope.Kind, id, ct); }

@@ -8,6 +8,7 @@ import { AuthProvider, createSessionBridge, useAuth, type SessionBridge } from "
 import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
+import { BranchesPage } from "./pages/Branches";
 import { CompanySelectPage } from "./pages/CompanySelect";
 import { CurrenciesPage } from "./pages/Currencies";
 import { HistoryPage } from "./pages/History";
@@ -22,7 +23,7 @@ import "./visual/visual.css";
 /** The Tauri window and the shared web app run THIS build; only the session transport differs (bearer in memory vs HttpOnly cookie). */
 export { isTauri };
 
-interface RouteDef { path: string; permission?: string; /** Allowed when ANY of these is held (each section inside still enforces its own permission). */ anyOf?: string[]; element: ReactNode }
+interface RouteDef { path: string; permission?: string; /** Allowed when ANY of these is held (each section inside still enforces its own permission). */ anyOf?: string[]; /** Allowed when ANY grant (even for a single branch) holds this permission; the server still decides per branch. */ anyScope?: string; element: ReactNode }
 
 /** Former pages that now live inside the unified Company Details & Settings page (old bookmarks keep working). */
 const REDIRECTS: Record<string, string> = { "/company/profile": "/company/details", "/company/settings": "/company/details/general" };
@@ -43,6 +44,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/details", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
   { path: "/company/details/general", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
   { path: "/company/currencies", permission: "company.currencies.view", element: <CurrenciesPage /> },
+  { path: "/company/branches", anyScope: "company.branches.view", element: <BranchesPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
   ...(DevPreviews ? [
     { path: "/dev/preview", element: <Suspense fallback={<Loading />}><DevPreviews.gallery /></Suspense> },
@@ -72,8 +74,9 @@ function Shell() {
     const company: MenuItem[] = [
       { id: "/company/details", label: t("nav.details"), permission: "company.profile.view|company.settings.view" },
       { id: "/company/currencies", label: t("nav.currencies"), permission: "company.currencies.view" },
+      { id: "/company/branches", label: t("nav.branches"), permission: "company.branches.view", anyScope: true },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
-    ].filter((i) => i.permission.split("|").some((p) => auth.can(p))).map(({ id, label }) => ({ id, label }));
+    ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
@@ -106,7 +109,7 @@ function Shell() {
   const def = ROUTES.find((r) => r.path === route);
   // Protected navigation: a route is rendered only when the permission is held; the server enforces the same rule independently.
   const content = !def ? <Banner kind="error" testId="not-found">{t("error.not_found")}</Banner>
-    : (def.permission && !auth.can(def.permission)) || (def.anyOf && !def.anyOf.some((p) => auth.can(p))) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
+    : (def.permission && !auth.can(def.permission)) || (def.anyOf && !def.anyOf.some((p) => auth.can(p))) || (def.anyScope && !auth.canAny(def.anyScope)) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
     : def.element;
 
   return (

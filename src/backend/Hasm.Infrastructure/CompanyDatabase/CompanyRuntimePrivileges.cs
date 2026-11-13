@@ -30,10 +30,14 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.Currency.Table, ["SELECT"]),
         (CompanySchema.CompanyCurrency.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.ConfigRevision.Table, ["SELECT", "INSERT"]),
+        // Branches (Phase 3.1B): never DELETE/TRUNCATE (records are permanent; triggers refuse even the owner).
+        (CompanySchema.Branch.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.BranchRevision.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
     internal static readonly string[] ForbiddenOnAudit = ["UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+    internal static readonly string[] ForbiddenOnBranch = ["DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
     internal static readonly string[] ForbiddenOnState = ["INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
     private static string Q(string identifier) => new NpgsqlCommandBuilder().QuoteIdentifier(identifier);
@@ -78,6 +82,8 @@ public static class CompanyRuntimePrivileges
           UNION ALL SELECT 'owns_objects' FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = @r::name AND c.relnamespace = 'public'::regnamespace
           UNION ALL SELECT 'audit_modifiable' WHERE to_regclass(@audit) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@audit), p))
           UNION ALL SELECT 'history_modifiable' WHERE to_regclass(@history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@history), p))
+          UNION ALL SELECT 'branch_history_modifiable' WHERE to_regclass(@branch_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@branch_history), p))
+          UNION ALL SELECT 'branch_modifiable' WHERE to_regclass(@branch) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@branch), p))
           UNION ALL SELECT 'state_modifiable' FROM unnest(@state_tables::text[]) t
               WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_state::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
         ) v
@@ -94,6 +100,9 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("audit", BizAudit.Table);
         cmd.Parameters.AddWithValue("forbidden_audit", ForbiddenOnAudit);
         cmd.Parameters.AddWithValue("history", CompanySchema.ConfigRevision.Table);
+        cmd.Parameters.AddWithValue("branch", CompanySchema.Branch.Table);
+        cmd.Parameters.AddWithValue("branch_history", CompanySchema.BranchRevision.Table);
+        cmd.Parameters.AddWithValue("forbidden_branch", ForbiddenOnBranch);
         cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });
         cmd.Parameters.AddWithValue("forbidden_state", ForbiddenOnState);
         var codes = new SortedSet<string>(StringComparer.Ordinal);

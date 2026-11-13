@@ -25,8 +25,13 @@ public static class PostgresTestEnvironment
     public static bool Required => Environment.GetEnvironmentVariable(RequireVar) == "1";
 
     /// <summary>Returns null when the gate is open, otherwise the reason it is closed.</summary>
-    public static string? Evaluate() =>
-        Evaluate(Environment.GetEnvironmentVariable(ConnectionVar), Environment.GetEnvironmentVariable(DisposableVar));
+    public static string? Evaluate()
+    {
+        var raw = Environment.GetEnvironmentVariable(ConnectionVar);
+        var staticReason = Evaluate(raw, Environment.GetEnvironmentVariable(DisposableVar));
+        // The static checks are spoofable: the server itself must also prove it is the disposable instance (see PostgresClusterIdentity).
+        return staticReason ?? PostgresClusterIdentity.Verify(raw!);
+    }
 
     public static string? Evaluate(string? raw, string? acknowledgement)
     {
