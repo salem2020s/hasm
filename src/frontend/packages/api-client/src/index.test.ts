@@ -101,3 +101,56 @@ describe("api client", () => {
     expect(JSON.parse(call(fetchMock).init.body as string)).toMatchObject({ client: "web" });
   });
 });
+
+describe("api client: branches (same endpoints for Web and Desktop)", () => {
+  const branch = { id: "b1", code: "MAIN", revision: 1 };
+  const headersOf = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => call(fetchMock, n).init.headers as Record<string, string>;
+
+  it("lists, reads and creates branches with the anti-CSRF header on the state change only", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(branch)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listBranches();
+    await client.getBranch("a b");
+    await client.createBranch({ code: "N1", nameAr: null, nameEn: "North", addressLine1: null, addressLine2: null, city: null, region: null, postalCode: null, phone: null, email: null, website: null });
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/branches");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/branches/a%20b");
+    expect(call(fetchMock, 2)).toMatchObject({ url: "https://x/api/v1/company/branches", init: { method: "POST" } });
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toMatchObject({ code: "N1", nameEn: "North" });
+    expect(headersOf(fetchMock, 0)["X-Hasm-Request"]).toBeUndefined();
+    expect(headersOf(fetchMock, 2)["X-Hasm-Request"]).toBe("1");
+  });
+
+  it("sends the branch revision as If-Match on update, activation, deactivation and main designation", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json(branch)));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.updateBranch("b1", { nameAr: "ا", nameEn: null, addressLine1: null, addressLine2: null, city: null, region: null, postalCode: null, phone: null, email: null, website: null }, 4);
+    await client.deactivateBranch("b1", 5, "b2");
+    await client.deactivateBranch("b1", 6);
+    await client.activateBranch("b1", 7);
+    await client.makeMainBranch("b1", 8);
+    const urls = [0, 1, 2, 3, 4].map((n) => call(fetchMock, n).url.replace("https://x/api/v1/company/branches/", ""));
+    expect(urls).toEqual(["b1", "b1/deactivate", "b1/deactivate", "b1/activate", "b1/make-main"]);
+    expect([0, 1, 2, 3, 4].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"4"', '"5"', '"6"', '"7"', '"8"']);
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ newMainId: "b2" });
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toEqual({});
+    expect(call(fetchMock, 0).init.method).toBe("PUT");
+  });
+
+  it("uses the bearer token and no cookies on Desktop for the same branch endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/auth/login") ? { user: { id: "u" }, token: "tok" } : { branches: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    await client.login("a", "b");
+    await client.listBranches();
+    const init = call(fetchMock, 1).init;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+    expect(init.credentials).toBe("omit");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/branches");
+  });
+
+  it("surfaces the server's short code and current revision for branch conflicts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "branch_code_taken" }, { status: 409 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.createBranch({ code: "X", nameAr: null, nameEn: "x", addressLine1: null, addressLine2: null, city: null, region: null, postalCode: null, phone: null, email: null, website: null }))
+      .rejects.toMatchObject({ status: 409, code: "branch_code_taken" });
+  });
+});

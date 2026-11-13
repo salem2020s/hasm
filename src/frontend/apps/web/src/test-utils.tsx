@@ -44,6 +44,13 @@ export function fakeClient(overrides: Partial<Record<keyof ApiClient, unknown>> 
     setCurrency: vi.fn(),
     getHistory: vi.fn().mockResolvedValue({ entries: [] }),
     getEntitlements: vi.fn().mockResolvedValue({ edition: "trial", restrictions: [{ key: "multi_currency", limit: 1, enforced: true, note: "" }] }),
+    listBranches: vi.fn().mockResolvedValue({ branches: [], limit: null, everCreated: null, can: { create: false, activate: false, designate: false, update: [] } }),
+    getBranch: vi.fn(),
+    createBranch: vi.fn(),
+    updateBranch: vi.fn(),
+    deactivateBranch: vi.fn(),
+    activateBranch: vi.fn(),
+    makeMainBranch: vi.fn(),
   };
   return { ...base, ...overrides } as unknown as ApiClient;
 }

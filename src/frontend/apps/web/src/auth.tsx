@@ -23,6 +23,8 @@ export interface AuthValue {
   changeCompany(): Promise<void>;
   refreshCompanies(): Promise<void>;
   can(permission: string): boolean;
+  /** True when ANY grant (company-wide or for a single branch) holds the permission. Only for showing a screen; the server decides per branch. */
+  canAny(permission: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -51,6 +53,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const [companies, setCompanies] = useState<CompanySummary[]>([]);
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<ReadonlySet<string>>(new Set());
+  const [anyPermissions, setAnyPermissions] = useState<ReadonlySet<string>>(new Set());
   const [notice, setNotice] = useState<Notice>(null);
   const mounted = useRef(true);
 
@@ -59,6 +62,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanies([]);
     setCompanyId(null);
     setPermissions(new Set());
+    setAnyPermissions(new Set());
     setNotice(why);
     setPhase("anonymous");
   }, []);
@@ -80,6 +84,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     const me = await api.accessMe();
     setCompanyId(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
+    setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
     setPhase("ready");
   }, [api]);
 
@@ -153,6 +158,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }
     setCompanyId(null);
     setPermissions(new Set());
+    setAnyPermissions(new Set());
     try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
     setPhase("needCompany");
   }, [api, handleError, loadCompanies]);
@@ -164,8 +170,9 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const value = useMemo<AuthValue>(() => ({
     phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
+    canAny: (p) => anyPermissions.has(p),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
-  }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, locale]);
+  }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, locale]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

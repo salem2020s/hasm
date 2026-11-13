@@ -127,6 +127,40 @@ export interface EntitlementsResponse {
   restrictions: { key: string; limit: number | null; enforced: boolean; note: string }[];
 }
 
+
+export interface Branch {
+  id: string;
+  code: string;
+  nameAr: string | null;
+  nameEn: string | null;
+  isActive: boolean;
+  isMain: boolean;
+  /** Advances on every deactivation and reactivation (branch-scoped access assignments depend on it). */
+  activationEpoch: number;
+  /** True for the main branch created by the system when the company was provisioned. */
+  seeded: boolean;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  revision: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+/** The editable fields of a branch (the code is sent on create only and can never change afterwards). */
+export type BranchInput = Pick<Branch, "nameAr" | "nameEn" | "addressLine1" | "addressLine2" | "city" | "region" | "postalCode" | "phone" | "email" | "website"> & { code?: string };
+export interface BranchesResponse {
+  branches: Branch[];
+  /** Edition limit of branches ever created, and how many exist (inactive ones count). */
+  limit: number | null;
+  everCreated: number | null;
+  /** What this caller may do. The server authorizes every action again; this only shows or hides controls. */
+  can: { create: boolean; activate: boolean; designate: boolean; update: string[] };
+}
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -220,6 +254,18 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getHistory: (entity?: string, before?: number) =>
       get<{ entries: HistoryEntry[] }>(`/api/v1/company/history?limit=50${entity ? `&entity=${enc(entity)}` : ""}${before ? `&before=${before}` : ""}`),
     getEntitlements: () => get<EntitlementsResponse>("/api/v1/company/entitlements"),
+
+    // Branch management (Phase 3.1B). Changes carry the branch revision as If-Match; the server enforces every rule.
+    listBranches: () => get<BranchesResponse>("/api/v1/company/branches"),
+    getBranch: (id: string) => get<Branch>(`/api/v1/company/branches/${enc(id)}`),
+    createBranch: (branch: BranchInput) => request<Branch>("POST", "/api/v1/company/branches", { body: branch }),
+    updateBranch: (id: string, branch: BranchInput, revision: number) =>
+      request<Branch>("PUT", `/api/v1/company/branches/${enc(id)}`, { body: branch, ifMatch: revision }),
+    /** The main branch can be deactivated only together with `newMainId`, another active branch (atomic on the server). */
+    deactivateBranch: (id: string, revision: number, newMainId?: string) =>
+      request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/deactivate`, { body: newMainId ? { newMainId } : {}, ifMatch: revision }),
+    activateBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/activate`, { ifMatch: revision }),
+    makeMainBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/make-main`, { ifMatch: revision }),
   };
 }
 
