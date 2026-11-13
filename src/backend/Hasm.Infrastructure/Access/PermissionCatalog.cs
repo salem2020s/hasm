@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -99,6 +99,9 @@ public sealed partial class PermissionCatalog
         // Exceptional reopening of a Final Closed period or a closed year is an APPROVAL workflow: Create = request it, Approve = approve (and execute) it.
         // Approve is in no preset except Fiscal Approver, and never in the Company Administrator preset; self-approval is refused by the service and by PostgreSQL.
         new("company.fiscalreopen", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Approve]),
+        // Chart of Accounts (Phase 3.2A, system migration 0010): company-wide only (the chart belongs to the whole company). Re-coding an account and moving it in the
+        // tree are separate, controlled permissions; configuring the automatic code assignment is another.
+        new("company.accounts", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -139,6 +142,13 @@ public sealed partial class PermissionCatalog
         public const string FiscalReopenView = "company.fiscalreopen.view";
         public const string FiscalReopenRequest = "company.fiscalreopen.create";
         public const string FiscalReopenApprove = "company.fiscalreopen.approve";
+        public const string AccountsView = "company.accounts.view";
+        public const string AccountsCreate = "company.accounts.create";
+        public const string AccountsUpdate = "company.accounts.update";
+        public const string AccountsActivate = "company.accounts.activate";
+        public const string AccountsRecode = "company.accounts.recode";
+        public const string AccountsRestructure = "company.accounts.restructure";
+        public const string AccountsConfigure = "company.accounts.configure";
     }
 
     public Permission Get(string code) =>

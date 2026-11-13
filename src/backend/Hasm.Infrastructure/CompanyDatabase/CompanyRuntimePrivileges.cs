@@ -41,6 +41,10 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.FiscalPeriod.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.FiscalHistory.Table, ["SELECT", "INSERT"]),
         (CompanySchema.FiscalReopenRequest.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Chart of Accounts (Phase 3.2A): accounts are never deleted; history is append-only.
+        (CompanySchema.Account.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.AccountSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.AccountRevision.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -96,6 +100,8 @@ public static class CompanyRuntimePrivileges
           UNION ALL SELECT 'warehouse_modifiable' WHERE to_regclass(@warehouse) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@warehouse), p))
           UNION ALL SELECT 'fiscal_history_modifiable' WHERE to_regclass(@fiscal_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@fiscal_history), p))
           UNION ALL SELECT 'fiscal_modifiable' FROM unnest(@fiscal_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
+          UNION ALL SELECT 'account_history_modifiable' WHERE to_regclass(@account_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@account_history), p))
+          UNION ALL SELECT 'account_modifiable' FROM unnest(@account_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
           UNION ALL SELECT 'state_modifiable' FROM unnest(@state_tables::text[]) t
               WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_state::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
         ) v
@@ -118,6 +124,8 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("warehouse", CompanySchema.Warehouse.Table);
         cmd.Parameters.AddWithValue("warehouse_history", CompanySchema.WarehouseRevision.Table);
         cmd.Parameters.AddWithValue("fiscal_history", CompanySchema.FiscalHistory.Table);
+        cmd.Parameters.AddWithValue("account_history", CompanySchema.AccountRevision.Table);
+        cmd.Parameters.AddWithValue("account_tables", new[] { CompanySchema.Account.Table, CompanySchema.AccountSettings.Table });
         cmd.Parameters.AddWithValue("fiscal_tables", new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalReopenRequest.Table });
         cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });
         cmd.Parameters.AddWithValue("forbidden_state", ForbiddenOnState);

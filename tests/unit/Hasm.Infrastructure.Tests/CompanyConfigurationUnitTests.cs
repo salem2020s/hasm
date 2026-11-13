@@ -222,6 +222,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.Branch.Table, CompanySchema.BranchRevision.Table,   // Phase 3.1B (migration 0004)
         CompanySchema.Warehouse.Table, CompanySchema.WarehouseRevision.Table,   // Phase 3.1C (migration 0005)
         CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalHistory.Table, CompanySchema.FiscalReopenRequest.Table,   // Phase 3.1D (migration 0006): calendar structure and reopen requests, no financial data
+        CompanySchema.Account.Table, CompanySchema.AccountSettings.Table, CompanySchema.AccountRevision.Table,   // Phase 3.2A (migration 0007): the chart of accounts is master data, not financial history
     ];
 
     /// <summary>
@@ -276,6 +277,7 @@ public class ConfigurationSchemaContractTests
     private static readonly string[] BranchCodes = ["company.branches.view", "company.branches.update", "company.branchstructure.create", "company.branchstructure.activate", "company.branchstructure.designate"];
     private static readonly string[] WarehouseCodes = ["company.warehouses.view", "company.warehouses.update", "company.warehousestructure.create", "company.warehousestructure.activate"];
     private static readonly string[] FiscalCodes = ["company.fiscalyears.view", "company.fiscalyears.create", "company.fiscalyears.close", "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen", "company.fiscalreopen.view", "company.fiscalreopen.create"];
+    private static readonly string[] AccountCodes = ["company.accounts.view", "company.accounts.create", "company.accounts.update", "company.accounts.activate", "company.accounts.recode", "company.accounts.restructure", "company.accounts.configure"];
 
     [Fact]
     public void Company_administration_permissions_are_in_the_catalog_and_scoped_to_the_company()
@@ -286,7 +288,7 @@ public class ConfigurationSchemaContractTests
             Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c);
             Assert.Equal(ScopeKind.Company, p.Resource.Scope);
         }
-        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Concat(FiscalCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
+        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Concat(FiscalCodes).Concat(AccountCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
         Assert.Equal(["company.config.view"], PresetRoles.Definitions[PresetRoles.AccessAuditorId].Permissions.Where(c => c.StartsWith("company.")));
         Assert.Empty(PresetRoles.Definitions[PresetRoles.AccessManagerId].Permissions.Where(c => c.StartsWith("company.")));
     }

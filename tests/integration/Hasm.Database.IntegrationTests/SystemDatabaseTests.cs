@@ -14,8 +14,8 @@ public class SystemDatabaseTests : PostgresTestBase
     {
         var result = await Init();
         Assert.True(result.DatabaseCreated);
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9], result.AppliedMigrations);
-        Assert.Equal(9L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], result.AppliedMigrations);
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
@@ -28,17 +28,17 @@ public class SystemDatabaseTests : PostgresTestBase
 
         Assert.False(second.DatabaseCreated);
         Assert.Empty(second.AppliedMigrations);
-        Assert.Equal(9, second.AlreadyApplied);
+        Assert.Equal(10, second.AlreadyApplied);
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table}")); // data preserved
-        Assert.Equal(9L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
     public async Task Concurrent_initializations_apply_each_migration_once()
     {
         var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Init()));
-        Assert.Equal(9, results.Sum(r => r.AppliedMigrations.Count)); // each migration applied exactly once overall
-        Assert.Equal(9L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(10, results.Sum(r => r.AppliedMigrations.Count)); // each migration applied exactly once overall
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
@@ -76,14 +76,14 @@ public class SystemDatabaseTests : PostgresTestBase
     public async Task Failed_migration_rolls_back_completely()
     {
         await Init();
-        var bad = MigrationScript.Parse("0010_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
+        var bad = MigrationScript.Parse("0011_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
         var scripts = MigrationScript.LoadEmbedded().Append(bad).ToList();
         var runner = new MigrationRunner(Options.BuildSystemConnectionString(admin: true));
 
         await Assert.ThrowsAsync<PostgresException>(() => runner.ApplyAsync(scripts));
 
         Assert.Equal(0L, await Scalar<long>("SELECT count(*) FROM information_schema.tables WHERE table_name='zz_partial'"));
-        Assert.Equal(9L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
