@@ -66,6 +66,7 @@ app.MapWarehouseEndpoints();
 app.MapFiscalEndpoints();
 app.MapAccountEndpoints();
 app.MapNumberingEndpoints();
+app.MapExchangeRateEndpoints();
 
 app.Run();
 

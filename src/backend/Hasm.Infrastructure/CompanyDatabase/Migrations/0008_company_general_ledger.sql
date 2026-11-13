@@ -138,3 +138,54 @@ $$;
 CREATE TRIGGER r_45b8c86a BEFORE UPDATE OR DELETE ON t_738092a9 FOR EACH ROW EXECUTE FUNCTION f_ec66526a();
 CREATE TRIGGER r_563a795d BEFORE TRUNCATE ON t_738092a9 FOR EACH STATEMENT EXECUTE FUNCTION f_ec66526a();
 REVOKE ALL ON TABLE t_738092a9 FROM PUBLIC;
+
+-- ======================================================================================================================================
+-- Slice S2: exchange rates
+-- ======================================================================================================================================
+-- A rate is "units of the BASE currency for ONE unit of the foreign currency" (numeric(20,10), strictly positive). The base currency has the implicit rate 1 and is
+-- never stored. Rows are append-only: a correction is a NEW row for the same date and the latest row (highest id) for the latest valid_from <= the date is the
+-- effective rate, so history is preserved and the choice is deterministic. A posted document stores its own applied-rate snapshot (rate id and value, slice S5);
+-- changing rate master data therefore never recalculates posted amounts.
+CREATE TABLE t_eba5b513 (
+    c_e3463fc9 bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    c_3fdf88c5 varchar(3) NOT NULL,
+    c_515a2107 numeric(20,10) NOT NULL,
+    c_94455323 date NOT NULL,
+    c_fc1d8c8c timestamptz NOT NULL,
+    c_1cb257f5 uuid NOT NULL,
+    c_e2f9f81f varchar(200) NULL,
+    c_340bec19 varchar(48) NOT NULL,
+    c_48359c89 bigint NOT NULL,
+    CONSTRAINT k_f1618a01 PRIMARY KEY (c_e3463fc9),
+    CONSTRAINT k_53cc3679 FOREIGN KEY (c_3fdf88c5) REFERENCES t_451e91be (c_b6064cf1),
+    CONSTRAINT k_25aaa623 UNIQUE (c_340bec19, c_48359c89),
+    CONSTRAINT k_a38d200e FOREIGN KEY (c_340bec19, c_48359c89) REFERENCES t_2db8cf1f (c_839d1168, c_689dc6c4),
+    CONSTRAINT k_71fa9285 CHECK (c_515a2107 > 0 AND c_94455323 BETWEEN DATE '2000-01-01' AND DATE '2100-12-31' AND (c_e2f9f81f IS NULL OR length(btrim(c_e2f9f81f)) > 0))
+);
+CREATE INDEX k_4770ec5e ON t_eba5b513 (c_3fdf88c5, c_94455323 DESC, c_e3463fc9 DESC);
+
+CREATE FUNCTION f_6be4dcce() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'exchange rates are append-only (enter a new rate to correct one)';
+END;
+$$;
+CREATE TRIGGER r_22a4dc76 BEFORE UPDATE OR DELETE ON t_eba5b513 FOR EACH ROW EXECUTE FUNCTION f_6be4dcce();
+CREATE TRIGGER r_3e5844f1 BEFORE TRUNCATE ON t_eba5b513 FOR EACH STATEMENT EXECUTE FUNCTION f_6be4dcce();
+
+-- A rate exists only for an ENABLED, NON-BASE company currency (the base currency is implicitly 1; a disabled currency cannot be used).
+CREATE FUNCTION f_489b7b28() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM t_f5bc326a cc WHERE cc.c_6da45b20 = NEW.c_3fdf88c5 AND cc.c_702730ab AND NOT cc.c_5cdc1bc7) THEN
+        RAISE EXCEPTION 'a rate needs an enabled foreign company currency';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_e25ae556 BEFORE INSERT ON t_eba5b513 FOR EACH ROW EXECUTE FUNCTION f_489b7b28();
+
+-- The effective rate id for a currency on a date (NULL = no rate: the currency cannot be used without an authorized override). Used by the service and,
+-- from slice S5, by the posting trigger, so both always choose the same rate.
+CREATE FUNCTION f_56eae1de(p_currency varchar, p_date date) RETURNS bigint LANGUAGE sql STABLE AS $$
+    SELECT c_e3463fc9 FROM t_eba5b513 WHERE c_3fdf88c5 = p_currency AND c_94455323 <= p_date ORDER BY c_94455323 DESC, c_e3463fc9 DESC LIMIT 1
+$$;
+REVOKE ALL ON TABLE t_eba5b513 FROM PUBLIC;

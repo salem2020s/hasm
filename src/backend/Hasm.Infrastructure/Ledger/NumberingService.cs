@@ -16,6 +16,7 @@ namespace Hasm.Infrastructure.Ledger;
 public static class LedgerAuditEvents
 {
     public const short NumberingRuleChanged = 1036;
+    public const short ExchangeRateEntered = 1037;
 }
 
 /// <summary>

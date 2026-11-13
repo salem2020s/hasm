@@ -104,6 +104,8 @@ public sealed partial class PermissionCatalog
         new("company.accounts", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure, PermissionAction.Configure]),
         // General Ledger foundation (Phase 3.2B, system migration 0011), company-wide only. Numbering: view the rules, configure them.
         new("company.numbering", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Exchange rates: manual company-wide master data; entering a rate is the only write (append-only history).
+        new("company.exchangerates", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create]),
     ]);
 
     public static class Codes
@@ -153,6 +155,8 @@ public sealed partial class PermissionCatalog
         public const string AccountsConfigure = "company.accounts.configure";
         public const string NumberingView = "company.numbering.view";
         public const string NumberingConfigure = "company.numbering.configure";
+        public const string ExchangeRatesView = "company.exchangerates.view";
+        public const string ExchangeRatesCreate = "company.exchangerates.create";
     }
 
     public Permission Get(string code) =>
