@@ -102,6 +102,8 @@ public sealed partial class PermissionCatalog
         // Chart of Accounts (Phase 3.2A, system migration 0010): company-wide only (the chart belongs to the whole company). Re-coding an account and moving it in the
         // tree are separate, controlled permissions; configuring the automatic code assignment is another.
         new("company.accounts", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure, PermissionAction.Configure]),
+        // General Ledger foundation (Phase 3.2B, system migration 0011), company-wide only. Numbering: view the rules, configure them.
+        new("company.numbering", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -149,6 +151,8 @@ public sealed partial class PermissionCatalog
         public const string AccountsRecode = "company.accounts.recode";
         public const string AccountsRestructure = "company.accounts.restructure";
         public const string AccountsConfigure = "company.accounts.configure";
+        public const string NumberingView = "company.numbering.view";
+        public const string NumberingConfigure = "company.numbering.configure";
     }
 
     public Permission Get(string code) =>

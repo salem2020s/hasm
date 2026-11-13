@@ -223,6 +223,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.Warehouse.Table, CompanySchema.WarehouseRevision.Table,   // Phase 3.1C (migration 0005)
         CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalHistory.Table, CompanySchema.FiscalReopenRequest.Table,   // Phase 3.1D (migration 0006): calendar structure and reopen requests, no financial data
         CompanySchema.Account.Table, CompanySchema.AccountSettings.Table, CompanySchema.AccountRevision.Table,   // Phase 3.2A (migration 0007): the chart of accounts is master data, not financial history
+        CompanySchema.LedgerHistory.Table, CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table,   // Phase 3.2B S1 (migration 0008): numbering configuration and the issue ledger; no journal or balance exists yet
     ];
 
     /// <summary>
@@ -288,7 +289,7 @@ public class ConfigurationSchemaContractTests
             Assert.True(PermissionCatalog.Default.TryGet(c, out var p), c);
             Assert.Equal(ScopeKind.Company, p.Resource.Scope);
         }
-        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Concat(FiscalCodes).Concat(AccountCodes).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
+        Assert.Equal(codes.Concat(BranchCodes).Concat(WarehouseCodes).Concat(FiscalCodes).Concat(AccountCodes).Concat(["company.numbering.view", "company.numbering.configure"]).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Where(c => c.StartsWith("company.")).Order());
         Assert.Equal(["company.config.view"], PresetRoles.Definitions[PresetRoles.AccessAuditorId].Permissions.Where(c => c.StartsWith("company.")));
         Assert.Empty(PresetRoles.Definitions[PresetRoles.AccessManagerId].Permissions.Where(c => c.StartsWith("company.")));
     }
