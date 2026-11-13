@@ -35,6 +35,14 @@ public static class ConfigAuditEvents
     public const short WarehouseUpdated = 1014;
     public const short WarehouseDeactivated = 1015;
     public const short WarehouseReactivated = 1016;
+    // Fiscal calendar (Phase 3.1D).
+    public const short FiscalYearCreated = 1017;
+    public const short FiscalYearClosed = 1018;
+    public const short FiscalYearReopened = 1019;
+    public const short FiscalPeriodSoftClosed = 1020;
+    public const short FiscalPeriodReopened = 1021;
+    public const short FiscalPeriodFinalClosed = 1022;
+    public const short FiscalPeriodFinalReopened = 1023;
 }
 
 /// <summary>Company profile values in their stored (normalised) form. Authoritative in the company database.</summary>

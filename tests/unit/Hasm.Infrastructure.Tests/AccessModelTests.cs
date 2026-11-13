@@ -33,18 +33,21 @@ public class AccessModelTests
     }
 
     [Fact]
-    public void Preset_roles_only_reference_catalog_permissions_and_administrator_holds_everything()
+    public void Preset_roles_only_reference_catalog_permissions_and_administrator_holds_everything_except_the_two_exceptional_reopenings()
     {
         foreach (var (_, (_, permissions)) in PresetRoles.Definitions)
             Assert.All(permissions, code => Assert.True(PermissionCatalog.Default.TryGet(code, out _), code));
-        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
+        // Segregation of duties: the two exceptional reopenings (a Final Closed period, a closed year) are in the catalog but in NO preset role.
+        string[] exceptional = [PermissionCatalog.Codes.FiscalPeriodsReopenFinal, PermissionCatalog.Codes.FiscalYearsReopen];
+        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(exceptional).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
+        Assert.All(PresetRoles.Definitions.Values, d => Assert.Empty(d.Permissions.Intersect(exceptional)));
     }
 
     [Fact]
     public void Migration_seed_equals_the_code_defined_preset_roles()
     {
-        // The preset roles are seeded by migration 0004 and extended by the versioned migrations 0006 (company administration), 0007 (branches) and 0008 (warehouses).
-        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6 or 7 or 8).Select(s => s.Sql));
+        // The preset roles are seeded by migration 0004 and extended by the versioned migrations 0006 (company administration), 0007 (branches) 0008 (warehouses) and 0009 (fiscal calendar).
+        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6 or 7 or 8 or 9).Select(s => s.Sql));
         var seeded = Regex.Matches(sql, @"^\s*\('(?<id>5c1b0f6e-[0-9a-f-]+)', '(?<perm>[a-z.]+)'\)", RegexOptions.Multiline)
             .GroupBy(m => Guid.Parse(m.Groups["id"].Value))
             .ToDictionary(g => g.Key, g => g.Select(m => m.Groups["perm"].Value).Order().ToArray());

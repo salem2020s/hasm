@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, ReopenFinal }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -93,6 +93,10 @@ public sealed partial class PermissionCatalog
         // (only for that warehouse; no inheritance from branch scope); creating and activating/deactivating change the company structure: company-wide only.
         new("company.warehouses", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Update]),
         new("company.warehousestructure", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate]),
+        // Fiscal calendar (Phase 3.1D, system migration 0009): company-wide only. Soft closing/reopening and final closing are separate permissions, and the two
+        // exceptional reopenings (a Final Closed period, a closed year) are NOT in the preset Company Administrator (segregation of duties): a custom role holds them.
+        new("company.fiscalyears", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Close, PermissionAction.Reopen]),
+        new("company.fiscalperiods", ScopeKind.Company, [PermissionAction.Close, PermissionAction.FinalClose, PermissionAction.Reopen, PermissionAction.ReopenFinal]),
     ]);
 
     public static class Codes
@@ -124,6 +128,14 @@ public sealed partial class PermissionCatalog
         public const string WarehousesUpdate = "company.warehouses.update";
         public const string WarehouseCreate = "company.warehousestructure.create";
         public const string WarehouseActivate = "company.warehousestructure.activate";
+        public const string FiscalYearsView = "company.fiscalyears.view";
+        public const string FiscalYearsCreate = "company.fiscalyears.create";
+        public const string FiscalYearsClose = "company.fiscalyears.close";
+        public const string FiscalYearsReopen = "company.fiscalyears.reopen";
+        public const string FiscalPeriodsClose = "company.fiscalperiods.close";
+        public const string FiscalPeriodsFinalClose = "company.fiscalperiods.finalclose";
+        public const string FiscalPeriodsReopen = "company.fiscalperiods.reopen";
+        public const string FiscalPeriodsReopenFinal = "company.fiscalperiods.reopenfinal";
     }
 
     public Permission Get(string code) =>
@@ -142,7 +154,8 @@ public static class PresetRoles
     public static IReadOnlyDictionary<Guid, (string Key, IReadOnlySet<string> Permissions)> Definitions { get; } =
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).ToHashSet()),
+            // The exceptional reopenings are deliberately outside the preset (segregation of duties); see the catalog comment.
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalYearsReopen, PermissionCatalog.Codes.FiscalPeriodsReopenFinal]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
