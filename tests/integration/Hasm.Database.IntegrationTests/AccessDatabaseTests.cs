@@ -179,7 +179,9 @@ public class AccessMigrationTests : AccessTestBase
         foreach (var (id, (key, permissions)) in PresetRoles.Definitions)
         {
             Assert.Equal(key, await Scalar<string>($"SELECT {Ro.PresetKey} FROM {Ro.Table} WHERE {Ro.Id}=@i AND {Ro.CompanyId} IS NULL AND {Ro.IsActive}", ("i", id)));
-            var stored = await Scalar<string[]>($"SELECT array_agg({Rp.Permission} ORDER BY {Rp.Permission}) FROM {Rp.Table} WHERE {Rp.RoleId}=@i", ("i", id));
+            // Collection equality, independent of the database collation (the CI image sorts by locale, ignoring punctuation): both sides are ordinal-sorted in C#.
+            // Duplicates, missing and unexpected codes still fail: the comparison is element-by-element over the full sorted lists.
+            var stored = (await Scalar<string[]>($"SELECT array_agg({Rp.Permission}) FROM {Rp.Table} WHERE {Rp.RoleId}=@i", ("i", id))).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(permissions.Order(StringComparer.Ordinal), stored);
         }
         Assert.Equal(PresetRoles.Definitions.Count, (int)await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
