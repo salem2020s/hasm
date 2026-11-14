@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\unit\Hasm.Infrastructure.Tests\XlsxBuilder.cs" Link="XlsxBuilder.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\..\src\backend\Hasm.Infrastructure\Hasm.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\src\backend\Hasm.Api\Hasm.Api.csproj" />
     <!-- Built (not referenced) so the admin-tool tests can run the real command-line tool. -->

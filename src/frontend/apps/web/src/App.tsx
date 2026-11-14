@@ -10,6 +10,7 @@ import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
+import { ImportsPage } from "./pages/Imports";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
@@ -60,6 +61,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/fiscal-years", permission: "company.fiscalyears.view", element: <FiscalYearsPage /> },
   { path: "/company/accounts", permission: "company.accounts.view", element: <ChartOfAccountsPage /> },
   { path: "/company/numbering", permission: "company.numbering.view", element: <NumberingPage /> },
+  { path: "/company/imports", permission: "company.imports.view", element: <ImportsPage /> },
   { path: "/company/exchange-rates", permission: "company.exchangerates.view", element: <ExchangeRatesPage /> },
   { path: "/company/cost-centers", permission: "company.costcenters.view", element: <CostCentersPage /> },
   { path: "/company/cost-center-policies", permission: "company.costcenterpolicies.view", element: <CostCenterPoliciesPage /> },
@@ -101,6 +103,7 @@ function Shell() {
       { id: "/company/fiscal-years", label: t("nav.fiscal"), permission: "company.fiscalyears.view" },
       { id: "/company/accounts", label: t("nav.accounts"), permission: "company.accounts.view" },
       { id: "/company/numbering", label: t("nav.numbering"), permission: "company.numbering.view" },
+      { id: "/company/imports", label: t("nav.imports"), permission: "company.imports.view" },
       { id: "/company/exchange-rates", label: t("nav.exchange_rates"), permission: "company.exchangerates.view" },
       { id: "/company/cost-centers", label: t("nav.cost_centers"), permission: "company.costcenters.view" },
       { id: "/company/cost-center-policies", label: t("nav.cost_center_policies"), permission: "company.costcenterpolicies.view" },

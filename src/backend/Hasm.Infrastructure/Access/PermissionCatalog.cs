@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -124,6 +124,8 @@ public sealed partial class PermissionCatalog
         new("company.costcenterpolicies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         // Fiscal-year closing and opening balances (3.2C S3): view/preview, configure the profit and loss account, generate the closing/opening entries (create), and reverse them. Company-wide.
         new("company.fiscalclosing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Create, PermissionAction.Reverse]),
+        // Generic import framework (3.2D): staging, validation, dry run, independent approval and application of imported data. Company-wide; each adapter additionally requires its own business permission.
+        new("company.imports", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Configure, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Apply, PermissionAction.Cancel]),
     ]);
 
     public static class Codes
@@ -204,6 +206,13 @@ public sealed partial class PermissionCatalog
         public const string FiscalClosingConfigure = "company.fiscalclosing.configure";
         public const string FiscalClosingCreate = "company.fiscalclosing.create";
         public const string FiscalClosingReverse = "company.fiscalclosing.reverse";
+        public const string ImportsView = "company.imports.view";
+        public const string ImportsUpload = "company.imports.upload";
+        public const string ImportsConfigure = "company.imports.configure";
+        public const string ImportsSubmit = "company.imports.submit";
+        public const string ImportsApprove = "company.imports.approve";
+        public const string ImportsApply = "company.imports.apply";
+        public const string ImportsCancel = "company.imports.cancel";
     }
 
     public Permission Get(string code) =>
@@ -218,6 +227,7 @@ public static class PresetRoles
     public static readonly Guid AccessAuditorId = new("5c1b0f6e-0000-4a00-8000-000000000003");
     public static readonly Guid FiscalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000004");
     public static readonly Guid JournalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000005");
+    public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -225,7 +235,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -237,6 +247,7 @@ public static class PresetRoles
                 PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.FiscalReopenView, PermissionCatalog.Codes.FiscalYearsView,
             }),
             [JournalApproverId] = ("journal-approver", new HashSet<string> { PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove }),
+            [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,

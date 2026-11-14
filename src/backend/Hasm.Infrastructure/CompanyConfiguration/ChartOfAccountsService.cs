@@ -12,6 +12,13 @@ using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
 
 namespace Hasm.Infrastructure.CompanyConfiguration;
 
+/// <summary>A refusal by the Chart of Accounts domain rules raised inside a caller-owned unit of work (<see cref="ChartOfAccountsService.CreateInWorkAsync"/>): the stable <see cref="Code"/> and field errors.</summary>
+public sealed class ChartOperationException(string code, IReadOnlyList<FieldError>? fields) : Exception(code)
+{
+    public string Code { get; } = code;
+    public IReadOnlyList<FieldError>? Fields { get; } = fields;
+}
+
 /// <summary>
 /// Chart of Accounts domain operations (Phase 3.2A). <b>No authorization here by design:</b> <see cref="ChartOfAccountsManagementService"/> wraps it.
 /// The chart is the company's own tree of accounts (its own database, so no cross-company reference is possible). Every mutation runs in
@@ -42,6 +49,7 @@ public sealed class ChartOfAccountsService(
     private sealed class Abort(ConfigStatus status, string code, long? currentRevision = null, IReadOnlyList<FieldError>? fields = null) : Exception(code)
     {
         public ConfigResult<T> To<T>() => new(status, code, default, fields, currentRevision);
+        public IReadOnlyList<FieldError>? Fields => fields;
     }
 
     // ------------------------------------------------------------------------------------------------------------- reads
@@ -73,8 +81,31 @@ public sealed class ChartOfAccountsService(
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
+            return await CreateCoreAsync(work, actor, input!, manualCode, nameAr, nameEn, givenType, givenNature, isGroup, policy, currency, ct);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Creates an account INSIDE a unit of work the caller already runs (the import framework applies a whole approved batch in one audited transaction). The same validation, the same domain rules, the same
+    /// history row and audit event as <see cref="CreateAsync"/>; the caller must have called <see cref="LockForImportAsync"/> first. A refusal is a <see cref="ChartOperationException"/> (the caller rolls back).
+    /// </summary>
+    public async Task<AccountView> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, AccountInput input, CancellationToken ct = default)
+    {
+        if (!ConfigurationValidation.TryNormalizeAccount(input, out var manualCode, out var nameAr, out var nameEn, out var givenType, out var givenNature, out var isGroup, out var policy, out var currency, out var errors))
+            throw new ChartOperationException("validation_failed", errors);
+        try { return await CreateCoreAsync(work, actor, input, manualCode, nameAr, nameEn, givenType, givenNature, isGroup, policy, currency, ct); }
+        catch (Abort abort) { throw new ChartOperationException(abort.Message, abort.Fields); }
+    }
+
+    /// <summary>The advisory lock every chart writer takes first (before the audit-stream lock).</summary>
+    public Task LockForImportAsync(CompanyAuditedWork work, CancellationToken ct = default) => LockAsync(work, ct);
+
+    private async Task<AccountView> CreateCoreAsync(CompanyAuditedWork work, Guid actor, AccountInput input, string? manualCode, string? nameAr, string? nameEn, AccountType? givenType, AccountNature? givenNature,
+        bool isGroup, AccountCurrencyPolicy policy, string? currency, CancellationToken ct)
+    {
+        {
             AccountView? parent = null;
-            if (input!.ParentId is { } pid)
+            if (input.ParentId is { } pid)
             {
                 parent = (await LoadAsync(work.Connection, work.Transaction, pid, true, ct)).SingleOrDefault()
                     ?? throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("parentId", "parent_not_found")]);
@@ -130,7 +161,7 @@ public sealed class ChartOfAccountsService(
             };
             await RecordAsync(work, ConfigAuditEvents.AccountCreated, actor, 1, id, 1, changes, "account created", ct);
             return (await LoadAsync(work.Connection, work.Transaction, id, false, ct)).Single();
-        }, ct);
+        }
     }
 
     /// <summary>Names, nature, group flag and currency policy. The type never changes; code and parent have their own operations.</summary>

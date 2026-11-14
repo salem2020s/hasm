@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
@@ -131,6 +132,13 @@ public static class AuthenticationSetup
         return (StatusCodes.Status503ServiceUnavailable, "audit_unavailable");
     }
 
+    private static (int, string) Encryption(HttpContext context, EncryptionUnavailableException ex)
+    {
+        // Only the short code is logged (never keys, paths or content); the client sees one generic code. No plaintext fallback exists: the operation simply does not happen.
+        context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Hasm.Encryption").LogError("encryption.unavailable code={Code}", ex.Code);
+        return (StatusCodes.Status503ServiceUnavailable, "encryption_unavailable");
+    }
+
     /// <summary>Generic error responses: no exception text, stack trace, connection detail or secret is ever returned.</summary>
     public static void UseHasmExceptionHandling(this WebApplication app) => app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     {
@@ -139,6 +147,7 @@ public static class AuthenticationSetup
         {
             BadHttpRequestException b => (b.StatusCode, "bad_request"),
             AuditUnavailableException a => Audit(context, a),
+            EncryptionUnavailableException e => Encryption(context, e),
             CompanyDatabaseException c => Company(context, c),
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),

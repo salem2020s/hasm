@@ -4,6 +4,7 @@ using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.SystemDatabase;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
@@ -17,7 +18,9 @@ using Npgsql;
 //   Hasm.Admin migrate-companies [--company <id>]  (applies pending forward-only company migrations to Ready companies; per-company outcome; exit 8 on partial failure)
 //   Hasm.Admin grant-company-runtime <company-id> [--rotate-credential]  (creates/updates the company's own least-privilege runtime login role and credential file; idempotent)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
+//   Hasm.Admin grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id>  (offline delegation of the Import Approver role: approval of imports; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
+//   Hasm.Admin encryption-keygen <key-id>     (creates a new random master key file for the import/attachment file encryption with owner-only permissions; never overwrites; back it up SEPARATELY from the data)
 //   Hasm.Admin audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>]   (READ-ONLY integrity verification; exit 0 verified, 6 failed, 7 incomplete)
 //   Hasm.Admin audit-anchor <system|company-id> [--establish-baseline]  (records the head of a sound stream in the checkpoint store; never changes the database)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
@@ -41,8 +44,9 @@ var validUsage = command switch
     "grant-company-runtime" => (args.Length == 2 || (args.Length == 3 && (rotateCredential = args[2] == "--rotate-credential")))
         && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
-    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
+    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
+    "encryption-keygen" => args.Length == 2 && KekRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
         && (args.Length == 2 || (args.Length == 4 && args[2] == "--checkpoint-dir" && !string.IsNullOrWhiteSpace(checkpointDirOverride = args[3]))),
     "audit-anchor" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream) && (args.Length == 2 || (args.Length == 3 && args[2] == "--establish-baseline")),
@@ -50,7 +54,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
     return Usage;
 }
 
@@ -68,6 +72,20 @@ if (command == "audit-keygen")
         return Ok;
     }
     catch (AuditConfigurationException ex) { Console.Error.WriteLine(ex.Message); return BadConfig; }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("The key could not be created (it may already exist; existing keys are never overwritten)."); return Failed; }
+}
+
+if (command == "encryption-keygen")
+{
+    // No database involved. The master key is written to the configured key directory with owner-only permissions; only its id is printed.
+    var enc = EncryptionOptions.FromConfiguration(configuration);
+    if (enc.KeyDirectory is null) { Console.Error.WriteLine($"{EncryptionOptions.SectionName}:KeyDirectory is required."); return BadConfig; }
+    try
+    {
+        FileKekRing.Generate(enc.KeyDirectory, args[1]);
+        Console.WriteLine($"Encryption key (key-encryption key) '{args[1]}' created. Back it up now, SEPARATELY from the encrypted data and the database (without it encrypted files cannot be read), then set Hasm__Encryption__ActiveKeyId to use it for new files. Older keys must stay in the directory until every file was re-wrapped.");
+        return Ok;
+    }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("The key could not be created (it may already exist; existing keys are never overwritten)."); return Failed; }
 }
 
@@ -175,14 +193,19 @@ try
         case "revoke-fiscal-approver":
         case "grant-journal-approver":
         case "revoke-journal-approver":
+        case "grant-import-approver":
+        case "revoke-import-approver":
         {
             // Offline delegation of the Fiscal Approver role (approval of exceptional fiscal reopenings). No HTTP endpoint exists for this: a company administrator
             // cannot grant a permission they do not hold, so this is the supported way to create the first approver and the recovery path. Audited without an actor user.
             await using var access = new AccessService(options.BuildSystemConnectionString(admin: true), TimeProvider.System, PermissionCatalog.Default, AuditTrail.FromOptions(auditOptions, TimeProvider.System));
+            var importRole = command.EndsWith("import-approver", StringComparison.Ordinal);
             var journalRole = command.EndsWith("journal-approver", StringComparison.Ordinal);
-            var roleName = journalRole ? "Journal Approver" : "Fiscal Approver";
+            var roleName = importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
             var granting = command.StartsWith("grant-", StringComparison.Ordinal);
-            var status = journalRole
+            var status = importRole
+                ? (granting ? await access.GrantImportApproverOfflineAsync(args[1], companyId) : await access.RevokeImportApproverOfflineAsync(args[1], companyId))
+                : journalRole
                 ? (granting ? await access.GrantJournalApproverOfflineAsync(args[1], companyId) : await access.RevokeJournalApproverOfflineAsync(args[1], companyId))
                 : (granting ? await access.GrantFiscalApproverOfflineAsync(args[1], companyId) : await access.RevokeFiscalApproverOfflineAsync(args[1], companyId));
             switch (status)
