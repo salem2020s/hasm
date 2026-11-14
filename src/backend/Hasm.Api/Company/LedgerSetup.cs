@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Ledger;
 
@@ -22,7 +23,11 @@ public static class LedgerSetup
         services.AddSingleton(sp => new LedgerSettingsService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new LedgerSettingsManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerSettingsService>()));
         services.AddSingleton(sp => new LedgerReportService(sp.GetRequiredService<CompanyDatabaseResolver>()));
-        services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>()));
+        services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>(), sp.GetRequiredService<JournalService>()));
+        services.AddSingleton(sp => new CostCenterPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new CostCenterPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterPolicyService>()));
+        services.AddSingleton(sp => new FiscalYearClosingService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new FiscalYearClosingManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<FiscalYearClosingService>(), sp.GetRequiredService<JournalManagementService>()));
         return services;
     }
 }

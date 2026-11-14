@@ -278,7 +278,8 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.Contains("no-store", empty.Headers.CacheControl!.ToString());
         Assert.Equal(0, empty.Json.GetProperty("years").GetArrayLength());
         Assert.Equal("2026-11-09", empty.Json.GetProperty("today").GetString());
-        Assert.False(empty.Json.GetProperty("closeChecksImplemented").GetBoolean());                                               // never presented as verified
+        Assert.True(empty.Json.GetProperty("closeChecksImplemented").GetBoolean());                                                // every domain with a module has a real probe
+        Assert.Equal(["inventory_valuation_differences"], empty.Json.GetProperty("closeChecksNotApplicable").EnumerateArray().Select(x => x.GetString()).ToArray());   // listed honestly, never as passed
         var can = empty.Json.GetProperty("can");
         Assert.True(can.GetProperty("create").GetBoolean());
         Assert.True(can.GetProperty("softClose").GetBoolean());

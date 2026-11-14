@@ -400,4 +400,43 @@ describe("ledger endpoints (Phase 3.2B)", () => {
     expect([0, 1, 2].map((i) => h(call(fetchMock, i).init)["If-Match"])).toEqual(['"2"', '"4"', '"5"']);
     expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/cost-centers/c1/move");
   });
+
+  it("calls the cost-center policy endpoints with the rule revision (0 = never configured) and the journal lookup", async () => {
+    const { fetchMock, client } = make();
+    await client.setAccountCostCenterRule("a1", true, 0);
+    await client.setCostCenterBranchRule("c1", { restricted: true, branchIds: ["b1"] }, 3);
+    await client.listAllocatableCostCenters();
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/cost-center-policies/accounts/a1");
+    expect(h(call(fetchMock, 0).init)["If-Match"]).toBe('"0"');
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ required: true });
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/cost-center-policies/branches/c1");
+    expect(h(call(fetchMock, 1).init)["If-Match"]).toBe('"3"');
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ restricted: true, branchIds: ["b1"] });
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/journal/cost-centers");
+  });
+
+  it("calls the year-end closing endpoints: settings with the revision, preview, close, carry forward and the two reversals", async () => {
+    const { fetchMock, client } = make();
+    await client.putClosingSettings({ equityAccountId: "a1" }, 2);
+    await client.previewYearEnd("y1");
+    await client.startYearClosing("y1");
+    await client.carryForwardYear("y1");
+    await client.reverseYearOpening("y1", "2027-01-01");
+    await client.reverseYearClosing("y1");
+    const urls = [0, 1, 2, 3, 4, 5].map((i) => call(fetchMock, i).url);
+    expect(urls).toEqual([
+      "https://x/api/v1/company/fiscal-closing/settings", "https://x/api/v1/company/fiscal-closing/years/y1/preview", "https://x/api/v1/company/fiscal-closing/years/y1/close",
+      "https://x/api/v1/company/fiscal-closing/years/y1/carry-forward", "https://x/api/v1/company/fiscal-closing/years/y1/reverse-opening", "https://x/api/v1/company/fiscal-closing/years/y1/reverse-closing",
+    ]);
+    expect(h(call(fetchMock, 0).init)["If-Match"]).toBe('"2"');
+    expect(JSON.parse(call(fetchMock, 4).init.body as string)).toEqual({ entryDate: "2027-01-01" });
+  });
+
+  it("sends staged approval policies with their risk conditions and the exclude-closing report flag", async () => {
+    const { fetchMock, client } = make();
+    await client.createApprovalPolicy({ docType: "journal_entry", source: "any", minAmount: "0", nameAr: null, nameEn: "x", journalType: "reversal", rateOverride: true, closingKind: "closing", stages: [{ required: 1 }, { required: 2 }] });
+    await client.getTrialBalance({ from: "2026-01-01", to: "2026-12-31", excludeClosing: true });
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toMatchObject({ journalType: "reversal", rateOverride: true, closingKind: "closing", stages: [{ required: 1 }, { required: 2 }] });
+    expect(call(fetchMock, 1).url).toContain("excludeClosing=true");
+  });
 });

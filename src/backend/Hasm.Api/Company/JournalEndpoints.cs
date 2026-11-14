@@ -20,6 +20,7 @@ public static class JournalEndpoints
     {
         var g = app.MapGroup("/api/v1/company/journal").RequireAuthorization();
         g.MapGet("", List);
+        g.MapGet("/cost-centers", AllocatableCostCenters);
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
@@ -61,7 +62,8 @@ public static class JournalEndpoints
             baseDebit = M(l.BaseDebit), baseCredit = M(l.BaseCredit), branchId = l.BranchId, isRounding = l.IsRounding, reversesLineId = l.ReversesLineId,
             allocations = l.Allocations.Select(a => new { costCenterId = a.CostCenterId, amount = M(a.Amount), baseAmount = M(a.BaseAmount) }),
         }),
-        approvals = v.Approvals.Select(a => new { id = a.Id, documentRevision = a.DocumentRevision, approver = a.Approver, approved = a.Approved, decidedAtUtc = a.DecidedAtUtc, comment = a.Comment }),
+        approvals = v.Approvals.Select(a => new { id = a.Id, documentRevision = a.DocumentRevision, approver = a.Approver, approved = a.Approved, decidedAtUtc = a.DecidedAtUtc, comment = a.Comment, stage = a.Stage }),
+        plan = (v.Plan ?? []).Select(p => new { stage = p.Stage, required = p.Required, approved = p.Approved, roleId = p.RoleId }),
         events = v.Events.Select(e => new { id = e.Id, kind = e.Kind.ToString(), actor = e.Actor, atUtc = e.AtUtc, revision = e.Revision, detail = e.Detail }),
     };
 
@@ -70,6 +72,15 @@ public static class JournalEndpoints
         "draft" => JournalStatus.Draft, "pending_approval" => JournalStatus.PendingApproval, "approved" => JournalStatus.Approved,
         "posted" => JournalStatus.Posted, "reversed" => JournalStatus.Reversed, "cancelled" => JournalStatus.Cancelled, _ => null,
     };
+
+    /// <summary>The cost centers the caller may allocate to (active leaves inside their grants): what the journal editor offers, independent of the administration permission.</summary>
+    private static async Task<IResult> AllocatableCostCenters(HttpContext http, AccessService access, JournalManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        var r = await svc.AllocatableCostCentersAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
+        return CompanyConfigurationEndpoints.Map(r, v => new { costCenters = v.Select(c => new { id = c.Id, code = c.Code, nameAr = c.NameAr, nameEn = c.NameEn, parentId = c.ParentId, branchId = c.BranchId }) });
+    }
 
     private static async Task<IResult> List(string? status, DateOnly? from, DateOnly? to, Guid? branchId, string? q, int? limit, int? offset, HttpContext http, AccessService access, JournalManagementService svc)
     {

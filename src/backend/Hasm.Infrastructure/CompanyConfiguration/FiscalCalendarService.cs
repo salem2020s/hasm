@@ -40,6 +40,9 @@ public sealed class FiscalCalendarService(
 
     public IReadOnlyList<string> UnimplementedCloseChecks => closeGuard.UnimplementedDomains;
 
+    /// <summary>Close-check domains whose module does not exist in this release (listed honestly, never reported as passed).</summary>
+    public IReadOnlyList<string> NotApplicableCloseChecks => closeGuard.NotApplicableDomains;
+
     private sealed class Abort(ConfigStatus status, string code, long? currentRevision = null, IReadOnlyList<FieldError>? fields = null) : Exception(code)
     {
         public ConfigResult<T> To<T>() => new(status, code, default, fields, currentRevision);
@@ -188,6 +191,8 @@ public sealed class FiscalCalendarService(
             // The record never claims more than was checked: while the modules behind the close checks do not exist, every close says so in its own history.
             if (closing && closeGuard.UnimplementedDomains.Count > 0)
                 changes["closeChecksNotImplemented"] = new JsonArray([.. closeGuard.UnimplementedDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
+            if (closing && closeGuard.NotApplicableDomains.Count > 0)
+                changes["closeChecksNotApplicable"] = new JsonArray([.. closeGuard.NotApplicableDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
             await RecordAsync(work, eventType, actor, 2, periodId, current.Revision + 1, changes, (short)from, (short)to, null, label, ct);
             return (await LoadPeriodAsync(work.Connection, work.Transaction, periodId, false, ct))!.Value.View;
         }, ct);
@@ -215,6 +220,8 @@ public sealed class FiscalCalendarService(
             var changes = new JsonObject { ["status"] = new JsonObject { ["old"] = "Open", ["new"] = "Closed" } };
             if (closeGuard.UnimplementedDomains.Count > 0)
                 changes["closeChecksNotImplemented"] = new JsonArray([.. closeGuard.UnimplementedDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
+            if (closeGuard.NotApplicableDomains.Count > 0)
+                changes["closeChecksNotApplicable"] = new JsonArray([.. closeGuard.NotApplicableDomains.Select(d => (JsonNode?)JsonValue.Create(d))]);
             await RecordAsync(work, ConfigAuditEvents.FiscalYearClosed, actor, 1, yearId, year.Revision + 1, changes, 1, 2, null, "fiscal year closed", ct);
             return (await LoadYearsAsync(work.Connection, work.Transaction, yearId, false, ct)).Single();
         }, ct);

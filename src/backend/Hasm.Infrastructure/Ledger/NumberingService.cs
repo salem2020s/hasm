@@ -40,6 +40,11 @@ public static class LedgerAuditEvents
     public const short JournalAdjustingDrafted = 1058;
     public const short JournalEventLogged = 1059;
     public const short LedgerSettingsChanged = 1060;
+    public const short AccountCostCenterRuleChanged = 1061;
+    public const short CostCenterBranchEligibilityChanged = 1062;
+    public const short ClosingSettingsChanged = 1063;
+    public const short FiscalYearClosingStarted = 1064;
+    public const short FiscalYearCarryforwardStarted = 1065;
 }
 
 /// <summary>

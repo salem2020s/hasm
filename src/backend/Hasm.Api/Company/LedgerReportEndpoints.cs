@@ -23,13 +23,13 @@ public static class LedgerReportEndpoints
 
     private static IResult Csv(byte[] bytes, string name) => Results.File(bytes, "text/csv; charset=utf-8", name);
 
-    private static async Task<IResult> TrialBalance(DateOnly? from, DateOnly? to, Guid? branchId, Guid? costCenterId, bool? includeZero, string? format, HttpContext http, AccessService access, LedgerReportManagementService svc)
+    private static async Task<IResult> TrialBalance(DateOnly? from, DateOnly? to, Guid? branchId, Guid? costCenterId, bool? includeZero, bool? excludeClosing, string? format, HttpContext http, AccessService access, LedgerReportManagementService svc)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         if (from is null || to is null) return CompanyConfigurationEndpoints.Error(400, "invalid_range");
         var csv = string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase);
-        var r = await svc.TrialBalanceAsync(actor!.UserId, actor.CompanyId, from.Value, to.Value, branchId, costCenterId, includeZero ?? false, csv, http.RequestAborted);
+        var r = await svc.TrialBalanceAsync(actor!.UserId, actor.CompanyId, from.Value, to.Value, branchId, costCenterId, includeZero ?? false, csv, http.RequestAborted, excludeClosing ?? false);
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
         var v = r.Value!;
         if (csv) return Csv(LedgerReportService.TrialBalanceCsv(v), $"trial-balance-{D(v.From)}-{D(v.To)}.csv");
@@ -45,13 +45,13 @@ public static class LedgerReportEndpoints
         });
     }
 
-    private static async Task<IResult> GeneralLedger(Guid? accountId, DateOnly? from, DateOnly? to, Guid? branchId, Guid? costCenterId, int? limit, int? offset, string? format, HttpContext http, AccessService access, LedgerReportManagementService svc)
+    private static async Task<IResult> GeneralLedger(Guid? accountId, DateOnly? from, DateOnly? to, Guid? branchId, Guid? costCenterId, int? limit, int? offset, bool? excludeClosing, string? format, HttpContext http, AccessService access, LedgerReportManagementService svc)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         if (accountId is null || from is null || to is null) return CompanyConfigurationEndpoints.Error(400, "invalid_range");
         var csv = string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase);
-        var r = await svc.GeneralLedgerAsync(actor!.UserId, actor.CompanyId, accountId.Value, from.Value, to.Value, branchId, costCenterId, limit ?? 200, offset ?? 0, csv, http.RequestAborted);
+        var r = await svc.GeneralLedgerAsync(actor!.UserId, actor.CompanyId, accountId.Value, from.Value, to.Value, branchId, costCenterId, limit ?? 200, offset ?? 0, csv, http.RequestAborted, excludeClosing ?? false);
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
         var v = r.Value!;
         if (csv) return Csv(LedgerReportService.GeneralLedgerCsv(v), $"general-ledger-{D(v.From)}-{D(v.To)}.csv");

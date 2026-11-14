@@ -28,7 +28,7 @@ export function LedgerReportsPage() {
   const auth = useAuth();
   const [tab, setTab] = useState<Tab>("tb");
   const year = new Date().getFullYear();
-  const [f, setF] = useState({ from: `${year}-01-01`, to: iso(new Date()), branchId: "", costCenterId: "", accountId: "", includeZero: false });
+  const [f, setF] = useState({ from: `${year}-01-01`, to: iso(new Date()), branchId: "", costCenterId: "", accountId: "", includeZero: false, excludeClosing: false });
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [centers, setCenters] = useState<CostCenter[]>([]);
@@ -43,12 +43,16 @@ export function LedgerReportsPage() {
     void (async () => {
       try { setAccounts((await auth.api.listAccounts()).accounts); } catch { setAccounts([]); }
       try { setBranches((await auth.api.listBranches()).branches); } catch { setBranches([]); }
-      try { setCenters((await auth.api.listCostCenters()).costCenters); } catch { setCenters([]); }
+      try { setCenters((await auth.api.listCostCenters()).costCenters); }
+      catch {
+        // A cost-center-scoped viewer cannot list the administration tree: offer the cost centers the server allows them instead.
+        try { setCenters((await auth.api.listAllocatableCostCenters()).costCenters.map((c) => ({ ...c, isGroup: false, isActive: true, canReceiveAllocations: true, hasChildren: false, revision: 0, createdAtUtc: "", updatedAtUtc: "" }))); } catch { setCenters([]); }
+      }
       setReady(true);
     })();
   }, [auth.api]);
 
-  const query = () => ({ from: f.from, to: f.to, branchId: f.branchId || undefined, costCenterId: f.costCenterId || undefined });
+  const query = () => ({ from: f.from, to: f.to, branchId: f.branchId || undefined, costCenterId: f.costCenterId || undefined, excludeClosing: f.excludeClosing || undefined });
   const valid = !!f.from && !!f.to && f.from <= f.to && (tab === "tb" || !!f.accountId);
 
   async function show(e?: FormEvent, offset = 0) {
@@ -90,6 +94,7 @@ export function LedgerReportsPage() {
             <Field id="rep-to" label={t("rep.to")} required error={f.from > f.to ? t("rep.range_invalid") : undefined}>{(a) => <input {...a} type="date" value={f.to} onChange={(x) => setF({ ...f, to: x.target.value })} />}</Field>
             <Field id="rep-branch" label={t("rep.branch")}>{(a) => <select {...a} value={f.branchId} onChange={(x) => setF({ ...f, branchId: x.target.value })}><option value="">{t("common.all")}</option>{branches.map((b) => <option key={b.id} value={b.id}>{localName(b, locale)}</option>)}</select>}</Field>
             {centers.length > 0 && <Field id="rep-cc" label={t("rep.cost_center")}>{(a) => <select {...a} value={f.costCenterId} onChange={(x) => setF({ ...f, costCenterId: x.target.value })}><option value="">{t("common.all")}</option>{centers.map((c) => <option key={c.id} value={c.id}>{c.code} — {localName(c, locale)}</option>)}</select>}</Field>}
+            <div className="field"><label><input type="checkbox" checked={f.excludeClosing} onChange={(x) => setF({ ...f, excludeClosing: x.target.checked })} /> {t("rep.exclude_closing")}</label></div>
             {tab === "tb" && <div className="field"><label><input type="checkbox" checked={f.includeZero} onChange={(x) => setF({ ...f, includeZero: x.target.checked })} /> {t("rep.include_zero")}</label></div>}
             <button type="submit" className="primary" disabled={!valid}>{t("rep.show")}</button>
             {canExport && <button type="button" disabled={!valid} onClick={() => void download()}>{t("rep.download_csv")}</button>}

@@ -33,7 +33,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     internal const int LockKey1 = 0x48434A45;   // "HCJE": advisory-lock namespace for journal operations that must be serialised company-wide (settings)
     internal const int LockKey2 = 1;
 
-    private sealed class Abort(ConfigStatus status, string code, long? currentRevision = null, IReadOnlyList<FieldError>? fields = null) : Exception(code)
+    internal sealed class Abort(ConfigStatus status, string code, long? currentRevision = null, IReadOnlyList<FieldError>? fields = null) : Exception(code)
     {
         public ConfigResult<T> To<T>() => new(status, code, default, fields, currentRevision);
     }
@@ -50,14 +50,26 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         return await LoadViewAsync(conn, null, id, false, ct);
     }
 
+    /// <summary>True when the entry is a year-end closing or opening entry or the reversal of one (the database function that defines the class, so the service and PostgreSQL always agree).</summary>
+    public async Task<bool> IsYearEndAsync(Guid companyId, Guid id, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var q = new NpgsqlCommand($"SELECT {CompanySchema.ClosingLogic.KindFunction}(@id) IS NOT NULL", conn);
+        q.Parameters.AddWithValue("id", id);
+        return (bool)(await q.ExecuteScalarAsync(ct))!;
+    }
+
     public async Task<IReadOnlyList<JournalEntrySummary>> ListAsync(Guid companyId, JournalFilter filter, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var cmd = new NpgsqlCommand(
             $"SELECT {HeaderColumns} FROM {JE.Table} e WHERE (@st::smallint IS NULL OR e.{JE.Status} = @st) AND (@f::date IS NULL OR e.{JE.Date} >= @f) AND (@t::date IS NULL OR e.{JE.Date} <= @t) " +
             $"AND (@b::uuid IS NULL OR e.{JE.Branch} = @b) AND (@q::text IS NULL OR e.{JE.Number} ILIKE @q OR e.{JE.Desc} ILIKE @q) " +
-            // Branch authorization is applied BEFORE ORDER/LIMIT/OFFSET: the entry's branch and every line branch must be allowed (null = company-wide, no restriction).
-            $"AND (@ab::uuid[] IS NULL OR (e.{JE.Branch} = ANY(@ab) AND NOT EXISTS (SELECT 1 FROM {CompanySchema.JournalLine.Table} jl WHERE jl.{CompanySchema.JournalLine.Entry} = e.{JE.Id} AND jl.{CompanySchema.JournalLine.Branch} IS NOT NULL AND NOT (jl.{CompanySchema.JournalLine.Branch} = ANY(@ab))))) " +
+            // Authorization is applied BEFORE ORDER/LIMIT/OFFSET (null @ab = company-wide, no restriction). An entry is visible through EITHER path (the same rule as opening it):
+            // the branch path (the entry's branch and every line branch allowed) or the cost-center path (every line has allocations and all of them lie in the allowed cost centers, @ac = closure).
+            $"AND (@ab::uuid[] IS NULL OR (e.{JE.Branch} = ANY(@ab) AND NOT EXISTS (SELECT 1 FROM {CompanySchema.JournalLine.Table} jl WHERE jl.{CompanySchema.JournalLine.Entry} = e.{JE.Id} AND jl.{CompanySchema.JournalLine.Branch} IS NOT NULL AND NOT (jl.{CompanySchema.JournalLine.Branch} = ANY(@ab)))) " +
+            $"OR (@ac::uuid[] IS NOT NULL AND EXISTS (SELECT 1 FROM {CompanySchema.JournalLine.Table} jl WHERE jl.{CompanySchema.JournalLine.Entry} = e.{JE.Id}) AND NOT EXISTS (SELECT 1 FROM {CompanySchema.JournalLine.Table} jl WHERE jl.{CompanySchema.JournalLine.Entry} = e.{JE.Id} " +
+            $"AND (NOT EXISTS (SELECT 1 FROM {CompanySchema.JournalAllocation.Table} ja WHERE ja.{CompanySchema.JournalAllocation.Line} = jl.{CompanySchema.JournalLine.Id}) OR EXISTS (SELECT 1 FROM {CompanySchema.JournalAllocation.Table} ja WHERE ja.{CompanySchema.JournalAllocation.Line} = jl.{CompanySchema.JournalLine.Id} AND NOT (ja.{CompanySchema.JournalAllocation.CC} = ANY(@ac))))))) " +
             $"ORDER BY e.{JE.Date} DESC, e.{JE.CreatedAt} DESC, e.{JE.Id} LIMIT @l OFFSET @o", conn);
         cmd.Parameters.Add(new NpgsqlParameter("st", NpgsqlDbType.Smallint) { Value = filter.Status is null ? DBNull.Value : (short)filter.Status });
         cmd.Parameters.Add(new NpgsqlParameter("f", NpgsqlDbType.Date) { Value = filter.From is null ? DBNull.Value : filter.From.Value.ToDateTime(TimeOnly.MinValue) });
@@ -66,12 +78,35 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         var q = filter.Text?.Trim();
         cmd.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text) { Value = string.IsNullOrEmpty(q) ? DBNull.Value : "%" + q.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%" });
         cmd.Parameters.Add(new NpgsqlParameter("ab", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = filter.AllowedBranches is null ? DBNull.Value : filter.AllowedBranches.ToArray() });
+        cmd.Parameters.Add(new NpgsqlParameter("ac", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = filter.AllowedCostCenters is null ? DBNull.Value : filter.AllowedCostCenters.ToArray() });
         cmd.Parameters.AddWithValue("l", Math.Clamp(filter.Limit, 1, 500));
         cmd.Parameters.AddWithValue("o", Math.Max(0, filter.Offset));
         var list = new List<JournalEntrySummary>();
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) list.Add(ReadHeader(r));
         return list;
+    }
+
+    /// <summary>The given cost centers and all their descendants (what a cost-center-scoped grant covers).</summary>
+    public async Task<IReadOnlyList<Guid>> CostCenterClosureAsync(Guid companyId, IReadOnlyCollection<Guid> roots, CancellationToken ct = default)
+    {
+        if (roots.Count == 0) return [];
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var cmd = new NpgsqlCommand(
+            $"WITH RECURSIVE t(id) AS (SELECT c.{CompanySchema.CostCenter.Id} FROM {CompanySchema.CostCenter.Table} c WHERE c.{CompanySchema.CostCenter.Id} = ANY(@r) UNION SELECT c.{CompanySchema.CostCenter.Id} FROM {CompanySchema.CostCenter.Table} c JOIN t ON c.{CompanySchema.CostCenter.ParentId} = t.id) SELECT id FROM t", conn);
+        cmd.Parameters.Add(new NpgsqlParameter("r", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = roots.ToArray() });
+        var list = new List<Guid>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add(r.GetGuid(0));
+        return list;
+    }
+
+    /// <summary>The cost centers a user may allocate to: every ACTIVE LEAF (company-wide or branch access) or the active leaves inside the granted cost-center subtrees.</summary>
+    public async Task<IReadOnlyList<CostCenterView>> AllocatableCostCentersAsync(Guid companyId, IReadOnlyCollection<Guid>? restrictToClosure, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        var all = await CostCenterService.LoadAsync(conn, null, null, false, ct);
+        return [.. all.Where(c => c.CanReceiveAllocations && (restrictToClosure is null || restrictToClosure.Contains(c.Id)))];
     }
 
     private static readonly string HeaderColumns =
@@ -122,7 +157,8 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         lines = [.. lines.Select(x => allocations.TryGetValue(x.Id, out var al) ? x with { Allocations = al } : x)];
         var deb = lines.Sum(x => x.BaseDebit);
         var cre = lines.Sum(x => x.BaseCredit);
-        var required = await DocumentApprovals.RequiredAsync(conn, tx, DocumentTypes.JournalEntry, h.Source, h.BranchId, h.BaseTotal, ct);
+        var plan = await DocumentApprovals.PlanAsync(conn, tx, id, h.Revision, ct);
+        var required = plan.Sum(p => p.Required);
         var approvals = await DocumentApprovals.ListAsync(conn, tx, DocumentTypes.JournalEntry, id, ct);
         var events = new List<JournalEventView>();
         await using (var ev = new NpgsqlCommand($"SELECT {JV.Id}, {JV.Event}, {JV.Actor}, {JV.At}, {JV.Rev}, {JV.Detail} FROM {JV.Table} WHERE {JV.Entry} = @id ORDER BY {JV.Id}", conn, tx))
@@ -131,7 +167,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
             await using var r = await ev.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) events.Add(new JournalEventView(r.GetInt64(0), (JournalEventKind)r.GetInt16(1), r.GetGuid(2), Utc(r, 3), r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5)));
         }
-        return new JournalEntryView(h, lines.Count >= 2 && deb == cre && deb > 0, deb, cre, required, lines, approvals, events);
+        return new JournalEntryView(h, lines.Count >= 2 && deb == cre && deb > 0, deb, cre, required, lines, approvals, events, plan);
     }
 
     // ------------------------------------------------------------------------------------------------------------- create and edit drafts
@@ -170,40 +206,43 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     private async Task<ConfigResult<JournalEntryView>> CreateAsync(Guid actor, Guid companyId, JournalInput? input, bool mayOverrideRate, DocumentSource source, string? sourceKey, CancellationToken ct)
     {
         if (input is null) return ConfigResult<JournalEntryView>.Invalid([new("body", "required")]);
-        return await MutateAsync(companyId, async work =>
+        return await MutateAsync(companyId, work => CreateInWorkAsync(work, actor, input, mayOverrideRate, source, sourceKey, ct), ct);
+    }
+
+    /// <summary>Creates a draft inside the caller's audited transaction (used by year-end processing so the entry and its closing record commit together). Throws <see cref="Abort"/> on a refusal.</summary>
+    internal async Task<JournalEntryView> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, JournalInput input, bool mayOverrideRate, DocumentSource source, string? sourceKey, CancellationToken ct, bool yearEnd = false)
+    {
+        var ctx = await PrepareHeaderAsync(work, input, ct, yearEnd ? int.MaxValue : JournalValidation.MaxLines);
+        var type = input.AdjustsId is null ? JournalType.Normal : JournalType.Adjusting;
+        if (input.AdjustsId is { } adj)
         {
-            var ctx = await PrepareHeaderAsync(work, input, ct);
-            var type = input.AdjustsId is null ? JournalType.Normal : JournalType.Adjusting;
-            if (input.AdjustsId is { } adj)
-            {
-                var target = await LoadHeaderAsync(work.Connection, work.Transaction, adj, false, ct);
-                if (target is null) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("adjustsId", "entry_not_found")]);
-                if (target.Status is not (JournalStatus.Posted or JournalStatus.Reversed)) throw new Abort(ConfigStatus.Conflict, "adjusted_entry_not_posted");
-            }
-            var lines = await ComputeLinesAsync(work, ctx, input.Lines, input.EntryDate!.Value, mayOverrideRate, ct);
-            var id = Guid.NewGuid();
-            var now = clock.GetUtcNow().UtcDateTime;
-            var baseTotal = lines.Sum(l => l.BaseDebit);
-            try
-            {
-                await using var ins = new NpgsqlCommand(
-                    $"INSERT INTO {JE.Table} ({JE.Id}, {JE.Status}, {JE.Type}, {JE.Source}, {JE.SourceKey}, {JE.Date}, {JE.Desc}, {JE.Branch}, {JE.BaseCur}, {JE.BaseTotal}, {JE.Rev}, {JE.CreatedBy}, {JE.CreatedAt}, {JE.UpdatedAt}, {JE.Adjusts}) " +
-                    "VALUES (@id, 1, @type, @src, @key, @date, @desc, @branch, @cur, @total, 1, @actor, @now, @now, @adj)", work.Connection, work.Transaction);
-                ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("type", (short)type); ins.Parameters.AddWithValue("src", (short)source);
-                ins.Parameters.Add(new NpgsqlParameter("key", NpgsqlDbType.Varchar) { Value = (object?)sourceKey ?? DBNull.Value });
-                ins.Parameters.Add(new NpgsqlParameter("date", NpgsqlDbType.Date) { Value = input.EntryDate.Value.ToDateTime(TimeOnly.MinValue) });
-                ins.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)ctx.Description ?? DBNull.Value });
-                ins.Parameters.AddWithValue("branch", ctx.BranchId); ins.Parameters.AddWithValue("cur", ctx.BaseCurrency); ins.Parameters.AddWithValue("total", baseTotal);
-                ins.Parameters.AddWithValue("actor", actor); ins.Parameters.AddWithValue("now", now);
-                ins.Parameters.Add(new NpgsqlParameter("adj", NpgsqlDbType.Uuid) { Value = (object?)input.AdjustsId ?? DBNull.Value });
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "duplicate_source"); }
-            await WriteLinesAsync(work, id, lines, ct);
-            await RecordAsync(work, type == JournalType.Adjusting ? LedgerAuditEvents.JournalAdjustingDrafted : LedgerAuditEvents.JournalCreated, actor, id,
-                type == JournalType.Adjusting ? JournalEventKind.AdjustingDrafted : JournalEventKind.Created, 1, $"{lines.Count} lines", ct);
-            return (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
-        }, ct);
+            var target = await LoadHeaderAsync(work.Connection, work.Transaction, adj, false, ct);
+            if (target is null) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("adjustsId", "entry_not_found")]);
+            if (target.Status is not (JournalStatus.Posted or JournalStatus.Reversed)) throw new Abort(ConfigStatus.Conflict, "adjusted_entry_not_posted");
+        }
+        var lines = await ComputeLinesAsync(work, ctx, input.Lines, input.EntryDate!.Value, mayOverrideRate, ct, yearEnd);
+        var id = Guid.NewGuid();
+        var now = clock.GetUtcNow().UtcDateTime;
+        var baseTotal = lines.Sum(l => l.BaseDebit);
+        try
+        {
+            await using var ins = new NpgsqlCommand(
+                $"INSERT INTO {JE.Table} ({JE.Id}, {JE.Status}, {JE.Type}, {JE.Source}, {JE.SourceKey}, {JE.Date}, {JE.Desc}, {JE.Branch}, {JE.BaseCur}, {JE.BaseTotal}, {JE.Rev}, {JE.CreatedBy}, {JE.CreatedAt}, {JE.UpdatedAt}, {JE.Adjusts}) " +
+                "VALUES (@id, 1, @type, @src, @key, @date, @desc, @branch, @cur, @total, 1, @actor, @now, @now, @adj)", work.Connection, work.Transaction);
+            ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("type", (short)type); ins.Parameters.AddWithValue("src", (short)source);
+            ins.Parameters.Add(new NpgsqlParameter("key", NpgsqlDbType.Varchar) { Value = (object?)sourceKey ?? DBNull.Value });
+            ins.Parameters.Add(new NpgsqlParameter("date", NpgsqlDbType.Date) { Value = input.EntryDate.Value.ToDateTime(TimeOnly.MinValue) });
+            ins.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)ctx.Description ?? DBNull.Value });
+            ins.Parameters.AddWithValue("branch", ctx.BranchId); ins.Parameters.AddWithValue("cur", ctx.BaseCurrency); ins.Parameters.AddWithValue("total", baseTotal);
+            ins.Parameters.AddWithValue("actor", actor); ins.Parameters.AddWithValue("now", now);
+            ins.Parameters.Add(new NpgsqlParameter("adj", NpgsqlDbType.Uuid) { Value = (object?)input.AdjustsId ?? DBNull.Value });
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "duplicate_source"); }
+        await WriteLinesAsync(work, id, lines, ct);
+        await RecordAsync(work, type == JournalType.Adjusting ? LedgerAuditEvents.JournalAdjustingDrafted : LedgerAuditEvents.JournalCreated, actor, id,
+            type == JournalType.Adjusting ? JournalEventKind.AdjustingDrafted : JournalEventKind.Created, 1, $"{lines.Count} lines", ct);
+        return (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
     }
 
     public async Task<ConfigResult<JournalEntryView>> UpdateDraftAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, JournalInput? input, bool mayOverrideRate, CancellationToken ct = default)
@@ -243,11 +282,14 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         {
             var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
             if (cur.Status != JournalStatus.Draft) throw new Abort(ConfigStatus.Conflict, "entry_not_draft");
-            var required = await DocumentApprovals.RequiredAsync(work.Connection, work.Transaction, DocumentTypes.JournalEntry, cur.Source, cur.BranchId, cur.BaseTotal, ct);
+            // The plan comes from the SAME SQL function the database gate uses (risk conditions, stages); what this revision is submitted under is snapshotted as a floor.
+            var plan = await DocumentApprovals.PlanAsync(work.Connection, work.Transaction, id, cur.Revision, ct);
+            var required = plan.Sum(p => p.Required);
             var next = required == 0 ? JournalStatus.Approved : JournalStatus.PendingApproval;
             var now = clock.GetUtcNow().UtcDateTime;
+            if (required > 0) await DocumentApprovals.BindAsync(work, id, cur.Revision, now, ct);
             await SetStatusAsync(work, id, next, $", {JE.SubmittedBy} = @actor, {JE.SubmittedAt} = @now", p => { p.AddWithValue("actor", actor); p.AddWithValue("now", now); }, ct);
-            await RecordAsync(work, LedgerAuditEvents.JournalSubmitted, actor, id, JournalEventKind.Submitted, cur.Revision, required == 0 ? "approved: no approval required" : $"approvals required: {required}", ct);
+            await RecordAsync(work, LedgerAuditEvents.JournalSubmitted, actor, id, JournalEventKind.Submitted, cur.Revision, required == 0 ? "approved: no approval required" : $"approvals required: {required}" + (plan.Count > 1 ? $" in {plan.Count} ordered stages" : ""), ct);
             return (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
         }, ct);
     }
@@ -285,7 +327,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     /// (never the creator or submitter) and one decision per approver per revision. An approval that completes the requirement moves the entry to Approved; a rejection returns
     /// it to Draft (new revision, so the rejected content can never be approved by old decisions).
     /// </summary>
-    public async Task<ConfigResult<JournalEntryView>> DecideAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, ApprovalDecisionInput? input, CancellationToken ct = default)
+    public async Task<ConfigResult<JournalEntryView>> DecideAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, ApprovalDecisionInput? input, CancellationToken ct = default, IReadOnlySet<Guid>? approverRoles = null)
     {
         if (expectedRevision is null) return ConfigResult<JournalEntryView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         if (input?.Approve is null) return ConfigResult<JournalEntryView>.Invalid([new("approve", "required")]);
@@ -296,7 +338,13 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         {
             var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
             if (cur.Status != JournalStatus.PendingApproval) throw new Abort(ConfigStatus.Conflict, "entry_not_pending_approval");
-            var result = await DocumentApprovals.RecordAsync(work, new ApprovalDecisionRequest(DocumentTypes.JournalEntry, id, cur.Revision, actor, cur.CreatedBy, cur.SubmittedBy, approve, input.Comment), clock.GetUtcNow().UtcDateTime, ct);
+            // The decision is cast for the FIRST stage that is not complete (stages are strictly ordered); a stage bound to a role takes decisions only from holders of that role
+            // (the caller supplies the roles the approver holds right now, read from the authorization store on this very call).
+            var plan = await DocumentApprovals.PlanAsync(work.Connection, work.Transaction, id, cur.Revision, ct);
+            var open = plan.FirstOrDefault(p => p.Approved < p.Required);
+            if (open is null && plan.Count > 0) throw new Abort(ConfigStatus.Conflict, "approval_stage_complete");
+            if (actor != cur.CreatedBy && actor != cur.SubmittedBy && open?.RoleId is { } stageRole && (approverRoles is null || !approverRoles.Contains(stageRole))) throw new Abort(ConfigStatus.Forbidden, "approver_role_required");
+            var result = await DocumentApprovals.RecordAsync(work, new ApprovalDecisionRequest(DocumentTypes.JournalEntry, id, cur.Revision, actor, cur.CreatedBy, cur.SubmittedBy, approve, input.Comment, open?.Stage ?? 1), clock.GetUtcNow().UtcDateTime, ct);
             switch (result.Status)
             {
                 case ApprovalRecordStatus.SeparationOfDuties: throw new Abort(ConfigStatus.Forbidden, "separation_of_duties");
@@ -311,8 +359,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
             }
             else
             {
-                var required = await DocumentApprovals.RequiredAsync(work.Connection, work.Transaction, DocumentTypes.JournalEntry, cur.Source, cur.BranchId, cur.BaseTotal, ct);
-                if (await DocumentApprovals.SatisfiedAsync(work.Connection, work.Transaction, DocumentTypes.JournalEntry, id, cur.Revision, required, ct))
+                if (await DocumentApprovals.PlanSatisfiedAsync(work.Connection, work.Transaction, id, ct))
                 {
                     await SetStatusAsync(work, id, JournalStatus.Approved, "", _ => { }, ct);
                     await AddEventAsync(work, id, JournalEventKind.Approved, actor, cur.Revision, "required approvals complete", ct, auditAlreadyWritten: false, auditType: LedgerAuditEvents.JournalApproved);
@@ -431,7 +478,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
 
     private sealed record HeaderContext(Guid BranchId, string BaseCurrency, int BaseMinor, string? Description, Dictionary<string, int?> Currencies, Guid? RoundingAccountId);
 
-    private async Task<HeaderContext> PrepareHeaderAsync(CompanyAuditedWork work, JournalInput input, CancellationToken ct)
+    private async Task<HeaderContext> PrepareHeaderAsync(CompanyAuditedWork work, JournalInput input, CancellationToken ct, int maxLines = JournalValidation.MaxLines)
     {
         var errors = new List<FieldError>();
         if (input.EntryDate is null) errors.Add(new("entryDate", "required"));
@@ -439,7 +486,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         var description = JournalValidation.CleanText(input.Description, 500, "description", errors);
         if (input.BranchId is null) errors.Add(new("branchId", "required"));
         if (input.Lines is null || input.Lines.Count == 0) errors.Add(new("lines", "required"));
-        else if (input.Lines.Count > JournalValidation.MaxLines) errors.Add(new("lines", "too_many"));
+        else if (input.Lines.Count > maxLines) errors.Add(new("lines", "too_many"));
         if (errors.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: errors);
 
         var currencies = new Dictionary<string, int?>();
@@ -468,7 +515,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         return new HeaderContext(input.BranchId!.Value, baseCode, baseMinor.Value, description, currencies, rounding);
     }
 
-    private async Task<List<Computed>> ComputeLinesAsync(CompanyAuditedWork work, HeaderContext ctx, IReadOnlyList<JournalLineInput>? inputs, DateOnly date, bool mayOverrideRate, CancellationToken ct)
+    private async Task<List<Computed>> ComputeLinesAsync(CompanyAuditedWork work, HeaderContext ctx, IReadOnlyList<JournalLineInput>? inputs, DateOnly date, bool mayOverrideRate, CancellationToken ct, bool historicalCostCenters = false)
     {
         var errors = new List<FieldError>();
         inputs ??= [];
@@ -558,22 +605,35 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
             if (lineBase <= 0) { errors.Add(new(F("debit"), "base_amount_rounds_to_zero")); continue; }
 
             var allocs = new List<(Guid, decimal, decimal)>();
-            if (l.Allocations is { Count: > 0 })
+            var allocInputs = l.Allocations;
+            if (allocInputs is { Count: > 0 } && allocInputs.Any(a => a.Percent is not null))
             {
-                if (l.Allocations.Count > JournalValidation.MaxAllocationsPerLine) { errors.Add(new(F("allocations"), "too_many")); continue; }
+                // Percentage mode: every allocation uses a percentage (no amounts), valid distinct cost centers, percentages total exactly 100 with at most four decimals.
+                if (allocInputs.Count > JournalValidation.MaxAllocationsPerLine) { errors.Add(new(F("allocations"), "too_many")); continue; }
+                if (allocInputs.Any(a => a.Amount is not null || a.Percent is null)) { errors.Add(new(F("allocations"), "percent_and_amount_mixed")); continue; }
+                if (allocInputs.Any(a => a.CostCenterId is null) || allocInputs.Select(a => a.CostCenterId).Distinct().Count() != allocInputs.Count) { errors.Add(new(F("allocations"), "duplicate_cost_center")); continue; }
+                if (allocInputs.Any(a => a.Percent <= 0 || a.Percent != decimal.Round(a.Percent!.Value, 4))) { errors.Add(new(F("allocations"), "invalid_percent")); continue; }
+                if (allocInputs.Sum(a => a.Percent!.Value) != 100m) { errors.Add(new(F("allocations"), "percent_sum_mismatch")); continue; }
+                var amounts = AllocationMath.Distribute(amount, minor, [.. allocInputs.Select(a => (a.CostCenterId!.Value, a.Percent!.Value))]);
+                if (amounts.Values.Any(v => v <= 0)) { errors.Add(new(F("allocations"), "allocation_rounds_to_zero")); continue; }
+                allocInputs = [.. allocInputs.Select(a => new JournalAllocationInput(a.CostCenterId, amounts[a.CostCenterId!.Value]))];
+            }
+            if (allocInputs is { Count: > 0 })
+            {
+                if (allocInputs.Count > JournalValidation.MaxAllocationsPerLine) { errors.Add(new(F("allocations"), "too_many")); continue; }
                 var seen = new HashSet<Guid>(); decimal sum = 0, baseSum = 0; var bad = false;
-                for (var k = 0; k < l.Allocations.Count; k++)
+                for (var k = 0; k < allocInputs.Count; k++)
                 {
-                    var al = l.Allocations[k];
+                    var al = allocInputs[k];
                     string AF(string n) => $"lines[{i}].allocations[{k}].{n}";
                     if (al.CostCenterId is null) { errors.Add(new(AF("costCenterId"), "required")); bad = true; continue; }
                     if (!centers.TryGetValue(al.CostCenterId.Value, out var cc)) { errors.Add(new(AF("costCenterId"), "cost_center_not_found")); bad = true; continue; }
-                    if (cc.Group || !cc.Active) { errors.Add(new(AF("costCenterId"), "cost_center_not_allocatable")); bad = true; continue; }
+                    if (!historicalCostCenters && (cc.Group || !cc.Active)) { errors.Add(new(AF("costCenterId"), "cost_center_not_allocatable")); bad = true; continue; }
                     if (!seen.Add(al.CostCenterId.Value)) { errors.Add(new(AF("costCenterId"), "duplicate_cost_center")); bad = true; continue; }
                     if (al.Amount is null or <= 0) { errors.Add(new(AF("amount"), "must_be_positive")); bad = true; continue; }
                     if (al.Amount.Value != decimal.Round(al.Amount.Value, minor)) { errors.Add(new(AF("amount"), "too_many_decimals")); bad = true; continue; }
                     sum += al.Amount.Value;
-                    var share = k == l.Allocations.Count - 1 ? lineBase - baseSum : (currency == ctx.BaseCurrency ? al.Amount.Value : CurrencyMath.ConvertToBase(al.Amount.Value, rate, ctx.BaseMinor));
+                    var share = k == allocInputs.Count - 1 ? lineBase - baseSum : (currency == ctx.BaseCurrency ? al.Amount.Value : CurrencyMath.ConvertToBase(al.Amount.Value, rate, ctx.BaseMinor));
                     if (share <= 0) { errors.Add(new(AF("amount"), "base_amount_rounds_to_zero")); bad = true; continue; }
                     baseSum += share;
                     allocs.Add((al.CostCenterId.Value, al.Amount.Value, share));
@@ -645,6 +705,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     /// <summary>Stable codes for the rules PostgreSQL enforces (the database message is never shown to clients).</summary>
     internal static string MapDatabaseRule(string message) => message switch
     {
+        _ when message.Contains("independent approver") => "separation_of_duties",
         _ when message.Contains("not balanced") => "entry_not_balanced",
         _ when message.Contains("at least two lines") => "entry_needs_two_lines",
         _ when message.Contains("base currency") => "base_currency_mismatch",
@@ -652,6 +713,10 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         _ when message.Contains("currency policy") => "currency_policy_violation",
         _ when message.Contains("active and postable") => "account_not_postable",
         _ when message.Contains("branch must be active") => "branch_inactive",
+        _ when message.Contains("no longer matches the ledger") || message.Contains("do not match the balance sheet") => "year_end_stale",
+        _ when message.Contains("reverse the opening balances") => "opening_balances_not_reversed",
+        _ when message.Contains("requires a cost center") => "cost_center_required",
+        _ when message.Contains("not eligible for the branch") => "cost_center_not_eligible",
         _ when message.Contains("leaf cost centers") => "cost_center_not_allocatable",
         _ when message.Contains("approvals") => "approval_required",
         _ when message.Contains("outside every fiscal period") => "no_fiscal_period",

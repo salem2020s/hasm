@@ -1,4 +1,4 @@
-import type { Account, Branch, CostCenter, JournalEntry, JournalHeader, JournalInput, JournalLine, JournalListResponse, JournalStatus } from "@hasm/api-client";
+import type { Account, AllocatableCostCenter, Branch, JournalEntry, JournalHeader, JournalInput, JournalLine, JournalListResponse, JournalStatus } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -15,14 +15,14 @@ import { useReportUnsaved, useUnsaved } from "../unsaved";
 const STATUSES: JournalStatus[] = ["draft", "pending_approval", "approved", "posted", "reversed", "cancelled"];
 
 interface AllocDraft { costCenterId: string; amount: string }
-interface LineDraft { key: string; accountId: string; description: string; currency: string; debit: string; credit: string; branchId: string; rateOverride: string; rateReason: string; allocations: AllocDraft[] }
-interface Lookups { accounts: Account[]; currencies: string[]; baseCurrency: string | null; branches: Branch[]; costCenters: CostCenter[]; accountsDenied: boolean }
+interface LineDraft { allocMode: "amount" | "percent"; key: string; accountId: string; description: string; currency: string; debit: string; credit: string; branchId: string; rateOverride: string; rateReason: string; allocations: AllocDraft[] }
+interface Lookups { accounts: Account[]; currencies: string[]; baseCurrency: string | null; branches: Branch[]; costCenters: AllocatableCostCenter[]; accountsDenied: boolean }
 
 let keySeed = 0;
 const newKey = () => `l${++keySeed}`;
-const blankLine = (currency: string, branchId = ""): LineDraft => ({ key: newKey(), accountId: "", description: "", currency, debit: "", credit: "", branchId, rateOverride: "", rateReason: "", allocations: [] });
+const blankLine = (currency: string, branchId = ""): LineDraft => ({ allocMode: "amount", key: newKey(), accountId: "", description: "", currency, debit: "", credit: "", branchId, rateOverride: "", rateReason: "", allocations: [] });
 const fromLine = (l: JournalLine): LineDraft => ({
-  key: newKey(), accountId: l.accountId, description: l.description ?? "", currency: l.currency, debit: Number(l.debit) > 0 ? l.debit : "", credit: Number(l.credit) > 0 ? l.credit : "",
+  allocMode: "amount", key: newKey(), accountId: l.accountId, description: l.description ?? "", currency: l.currency, debit: Number(l.debit) > 0 ? l.debit : "", credit: Number(l.credit) > 0 ? l.credit : "",
   branchId: l.branchId, rateOverride: l.rateId === null && l.currency && l.rateOverrideReason ? l.rate : "", rateReason: l.rateOverrideReason ?? "",
   allocations: l.allocations.map((a) => ({ costCenterId: a.costCenterId, amount: a.amount })),
 });
@@ -35,7 +35,9 @@ function toInput(date: string, description: string, branchId: string, lines: Lin
       debit: l.debit.trim() ? toLatinDigits(l.debit.trim()) : null, credit: l.credit.trim() ? toLatinDigits(l.credit.trim()) : null,
       branchId: l.branchId && l.branchId !== branchId ? l.branchId : null,
       rateOverride: l.rateOverride.trim() ? toLatinDigits(l.rateOverride.trim()) : null, rateOverrideReason: l.rateOverride.trim() ? l.rateReason.trim() : null,
-      allocations: l.allocations.filter((a) => a.costCenterId).map((a) => ({ costCenterId: a.costCenterId, amount: toLatinDigits(a.amount.trim()) })),
+      allocations: l.allocations.filter((a) => a.costCenterId).map((a) => (l.allocMode === "percent"
+        ? { costCenterId: a.costCenterId, percent: toLatinDigits(a.amount.trim()) }
+        : { costCenterId: a.costCenterId, amount: toLatinDigits(a.amount.trim()) })),
     })),
   };
 }
@@ -179,14 +181,20 @@ function EntryScreen({ id, adjustsId, lookups, can, onBack, onOpen }: { id: stri
                 {editable ? (
                   <select aria-label={t("jrn.cost_center")} value={a.costCenterId} onChange={(e) => setLine(l.key, { allocations: l.allocations.map((x, j) => (j === k ? { ...x, costCenterId: e.target.value } : x)) })}>
                     <option value="">{t("jrn.choose_cost_center")}</option>
-                    {lookups.costCenters.filter((c) => c.canReceiveAllocations).map((c) => <option key={c.id} value={c.id}>{c.code} — {localName(c, locale)}</option>)}
+                    {lookups.costCenters.map((c) => <option key={c.id} value={c.id}>{c.code} — {localName(c, locale)}</option>)}
                   </select>
                 ) : <span>{lookups.costCenters.find((c) => c.id === a.costCenterId)?.code ?? a.costCenterId}</span>}
-                {editable ? <input aria-label={t("jrn.allocation_amount")} inputMode="decimal" dir="ltr" value={a.amount} onChange={(e) => setLine(l.key, { allocations: l.allocations.map((x, j) => (j === k ? { ...x, amount: e.target.value } : x)) })} /> : <bdi dir="ltr">{a.amount}</bdi>}
+                {editable ? <input aria-label={t(l.allocMode === "percent" ? "jrn.allocation_percent" : "jrn.allocation_amount")} inputMode="decimal" dir="ltr" value={a.amount} onChange={(e) => setLine(l.key, { allocations: l.allocations.map((x, j) => (j === k ? { ...x, amount: e.target.value } : x)) })} /> : <bdi dir="ltr">{a.amount}</bdi>}
                 {editable && <button type="button" className="ghost" onClick={() => setLine(l.key, { allocations: l.allocations.filter((_, j) => j !== k) })}>{t("jrn.remove_allocation")}</button>}
               </div>
             ))}
             {editable && lookups.costCenters.length > 0 && <button type="button" className="ghost" onClick={() => setLine(l.key, { allocations: [...l.allocations, { costCenterId: "", amount: "" }] })}>{t("jrn.add_allocation")}</button>}
+            {editable && l.allocations.length > 0 && (
+              <select aria-label={t("jrn.alloc_mode")} value={l.allocMode} onChange={(e) => setLine(l.key, { allocMode: e.target.value as "amount" | "percent", allocations: l.allocations.map((x) => ({ ...x, amount: "" })) })}>
+                <option value="amount">{t("jrn.alloc_mode_amount")}</option>
+                <option value="percent">{t("jrn.alloc_mode_percent")}</option>
+              </select>
+            )}
           </td>
         ) : <td />}
       </tr>
@@ -200,6 +208,17 @@ function EntryScreen({ id, adjustsId, lookups, can, onBack, onOpen }: { id: stri
       {h?.type === "reversal" && <Banner kind="info">{t("jrn.is_reversal")}</Banner>}
       {h?.type === "adjusting" && <Banner kind="info">{t("jrn.is_adjusting")}</Banner>}
       {h && h.status === "pending_approval" && entry && <Banner kind="info" testId="jrn-pending">{t("jrn.pending_note").replace("{n}", String(entry.requiredApprovals))}</Banner>}
+      {h && h.status === "pending_approval" && entry?.plan && entry.plan.length > 1 && (
+        <Card title={t("jrn.plan")}>
+          <ol data-testid="jrn-plan">
+            {entry.plan.map((s, i) => {
+              const done = s.approved >= s.required;
+              const open = !done && entry.plan!.slice(0, i).every((x) => x.approved >= x.required);
+              return <li key={s.stage} data-testid={`jrn-plan-${s.stage}`}>{t("jrn.plan_stage", { n: String(s.stage) })}: <bdi dir="ltr">{s.approved}/{s.required}</bdi> — {done ? t("jrn.plan_done") : open ? t("jrn.plan_open") : t("jrn.plan_waiting")}</li>;
+            })}
+          </ol>
+        </Card>
+      )}
       <form onSubmit={save} noValidate data-testid="jrn-form">
         <Card title={t("jrn.header")}>
           <fieldset disabled={!editable || runner.busy}>
@@ -287,11 +306,11 @@ export function JournalPage() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     void (async () => {
-      let accounts: Account[] = []; let denied = false; let currencies: string[] = []; let baseCurrency: string | null = null; let branches: Branch[] = []; let costCenters: CostCenter[] = [];
+      let accounts: Account[] = []; let denied = false; let currencies: string[] = []; let baseCurrency: string | null = null; let branches: Branch[] = []; let costCenters: AllocatableCostCenter[] = [];
       try { accounts = (await auth.api.listAccounts()).accounts; } catch { denied = true; }
       try { const c = await auth.api.getCurrencies(); currencies = c.currencies.filter((x) => x.enabled).map((x) => x.code); baseCurrency = c.baseCurrency; } catch { /* no permission: base currency lines only */ }
       try { branches = (await auth.api.listBranches()).branches.filter((b) => b.isActive); } catch { /* none */ }
-      try { costCenters = (await auth.api.listCostCenters()).costCenters; } catch { /* no permission */ }
+      try { costCenters = (await auth.api.listAllocatableCostCenters()).costCenters; } catch { /* no permission */ }
       setLookups({ accounts, accountsDenied: denied, currencies, baseCurrency, branches, costCenters });
     })();
   }, [auth.api]);

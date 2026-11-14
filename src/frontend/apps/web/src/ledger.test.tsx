@@ -226,7 +226,40 @@ describe("approval policies screen", () => {
     await userEvent.clear(screen.getByLabelText(lbl("pol.required")));
     await userEvent.type(screen.getByLabelText(lbl("pol.required")), "3");
     await userEvent.click(screen.getByRole("button", { name: A("common.save") }));
-    await waitFor(() => expect(client.createApprovalPolicy).toHaveBeenCalledWith({ docType: "journal_entry", source: "any", branchId: null, minAmount: "5000.5", requiredApprovals: 3, nameAr: null, nameEn: "Big" }));
+    await waitFor(() => expect(client.createApprovalPolicy).toHaveBeenCalledWith({ docType: "journal_entry", source: "any", branchId: null, minAmount: "5000.5", requiredApprovals: 3, nameAr: null, nameEn: "Big", journalType: null, rateOverride: null, softClosed: null, closingKind: null }));
+  });
+
+  it("creates a staged policy with risk conditions sending the ordered stages instead of a single count", async () => {
+    const client = render();
+    await go("#/company/approval-policies");
+    await userEvent.click(await screen.findByRole("button", { name: A("pol.new") }));
+    await userEvent.type(screen.getByLabelText(lbl("cc.name_en")), "Risky");
+    await userEvent.selectOptions(screen.getByLabelText(A("pol.cond_type")), "reversal");
+    await userEvent.selectOptions(screen.getByLabelText(A("pol.cond_rate")), "yes");
+    await userEvent.click(screen.getByLabelText(A("pol.staged")));
+    expect(screen.queryByLabelText(lbl("pol.required"))).not.toBeInTheDocument();       // the classic count is replaced by the stages
+    await userEvent.click(screen.getByRole("button", { name: A("pol.add_stage") }));
+    await userEvent.clear(screen.getByLabelText(A("pol.stage_required").replace("{n}", "1")));
+    await userEvent.type(screen.getByLabelText(A("pol.stage_required").replace("{n}", "1")), "1");
+    await userEvent.clear(screen.getByLabelText(A("pol.stage_required").replace("{n}", "2")));
+    await userEvent.type(screen.getByLabelText(A("pol.stage_required").replace("{n}", "2")), "٢");
+    await userEvent.click(screen.getByRole("button", { name: A("common.save") }));
+    await waitFor(() => expect(client.createApprovalPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      journalType: "reversal", rateOverride: true, softClosed: null, stages: [{ required: 1, roleId: null }, { required: 2, roleId: null }],
+    })));
+    expect((client.createApprovalPolicy as unknown as { mock: { calls: Record<string, unknown>[][] } }).mock.calls[0]![0]).not.toHaveProperty("requiredApprovals");
+  });
+
+  it("refuses a staged policy whose stage count is invalid before calling the server", async () => {
+    const client = render();
+    await go("#/company/approval-policies");
+    await userEvent.click(await screen.findByRole("button", { name: A("pol.new") }));
+    await userEvent.type(screen.getByLabelText(lbl("cc.name_en")), "Bad");
+    await userEvent.click(screen.getByLabelText(A("pol.staged")));
+    await userEvent.clear(screen.getByLabelText(A("pol.stage_required").replace("{n}", "1")));
+    await userEvent.type(screen.getByLabelText(A("pol.stage_required").replace("{n}", "1")), "0");
+    expect(screen.getByRole("button", { name: A("common.save") })).toBeDisabled();
+    expect(client.createApprovalPolicy).not.toHaveBeenCalled();
   });
 
   it("edits and deactivates with the policy revision", async () => {
@@ -265,7 +298,7 @@ describe("journal screen", () => {
       listAccounts: vi.fn().mockResolvedValue({ accounts, settings: null, templates: [], usageChecksImplemented: true, can: {} }),
       getCurrencies: vi.fn().mockResolvedValue({ currencies: [{ code: "JOD", nameEn: "Dinar", minorUnits: 3, isBase: true, enabled: true, revision: 1 }, { code: "USD", nameEn: "Dollar", minorUnits: 2, isBase: false, enabled: true, revision: 1 }], baseCurrency: "JOD", baseCurrencySelected: true, baseCurrencyLock: { locked: false, checksImplemented: true, unimplementedDomains: [] } }),
       listBranches: vi.fn().mockResolvedValue({ branches: [{ id: "b1", code: "MAIN", nameAr: "الرئيسي", nameEn: "Main", isActive: true, isMain: true }], limit: null, everCreated: null, can: { create: false, activate: false, designate: false, update: [] } }),
-      listCostCenters: vi.fn().mockResolvedValue({ costCenters: [], can: ccAll }),
+      listAllocatableCostCenters: vi.fn().mockResolvedValue({ costCenters: [{ id: "cc1", code: "OPS-1", nameAr: "المبيعات", nameEn: "Sales", parentId: null, branchId: null }, { id: "cc2", code: "OPS-2", nameAr: "الإنتاج", nameEn: "Production", parentId: null, branchId: null }] }),
       createJournalEntry: vi.fn().mockResolvedValue(entry("draft")), updateJournalEntry: vi.fn().mockResolvedValue(entry("draft", { revision: 2 })),
       submitJournalEntry: vi.fn().mockResolvedValue(entry("approved")), withdrawJournalEntry: vi.fn().mockResolvedValue(entry("draft", { revision: 2 })), cancelJournalEntry: vi.fn().mockResolvedValue(entry("cancelled")),
       decideJournalEntry: vi.fn().mockResolvedValue(entry("approved")), postJournalEntry: vi.fn().mockResolvedValue(entry("posted", { number: "JV-2026-000001" })), reverseJournalEntry: vi.fn().mockResolvedValue(entry("draft", { id: "j2", type: "reversal" })),
@@ -288,6 +321,16 @@ describe("journal screen", () => {
     render(null);
     await go("#/accounting/journal");
     expect(await screen.findByTestId("jrn-empty")).toBeInTheDocument();
+  });
+
+  it("shows the ordered approval stages with their progress for a pending entry", async () => {
+    render(entry("pending_approval", {}, { requiredApprovals: 4, plan: [{ stage: 1, required: 1, approved: 1, roleId: null }, { stage: 2, required: 2, approved: 1, roleId: null }, { stage: 3, required: 1, approved: 0, roleId: null }] }));
+    await open();
+    const plan = await screen.findByTestId("jrn-plan");
+    expect(within(plan).getByTestId("jrn-plan-1")).toHaveTextContent(A("jrn.plan_done"));
+    expect(within(plan).getByTestId("jrn-plan-2")).toHaveTextContent(A("jrn.plan_open"));
+    expect(within(plan).getByTestId("jrn-plan-2")).toHaveTextContent("1/2");
+    expect(within(plan).getByTestId("jrn-plan-3")).toHaveTextContent(A("jrn.plan_waiting"));
   });
 
   it("applies the filters through the server query", async () => {
@@ -314,6 +357,31 @@ describe("journal screen", () => {
     await userEvent.click(save);
     await waitFor(() => expect(client.createJournalEntry).toHaveBeenCalledWith(expect.objectContaining({
       branchId: "b1", lines: [expect.objectContaining({ accountId: "a1", debit: "125.500", credit: null }), expect.objectContaining({ accountId: "a2", debit: null, credit: "125.5" })],
+    })));
+  });
+
+  it("allocates a line by percentage, sending percentages (never guessed amounts) and offering only the cost centers the server allows", async () => {
+    const client = render(null);
+    await go("#/accounting/journal");
+    await userEvent.click(await screen.findByRole("button", { name: A("jrn.new") }));
+    const accountSelects = await screen.findAllByLabelText(A("jrn.account"));
+    await userEvent.selectOptions(accountSelects[0]!, "a1");
+    await userEvent.selectOptions(accountSelects[1]!, "a2");
+    await userEvent.type(screen.getAllByLabelText(A("jrn.debit"))[0]!, "100");
+    await userEvent.type(screen.getAllByLabelText(A("jrn.credit"))[1]!, "100");
+    await userEvent.click(screen.getAllByRole("button", { name: A("jrn.add_allocation") })[0]!);
+    await userEvent.click(screen.getAllByRole("button", { name: A("jrn.add_allocation") })[0]!);
+    const centers = screen.getAllByLabelText(A("jrn.cost_center"));
+    expect(Array.from((centers[0] as HTMLSelectElement).options).map((o) => o.value)).toEqual(["", "cc1", "cc2"]);
+    await userEvent.selectOptions(centers[0]!, "cc1");
+    await userEvent.selectOptions(centers[1]!, "cc2");
+    await userEvent.selectOptions(screen.getByLabelText(A("jrn.alloc_mode")), "percent");
+    const pct = screen.getAllByLabelText(A("jrn.allocation_percent"));
+    await userEvent.type(pct[0]!, "٣٣٫٣٣٣٣");
+    await userEvent.type(pct[1]!, "66.6667");
+    await userEvent.click(screen.getByRole("button", { name: A("jrn.save_draft") }));
+    await waitFor(() => expect(client.createJournalEntry).toHaveBeenCalledWith(expect.objectContaining({
+      lines: [expect.objectContaining({ allocations: [{ costCenterId: "cc1", percent: "33.3333" }, { costCenterId: "cc2", percent: "66.6667" }] }), expect.objectContaining({ allocations: [] })],
     })));
   });
 

@@ -82,7 +82,7 @@ public class FiscalUnitTests
             "company.fiscalperiods.close", "company.fiscalperiods.finalclose", "company.fiscalperiods.reopen",
             "company.fiscalreopen.view", "company.fiscalreopen.create", "company.fiscalreopen.approve"];
         foreach (var c in codes) Assert.Equal(ScopeKind.Company, PermissionCatalog.Default.Get(c).Resource.Scope);
-        Assert.Equal(codes.Order(), PermissionCatalog.Default.All.Select(p => p.Code).Where(c => c.StartsWith("company.fiscal")).Order());
+        Assert.Equal(codes.Order(), PermissionCatalog.Default.All.Select(p => p.Code).Where(c => c.StartsWith("company.fiscal") && !c.StartsWith("company.fiscalclosing.")).Order());   // year-end closing permissions (3.2C S3) are pinned in CostCenterPolicyUnitTests
         // There is no direct one-step reopening permission any more.
         Assert.False(PermissionCatalog.Default.TryGet("company.fiscalperiods.reopenfinal", out _));
         Assert.False(PermissionCatalog.Default.TryGet("company.fiscalyears.reopen", out _));
@@ -110,7 +110,18 @@ public class FiscalUnitTests
         Assert.Equal(PeriodCloseGuard.RequiredDomains.Order(StringComparer.Ordinal), new PeriodCloseGuard().UnimplementedDomains);
         var real = new PeriodCloseGuard([new Probe(PeriodCloseGuard.RequiredDomains[0])]);
         Assert.Equal(PeriodCloseGuard.RequiredDomains.Skip(1).Order(StringComparer.Ordinal), real.UnimplementedDomains);
-        Assert.Equal(3, PeriodCloseGuard.RequiredDomains.Length);
+        Assert.Equal(4, PeriodCloseGuard.RequiredDomains.Length);   // pending postings, inventory differences, pending adjustments, year-end consistency
+    }
+
+    [Fact]
+    public void A_domain_whose_module_is_absent_is_listed_as_not_applicable_never_as_implemented_and_does_not_make_closing_refuse()
+    {
+        var guard = new PeriodCloseGuard([new Probe("pending_accounting_postings"), new Probe("pending_adjustments"), new Probe("year_end_closing"), new Hasm.Infrastructure.Ledger.ModuleAbsentPeriodCloseProbe("inventory_valuation_differences")]);
+        Assert.Empty(guard.UnimplementedDomains);
+        Assert.Equal(["inventory_valuation_differences"], guard.NotApplicableDomains);
+        Assert.False(new Hasm.Infrastructure.Ledger.ModuleAbsentPeriodCloseProbe("x").Implemented);                                 // never claims to be implemented
+        // A domain with neither a real probe nor an absent module still counts as unimplemented.
+        Assert.Equal(["year_end_closing"], new PeriodCloseGuard([new Probe("pending_accounting_postings"), new Probe("pending_adjustments"), new Hasm.Infrastructure.Ledger.ModuleAbsentPeriodCloseProbe("inventory_valuation_differences")]).UnimplementedDomains);
     }
 
     private sealed class Probe(string domain) : IPeriodCloseProbe

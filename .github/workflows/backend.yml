@@ -99,7 +99,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 653 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 693 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -147,8 +147,14 @@ jobs:
               # slice S5 journal and posting engine (company migration 0008, system migration 0011); slice S6 ledger reports.
               "JournalLifecycleTests": 9, "JournalPeriodTests": 2, "JournalMultiCurrencyTests": 5, "JournalAllocationTests": 4, "JournalApprovalTests": 7,
               "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 3, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
+              # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
+              "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
+              # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
+              "ApprovalStageTests": 8, "FiscalClosingTests": 11,
+              # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
+              "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
           }
-          TOTAL = sum(EXPECTED.values())  # 653
+          TOTAL = sum(EXPECTED.values())  # 693
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

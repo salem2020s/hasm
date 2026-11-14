@@ -9,7 +9,7 @@ public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Expo
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
 /// Company covers everything in the company; Branch and Warehouse cover only the identified branch/warehouse.
 /// </summary>
-public enum ScopeKind : short { Company = 0, Branch = 1, Warehouse = 2 }
+public enum ScopeKind : short { Company = 0, Branch = 1, Warehouse = 2, CostCenter = 3 }
 
 /// <summary>A concrete target of an authorization check (what the caller wants to act on).</summary>
 public readonly record struct ScopeTarget(ScopeKind Kind, Guid? Id)
@@ -17,18 +17,20 @@ public readonly record struct ScopeTarget(ScopeKind Kind, Guid? Id)
     public static ScopeTarget Company { get; } = new(ScopeKind.Company, null);
     public static ScopeTarget Branch(Guid id) => new(ScopeKind.Branch, id);
     public static ScopeTarget Warehouse(Guid id) => new(ScopeKind.Warehouse, id);
+    public static ScopeTarget CostCenter(Guid id) => new(ScopeKind.CostCenter, id);
 
     /// <summary>A Company target has no id; Branch and Warehouse targets require a non-empty id.</summary>
     public bool IsWellFormed => Kind switch
     {
         ScopeKind.Company => Id is null,
-        ScopeKind.Branch or ScopeKind.Warehouse => Id is { } id && id != Guid.Empty,
+        ScopeKind.Branch or ScopeKind.Warehouse or ScopeKind.CostCenter => Id is { } id && id != Guid.Empty,
         _ => false,
     };
 }
 
 /// <summary>A resource whose permissions can be granted. <see cref="Scope"/> is the narrowest scope the resource's data lives at.</summary>
-public sealed record PermissionResource(string Key, ScopeKind Scope, IReadOnlyList<PermissionAction> Actions);
+/// <param name="AcceptsCostCenter">The resource also accepts cost-center-scoped grants (journal entries and ledger reports carry cost-center allocations).</param>
+public sealed record PermissionResource(string Key, ScopeKind Scope, IReadOnlyList<PermissionAction> Actions, bool AcceptsCostCenter = false);
 
 /// <summary>A structured permission: <c>resource.action</c>, for example <c>access.roles.update</c>.</summary>
 public sealed record Permission(PermissionResource Resource, PermissionAction Action)
@@ -112,12 +114,16 @@ public sealed partial class PermissionCatalog
         new("company.approvalpolicies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
         // Journal (slice S5): branch-scoped. Approve is NOT in the Company Administrator preset (separation of duties; it belongs to Journal Approver and custom roles).
         // Posting into a Soft Closed period and overriding an exchange rate are separate company-wide permissions.
-        new("company.journal", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Post, PermissionAction.Reverse]),
+        new("company.journal", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Post, PermissionAction.Reverse], AcceptsCostCenter: true),
         new("company.journalsoftclosed", ScopeKind.Company, [PermissionAction.Post]),
         new("company.journalrate", ScopeKind.Company, [PermissionAction.Override]),
         new("company.ledgersettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         // Ledger reports (slice S6): branch-scoped (a branch grant sees only its own branches); export is separate.
-        new("company.ledgerreports", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export]),
+        new("company.ledgerreports", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export], AcceptsCostCenter: true),
+        // Cost-center accounting policies (3.2C S1): which accounts require a cost center and which branches a cost center is eligible for. Company-wide.
+        new("company.costcenterpolicies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Fiscal-year closing and opening balances (3.2C S3): view/preview, configure the profit and loss account, generate the closing/opening entries (create), and reverse them. Company-wide.
+        new("company.fiscalclosing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Create, PermissionAction.Reverse]),
     ]);
 
     public static class Codes
@@ -192,6 +198,12 @@ public sealed partial class PermissionCatalog
         public const string LedgerSettingsConfigure = "company.ledgersettings.configure";
         public const string LedgerReportsView = "company.ledgerreports.view";
         public const string LedgerReportsExport = "company.ledgerreports.export";
+        public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
+        public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
+        public const string FiscalClosingView = "company.fiscalclosing.view";
+        public const string FiscalClosingConfigure = "company.fiscalclosing.configure";
+        public const string FiscalClosingCreate = "company.fiscalclosing.create";
+        public const string FiscalClosingReverse = "company.fiscalclosing.reverse";
     }
 
     public Permission Get(string code) =>
@@ -252,12 +264,12 @@ public sealed class EffectivePermissions(PermissionCatalog catalog, IReadOnlyLis
     {
         if (!catalog.TryGet(code, out var permission) || !target.IsWellFormed) return false;
         // The target must be at a granularity the resource knows (a branch target for a company-level resource is a caller bug: deny).
-        if (target.Kind != ScopeKind.Company && target.Kind != permission.Resource.Scope) return false;
+        if (target.Kind != ScopeKind.Company && target.Kind != permission.Resource.Scope && !(target.Kind == ScopeKind.CostCenter && permission.Resource.AcceptsCostCenter)) return false;
         foreach (var grant in Grants)
         {
             if (!grant.Permissions.Contains(code)) continue;
             if (grant.Scope == ScopeKind.Company) return true;
-            if (grant.Scope == target.Kind && grant.ScopeId == target.Id && permission.Resource.Scope == grant.Scope) return true;
+            if (grant.Scope == target.Kind && grant.ScopeId == target.Id && (permission.Resource.Scope == grant.Scope || (grant.Scope == ScopeKind.CostCenter && permission.Resource.AcceptsCostCenter))) return true;
         }
         return false;
     }
@@ -275,7 +287,7 @@ public sealed class EffectivePermissions(PermissionCatalog catalog, IReadOnlyLis
         {
             if (!catalog.TryGet(code, out var permission)) return false;
             // Under a narrower assignment, permissions of coarser resources are inert (never exercisable), so granting them escalates nothing.
-            if (scope.Kind != ScopeKind.Company && permission.Resource.Scope != scope.Kind) continue;
+            if (scope.Kind != ScopeKind.Company && permission.Resource.Scope != scope.Kind && !(scope.Kind == ScopeKind.CostCenter && permission.Resource.AcceptsCostCenter)) continue;
             if (!Has(code, scope)) return false;
         }
         return true;
