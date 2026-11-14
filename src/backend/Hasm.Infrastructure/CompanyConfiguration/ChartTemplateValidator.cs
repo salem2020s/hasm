@@ -27,6 +27,11 @@ public static partial class ChartTemplateValidator
             if (!byCode.TryAdd(a.Code, a)) P(a.Code, "duplicate code");
         }
         var children = new Dictionary<string, int>(StringComparer.Ordinal);
+        // applying a template inserts the accounts in list order, so every parent must be listed before its children
+        var position = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < template.Accounts.Count; i++) position.TryAdd(template.Accounts[i].Code, i);
+        foreach (var a in template.Accounts)
+            if (a.ParentCode is { } pc && position.TryGetValue(pc, out var at) && at > position[a.Code]) P(a.Code, $"parent {pc} is listed after its child");
         foreach (var a in byCode.Values)
         {
             if (string.IsNullOrWhiteSpace(a.NameAr) || !ArabicLetter().IsMatch(a.NameAr)) P(a.Code, "Arabic name missing or without Arabic letters");

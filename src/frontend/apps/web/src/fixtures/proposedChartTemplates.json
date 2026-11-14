@@ -585,6 +585,12 @@
    "nameEn": "Foreign exchange gains"
   },
   {
+   "code": "4203",
+   "parent": "42",
+   "nameAr": "فائض الصندوق",
+   "nameEn": "Cash surpluses"
+  },
+  {
    "code": "5",
    "parent": null,
    "nameAr": "المصروفات",
@@ -677,8 +683,8 @@
   {
    "code": "5210",
    "parent": "52",
-   "nameAr": "عجز وزيادة الصندوق",
-   "nameEn": "Cash over and short"
+   "nameAr": "عجز الصندوق",
+   "nameEn": "Cash shortages"
   },
   {
    "code": "5211",

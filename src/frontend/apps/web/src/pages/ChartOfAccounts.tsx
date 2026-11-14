@@ -42,6 +42,7 @@ export function ChartOfAccountsPage() {
   const [currencies, setCurrencies] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [templateKey, setTemplateKey] = useState("generic");
   const [type, setType] = useState<"all" | AccountType>("all");
   const [status, setStatus] = useState<"all" | "active" | "inactive">("all");
   const [expanded, setExpanded] = useState<Set<string> | null>(null);
@@ -153,7 +154,7 @@ export function ChartOfAccountsPage() {
   }
 
   const tableRows = rows(null, 0);
-  const template = data.templates[0];
+  const template = data.templates.find((x) => x.key === templateKey) ?? data.templates[0];
 
   return (
     <section aria-labelledby="page-title">
@@ -276,7 +277,18 @@ export function ChartOfAccountsPage() {
           confirmLabel={t("form.confirm")}
           onCancel={() => setDialog(null)}
           onConfirm={() => { setDialog(null); void run(() => auth.api.applyChartTemplate(template.key), t("accounts.template_applied")); }}
-        />
+        >
+          {data.templates.length > 1 && (
+            <Field id="template-choice" label={t("accounts.template_choose")}>
+              {(a) => (
+                <select {...a} value={template.key} onChange={(e) => setTemplateKey(e.target.value)}>
+                  {data.templates.map((x) => <option key={x.key} value={x.key}>{locale === "en" ? x.nameEn : x.nameAr} ({x.accounts})</option>)}
+                </select>
+              )}
+            </Field>
+          )}
+          <p className="hint" data-testid="template-description">{t(`accounts.template_desc.${template.key}`) === `accounts.template_desc.${template.key}` ? "" : t(`accounts.template_desc.${template.key}`)}</p>
+        </ConfirmDialog>
       )}
     </section>
   );

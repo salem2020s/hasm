@@ -73,10 +73,12 @@ interface ConfirmProps {
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Extra content between the message and the buttons (for example a choice). */
+  children?: ReactNode;
 }
 
 /** Confirmation for sensitive actions. Focus starts on Cancel (the safe choice); Escape cancels. */
-export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: ConfirmProps) {
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, children }: ConfirmProps) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
@@ -86,6 +88,7 @@ export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onCon
         onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}>
         <h2 id="confirm-title">{title}</h2>
         <p id="confirm-message">{message}</p>
+        {children}
         <div className="actions">
           <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel ?? t("cancel")}</button>
           <button type="button" className="danger" onClick={onConfirm}>{confirmLabel}</button>

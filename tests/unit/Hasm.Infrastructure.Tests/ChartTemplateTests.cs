@@ -13,13 +13,16 @@ public class ChartTemplateTests
 
     private static ChartTemplate Of(params TemplateAccount[] accounts) => new("t", "قالب", "Template", accounts);
 
-    public static IEnumerable<object[]> Proposed() => ProposedChartTemplates.All.Select(t => new object[] { t });
+    /// <summary>The owner-approved business-type templates (everything except the generic starter).</summary>
+    private static IReadOnlyList<ChartTemplate> Business => [.. ChartTemplates.All.Where(t => t.Key != ChartTemplates.Generic)];
+
+    public static IEnumerable<object[]> Proposed() => Business.Select(t => new object[] { t });
 
     [Fact]
     public void The_shipped_generic_template_is_structurally_valid_and_unchanged()
     {
         Assert.Empty(ChartTemplateValidator.Validate(ChartTemplates.Find(ChartTemplates.Generic)!));
-        Assert.Equal([ChartTemplates.Generic], ChartTemplates.All.Select(t => t.Key));          // the proposed templates are NOT exposed as production options
+        Assert.Equal([ChartTemplates.Generic, "service", "retail", "wholesale"], ChartTemplates.All.Select(t => t.Key));
         Assert.Equal(38, ChartTemplates.Find(ChartTemplates.Generic)!.Accounts.Count);
     }
 
@@ -28,13 +31,13 @@ public class ChartTemplateTests
     public void Every_proposed_template_satisfies_every_chart_rule(ChartTemplate template) => Assert.Empty(ChartTemplateValidator.Validate(template));
 
     [Fact]
-    public void The_three_proposed_templates_have_the_reviewed_sizes_and_are_not_registered_for_production()
+    public void The_three_business_templates_have_the_approved_exact_sizes_and_are_registered_after_the_unchanged_generic_one()
     {
-        Assert.Equal([54, 65, 64], ProposedChartTemplates.All.Select(t => t.Accounts.Count));
-        Assert.Equal(["service", "retail", "wholesale"], ProposedChartTemplates.All.Select(t => t.Key));
-        Assert.Null(ChartTemplates.Find("service"));
-        Assert.Null(ChartTemplates.Find("retail"));
-        Assert.Null(ChartTemplates.Find("wholesale"));
+        Assert.Equal([54, 66, 64], Business.Select(t => t.Accounts.Count));
+        Assert.Equal(["service", "retail", "wholesale"], Business.Select(t => t.Key));
+        Assert.All(["service", "retail", "wholesale"], k => Assert.NotNull(ChartTemplates.Find(k)));
+        Assert.Equal(["Service business chart of accounts", "Retail trading chart of accounts", "Wholesale trading chart of accounts"], Business.Select(t => t.NameEn));
+        Assert.All(ChartTemplates.All, t => Assert.False(string.IsNullOrWhiteSpace(t.NameAr)));
     }
 
     [Theory]
@@ -117,7 +120,7 @@ public class ChartTemplateTests
         var salesReturns = U(0x645, 0x631, 0x62F, 0x648, 0x62F, 0x627, 0x62A) + " " + U(0x627, 0x644, 0x645, 0x628, 0x64A, 0x639, 0x627, 0x62A);             // مردودات المبيعات
         var purchaseReturns = U(0x645, 0x631, 0x62F, 0x648, 0x62F, 0x627, 0x62A) + " " + U(0x627, 0x644, 0x645, 0x634, 0x62A, 0x631, 0x64A, 0x627, 0x62A);  // مردودات المشتريات
         var amortization = U(0x645, 0x62C, 0x645, 0x639) + " " + U(0x627, 0x644, 0x625, 0x637, 0x641, 0x627, 0x621);                                         // مجمع الإطفاء
-        foreach (var t in ProposedChartTemplates.All)
+        foreach (var t in Business)
         {
             var ar = t.Accounts.ToDictionary(a => a.NameEn, a => a.NameAr);
             Assert.Equal(retained, ar["Retained earnings"]);
@@ -126,7 +129,7 @@ public class ChartTemplateTests
             if (t.Key != "service") { Assert.Equal(salesReturns, ar["Sales returns"]); Assert.Equal(purchaseReturns, ar["Purchase returns"]); }
         }
         // a reversed Arabic word would start with a letter that only occurs at the END of words (ta marbuta, final forms)
-        foreach (var name in ProposedChartTemplates.All.Concat(ChartTemplates.All).SelectMany(t => t.Accounts).Select(a => a.NameAr).Distinct())
+        foreach (var name in ChartTemplates.All.SelectMany(t => t.Accounts).Select(a => a.NameAr).Distinct())
             foreach (var word in name.Split([' ', '(', ')', '/'], StringSplitOptions.RemoveEmptyEntries))
             {
                 Assert.NotEqual('\u0629', word[0]);          // ة never starts a word
@@ -137,7 +140,7 @@ public class ChartTemplateTests
     [Fact]
     public void Tangible_depreciation_and_intangible_amortization_are_separate_accounts_in_every_template()
     {
-        foreach (var t in ProposedChartTemplates.All)
+        foreach (var t in Business)
         {
             var by = t.Accounts.ToDictionary(a => a.NameEn);
             Assert.Equal((AccountType.Asset, AccountNature.Credit, false), (by["Accumulated depreciation"].Type, by["Accumulated depreciation"].Nature, by["Accumulated depreciation"].IsGroup));
@@ -153,7 +156,7 @@ public class ChartTemplateTests
     public void Inventory_related_accounts_exist_only_in_the_trading_templates_and_nothing_is_automatic()
     {
         string[] inventory = ["Inventory", "Merchandise inventory", "Goods in transit", "Goods received not invoiced (GRNI)", "Cost of goods sold", "Freight-in and import costs"];
-        foreach (var t in ProposedChartTemplates.All)
+        foreach (var t in Business)
         {
             var has = inventory.All(n => t.Accounts.Any(a => a.NameEn == n));
             Assert.Equal(t.Key != "service", has);
@@ -162,11 +165,26 @@ public class ChartTemplateTests
     }
 
     [Fact]
+    public void Retail_cash_differences_are_two_accounts_shortages_as_expense_and_surpluses_as_other_income()
+    {
+        var retail = ChartTemplates.Find("retail")!.Accounts.ToDictionary(a => a.NameEn);
+        var shortage = retail["Cash shortages"]; var surplus = retail["Cash surpluses"];
+        Assert.Equal((AccountType.Expense, AccountNature.Debit, false), (shortage.Type, shortage.Nature, shortage.IsGroup));
+        Assert.Equal((AccountType.Revenue, AccountNature.Credit, false), (surplus.Type, surplus.Nature, surplus.IsGroup));
+        Assert.Equal("Operating expenses", ChartTemplates.Find("retail")!.Accounts.Single(a => a.Code == shortage.ParentCode).NameEn);
+        Assert.Equal("Other income", ChartTemplates.Find("retail")!.Accounts.Single(a => a.Code == surplus.ParentCode).NameEn);
+        Assert.NotEqual(shortage.Code, surplus.Code);
+        Assert.DoesNotContain(retail.Keys, k => k.Contains("over and short", StringComparison.OrdinalIgnoreCase));
+        Assert.False(ChartTemplates.Find("wholesale")!.Accounts.Any(a => a.NameEn.StartsWith("Cash s", StringComparison.Ordinal)));
+        Assert.False(ChartTemplates.Find("service")!.Accounts.Any(a => a.NameEn.StartsWith("Cash s", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void Trading_templates_differ_only_in_their_channel_specific_accounts()
     {
-        var retail = ProposedChartTemplates.Retail.Accounts.Select(a => a.NameEn).ToHashSet();
-        var wholesale = ProposedChartTemplates.Wholesale.Accounts.Select(a => a.NameEn).ToHashSet();
-        Assert.Equal(["Card processing fees", "Card settlements receivable", "Cash over and short", "Store supplies and packaging"], retail.Except(wholesale).Order());
+        var retail = ChartTemplates.Find("retail")!.Accounts.Select(a => a.NameEn).ToHashSet();
+        var wholesale = ChartTemplates.Find("wholesale")!.Accounts.Select(a => a.NameEn).ToHashSet();
+        Assert.Equal(["Card processing fees", "Card settlements receivable", "Cash shortages", "Cash surpluses", "Store supplies and packaging"], retail.Except(wholesale).Order());
         Assert.Equal(["Sales commissions", "Volume rebates and incentives granted", "Warehousing and logistics"], wholesale.Except(retail).Order());
     }
 
@@ -189,6 +207,7 @@ public class ChartTemplateTests
     [InlineData("group_contra")]
     [InlineData("empty_group")]
     [InlineData("cycle")]
+    [InlineData("child_before_parent")]
     [InlineData("bad_code")]
     [InlineData("lowercase_code")]
     [InlineData("no_arabic")]
@@ -209,6 +228,7 @@ public class ChartTemplateTests
             "group_contra" => Of(root, A("11", "1", AccountType.Asset, true, AccountNature.Credit), A("1101", "11", AccountType.Asset, false)),
             "empty_group" => Of(root, A("11", "1", AccountType.Asset, true), A("1101", "1", AccountType.Asset, false)),
             "cycle" => Of(root, A("11", "12", AccountType.Asset, true), A("12", "11", AccountType.Asset, true), A("1101", "11", AccountType.Asset, false)),
+            "child_before_parent" => Of(root, A("1101", "11", AccountType.Asset, false), A("11", "1", AccountType.Asset, true)),
             "bad_code" => Of(root, A("11 01", "1", AccountType.Asset, false)),
             "lowercase_code" => Of(root, A("ab1", "1", AccountType.Asset, false)),
             "no_arabic" => Of(root, A("1101", "1", AccountType.Asset, false, ar: "Cash")),
