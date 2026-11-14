@@ -55,13 +55,17 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var cmd = new NpgsqlCommand(
             $"SELECT {HeaderColumns} FROM {JE.Table} e WHERE (@st::smallint IS NULL OR e.{JE.Status} = @st) AND (@f::date IS NULL OR e.{JE.Date} >= @f) AND (@t::date IS NULL OR e.{JE.Date} <= @t) " +
-            $"AND (@b::uuid IS NULL OR e.{JE.Branch} = @b) AND (@q::text IS NULL OR e.{JE.Number} ILIKE @q OR e.{JE.Desc} ILIKE @q) ORDER BY e.{JE.Date} DESC, e.{JE.CreatedAt} DESC, e.{JE.Id} LIMIT @l OFFSET @o", conn);
+            $"AND (@b::uuid IS NULL OR e.{JE.Branch} = @b) AND (@q::text IS NULL OR e.{JE.Number} ILIKE @q OR e.{JE.Desc} ILIKE @q) " +
+            // Branch authorization is applied BEFORE ORDER/LIMIT/OFFSET: the entry's branch and every line branch must be allowed (null = company-wide, no restriction).
+            $"AND (@ab::uuid[] IS NULL OR (e.{JE.Branch} = ANY(@ab) AND NOT EXISTS (SELECT 1 FROM {CompanySchema.JournalLine.Table} jl WHERE jl.{CompanySchema.JournalLine.Entry} = e.{JE.Id} AND jl.{CompanySchema.JournalLine.Branch} IS NOT NULL AND NOT (jl.{CompanySchema.JournalLine.Branch} = ANY(@ab))))) " +
+            $"ORDER BY e.{JE.Date} DESC, e.{JE.CreatedAt} DESC, e.{JE.Id} LIMIT @l OFFSET @o", conn);
         cmd.Parameters.Add(new NpgsqlParameter("st", NpgsqlDbType.Smallint) { Value = filter.Status is null ? DBNull.Value : (short)filter.Status });
         cmd.Parameters.Add(new NpgsqlParameter("f", NpgsqlDbType.Date) { Value = filter.From is null ? DBNull.Value : filter.From.Value.ToDateTime(TimeOnly.MinValue) });
         cmd.Parameters.Add(new NpgsqlParameter("t", NpgsqlDbType.Date) { Value = filter.To is null ? DBNull.Value : filter.To.Value.ToDateTime(TimeOnly.MinValue) });
         cmd.Parameters.Add(new NpgsqlParameter("b", NpgsqlDbType.Uuid) { Value = (object?)filter.BranchId ?? DBNull.Value });
         var q = filter.Text?.Trim();
         cmd.Parameters.Add(new NpgsqlParameter("q", NpgsqlDbType.Text) { Value = string.IsNullOrEmpty(q) ? DBNull.Value : "%" + q.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%" });
+        cmd.Parameters.Add(new NpgsqlParameter("ab", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = filter.AllowedBranches is null ? DBNull.Value : filter.AllowedBranches.ToArray() });
         cmd.Parameters.AddWithValue("l", Math.Clamp(filter.Limit, 1, 500));
         cmd.Parameters.AddWithValue("o", Math.Max(0, filter.Offset));
         var list = new List<JournalEntrySummary>();

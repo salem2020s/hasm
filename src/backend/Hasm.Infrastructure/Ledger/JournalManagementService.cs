@@ -42,10 +42,14 @@ public sealed class JournalManagementService(AccessService access, JournalServic
     public async Task<ConfigResult<IReadOnlyList<JournalEntrySummary>>> ListAsync(Guid userId, Guid companyId, JournalFilter filter, CancellationToken ct = default)
     {
         var eff = await access.GetEffectivePermissionsAsync(userId, companyId, ct);
-        var all = await journal.ListAsync(companyId, filter, ct);
-        var visible = all.Where(e => eff.Has(PermissionCatalog.Codes.JournalView, ScopeTarget.Branch(e.BranchId))).ToList();
-        if (visible.Count == 0 && !eff.Grants.Any(g => g.Permissions.Contains(PermissionCatalog.Codes.JournalView))) return Denied<IReadOnlyList<JournalEntrySummary>>();
-        return ConfigResult<IReadOnlyList<JournalEntrySummary>>.Ok(visible);
+        IReadOnlyList<Guid>? allowed = null; // null = company-wide view permission
+        if (!eff.Has(PermissionCatalog.Codes.JournalView, ScopeTarget.Company))
+        {
+            allowed = eff.Grants.Where(g => g.Scope == ScopeKind.Branch && g.ScopeId is not null && g.Permissions.Contains(PermissionCatalog.Codes.JournalView)).Select(g => g.ScopeId!.Value).Distinct().ToList();
+            if (allowed.Count == 0) return Denied<IReadOnlyList<JournalEntrySummary>>();
+        }
+        // The restriction runs inside the query, before ORDER BY / LIMIT / OFFSET, so paging only ever walks entries the caller may see.
+        return ConfigResult<IReadOnlyList<JournalEntrySummary>>.Ok(await journal.ListAsync(companyId, filter with { AllowedBranches = allowed }, ct));
     }
 
     public async Task<ConfigResult<JournalEntryView>> CreateAsync(Guid userId, Guid companyId, JournalInput? input, CancellationToken ct = default)

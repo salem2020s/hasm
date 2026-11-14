@@ -127,6 +127,35 @@ public class JournalAccessTests : JournalTestBase
     }
 
     [PostgresFact]
+    public async Task Branch_authorization_is_applied_before_the_limit_so_a_viewer_reaches_every_permitted_entry_even_behind_more_than_500_newer_ones_elsewhere()
+    {
+        await PrepareJournal();
+        var own = new List<Guid>();
+        for (var i = 0; i < 7; i++) own.Add((await Draft(new JournalInput(new DateOnly(2026, 1, 5), $"main-{i}", Main, [Dr(Cash.Id, 1m + i, branch: Main), Cr(Sales.Id, 1m + i, branch: Main)], null))).Header.Id);
+        // 505 NEWER entries in another branch: with filtering after LIMIT 500 they would crowd out every Main entry.
+        for (var i = 0; i < 505; i++) await Draft(new JournalInput(new DateOnly(2026, 3, 10), $"b2-{i}", B2, [Dr(Cash.Id, 1m, branch: B2), Cr(Sales.Id, 1m, branch: B2)], null));
+        // Header in Main but one line in B2: the Main-only viewer may not see it (same rule as opening it).
+        var mixed = await Draft(Entry("2026-03-11", Dr(Cash.Id, 2m, branch: B2), Cr(Sales.Id, 2m, branch: Main)));
+        var (mainUser, _) = await Branch(Main, PermissionCatalog.Codes.JournalView);
+
+        var first = Ok(await JMg.ListAsync(mainUser.Id, Company.Id, new JournalFilter(null, null, null, null, null, 500, 0)));
+        Assert.Equal(own.Order(), first.Select(e => e.Id).Order());
+        Assert.All(first, e => Assert.Equal(Main, e.BranchId));
+        Assert.DoesNotContain(first, e => e.Id == mixed.Header.Id);
+        // Safe, deterministic paging over the permitted set only.
+        var paged = new List<Guid>();
+        for (var off = 0; off < 20; off += 3) paged.AddRange(Ok(await JMg.ListAsync(mainUser.Id, Company.Id, new JournalFilter(null, null, null, null, null, 3, off))).Select(e => e.Id));
+        Assert.Equal(first.Select(e => e.Id), paged);
+        Assert.Equal(first.Select(e => e.Id), Ok(await JMg.ListAsync(mainUser.Id, Company.Id, new JournalFilter(null, null, null, null, null, 500, 0))).Select(e => e.Id));
+        // Asking explicitly for a branch the caller may not see returns nothing, never that branch's data.
+        Assert.Empty(Ok(await JMg.ListAsync(mainUser.Id, Company.Id, new JournalFilter(null, null, null, B2, null, 500, 0))));
+        // Company-wide access still pages through everything (7 + 505 + 1).
+        var all = new List<Guid>();
+        for (var off = 0; off < 600; off += 500) all.AddRange(Ok(await JMg.ListAsync(Admin.Id, Company.Id, new JournalFilter(null, null, null, null, null, 500, off))).Select(e => e.Id));
+        Assert.Equal(513, all.Distinct().Count());
+    }
+
+    [PostgresFact]
     public async Task Approval_is_enforced_through_the_facade_with_separation_of_duties_and_revocation_takes_effect_before_the_next_decision()
     {
         await PrepareJournal();

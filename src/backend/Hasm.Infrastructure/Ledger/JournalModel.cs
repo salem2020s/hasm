@@ -43,7 +43,8 @@ public sealed record JournalEntryView(
 public sealed record LedgerSettingsView(Guid? RoundingAccountId, long Revision, bool Exists);
 public sealed record LedgerSettingsInput(Guid? RoundingAccountId);
 
-public sealed record JournalFilter(JournalStatus? Status, DateOnly? From, DateOnly? To, Guid? BranchId, string? Text, int Limit = 100, int Offset = 0);
+public sealed record JournalFilter(JournalStatus? Status, DateOnly? From, DateOnly? To, Guid? BranchId, string? Text, int Limit = 100, int Offset = 0,
+    IReadOnlyList<Guid>? AllowedBranches = null);
 
 public sealed record ApprovalDecisionInput(bool? Approve, string? Comment);
 public sealed record ReversalInput(DateOnly? EntryDate, string? Description);
