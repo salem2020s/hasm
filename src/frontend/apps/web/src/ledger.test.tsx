@@ -437,6 +437,15 @@ describe("journal screen", () => {
     expect(await screen.findByTestId("jrn-error")).toHaveTextContent(A("jrn.error.separation_of_duties"));
   });
 
+  it("opens the entry a report asked for (drill-down from the general ledger) straight away", async () => {
+    sessionStorage.setItem("hasm.openJournalEntry", "j1");
+    const client = render(entry("posted", { number: "JV-2026-000001" }));
+    await go("#/accounting/journal");
+    expect(await screen.findByTestId("jrn-balance")).toBeInTheDocument();
+    await waitFor(() => expect(client.getJournalEntry).toHaveBeenCalledWith("j1"));
+    expect(sessionStorage.getItem("hasm.openJournalEntry")).toBeNull();                                           // consumed once
+  });
+
   it("reverses a posted entry with a chosen date and opens the drafted reversal", async () => {
     const client = render(entry("posted", { number: "JV-2026-000001" }), jcan(), { getJournalEntry: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "j2" ? entry("draft", { id: "j2", type: "reversal" }) : entry("posted", { number: "JV-2026-000001" }))) });
     await open();

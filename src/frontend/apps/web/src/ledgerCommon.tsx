@@ -17,6 +17,9 @@ export const isDecimal = (s: string, maxFraction = 4) => new RegExp(`^\\d{1,16}(
 export const toLatinDigits = (s: string) => s.replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (c) => String(c.charCodeAt(0) - 0x06f0)).replace(/٫/g, ".");
 
 /** The name for the current language, falling back to the other language and then to the code. */
+/** A report line asks the journal screen to open one entry (a drill-down): the id travels in session storage, never in the address. */
+export const OPEN_JOURNAL_KEY = "hasm.openJournalEntry";
+
 export function localName(x: { nameAr: string | null; nameEn: string | null; code?: string }, locale: string): string {
   const preferred = locale === "en" ? x.nameEn : x.nameAr;
   const other = locale === "en" ? x.nameAr : x.nameEn;
