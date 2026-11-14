@@ -13,7 +13,7 @@ const go = async (hash: string) => {
 };
 beforeEach(() => { localStorage.clear(); window.location.hash = ""; });
 
-const perms = [...ALL_PERMISSIONS, "company.fiscalclosing.view", "company.accounts.view", "company.branches.view"];
+const perms = [...ALL_PERMISSIONS, "company.fiscalclosing.view", "company.accounts.view", "company.branches.view", "company.costcenters.view"];
 const account = (over: Partial<Account>): Account => ({ id: "a1", code: "3101", nameAr: "أرباح مرحلة", nameEn: "Retained earnings", type: "equity", isGroup: false, isActive: true, ...over }) as unknown as Account;
 const settings = (over: Partial<ClosingSettingsResponse["settings"]> = {}, can = { configure: true, create: true, reverse: true }): ClosingSettingsResponse => ({
   settings: { equityAccountId: "a1", equityCode: "3101", equityNameAr: "أرباح مرحلة", equityNameEn: "Retained earnings", requireApproval: true, revision: 2, configured: true, ...over }, can });
@@ -75,9 +75,19 @@ describe("fiscal-year closing screen", () => {
     expect(options.some((o) => o.startsWith("3 "))).toBe(false);       // a group
     expect(options.some((o) => o.includes("3102"))).toBe(false);       // inactive
     await userEvent.selectOptions(select, "a1");
-    await userEvent.click(screen.getByLabelText(A("fyc.require_approval")));
+    expect(screen.getByTestId("fyc-approval-mandatory")).toBeInTheDocument();   // not a setting: there is no toggle
+    expect(screen.queryByRole("checkbox")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: A("common.save") }));
-    await waitFor(() => expect(client.putClosingSettings).toHaveBeenCalledWith({ equityAccountId: "a1", requireApproval: false }, 0));
+    await waitFor(() => expect(client.putClosingSettings).toHaveBeenCalledWith({ equityAccountId: "a1" }, 0));
+  });
+
+  it("renders only the first 200 lines of a very large generated entry, always shows the true line count and the cost center of each line", async () => {
+    const many = Array.from({ length: 450 }, (_, i) => ({ accountId: "a1", branchId: "b1", debit: "1.0000", credit: "0.0000", costCenterId: i === 0 ? "c1" : null }));
+    render({ previewYearEnd: vi.fn().mockResolvedValue(preview({ openingLines: many, canClose: true, canCarryForward: true, checks: [] })), listCostCenters: vi.fn().mockResolvedValue({ costCenters: [{ id: "c1", code: "CC1", nameAr: "مركز", nameEn: "Center", isGroup: false, isActive: true }], can: {} }) });
+    await go("#/company/fiscal-closing");
+    const table = await screen.findByTestId("fyc-opening-lines");
+    expect(within(table).getAllByRole("row")).toHaveLength(201);                       // the header and 200 lines
+    expect(screen.getByTestId("fyc-opening-lines-count").textContent).toContain("450");
   });
 
   it("starts the closing and the carryforward through the server", async () => {

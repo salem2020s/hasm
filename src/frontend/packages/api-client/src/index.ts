@@ -364,7 +364,7 @@ export interface ClosingSettings { equityAccountId: string | null; equityCode: s
 export interface ClosingSettingsResponse { settings: ClosingSettings; can: { configure: boolean; create: boolean; reverse: boolean } }
 /** A validation of the closing. A check of a module that does not exist is "not_applicable", never "passed". */
 export interface ClosingCheck { code: string; status: "passed" | "blocked" | "not_applicable"; detail: string | null; phase: "close" | "carry" | "both" }
-export interface YearEndLine { accountId: string; branchId: string; debit: string; credit: string }
+export interface YearEndLine { accountId: string; branchId: string; debit: string; credit: string; costCenterId?: string | null }
 export interface ClosingPreview {
   yearId: string; yearName: string; yearStart: string; yearEnd: string; baseCurrency: string; equityAccountId: string | null; netResult: string; isProfit: boolean;
   closingLines: YearEndLine[]; openingLines: YearEndLine[]; nextYearId: string | null; nextYearStart: string | null; checks: ClosingCheck[];
@@ -604,7 +604,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     enterExchangeRate: (rate: ExchangeRateInput, latestId: number) => request<ExchangeRate>("POST", "/api/v1/company/exchange-rates", { body: rate, ifMatch: latestId }),
     listCostCenters: () => get<CostCentersResponse>("/api/v1/company/cost-centers"),
     getClosingSettings: () => get<ClosingSettingsResponse>("/api/v1/company/fiscal-closing/settings"),
-    putClosingSettings: (body: { equityAccountId: string; requireApproval: boolean }, revision: number) => request<ClosingSettings>("PUT", "/api/v1/company/fiscal-closing/settings", { body, ifMatch: revision }),
+    putClosingSettings: (body: { equityAccountId: string }, revision: number) => request<ClosingSettings>("PUT", "/api/v1/company/fiscal-closing/settings", { body, ifMatch: revision }),
     listYearEnd: () => get<{ years: YearEndStatus[] }>("/api/v1/company/fiscal-closing/years"),
     previewYearEnd: (yearId: string) => get<ClosingPreview>(`/api/v1/company/fiscal-closing/years/${enc(yearId)}/preview`),
     startYearClosing: (yearId: string) => request<FiscalYearClosing>("POST", `/api/v1/company/fiscal-closing/years/${enc(yearId)}/close`),

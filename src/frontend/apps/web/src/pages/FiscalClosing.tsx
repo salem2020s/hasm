@@ -1,4 +1,4 @@
-import type { Account, Branch, ClosingPreview, ClosingSettingsResponse, FiscalYearClosing, YearEndStatus } from "@hasm/api-client";
+import type { Account, Branch, ClosingPreview, CostCenter, ClosingSettingsResponse, FiscalYearClosing, YearEndStatus } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
@@ -18,8 +18,7 @@ function Settings({ data, accounts, reload }: { data: ClosingSettingsResponse; a
   const runner = useRunner("fyc.error.", reload);
   const s = data.settings;
   const [equity, setEquity] = useState(s.equityAccountId ?? "");
-  const [approval, setApproval] = useState(s.requireApproval);
-  const dirty = equity !== (s.equityAccountId ?? "") || approval !== s.requireApproval;
+  const dirty = equity !== (s.equityAccountId ?? "");
   useReportUnsaved("fyc-settings", dirty, t("fyc.settings_title"));
   const candidates = accounts.filter((a) => a.type === "equity" && !a.isGroup && a.isActive);
   return (
@@ -35,12 +34,13 @@ function Settings({ data, accounts, reload }: { data: ClosingSettingsResponse; a
           </select>
         )}
       </Field>
-      <div className="field"><label><input type="checkbox" checked={approval} disabled={!data.can.configure || runner.busy} onChange={(e) => setApproval(e.target.checked)} /> {t("fyc.require_approval")}</label><p className="hint">{t("fyc.require_approval_hint")}</p></div>
-      {data.can.configure && <button type="button" className="primary" disabled={!equity || !dirty || runner.busy} onClick={() => void runner.run(() => auth.api.putClosingSettings({ equityAccountId: equity, requireApproval: approval }, s.revision), t("fyc.settings_saved"))}>{t("common.save")}</button>}
+      <div className="field" data-testid="fyc-approval-mandatory"><p><strong>{t("fyc.require_approval")}</strong></p><p className="hint">{t("fyc.require_approval_hint")}</p></div>
+      {data.can.configure && <button type="button" className="primary" disabled={!equity || !dirty || runner.busy} onClick={() => void runner.run(() => auth.api.putClosingSettings({ equityAccountId: equity }, s.revision), t("fyc.settings_saved"))}>{t("common.save")}</button>}
     </Card>
   );
 }
 
+const LINE_PREVIEW_LIMIT = 200;
 const STATUS_KEY: Record<string, string> = { passed: "fyc.check_passed", blocked: "fyc.check_blocked", not_applicable: "fyc.check_na" };
 
 export function FiscalClosingPage() {
@@ -51,6 +51,7 @@ export function FiscalClosingPage() {
   const [settings, setSettings] = useState<ClosingSettingsResponse | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [years, setYears] = useState<YearEndStatus[]>([]);
   const [yearId, setYearId] = useState("");
   const [preview, setPreview] = useState<ClosingPreview | null>(null);
@@ -69,6 +70,7 @@ export function FiscalClosingPage() {
       setYears(ys);
       if (auth.canAny("company.accounts.view")) { try { setAccounts((await auth.api.listAccounts()).accounts); } catch { setAccounts([]); } }
       if (auth.canAny("company.branches.view")) { try { setBranches((await auth.api.listBranches()).branches); } catch { setBranches([]); } }
+      if (auth.canAny("company.costcenters.view")) { try { setCostCenters((await auth.api.listCostCenters()).costCenters); } catch { setCostCenters([]); } }
       setLoadError(null);
       setYearId((cur) => cur || ys[0]?.yearId || "");
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "fyc.error.")); }
@@ -86,11 +88,16 @@ export function FiscalClosingPage() {
   const can = settings.can;
   const latest: FiscalYearClosing | undefined = status?.closings[status.closings.length - 1];
   const activeOpening = latest?.openingStatus === "posted";
+  const ccName = (id: string | null | undefined) => { if (!id) return "—"; const c = costCenters.find((x) => x.id === id); return c ? `${c.code} — ${localName(c, locale)}` : id.slice(0, 8); };
+  // The server generates and verifies every line; the screen only renders the first LINE_PREVIEW_LIMIT of a very large entry (the count is always shown).
   const lineTable = (lines: ClosingPreview["closingLines"], testId: string) => (
-    <table className="table" data-testid={testId}>
-      <thead><tr><th>{t("fyc.account")}</th><th>{t("fyc.branch")}</th><th>{t("fyc.debit")}</th><th>{t("fyc.credit")}</th></tr></thead>
-      <tbody>{lines.map((l, i) => <tr key={i}><td>{accountName(l.accountId)}</td><td>{branchName(l.branchId)}</td><td><bdi dir="ltr">{l.debit}</bdi></td><td><bdi dir="ltr">{l.credit}</bdi></td></tr>)}</tbody>
-    </table>
+    <>
+      <table className="table" data-testid={testId}>
+        <thead><tr><th>{t("fyc.account")}</th><th>{t("fyc.branch")}</th><th>{t("fyc.cost_center")}</th><th>{t("fyc.debit")}</th><th>{t("fyc.credit")}</th></tr></thead>
+        <tbody>{lines.slice(0, LINE_PREVIEW_LIMIT).map((l, i) => <tr key={i}><td>{accountName(l.accountId)}</td><td>{branchName(l.branchId)}</td><td>{ccName(l.costCenterId)}</td><td><bdi dir="ltr">{l.debit}</bdi></td><td><bdi dir="ltr">{l.credit}</bdi></td></tr>)}</tbody>
+      </table>
+      <p className="hint" data-testid={`${testId}-count`}>{lines.length > LINE_PREVIEW_LIMIT ? t("fyc.lines_shown", { shown: String(LINE_PREVIEW_LIMIT), n: String(lines.length) }) : t("fyc.lines_total", { n: String(lines.length) })}</p>
+    </>
   );
   return (
     <>

@@ -417,7 +417,7 @@ describe("ledger endpoints (Phase 3.2B)", () => {
 
   it("calls the year-end closing endpoints: settings with the revision, preview, close, carry forward and the two reversals", async () => {
     const { fetchMock, client } = make();
-    await client.putClosingSettings({ equityAccountId: "a1", requireApproval: true }, 2);
+    await client.putClosingSettings({ equityAccountId: "a1" }, 2);
     await client.previewYearEnd("y1");
     await client.startYearClosing("y1");
     await client.carryForwardYear("y1");
