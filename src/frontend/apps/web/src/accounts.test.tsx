@@ -50,7 +50,7 @@ describe("chart of accounts screen: tree, search and filters", () => {
     expect(within(screen.getByTestId("account-1102")).getByText("فرعي موقوف")).toBeInTheDocument();
     expect(within(screen.getByTestId("account-1102")).getByText("Old bank")).toBeInTheDocument();                              // falls back to the other language
     expect(within(screen.getByTestId("account-4")).getByText(/إيرادات · دائن/)).toBeInTheDocument();
-    expect(screen.getByTestId("outstanding")).toHaveTextContent("استيراد Excel");
+    expect(screen.getByTestId("outstanding")).toHaveTextContent("Excel");
     expect(screen.getByTestId("usage-unverified")).toBeInTheDocument();
   });
 
@@ -95,12 +95,66 @@ describe("chart of accounts screen: tree, search and filters", () => {
     render(list, { applyChartTemplate });
     await go("#/company/accounts");
     expect(await screen.findByText("دليل الحسابات فارغ.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "تطبيق القالب العام" }));
+    await userEvent.click(screen.getByRole("button", { name: "تطبيق قالب" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("38 حساباً");
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
     await waitFor(() => expect(applyChartTemplate).toHaveBeenCalledWith("generic"));
     expect(await screen.findByTestId("saved")).toHaveTextContent("تم تطبيق القالب.");
     expect(screen.queryByTestId("empty-hint")).not.toBeInTheDocument();
+  });
+});
+
+describe("chart of accounts screen: template picker (shared Web/Desktop component)", () => {
+  const TEMPLATES = [
+    { key: "generic", nameAr: "دليل حسابات عام", nameEn: "Generic chart of accounts", accounts: 38 },
+    { key: "service", nameAr: "دليل حسابات الخدمات", nameEn: "Service business chart of accounts", accounts: 54 },
+    { key: "retail", nameAr: "دليل حسابات التجزئة", nameEn: "Retail trading chart of accounts", accounts: 66 },
+    { key: "wholesale", nameAr: "دليل حسابات الجملة", nameEn: "Wholesale trading chart of accounts", accounts: 64 },
+  ];
+
+  it("lists every template the server offers with its account count, describes the selected one and applies exactly that one after confirmation", async () => {
+    const applyChartTemplate = vi.fn().mockResolvedValue({ accounts: [] });
+    const list = vi.fn().mockResolvedValueOnce(response([], { templates: TEMPLATES })).mockResolvedValue(response([root], { templates: TEMPLATES }));
+    render(list, { applyChartTemplate });
+    await go("#/company/accounts");
+    await screen.findByText("دليل الحسابات فارغ.");
+    await userEvent.click(screen.getByRole("button", { name: "تطبيق قالب" }));
+    const dialog = screen.getByRole("dialog");
+    const select = within(dialog).getByLabelText("القالب") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["generic", "service", "retail", "wholesale"]);
+    expect(Array.from(select.options).map((o) => o.textContent)).toContain("دليل حسابات التجزئة (66)");
+    await userEvent.selectOptions(select, "retail");
+    expect(dialog).toHaveTextContent("66 حساباً");
+    expect(within(dialog).getByTestId("template-description")).toHaveTextContent("حسابات المخزون مبدئية");
+    await userEvent.click(within(dialog).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(applyChartTemplate).toHaveBeenCalledWith("retail"));
+    expect(applyChartTemplate).toHaveBeenCalledTimes(1);
+    expect(await screen.findByTestId("saved")).toHaveTextContent("تم تطبيق القالب.");
+  });
+
+  it("cancelling applies nothing, and the picker is not offered on a non-empty chart or to a user who cannot create accounts", async () => {
+    const applyChartTemplate = vi.fn();
+    render(vi.fn().mockResolvedValue(response([], { templates: TEMPLATES })), { applyChartTemplate });
+    await go("#/company/accounts");
+    await screen.findByText("دليل الحسابات فارغ.");
+    await userEvent.click(screen.getByRole("button", { name: "تطبيق قالب" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "إلغاء" }));
+    expect(applyChartTemplate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows no template button on a non-empty chart", async () => {
+    render(vi.fn().mockResolvedValue(response([root, current], { templates: TEMPLATES })));
+    await go("#/company/accounts");
+    await screen.findByTestId("account-1");
+    expect(screen.queryByRole("button", { name: "تطبيق قالب" })).not.toBeInTheDocument();
+  });
+
+  it("shows no template button to a user who cannot create accounts", async () => {
+    render(vi.fn().mockResolvedValue(response([], { templates: TEMPLATES }, NONE)));
+    await go("#/company/accounts");
+    await screen.findByText("دليل الحسابات فارغ.");
+    expect(screen.queryByRole("button", { name: "تطبيق قالب" })).not.toBeInTheDocument();
   });
 });
 
@@ -355,7 +409,7 @@ describe("chart of accounts screen: unsaved changes and languages", () => {
     expect(document.documentElement.dir).toBe("ltr");
     expect(within(screen.getByTestId("account-1101")).getByText("Cash")).toBeInTheDocument();
     expect(within(screen.getByTestId("account-1")).getByText("Group")).toBeInTheDocument();
-    expect(screen.getByTestId("outstanding")).toHaveTextContent("Excel import");
+    expect(screen.getByTestId("outstanding")).toHaveTextContent("Excel or CSV");
     await userEvent.click(screen.getByRole("button", { name: "New account" }));
     expect(screen.getByLabelText("Name (English)")).toHaveAttribute("dir", "ltr");
     expect(screen.getByLabelText("Name (Arabic)")).toHaveAttribute("dir", "rtl");

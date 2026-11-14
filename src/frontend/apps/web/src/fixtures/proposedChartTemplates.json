@@ -1,0 +1,1112 @@
+{
+ "service": [
+  {
+   "code": "1",
+   "parent": null,
+   "nameAr": "الأصول",
+   "nameEn": "Assets"
+  },
+  {
+   "code": "11",
+   "parent": "1",
+   "nameAr": "الأصول المتداولة",
+   "nameEn": "Current assets"
+  },
+  {
+   "code": "1101",
+   "parent": "11",
+   "nameAr": "النقدية في الصندوق",
+   "nameEn": "Cash on hand"
+  },
+  {
+   "code": "1102",
+   "parent": "11",
+   "nameAr": "الحسابات البنكية",
+   "nameEn": "Bank accounts"
+  },
+  {
+   "code": "1103",
+   "parent": "11",
+   "nameAr": "الذمم المدينة (العملاء)",
+   "nameEn": "Accounts receivable"
+  },
+  {
+   "code": "1105",
+   "parent": "11",
+   "nameAr": "سلف الموظفين",
+   "nameEn": "Employee advances"
+  },
+  {
+   "code": "1107",
+   "parent": "11",
+   "nameAr": "مصاريف مدفوعة مقدماً",
+   "nameEn": "Prepaid expenses"
+  },
+  {
+   "code": "1108",
+   "parent": "11",
+   "nameAr": "إيرادات مستحقة",
+   "nameEn": "Accrued revenue"
+  },
+  {
+   "code": "1109",
+   "parent": "11",
+   "nameAr": "ضرائب مدينة",
+   "nameEn": "Taxes receivable"
+  },
+  {
+   "code": "12",
+   "parent": "1",
+   "nameAr": "الأصول غير المتداولة",
+   "nameEn": "Non-current assets"
+  },
+  {
+   "code": "1201",
+   "parent": "12",
+   "nameAr": "الأثاث والتجهيزات والمعدات",
+   "nameEn": "Furniture, fixtures and equipment"
+  },
+  {
+   "code": "1202",
+   "parent": "12",
+   "nameAr": "الحاسبات والأجهزة الإلكترونية",
+   "nameEn": "Computers and electronic equipment"
+  },
+  {
+   "code": "1204",
+   "parent": "12",
+   "nameAr": "مجمع الإهلاك",
+   "nameEn": "Accumulated depreciation"
+  },
+  {
+   "code": "1205",
+   "parent": "12",
+   "nameAr": "البرمجيات والأصول غير الملموسة",
+   "nameEn": "Software and other intangible assets"
+  },
+  {
+   "code": "1206",
+   "parent": "12",
+   "nameAr": "مجمع الإطفاء",
+   "nameEn": "Accumulated amortization"
+  },
+  {
+   "code": "2",
+   "parent": null,
+   "nameAr": "الخصوم",
+   "nameEn": "Liabilities"
+  },
+  {
+   "code": "21",
+   "parent": "2",
+   "nameAr": "الخصوم المتداولة",
+   "nameEn": "Current liabilities"
+  },
+  {
+   "code": "2101",
+   "parent": "21",
+   "nameAr": "الذمم الدائنة (الموردون)",
+   "nameEn": "Accounts payable"
+  },
+  {
+   "code": "2102",
+   "parent": "21",
+   "nameAr": "مصاريف مستحقة",
+   "nameEn": "Accrued expenses"
+  },
+  {
+   "code": "2103",
+   "parent": "21",
+   "nameAr": "رواتب وأجور مستحقة",
+   "nameEn": "Salaries and wages payable"
+  },
+  {
+   "code": "2104",
+   "parent": "21",
+   "nameAr": "ضرائب مستحقة",
+   "nameEn": "Taxes payable"
+  },
+  {
+   "code": "2105",
+   "parent": "21",
+   "nameAr": "إيرادات مؤجلة (مقبوضة مقدماً)",
+   "nameEn": "Deferred revenue"
+  },
+  {
+   "code": "2108",
+   "parent": "21",
+   "nameAr": "قروض قصيرة الأجل",
+   "nameEn": "Short-term loans"
+  },
+  {
+   "code": "22",
+   "parent": "2",
+   "nameAr": "الخصوم غير المتداولة",
+   "nameEn": "Non-current liabilities"
+  },
+  {
+   "code": "2201",
+   "parent": "22",
+   "nameAr": "قروض طويلة الأجل",
+   "nameEn": "Long-term loans"
+  },
+  {
+   "code": "3",
+   "parent": null,
+   "nameAr": "حقوق الملكية",
+   "nameEn": "Equity"
+  },
+  {
+   "code": "3101",
+   "parent": "3",
+   "nameAr": "رأس المال",
+   "nameEn": "Capital"
+  },
+  {
+   "code": "3102",
+   "parent": "3",
+   "nameAr": "الأرباح المحتجزة",
+   "nameEn": "Retained earnings"
+  },
+  {
+   "code": "3103",
+   "parent": "3",
+   "nameAr": "جاري الشركاء",
+   "nameEn": "Owners' current account"
+  },
+  {
+   "code": "4",
+   "parent": null,
+   "nameAr": "الإيرادات",
+   "nameEn": "Revenue"
+  },
+  {
+   "code": "41",
+   "parent": "4",
+   "nameAr": "الإيرادات التشغيلية",
+   "nameEn": "Operating revenue"
+  },
+  {
+   "code": "4101",
+   "parent": "41",
+   "nameAr": "إيرادات الخدمات",
+   "nameEn": "Service revenue"
+  },
+  {
+   "code": "4102",
+   "parent": "41",
+   "nameAr": "إيرادات العقود والاشتراكات",
+   "nameEn": "Contract and retainer revenue"
+  },
+  {
+   "code": "4103",
+   "parent": "41",
+   "nameAr": "الخصم المسموح به",
+   "nameEn": "Discounts allowed"
+  },
+  {
+   "code": "42",
+   "parent": "4",
+   "nameAr": "إيرادات أخرى",
+   "nameEn": "Other income"
+  },
+  {
+   "code": "4201",
+   "parent": "42",
+   "nameAr": "إيرادات أخرى متنوعة",
+   "nameEn": "Miscellaneous other income"
+  },
+  {
+   "code": "4202",
+   "parent": "42",
+   "nameAr": "أرباح فروق أسعار الصرف",
+   "nameEn": "Foreign exchange gains"
+  },
+  {
+   "code": "5",
+   "parent": null,
+   "nameAr": "المصروفات",
+   "nameEn": "Expenses"
+  },
+  {
+   "code": "51",
+   "parent": "5",
+   "nameAr": "التكاليف المباشرة للخدمات",
+   "nameEn": "Direct service costs"
+  },
+  {
+   "code": "5101",
+   "parent": "51",
+   "nameAr": "مقاولو الباطن والتكاليف المباشرة",
+   "nameEn": "Subcontractors and direct costs"
+  },
+  {
+   "code": "52",
+   "parent": "5",
+   "nameAr": "المصروفات التشغيلية",
+   "nameEn": "Operating expenses"
+  },
+  {
+   "code": "5201",
+   "parent": "52",
+   "nameAr": "الرواتب والأجور",
+   "nameEn": "Salaries and wages"
+  },
+  {
+   "code": "5202",
+   "parent": "52",
+   "nameAr": "الإيجارات",
+   "nameEn": "Rent"
+  },
+  {
+   "code": "5203",
+   "parent": "52",
+   "nameAr": "الكهرباء والماء والاتصالات",
+   "nameEn": "Utilities and communications"
+  },
+  {
+   "code": "5204",
+   "parent": "52",
+   "nameAr": "الدعاية والإعلان",
+   "nameEn": "Marketing and advertising"
+  },
+  {
+   "code": "5205",
+   "parent": "52",
+   "nameAr": "الأتعاب المهنية",
+   "nameEn": "Professional fees"
+  },
+  {
+   "code": "5206",
+   "parent": "52",
+   "nameAr": "السفر والتنقل",
+   "nameEn": "Travel and transport"
+  },
+  {
+   "code": "5207",
+   "parent": "52",
+   "nameAr": "المصاريف المكتبية والقرطاسية",
+   "nameEn": "Office supplies"
+  },
+  {
+   "code": "5211",
+   "parent": "52",
+   "nameAr": "مصروف الإهلاك",
+   "nameEn": "Depreciation expense"
+  },
+  {
+   "code": "5212",
+   "parent": "52",
+   "nameAr": "مصروف الإطفاء",
+   "nameEn": "Amortization expense"
+  },
+  {
+   "code": "5213",
+   "parent": "52",
+   "nameAr": "الرسوم والعمولات البنكية",
+   "nameEn": "Bank charges"
+  },
+  {
+   "code": "5214",
+   "parent": "52",
+   "nameAr": "ديون معدومة",
+   "nameEn": "Bad debts"
+  },
+  {
+   "code": "5215",
+   "parent": "52",
+   "nameAr": "خسائر فروق أسعار الصرف",
+   "nameEn": "Foreign exchange losses"
+  },
+  {
+   "code": "5216",
+   "parent": "52",
+   "nameAr": "مصروفات أخرى متنوعة",
+   "nameEn": "Miscellaneous other expenses"
+  }
+ ],
+ "retail": [
+  {
+   "code": "1",
+   "parent": null,
+   "nameAr": "الأصول",
+   "nameEn": "Assets"
+  },
+  {
+   "code": "11",
+   "parent": "1",
+   "nameAr": "الأصول المتداولة",
+   "nameEn": "Current assets"
+  },
+  {
+   "code": "1101",
+   "parent": "11",
+   "nameAr": "النقدية في الصندوق",
+   "nameEn": "Cash on hand"
+  },
+  {
+   "code": "1102",
+   "parent": "11",
+   "nameAr": "الحسابات البنكية",
+   "nameEn": "Bank accounts"
+  },
+  {
+   "code": "1103",
+   "parent": "11",
+   "nameAr": "الذمم المدينة (العملاء)",
+   "nameEn": "Accounts receivable"
+  },
+  {
+   "code": "1104",
+   "parent": "11",
+   "nameAr": "مبالغ بطاقات الدفع قيد التحصيل",
+   "nameEn": "Card settlements receivable"
+  },
+  {
+   "code": "1105",
+   "parent": "11",
+   "nameAr": "سلف الموظفين",
+   "nameEn": "Employee advances"
+  },
+  {
+   "code": "1106",
+   "parent": "11",
+   "nameAr": "دفعات مقدمة للموردين",
+   "nameEn": "Supplier advances"
+  },
+  {
+   "code": "1107",
+   "parent": "11",
+   "nameAr": "مصاريف مدفوعة مقدماً",
+   "nameEn": "Prepaid expenses"
+  },
+  {
+   "code": "1109",
+   "parent": "11",
+   "nameAr": "ضرائب مدينة",
+   "nameEn": "Taxes receivable"
+  },
+  {
+   "code": "112",
+   "parent": "11",
+   "nameAr": "المخزون",
+   "nameEn": "Inventory"
+  },
+  {
+   "code": "11201",
+   "parent": "112",
+   "nameAr": "مخزون البضاعة",
+   "nameEn": "Merchandise inventory"
+  },
+  {
+   "code": "11202",
+   "parent": "112",
+   "nameAr": "بضاعة في الطريق",
+   "nameEn": "Goods in transit"
+  },
+  {
+   "code": "12",
+   "parent": "1",
+   "nameAr": "الأصول غير المتداولة",
+   "nameEn": "Non-current assets"
+  },
+  {
+   "code": "1201",
+   "parent": "12",
+   "nameAr": "الأثاث والتجهيزات والمعدات",
+   "nameEn": "Furniture, fixtures and equipment"
+  },
+  {
+   "code": "1202",
+   "parent": "12",
+   "nameAr": "الحاسبات والأجهزة الإلكترونية",
+   "nameEn": "Computers and electronic equipment"
+  },
+  {
+   "code": "1203",
+   "parent": "12",
+   "nameAr": "المركبات",
+   "nameEn": "Vehicles"
+  },
+  {
+   "code": "1204",
+   "parent": "12",
+   "nameAr": "مجمع الإهلاك",
+   "nameEn": "Accumulated depreciation"
+  },
+  {
+   "code": "1205",
+   "parent": "12",
+   "nameAr": "البرمجيات والأصول غير الملموسة",
+   "nameEn": "Software and other intangible assets"
+  },
+  {
+   "code": "1206",
+   "parent": "12",
+   "nameAr": "مجمع الإطفاء",
+   "nameEn": "Accumulated amortization"
+  },
+  {
+   "code": "2",
+   "parent": null,
+   "nameAr": "الخصوم",
+   "nameEn": "Liabilities"
+  },
+  {
+   "code": "21",
+   "parent": "2",
+   "nameAr": "الخصوم المتداولة",
+   "nameEn": "Current liabilities"
+  },
+  {
+   "code": "2101",
+   "parent": "21",
+   "nameAr": "الذمم الدائنة (الموردون)",
+   "nameEn": "Accounts payable"
+  },
+  {
+   "code": "2102",
+   "parent": "21",
+   "nameAr": "مصاريف مستحقة",
+   "nameEn": "Accrued expenses"
+  },
+  {
+   "code": "2103",
+   "parent": "21",
+   "nameAr": "رواتب وأجور مستحقة",
+   "nameEn": "Salaries and wages payable"
+  },
+  {
+   "code": "2104",
+   "parent": "21",
+   "nameAr": "ضرائب مستحقة",
+   "nameEn": "Taxes payable"
+  },
+  {
+   "code": "2106",
+   "parent": "21",
+   "nameAr": "دفعات مقدمة من العملاء",
+   "nameEn": "Customer advances"
+  },
+  {
+   "code": "2107",
+   "parent": "21",
+   "nameAr": "بضاعة مستلمة لم تُفوتر",
+   "nameEn": "Goods received not invoiced (GRNI)"
+  },
+  {
+   "code": "2108",
+   "parent": "21",
+   "nameAr": "قروض قصيرة الأجل",
+   "nameEn": "Short-term loans"
+  },
+  {
+   "code": "22",
+   "parent": "2",
+   "nameAr": "الخصوم غير المتداولة",
+   "nameEn": "Non-current liabilities"
+  },
+  {
+   "code": "2201",
+   "parent": "22",
+   "nameAr": "قروض طويلة الأجل",
+   "nameEn": "Long-term loans"
+  },
+  {
+   "code": "3",
+   "parent": null,
+   "nameAr": "حقوق الملكية",
+   "nameEn": "Equity"
+  },
+  {
+   "code": "3101",
+   "parent": "3",
+   "nameAr": "رأس المال",
+   "nameEn": "Capital"
+  },
+  {
+   "code": "3102",
+   "parent": "3",
+   "nameAr": "الأرباح المحتجزة",
+   "nameEn": "Retained earnings"
+  },
+  {
+   "code": "3103",
+   "parent": "3",
+   "nameAr": "جاري الشركاء",
+   "nameEn": "Owners' current account"
+  },
+  {
+   "code": "4",
+   "parent": null,
+   "nameAr": "الإيرادات",
+   "nameEn": "Revenue"
+  },
+  {
+   "code": "41",
+   "parent": "4",
+   "nameAr": "المبيعات",
+   "nameEn": "Sales"
+  },
+  {
+   "code": "4101",
+   "parent": "41",
+   "nameAr": "مبيعات البضاعة",
+   "nameEn": "Merchandise sales"
+  },
+  {
+   "code": "4102",
+   "parent": "41",
+   "nameAr": "مردودات المبيعات",
+   "nameEn": "Sales returns"
+  },
+  {
+   "code": "4103",
+   "parent": "41",
+   "nameAr": "الخصم المسموح به على المبيعات",
+   "nameEn": "Sales discounts allowed"
+  },
+  {
+   "code": "42",
+   "parent": "4",
+   "nameAr": "إيرادات أخرى",
+   "nameEn": "Other income"
+  },
+  {
+   "code": "4201",
+   "parent": "42",
+   "nameAr": "إيرادات أخرى متنوعة",
+   "nameEn": "Miscellaneous other income"
+  },
+  {
+   "code": "4202",
+   "parent": "42",
+   "nameAr": "أرباح فروق أسعار الصرف",
+   "nameEn": "Foreign exchange gains"
+  },
+  {
+   "code": "4203",
+   "parent": "42",
+   "nameAr": "فائض الصندوق",
+   "nameEn": "Cash surpluses"
+  },
+  {
+   "code": "5",
+   "parent": null,
+   "nameAr": "المصروفات",
+   "nameEn": "Expenses"
+  },
+  {
+   "code": "51",
+   "parent": "5",
+   "nameAr": "تكلفة المبيعات",
+   "nameEn": "Cost of sales"
+  },
+  {
+   "code": "5101",
+   "parent": "51",
+   "nameAr": "تكلفة البضاعة المباعة",
+   "nameEn": "Cost of goods sold"
+  },
+  {
+   "code": "5102",
+   "parent": "51",
+   "nameAr": "فروقات الجرد وتسويات المخزون",
+   "nameEn": "Inventory count and adjustment differences"
+  },
+  {
+   "code": "5103",
+   "parent": "51",
+   "nameAr": "مصاريف شحن المشتريات وتكاليف الاستيراد",
+   "nameEn": "Freight-in and import costs"
+  },
+  {
+   "code": "5104",
+   "parent": "51",
+   "nameAr": "مردودات المشتريات",
+   "nameEn": "Purchase returns"
+  },
+  {
+   "code": "5105",
+   "parent": "51",
+   "nameAr": "الخصم المكتسب وحوافز المشتريات",
+   "nameEn": "Purchase discounts and rebates received"
+  },
+  {
+   "code": "52",
+   "parent": "5",
+   "nameAr": "المصروفات التشغيلية",
+   "nameEn": "Operating expenses"
+  },
+  {
+   "code": "5201",
+   "parent": "52",
+   "nameAr": "الرواتب والأجور",
+   "nameEn": "Salaries and wages"
+  },
+  {
+   "code": "5202",
+   "parent": "52",
+   "nameAr": "الإيجارات",
+   "nameEn": "Rent"
+  },
+  {
+   "code": "5203",
+   "parent": "52",
+   "nameAr": "الكهرباء والماء والاتصالات",
+   "nameEn": "Utilities and communications"
+  },
+  {
+   "code": "5204",
+   "parent": "52",
+   "nameAr": "الدعاية والإعلان",
+   "nameEn": "Marketing and advertising"
+  },
+  {
+   "code": "5205",
+   "parent": "52",
+   "nameAr": "النقل والتوصيل",
+   "nameEn": "Delivery and transport"
+  },
+  {
+   "code": "5208",
+   "parent": "52",
+   "nameAr": "رسوم معالجة بطاقات الدفع",
+   "nameEn": "Card processing fees"
+  },
+  {
+   "code": "5209",
+   "parent": "52",
+   "nameAr": "مستلزمات المتجر والتغليف",
+   "nameEn": "Store supplies and packaging"
+  },
+  {
+   "code": "5210",
+   "parent": "52",
+   "nameAr": "عجز الصندوق",
+   "nameEn": "Cash shortages"
+  },
+  {
+   "code": "5211",
+   "parent": "52",
+   "nameAr": "مصروف الإهلاك",
+   "nameEn": "Depreciation expense"
+  },
+  {
+   "code": "5212",
+   "parent": "52",
+   "nameAr": "مصروف الإطفاء",
+   "nameEn": "Amortization expense"
+  },
+  {
+   "code": "5213",
+   "parent": "52",
+   "nameAr": "الرسوم والعمولات البنكية",
+   "nameEn": "Bank charges"
+  },
+  {
+   "code": "5214",
+   "parent": "52",
+   "nameAr": "ديون معدومة",
+   "nameEn": "Bad debts"
+  },
+  {
+   "code": "5215",
+   "parent": "52",
+   "nameAr": "خسائر فروق أسعار الصرف",
+   "nameEn": "Foreign exchange losses"
+  },
+  {
+   "code": "5216",
+   "parent": "52",
+   "nameAr": "مصروفات أخرى متنوعة",
+   "nameEn": "Miscellaneous other expenses"
+  }
+ ],
+ "wholesale": [
+  {
+   "code": "1",
+   "parent": null,
+   "nameAr": "الأصول",
+   "nameEn": "Assets"
+  },
+  {
+   "code": "11",
+   "parent": "1",
+   "nameAr": "الأصول المتداولة",
+   "nameEn": "Current assets"
+  },
+  {
+   "code": "1101",
+   "parent": "11",
+   "nameAr": "النقدية في الصندوق",
+   "nameEn": "Cash on hand"
+  },
+  {
+   "code": "1102",
+   "parent": "11",
+   "nameAr": "الحسابات البنكية",
+   "nameEn": "Bank accounts"
+  },
+  {
+   "code": "1103",
+   "parent": "11",
+   "nameAr": "الذمم المدينة (العملاء)",
+   "nameEn": "Accounts receivable"
+  },
+  {
+   "code": "1105",
+   "parent": "11",
+   "nameAr": "سلف الموظفين",
+   "nameEn": "Employee advances"
+  },
+  {
+   "code": "1106",
+   "parent": "11",
+   "nameAr": "دفعات مقدمة للموردين",
+   "nameEn": "Supplier advances"
+  },
+  {
+   "code": "1107",
+   "parent": "11",
+   "nameAr": "مصاريف مدفوعة مقدماً",
+   "nameEn": "Prepaid expenses"
+  },
+  {
+   "code": "1109",
+   "parent": "11",
+   "nameAr": "ضرائب مدينة",
+   "nameEn": "Taxes receivable"
+  },
+  {
+   "code": "112",
+   "parent": "11",
+   "nameAr": "المخزون",
+   "nameEn": "Inventory"
+  },
+  {
+   "code": "11201",
+   "parent": "112",
+   "nameAr": "مخزون البضاعة",
+   "nameEn": "Merchandise inventory"
+  },
+  {
+   "code": "11202",
+   "parent": "112",
+   "nameAr": "بضاعة في الطريق",
+   "nameEn": "Goods in transit"
+  },
+  {
+   "code": "12",
+   "parent": "1",
+   "nameAr": "الأصول غير المتداولة",
+   "nameEn": "Non-current assets"
+  },
+  {
+   "code": "1201",
+   "parent": "12",
+   "nameAr": "الأثاث والتجهيزات والمعدات",
+   "nameEn": "Furniture, fixtures and equipment"
+  },
+  {
+   "code": "1202",
+   "parent": "12",
+   "nameAr": "الحاسبات والأجهزة الإلكترونية",
+   "nameEn": "Computers and electronic equipment"
+  },
+  {
+   "code": "1203",
+   "parent": "12",
+   "nameAr": "المركبات",
+   "nameEn": "Vehicles"
+  },
+  {
+   "code": "1204",
+   "parent": "12",
+   "nameAr": "مجمع الإهلاك",
+   "nameEn": "Accumulated depreciation"
+  },
+  {
+   "code": "1205",
+   "parent": "12",
+   "nameAr": "البرمجيات والأصول غير الملموسة",
+   "nameEn": "Software and other intangible assets"
+  },
+  {
+   "code": "1206",
+   "parent": "12",
+   "nameAr": "مجمع الإطفاء",
+   "nameEn": "Accumulated amortization"
+  },
+  {
+   "code": "2",
+   "parent": null,
+   "nameAr": "الخصوم",
+   "nameEn": "Liabilities"
+  },
+  {
+   "code": "21",
+   "parent": "2",
+   "nameAr": "الخصوم المتداولة",
+   "nameEn": "Current liabilities"
+  },
+  {
+   "code": "2101",
+   "parent": "21",
+   "nameAr": "الذمم الدائنة (الموردون)",
+   "nameEn": "Accounts payable"
+  },
+  {
+   "code": "2102",
+   "parent": "21",
+   "nameAr": "مصاريف مستحقة",
+   "nameEn": "Accrued expenses"
+  },
+  {
+   "code": "2103",
+   "parent": "21",
+   "nameAr": "رواتب وأجور مستحقة",
+   "nameEn": "Salaries and wages payable"
+  },
+  {
+   "code": "2104",
+   "parent": "21",
+   "nameAr": "ضرائب مستحقة",
+   "nameEn": "Taxes payable"
+  },
+  {
+   "code": "2106",
+   "parent": "21",
+   "nameAr": "دفعات مقدمة من العملاء",
+   "nameEn": "Customer advances"
+  },
+  {
+   "code": "2107",
+   "parent": "21",
+   "nameAr": "بضاعة مستلمة لم تُفوتر",
+   "nameEn": "Goods received not invoiced (GRNI)"
+  },
+  {
+   "code": "2108",
+   "parent": "21",
+   "nameAr": "قروض قصيرة الأجل",
+   "nameEn": "Short-term loans"
+  },
+  {
+   "code": "22",
+   "parent": "2",
+   "nameAr": "الخصوم غير المتداولة",
+   "nameEn": "Non-current liabilities"
+  },
+  {
+   "code": "2201",
+   "parent": "22",
+   "nameAr": "قروض طويلة الأجل",
+   "nameEn": "Long-term loans"
+  },
+  {
+   "code": "3",
+   "parent": null,
+   "nameAr": "حقوق الملكية",
+   "nameEn": "Equity"
+  },
+  {
+   "code": "3101",
+   "parent": "3",
+   "nameAr": "رأس المال",
+   "nameEn": "Capital"
+  },
+  {
+   "code": "3102",
+   "parent": "3",
+   "nameAr": "الأرباح المحتجزة",
+   "nameEn": "Retained earnings"
+  },
+  {
+   "code": "3103",
+   "parent": "3",
+   "nameAr": "جاري الشركاء",
+   "nameEn": "Owners' current account"
+  },
+  {
+   "code": "4",
+   "parent": null,
+   "nameAr": "الإيرادات",
+   "nameEn": "Revenue"
+  },
+  {
+   "code": "41",
+   "parent": "4",
+   "nameAr": "المبيعات",
+   "nameEn": "Sales"
+  },
+  {
+   "code": "4101",
+   "parent": "41",
+   "nameAr": "مبيعات البضاعة",
+   "nameEn": "Merchandise sales"
+  },
+  {
+   "code": "4102",
+   "parent": "41",
+   "nameAr": "مردودات المبيعات",
+   "nameEn": "Sales returns"
+  },
+  {
+   "code": "4103",
+   "parent": "41",
+   "nameAr": "الخصم المسموح به على المبيعات",
+   "nameEn": "Sales discounts allowed"
+  },
+  {
+   "code": "4104",
+   "parent": "41",
+   "nameAr": "حوافز وخصومات الكميات الممنوحة",
+   "nameEn": "Volume rebates and incentives granted"
+  },
+  {
+   "code": "42",
+   "parent": "4",
+   "nameAr": "إيرادات أخرى",
+   "nameEn": "Other income"
+  },
+  {
+   "code": "4201",
+   "parent": "42",
+   "nameAr": "إيرادات أخرى متنوعة",
+   "nameEn": "Miscellaneous other income"
+  },
+  {
+   "code": "4202",
+   "parent": "42",
+   "nameAr": "أرباح فروق أسعار الصرف",
+   "nameEn": "Foreign exchange gains"
+  },
+  {
+   "code": "5",
+   "parent": null,
+   "nameAr": "المصروفات",
+   "nameEn": "Expenses"
+  },
+  {
+   "code": "51",
+   "parent": "5",
+   "nameAr": "تكلفة المبيعات",
+   "nameEn": "Cost of sales"
+  },
+  {
+   "code": "5101",
+   "parent": "51",
+   "nameAr": "تكلفة البضاعة المباعة",
+   "nameEn": "Cost of goods sold"
+  },
+  {
+   "code": "5102",
+   "parent": "51",
+   "nameAr": "فروقات الجرد وتسويات المخزون",
+   "nameEn": "Inventory count and adjustment differences"
+  },
+  {
+   "code": "5103",
+   "parent": "51",
+   "nameAr": "مصاريف شحن المشتريات وتكاليف الاستيراد",
+   "nameEn": "Freight-in and import costs"
+  },
+  {
+   "code": "5104",
+   "parent": "51",
+   "nameAr": "مردودات المشتريات",
+   "nameEn": "Purchase returns"
+  },
+  {
+   "code": "5105",
+   "parent": "51",
+   "nameAr": "الخصم المكتسب وحوافز المشتريات",
+   "nameEn": "Purchase discounts and rebates received"
+  },
+  {
+   "code": "52",
+   "parent": "5",
+   "nameAr": "المصروفات التشغيلية",
+   "nameEn": "Operating expenses"
+  },
+  {
+   "code": "5201",
+   "parent": "52",
+   "nameAr": "الرواتب والأجور",
+   "nameEn": "Salaries and wages"
+  },
+  {
+   "code": "5202",
+   "parent": "52",
+   "nameAr": "الإيجارات",
+   "nameEn": "Rent"
+  },
+  {
+   "code": "5203",
+   "parent": "52",
+   "nameAr": "الكهرباء والماء والاتصالات",
+   "nameEn": "Utilities and communications"
+  },
+  {
+   "code": "5204",
+   "parent": "52",
+   "nameAr": "الدعاية والإعلان",
+   "nameEn": "Marketing and advertising"
+  },
+  {
+   "code": "5205",
+   "parent": "52",
+   "nameAr": "النقل والتوصيل",
+   "nameEn": "Delivery and transport"
+  },
+  {
+   "code": "5206",
+   "parent": "52",
+   "nameAr": "مصاريف المستودعات والخدمات اللوجستية",
+   "nameEn": "Warehousing and logistics"
+  },
+  {
+   "code": "5207",
+   "parent": "52",
+   "nameAr": "عمولات المبيعات والمندوبين",
+   "nameEn": "Sales commissions"
+  },
+  {
+   "code": "5211",
+   "parent": "52",
+   "nameAr": "مصروف الإهلاك",
+   "nameEn": "Depreciation expense"
+  },
+  {
+   "code": "5212",
+   "parent": "52",
+   "nameAr": "مصروف الإطفاء",
+   "nameEn": "Amortization expense"
+  },
+  {
+   "code": "5213",
+   "parent": "52",
+   "nameAr": "الرسوم والعمولات البنكية",
+   "nameEn": "Bank charges"
+  },
+  {
+   "code": "5214",
+   "parent": "52",
+   "nameAr": "ديون معدومة",
+   "nameEn": "Bad debts"
+  },
+  {
+   "code": "5215",
+   "parent": "52",
+   "nameAr": "خسائر فروق أسعار الصرف",
+   "nameEn": "Foreign exchange losses"
+  },
+  {
+   "code": "5216",
+   "parent": "52",
+   "nameAr": "مصروفات أخرى متنوعة",
+   "nameEn": "Miscellaneous other expenses"
+  }
+ ]
+}
