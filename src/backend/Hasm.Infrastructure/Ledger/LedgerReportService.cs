@@ -316,7 +316,7 @@ public sealed class LedgerReportManagementService(AccessService access, LedgerRe
     /// Null branches = every branch (company-wide grant); otherwise the branches the caller holds the permission for (possibly none) plus, when cost-center-scoped grants exist,
     /// the granted cost centers with their descendants. Fails (Denied) when the caller holds the permission nowhere.
     /// </summary>
-    private async Task<(bool Allowed, IReadOnlyList<Guid>? Branches, IReadOnlyList<Guid>? CostCenters)> ScopeAsync(Guid userId, Guid companyId, string code, CancellationToken ct)
+    internal async Task<(bool Allowed, IReadOnlyList<Guid>? Branches, IReadOnlyList<Guid>? CostCenters)> ScopeAsync(Guid userId, Guid companyId, string code, CancellationToken ct)
     {
         var eff = await access.GetEffectivePermissionsAsync(userId, companyId, ct);
         if (eff.Has(code, ScopeTarget.Company)) return (true, null, null);
@@ -325,6 +325,11 @@ public sealed class LedgerReportManagementService(AccessService access, LedgerRe
         if (branches.Count == 0 && roots.Count == 0) return (false, null, null);
         return (true, branches, roots.Count == 0 ? null : await journal.CostCenterClosureAsync(companyId, roots, ct));
     }
+
+    /// <summary>Range and branch validation shared by the statements.</summary>
+    internal ConfigResult<T>? ValidateScope<T>(DateOnly from, DateOnly to, Guid? branchId, IReadOnlyList<Guid>? allowed, IReadOnlyList<Guid>? costCenters) => Validate<T>(from, to, branchId, allowed, costCenters);
+
+    internal Task<ConfigResult<Hasm.Infrastructure.Reporting.ResolvedPeriod>> ResolvePeriodUncheckedAsync(Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest request, CancellationToken ct) => ResolveCoreAsync(companyId, request, ct);
 
     private ConfigResult<T>? Validate<T>(DateOnly from, DateOnly to, Guid? branchId, IReadOnlyList<Guid>? allowed, IReadOnlyList<Guid>? costCenters)
     {

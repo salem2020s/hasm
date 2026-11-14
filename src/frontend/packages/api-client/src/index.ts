@@ -480,6 +480,19 @@ export interface ReportQuery {
   comparison?: ReportComparison; maxLevel?: number; sort?: string; columns?: string[]; grouping?: "none" | "month";
 }
 export type ReportFormat = "csv" | "xlsx" | "pdf";
+
+/** Financial statements and their classification (Phase 3.3 S3). Amounts are exact decimal text in the base currency, in the natural presentation sign of each section. */
+export type StatementKind = "profit-and-loss" | "balance-sheet" | "trading-account";
+export interface StatementLineInfo { kind: "header" | "account" | "subtotal" | "total" | "note"; key: string; accountId: string | null; code: string | null; nameAr: string | null; nameEn: string | null; level: number; current: string; comparative: string | null; change: string | null }
+export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
+export interface StatementResponse {
+  kind: StatementKind; applicable: boolean; notApplicableReason: string | null; complete: boolean; asOf: boolean; baseCurrency: string; hasComparative: boolean; mapping: StatementMappingVersionInfo | null; period: ReportPeriodInfo;
+  issues: { code: string; count: number; amount: string }[]; checks: { code: string; status: "passed" | "failed" | "not_applicable"; difference: string }[]; lines: StatementLineInfo[];
+}
+export interface StatementQuery extends ReportQuery { mappingVersion?: number }
+export interface StatementSectionInfo { key: string; statement: "balance_sheet" | "profit_and_loss"; types: string[] }
+export interface StatementMappingAccount { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; type: string; nature: string; isGroup: boolean; templateKey: string | null; effectiveSection: string | null }
+export interface StatementMappingResponse { version: StatementMappingVersionInfo | null; sections: StatementSectionInfo[]; entries: { accountId: string; section: string }[]; accounts: StatementMappingAccount[] }
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -764,6 +777,13 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** Any export format (xlsx, pdf, csv) of the trial balance: the COMPLETE authorized result with the same filters, comparison, depth, sort and column selection as the screen. */
     exportTrialBalance: (q: ReportQuery & { includeZero?: boolean }, format: ReportFormat) => download(`/api/v1/company/reports/trial-balance?${reportQuery(q)}${q.includeZero ? "&includeZero=true" : ""}&format=${format}`),
     exportGeneralLedger: (accountId: string, q: ReportQuery, format: ReportFormat) => download(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&format=${format}`),
+    getStatement: (kind: StatementKind, q: StatementQuery) => get<StatementResponse>(`/api/v1/company/statements/${kind}?${reportQuery(q)}${q.mappingVersion ? `&mappingVersion=${q.mappingVersion}` : ""}`),
+    exportStatement: (kind: StatementKind, q: StatementQuery, format: ReportFormat) => download(`/api/v1/company/statements/${kind}?${reportQuery(q)}${q.mappingVersion ? `&mappingVersion=${q.mappingVersion}` : ""}&format=${format}`),
+    getStatementMapping: (version?: number) => get<StatementMappingResponse>(`/api/v1/company/statements/mapping${version ? `?version=${version}` : ""}`),
+    listStatementMappingVersions: () => get<{ versions: StatementMappingVersionInfo[] }>("/api/v1/company/statements/mapping/versions"),
+    getStatementMappingSuggestion: () => get<{ entries: { accountId: string; section: string }[] }>("/api/v1/company/statements/mapping/suggestion"),
+    saveStatementMapping: (entries: { accountId: string; section: string }[], expectedVersion: number, note: string | null, source: "manual" | "template" = "manual") =>
+      request<{ version: StatementMappingVersionInfo | null; entries: { accountId: string; section: string }[] }>("PUT", "/api/v1/company/statements/mapping", { body: { entries, note, source }, ifMatch: expectedVersion }),
     getReportDefinitions: () => get<{ reports: ReportDefinitionInfo[] }>("/api/v1/company/reports/definitions"),
     getReportPeriod: (q: { fiscalYearId?: string; fiscalPeriodId?: string; from?: string; to?: string; comparison?: ReportComparison }) =>
       get<ReportPeriodInfo>(`/api/v1/company/reports/period?${[q.fiscalPeriodId ? `fiscalPeriodId=${enc(q.fiscalPeriodId)}` : "", q.fiscalYearId ? `fiscalYearId=${enc(q.fiscalYearId)}` : "", q.from ? `from=${enc(q.from)}` : "", q.to ? `to=${enc(q.to)}` : "", q.comparison && q.comparison !== "none" ? `comparison=${q.comparison}` : ""].filter(Boolean).join("&")}`),

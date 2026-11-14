@@ -119,11 +119,13 @@ public class ReportingFoundationTests : LedgerReportTestBase
     public async Task Report_definitions_are_listed_only_for_callers_who_may_view_them()
     {
         await PrepareReports();
-        Assert.Equal(["general-ledger", "trial-balance"], (await RMg.DefinitionsAsync(Admin.Id, Company.Id)).Select(d => d.Definition.Id).Order());
+        Assert.Equal(["balance-sheet", "general-ledger", "profit-and-loss", "trading-account", "trial-balance"], (await RMg.DefinitionsAsync(Admin.Id, Company.Id)).Select(d => d.Definition.Id).Order());
         Assert.All(await RMg.DefinitionsAsync(Admin.Id, Company.Id), d => Assert.True(d.CanExport));
         var (viewer, _) = await Member([PermissionCatalog.Codes.LedgerReportsView], ScopeKind.Company, null);
         Assert.All(await RMg.DefinitionsAsync(viewer.Id, Company.Id), d => Assert.False(d.CanExport));
-        Assert.Equal(2, (await RMg.DefinitionsAsync(viewer.Id, Company.Id)).Count);
+        Assert.Equal(["general-ledger", "trial-balance"], (await RMg.DefinitionsAsync(viewer.Id, Company.Id)).Select(d => d.Definition.Id).Order());       // the statements have their own permissions
+        var (statements, _) = await Member([PermissionCatalog.Codes.FinancialStatementsView], ScopeKind.Company, null);
+        Assert.Equal(["balance-sheet", "profit-and-loss", "trading-account"], (await RMg.DefinitionsAsync(statements.Id, Company.Id)).Select(d => d.Definition.Id).Order());
         var (journalOnly, _) = await Member([PermissionCatalog.Codes.JournalView], ScopeKind.Company, null);
         Assert.Empty(await RMg.DefinitionsAsync(journalOnly.Id, Company.Id));
         Assert.Equal(ConfigStatus.Forbidden, (await RMg.ResolvePeriodAsync(journalOnly.Id, Company.Id, new ReportPeriodRequest(null, null, D("2026-01-01"), D("2026-01-31")))).Status);
@@ -157,7 +159,7 @@ public class ReportingFoundationTests : LedgerReportTestBase
         var tooBig = await Send(HttpMethod.Get, $"{Base}/general-ledger?accountId={Cash.Id}&from=2026-03-01&to=2026-03-31&format=csv", cookie: cookie);
         Assert.Equal((HttpStatusCode.Conflict, "export_too_large"), (tooBig.Status, tooBig.Error));
         var defs = await Send(HttpMethod.Get, $"{Base}/definitions", cookie: cookie);
-        Assert.Equal(["general-ledger", "trial-balance"], defs.Json.GetProperty("reports").EnumerateArray().Select(r => r.GetProperty("id").GetString()!).Order());
+        Assert.Equal(["balance-sheet", "general-ledger", "profit-and-loss", "trading-account", "trial-balance"], defs.Json.GetProperty("reports").EnumerateArray().Select(r => r.GetProperty("id").GetString()!).Order());
         var period = await Send(HttpMethod.Get, $"{Base}/period?fiscalYearId={Year.Id}&comparison=previous_year", cookie: cookie);
         Assert.Equal(HttpStatusCode.OK, period.Status);
         Assert.Equal("2026-01-01", period.Json.GetProperty("current").GetProperty("from").GetString());

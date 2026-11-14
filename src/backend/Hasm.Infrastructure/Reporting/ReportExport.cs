@@ -13,6 +13,7 @@ public static class ReportAuditEvents
     public const short Exported = 1110;
     public const short ExportRefused = 1111;
     public const short ExportFailed = 1112;
+    public const short StatementMappingSaved = 1113;
 }
 
 /// <summary>One output format. Renderers never decide what a user may see: they only draw a <see cref="ReportDocument"/> that the authorized query already produced.</summary>

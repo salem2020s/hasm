@@ -113,10 +113,15 @@ public static class ReportDefinitions
         new("branchId", "branch", false, "الفرع", "Branch"), new("costCenterId", "cost_center", false, "مركز التكلفة", "Cost center"),
     ];
 
+    private static readonly IReadOnlyList<ReportParameter> StatementParameters = [.. PeriodParameters, new("mappingVersion", "mapping_version", false, "إصدار التصنيف", "Classification version")];
+
     public static readonly IReadOnlyList<ReportDefinition> All =
     [
         new(TrialBalance, "ميزان المراجعة", "Trial balance", "company.ledgerreports.view", "company.ledgerreports.export",
             [.. PeriodParameters, new("includeZero", "bool", false, "إظهار الأرصدة الصفرية", "Include zero rows"), new("excludeClosing", "bool", false, "استبعاد قيود الإقفال", "Exclude closing entries")], TrialBalanceColumns, Formats, true, true),
+        new(ProfitAndLoss, "قائمة الأرباح والخسائر", "Profit and loss statement", "company.financialstatements.view", "company.financialstatements.export", StatementParameters, StatementDocuments.Columns, Formats, true, false),
+        new(BalanceSheet, "الميزانية العمومية", "Balance sheet", "company.financialstatements.view", "company.financialstatements.export", StatementParameters, StatementDocuments.Columns, Formats, true, false),
+        new(TradingAccount, "حساب المتاجرة وتكلفة المبيعات", "Trading account / cost of sales", "company.financialstatements.view", "company.financialstatements.export", StatementParameters, StatementDocuments.Columns, Formats, true, false),
         new(GeneralLedger, "دفتر الأستاذ", "General ledger", "company.ledgerreports.view", "company.ledgerreports.export",
             [new("accountId", "account", true, "الحساب", "Account"), .. PeriodParameters.Where(p => p.Name != "comparison"), new("excludeClosing", "bool", false, "استبعاد قيود الإقفال", "Exclude closing entries")], GeneralLedgerColumns, Formats, false, false),
     ];

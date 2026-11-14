@@ -229,6 +229,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.ApprovalPolicyStage.Table, CompanySchema.DocumentApprovalBinding.Table,   // Phase 3.2C S2: ordered approval stages and the plan snapshot of a submitted document
         CompanySchema.ClosingSettings.Table, CompanySchema.FiscalYearClosing.Table, CompanySchema.FiscalYearCarryforward.Table,   // Phase 3.2C S3: year-end closing and opening balances (all link to posted journal entries)
         CompanySchema.ImportBatch.Table, CompanySchema.ImportRow.Table, CompanySchema.ImportEvent.Table, CompanySchema.ImportSettings.Table,   // Phase 3.2D (migration 0010): import STAGING only (never business or financial data; an adapter applies through its own domain services and probes)
+        CompanySchema.StatementMappingVersion.Table, CompanySchema.StatementMappingEntry.Table,   // Phase 3.3 S3 (migration 0011): the versioned classification of accounts into financial-statement sections (presentation metadata, no financial data)
     ];
 
     /// <summary>

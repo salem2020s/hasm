@@ -15,6 +15,7 @@ namespace Hasm.Database.IntegrationTests;
 public class ReportingComparisonTests : LedgerReportTestBase
 {
     private FiscalYearView Fy2025 = null!;
+    private LedgerReportManagementService Mgmt = null!;
     private static DateOnly D(string s) => DateOnly.Parse(s);
     private ReportExportService Exporter() => new(Tx, new ReportOptions(), [new CsvReportRenderer()]);
 
@@ -22,6 +23,7 @@ public class ReportingComparisonTests : LedgerReportTestBase
     private async Task Seed()
     {
         await PrepareReports();
+        Mgmt = new LedgerReportManagementService(Rbac, Reports, Journal, new ReportOptions(), Cal);
         Fy2025 = Ok(await Cal.CreateYearAsync(Admin.Id, Company.Id, new FiscalYearInput("FY2025", new DateOnly(2025, 1, 1), "monthly")));
         await Posted(Entry("2025-01-15", Dr(Cash.Id, 500m), Cr(Sales.Id, 500m)));
         await Posted(Entry("2025-12-20", Dr(Expense.Id, 100m), Cr(Cash.Id, 100m)));
@@ -30,7 +32,7 @@ public class ReportingComparisonTests : LedgerReportTestBase
     }
 
     private Task<ConfigResult<ComparativeTrialBalanceView>> Report(ReportPeriodRequest p, Guid? user = null, Guid? branch = null, bool zero = false, int? maxLevel = null, string? sort = null) =>
-        RMg.TrialBalanceReportAsync(user ?? Admin.Id, Company.Id, p, branch, null, zero, false, maxLevel, sort, false);
+        Mgmt.TrialBalanceReportAsync(user ?? Admin.Id, Company.Id, p, branch, null, zero, false, maxLevel, sort, false);
 
     private static ComparativeTrialBalanceRow Row(ComparativeTrialBalanceView v, Guid id) => v.Rows.Single(r => r.AccountId == id);
 
@@ -99,13 +101,14 @@ public class ReportingComparisonTests : LedgerReportTestBase
         var (nobody, _) = await Member([PermissionCatalog.Codes.JournalView], ScopeKind.Company, null);
         Assert.Equal(ConfigStatus.Forbidden, (await Report(new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), nobody.Id)).Status);
         // a user with the view permission only cannot obtain the export document
-        Assert.Equal(ConfigStatus.Forbidden, (await RMg.TrialBalanceDocumentAsync(mainOnly.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), null, null, false, false, null, null)).Status);
+        Assert.Equal(ConfigStatus.Forbidden, (await Mgmt.TrialBalanceDocumentAsync(mainOnly.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), null, null, false, false, null, null)).Status);
     }
 
     [PostgresFact]
     public async Task Depth_limit_and_deterministic_sorting_apply_among_siblings_and_the_hierarchy_is_not_double_counted()
     {
         await PrepareReports();
+        Mgmt = new LedgerReportManagementService(Rbac, Reports, Journal, new ReportOptions(), Cal);
         var group = Ok(await ChartDomain.CreateAsync(Admin.Id, Company.Id, new AccountInput("12", null, "مجموعة", "Group", "asset", null, true, null, null)));
         var a = Ok(await ChartDomain.CreateAsync(Admin.Id, Company.Id, new AccountInput("1201", group.Id, "أ", "Alpha", null, null, false, null, null)));
         var b = Ok(await ChartDomain.CreateAsync(Admin.Id, Company.Id, new AccountInput("1202", group.Id, "ب", "Beta", null, null, false, null, null)));
@@ -126,7 +129,7 @@ public class ReportingComparisonTests : LedgerReportTestBase
         Assert.DoesNotContain(top.Rows, r => r.ParentId == group.Id);
         Assert.Contains(top.Rows, r => r.AccountId == group.Id && r.Closing == 330m);
         Assert.Equal(["invalid_sort"], (await Report(p, sort: "bogus")).Fields!.Select(f => f.Code));
-        Assert.Equal(["invalid_level"], (await RMg.TrialBalanceReportAsync(Admin.Id, Company.Id, p, null, null, false, false, 99, null, false)).Fields!.Select(f => f.Code));
+        Assert.Equal(["invalid_level"], (await Mgmt.TrialBalanceReportAsync(Admin.Id, Company.Id, p, null, null, false, false, 99, null, false)).Fields!.Select(f => f.Code));
         Assert.Equal(330m, byCode.Current.TotalDebit);                                                                    // leaf totals, never parents
     }
 
@@ -134,17 +137,17 @@ public class ReportingComparisonTests : LedgerReportTestBase
     public async Task A_comparative_trial_balance_exports_with_its_comparison_columns_and_the_general_ledger_exports_monthly_subtotals()
     {
         await Seed();
-        await using var doc = Ok(await RMg.TrialBalanceDocumentAsync(Admin.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), null, null, false, false, null, null));
+        await using var doc = Ok(await Mgmt.TrialBalanceDocumentAsync(Admin.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), null, null, false, false, null, null));
         Assert.Contains(doc.Columns, c => c.Key == "cmpClosing");
         await using var file = Ok(await Exporter().ExportAsync(new ReportExportRequest(Company.Id, Admin.Id, doc, "csv", ["code", "closing", "cmpClosing", "change"], "tb")));
         var lines = new StreamReader(file.Content, new UTF8Encoding(true)).ReadToEnd().Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("Code,Closing,Closing (comparative),Change in closing", lines[0]);
         Assert.Contains("1101,1350.0000,400.0000,950.0000", lines);
         // the same report without a comparison has no comparison columns at all
-        await using var plain = Ok(await RMg.TrialBalanceDocumentAsync(Admin.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null), null, null, false, false, null, null));
+        await using var plain = Ok(await Mgmt.TrialBalanceDocumentAsync(Admin.Id, Company.Id, new ReportPeriodRequest(Year.Id, null, null, null), null, null, false, false, null, null));
         Assert.DoesNotContain(plain.Columns, c => c.Key == "cmpClosing");
 
-        await using var gl = Ok(await RMg.GeneralLedgerDocumentAsync(Admin.Id, Company.Id, Cash.Id, D("2026-01-01"), D("2026-12-31"), null, null, false, default, true));
+        await using var gl = Ok(await Mgmt.GeneralLedgerDocumentAsync(Admin.Id, Company.Id, Cash.Id, D("2026-01-01"), D("2026-12-31"), null, null, false, default, true));
         var rows = new List<ReportRow>(); await foreach (var r in gl.Rows(default)) rows.Add(r);
         var subtotals = rows.Where(r => r.Kind == ReportRowKind.Subtotal && r.Cells[3] is string s && s.StartsWith("Subtotal")).ToList();
         Assert.Equal(["Subtotal 2026-02", "Subtotal 2026-03"], subtotals.Select(r => (string)r.Cells[3]!));
@@ -159,19 +162,19 @@ public class ReportingComparisonTests : LedgerReportTestBase
     {
         await Seed();
         await Posted(Entry("2026-03-12", Dr(Cash.Id, 7m, null, B2), Cr(Sales.Id, 7m, null, Main)));                       // a cross-branch document
-        var all = Ok(await RMg.ReconciliationAsync(Admin.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false));
+        var all = Ok(await Mgmt.ReconciliationAsync(Admin.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false));
         Assert.True(all.AllPassed);
         Assert.Equal(["trial_balance_balances", "group_roll_up", "ledger_matches_trial_balance", "opening_equals_previous_closing"], all.Checks.Select(c => c.Code));
         Assert.All(all.Checks, c => Assert.Equal(ReconciliationStatus.Passed, c.Status));
         var (mainOnly, _) = await Member([PermissionCatalog.Codes.LedgerReportsView], ScopeKind.Branch, Main);
-        var restricted = Ok(await RMg.ReconciliationAsync(mainOnly.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false));
+        var restricted = Ok(await Mgmt.ReconciliationAsync(mainOnly.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false));
         Assert.True(restricted.AllPassed);
         Assert.Equal(ReconciliationStatus.NotApplicable, restricted.Checks.Single(c => c.Code == "trial_balance_balances").Status);   // part of a cross-branch document is not balanced
         Assert.Equal(ReconciliationStatus.Passed, restricted.Checks.Single(c => c.Code == "ledger_matches_trial_balance").Status);
         var (nobody, _) = await Member([PermissionCatalog.Codes.JournalView], ScopeKind.Company, null);
-        Assert.Equal(ConfigStatus.Forbidden, (await RMg.ReconciliationAsync(nobody.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false)).Status);
+        Assert.Equal(ConfigStatus.Forbidden, (await Mgmt.ReconciliationAsync(nobody.Id, Company.Id, D("2026-02-01"), D("2026-03-31"), null, null, false)).Status);
         // the whole history from before the first entry also reconciles
-        Assert.True(Ok(await RMg.ReconciliationAsync(Admin.Id, Company.Id, D("2025-01-01"), D("2026-12-31"), null, null, false)).AllPassed);
+        Assert.True(Ok(await Mgmt.ReconciliationAsync(Admin.Id, Company.Id, D("2025-01-01"), D("2026-12-31"), null, null, false)).AllPassed);
     }
 
     [PostgresFact]
