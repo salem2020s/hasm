@@ -4,6 +4,7 @@ using Hasm.Infrastructure.Identity;
 using Npgsql;
 using System.Runtime.CompilerServices;
 using A = Hasm.Infrastructure.SystemDatabase.SystemSchema.RoleAssignment;
+using CCA = Hasm.Infrastructure.SystemDatabase.SystemSchema.CostCenterAssignment;
 using Au = Hasm.Infrastructure.SystemDatabase.SystemSchema.AccessAudit;
 using C = Hasm.Infrastructure.SystemDatabase.SystemSchema.Company;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserCompanyAccess;
@@ -171,10 +172,33 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
                 if (!r.IsDBNull(4)) g.Permissions.Add(r.GetString(4));
             }
         }
+        // Cost-center-scoped grants (own table: the scope check of the main assignment table cannot be extended without a DROP).
+        await using (var ccCmd = new NpgsqlCommand(
+            $"SELECT a.{CCA.Id}, a.{CCA.RoleId}, a.{CCA.CostCenterId}, rp.{RP.Permission}, a.{CCA.Epoch} " +
+            $"FROM {CCA.Table} a " +
+            $"JOIN {M.Table} m ON m.{M.UserId} = a.{CCA.UserId} AND m.{M.CompanyId} = a.{CCA.CompanyId} AND m.{M.RevokedAtUtc} IS NULL " +
+            $"JOIN {U.Table} u ON u.{U.Id} = a.{CCA.UserId} " +
+            $"JOIN {C.Table} c ON c.{C.Id} = a.{CCA.CompanyId} AND c.{C.ProvisioningState} = {(short)ProvisioningState.Ready} " +
+            $"JOIN {R.Table} r ON r.{R.Id} = a.{CCA.RoleId} AND r.{R.IsActive} AND (r.{R.CompanyId} IS NULL OR r.{R.CompanyId} = a.{CCA.CompanyId}) " +
+            $"LEFT JOIN {RP.Table} rp ON rp.{RP.RoleId} = r.{R.Id} " +
+            $"WHERE a.{CCA.UserId} = @u AND a.{CCA.CompanyId} = @c AND a.{CCA.RevokedAtUtc} IS NULL AND (@anyUser OR u.{U.State} = 0)", conn, tx))
+        {
+            ccCmd.Parameters.AddWithValue("u", userId);
+            ccCmd.Parameters.AddWithValue("c", companyId);
+            ccCmd.Parameters.AddWithValue("anyUser", !requireActiveUser);
+            await using var rr = await ccCmd.ExecuteReaderAsync(ct);
+            while (await rr.ReadAsync(ct))
+            {
+                var id = rr.GetGuid(0);
+                if (!grants.TryGetValue(id, out var g))
+                    grants[id] = g = (rr.GetGuid(1), ScopeKind.CostCenter, rr.GetGuid(2), rr.GetInt64(4), []);
+                if (!rr.IsDBNull(3)) g.Permissions.Add(rr.GetString(3));
+            }
+        }
         // Branch- and warehouse-scoped grants are effective only while the target exists in THIS company, is active and still has the activation epoch the
         // assignment recorded. Anything else (deactivated, reactivated since, unknown, company database unavailable) drops the grant:
         // fail closed, never reinterpreted as company-wide access. Company-wide grants are unaffected. Evaluated on every call (no cache).
-        foreach (var (grantId, g) in grants.Where(kv => kv.Value.Scope is ScopeKind.Branch or ScopeKind.Warehouse).ToList())
+        foreach (var (grantId, g) in grants.Where(kv => kv.Value.Scope is ScopeKind.Branch or ScopeKind.Warehouse or ScopeKind.CostCenter).ToList())
             if (!await ScopedGrantIsLiveAsync(companyId, g.Scope, g.ScopeId, g.Epoch, ct)) grants.Remove(grantId);
         return new EffectivePermissions(catalog, [.. grants.Select(kv => new GrantedRole(kv.Key, kv.Value.Role, kv.Value.Scope, kv.Value.ScopeId, kv.Value.Permissions))]);
     }
@@ -269,6 +293,14 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     }
 
     /// <summary>Loads a role visible to the company (a preset role or one of the company's own). Other companies' roles are invisible.</summary>
+    /// <summary>True when the role exists for this company (or is a preset), is active and contains the permission: used to validate the role an approval stage is bound to.</summary>
+    public async Task<bool> RoleHoldsPermissionAsync(Guid companyId, Guid roleId, string permission, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        var role = await FindRoleAsync(conn, null, companyId, roleId, ct);
+        return role is { IsActive: true } && role.Permissions.Contains(permission);
+    }
+
     private static async Task<RoleRow?> FindRoleAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid companyId, Guid roleId, CancellationToken ct)
     {
         var rows = await ReadRolesAsync(conn, tx, companyId, roleId, ct);
@@ -517,6 +549,15 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             rev.Parameters.AddWithValue("c", companyId);
             revoked = await rev.ExecuteNonQueryAsync(ct);
         }
+        await using (var revCc = new NpgsqlCommand(
+            $"UPDATE {CCA.Table} SET {CCA.RevokedAtUtc} = @t, {CCA.RevokedBy} = @a WHERE {CCA.UserId} = @u AND {CCA.CompanyId} = @c AND {CCA.RevokedAtUtc} IS NULL", conn, tx))
+        {
+            revCc.Parameters.AddWithValue("t", now);
+            revCc.Parameters.AddWithValue("a", actorUserId);
+            revCc.Parameters.AddWithValue("u", targetUserId);
+            revCc.Parameters.AddWithValue("c", companyId);
+            revoked += await revCc.ExecuteNonQueryAsync(ct);
+        }
         await using (var mem = new NpgsqlCommand($"UPDATE {M.Table} SET {M.RevokedAtUtc} = @t, {M.RevokedBy} = @a WHERE {M.UserId} = @u AND {M.CompanyId} = @c AND {M.RevokedAtUtc} IS NULL", conn, tx))
         {
             mem.Parameters.AddWithValue("t", now);
@@ -552,6 +593,17 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             list.Add(new AssignmentView(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), (ScopeKind)r.GetInt16(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetFieldValue<DateTimeOffset>(5), r.IsDBNull(6) ? null : r.GetInt64(6)));
+        await r.CloseAsync();
+        await using (var ccList = new NpgsqlCommand(
+            $"SELECT {CCA.Id}, {CCA.UserId}, {CCA.RoleId}, {CCA.CostCenterId}, {CCA.GrantedAtUtc}, {CCA.Epoch} FROM {CCA.Table} " +
+            $"WHERE {CCA.CompanyId} = @c AND {CCA.RevokedAtUtc} IS NULL AND (@u::uuid IS NULL OR {CCA.UserId} = @u) ORDER BY {CCA.GrantedAtUtc}, {CCA.Id}", conn))
+        {
+            ccList.Parameters.AddWithValue("c", companyId);
+            ccList.Parameters.Add(new NpgsqlParameter("u", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = (object?)userId ?? DBNull.Value });
+            await using var rc = await ccList.ExecuteReaderAsync(ct);
+            while (await rc.ReadAsync(ct))
+                list.Add(new AssignmentView(rc.GetGuid(0), rc.GetGuid(1), rc.GetGuid(2), ScopeKind.CostCenter, rc.GetGuid(3), rc.GetFieldValue<DateTimeOffset>(4), rc.GetInt64(5)));
+        }
         return AccessResult<IReadOnlyList<AssignmentView>>.Ok(list);
     }
 
@@ -581,6 +633,33 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
         var id = Guid.NewGuid();
         var now = clock.GetUtcNow();
+        if (scopeKind == ScopeKind.CostCenter)
+        {
+            // Retire assignments of the same user, role and cost center recorded under an older activation epoch (already inert), then record the new one.
+            await using (var stale = new NpgsqlCommand(
+                $"UPDATE {CCA.Table} SET {CCA.RevokedAtUtc} = @t, {CCA.RevokedBy} = @a WHERE {CCA.UserId} = @u AND {CCA.CompanyId} = @c AND {CCA.RoleId} = @r AND {CCA.CostCenterId} = @s AND {CCA.RevokedAtUtc} IS NULL AND {CCA.Epoch} <> @e", conn, tx))
+            {
+                stale.Parameters.AddWithValue("t", now); stale.Parameters.AddWithValue("a", actorUserId); stale.Parameters.AddWithValue("u", targetUserId);
+                stale.Parameters.AddWithValue("c", companyId); stale.Parameters.AddWithValue("r", roleId); stale.Parameters.AddWithValue("s", scopeId!.Value); stale.Parameters.AddWithValue("e", scopeEpoch!.Value);
+                if (await stale.ExecuteNonQueryAsync(ct) > 0)
+                    await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, roleId, AccessEvent.RoleAssignmentRevoked, $"{ScopeText(scope)} (stale activation epoch)", ct);
+            }
+            try
+            {
+                await using var insCc = new NpgsqlCommand(
+                    $"INSERT INTO {CCA.Table} ({CCA.Id}, {CCA.UserId}, {CCA.CompanyId}, {CCA.RoleId}, {CCA.CostCenterId}, {CCA.Epoch}, {CCA.GrantedAtUtc}, {CCA.GrantedBy}) VALUES (@i, @u, @c, @r, @s, @e, @t, @a)", conn, tx);
+                insCc.Parameters.AddWithValue("i", id); insCc.Parameters.AddWithValue("u", targetUserId); insCc.Parameters.AddWithValue("c", companyId); insCc.Parameters.AddWithValue("r", roleId);
+                insCc.Parameters.AddWithValue("s", scopeId!.Value); insCc.Parameters.AddWithValue("e", scopeEpoch!.Value); insCc.Parameters.AddWithValue("t", now); insCc.Parameters.AddWithValue("a", actorUserId);
+                await insCc.ExecuteNonQueryAsync(ct);
+            }
+            catch (PostgresException ex) when (ex.SqlState == UniqueViolation)
+            {
+                return AccessResult<AssignmentView>.Fail(AccessStatus.Conflict, "already_assigned");
+            }
+            await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, roleId, AccessEvent.RoleAssigned, ScopeText(scope), ct);
+            await CommitAuditedAsync(tx, ct);
+            return AccessResult<AssignmentView>.Ok(new AssignmentView(id, targetUserId, roleId, scopeKind, scopeId, now, scopeEpoch));
+        }
         if (scopeKind is ScopeKind.Branch or ScopeKind.Warehouse)
         {
             // Retire assignments of the SAME user, role and branch recorded under an older epoch: they are already inert (never effective again)
@@ -634,15 +713,18 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         if (!actor.HasCompanyWide(PermissionCatalog.Codes.AssignmentsDelete)) return Denied<bool>();
 
         Guid userId, roleId; ScopeKind kind; Guid? scopeId;
+        var costCenterAssignment = false;
         // The company filter makes assignments of other companies indistinguishable from nonexistent ones (no IDOR).
         await using (var find = new NpgsqlCommand(
-            $"SELECT {A.UserId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId} FROM {A.Table} WHERE {A.Id} = @i AND {A.CompanyId} = @c AND {A.RevokedAtUtc} IS NULL", conn, tx))
+            $"SELECT {A.UserId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId} FROM {A.Table} WHERE {A.Id} = @i AND {A.CompanyId} = @c AND {A.RevokedAtUtc} IS NULL " +
+            $"UNION ALL SELECT {CCA.UserId}, {CCA.RoleId}, {(short)ScopeKind.CostCenter}::smallint, {CCA.CostCenterId} FROM {CCA.Table} WHERE {CCA.Id} = @i AND {CCA.CompanyId} = @c AND {CCA.RevokedAtUtc} IS NULL", conn, tx))
         {
             find.Parameters.AddWithValue("i", assignmentId);
             find.Parameters.AddWithValue("c", companyId);
             await using var r = await find.ExecuteReaderAsync(ct);
             if (!await r.ReadAsync(ct)) return AccessResult<bool>.Fail(AccessStatus.NotFound, "assignment_not_found");
             userId = r.GetGuid(0); roleId = r.GetGuid(1); kind = (ScopeKind)r.GetInt16(2); scopeId = r.IsDBNull(3) ? null : r.GetGuid(3);
+            costCenterAssignment = kind == ScopeKind.CostCenter;
         }
         if (userId == actorUserId) return Denied<bool>("cannot_modify_self");
         var role = await FindRoleAsync(conn, tx, companyId, roleId, ct);
@@ -651,7 +733,9 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             && await AdministratorContinuity.WouldRemoveLastAsync(conn, tx, companyId, null, assignmentId, ct))
             return AccessResult<bool>.Fail(AccessStatus.Conflict, "last_administrator");
 
-        await using (var rev = new NpgsqlCommand($"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t, {A.RevokedBy} = @a WHERE {A.Id} = @i AND {A.RevokedAtUtc} IS NULL", conn, tx))
+        await using (var rev = new NpgsqlCommand(costCenterAssignment
+            ? $"UPDATE {CCA.Table} SET {CCA.RevokedAtUtc} = @t, {CCA.RevokedBy} = @a WHERE {CCA.Id} = @i AND {CCA.RevokedAtUtc} IS NULL"
+            : $"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t, {A.RevokedBy} = @a WHERE {A.Id} = @i AND {A.RevokedAtUtc} IS NULL", conn, tx))
         {
             rev.Parameters.AddWithValue("t", clock.GetUtcNow());
             rev.Parameters.AddWithValue("a", actorUserId);

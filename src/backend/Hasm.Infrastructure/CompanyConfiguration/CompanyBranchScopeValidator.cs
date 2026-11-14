@@ -27,6 +27,7 @@ public sealed class CompanyBranchScopeValidator(Func<CompanyDatabaseResolver> re
         {
             case ScopeKind.Branch: sql = $"SELECT {B.IsActive}, {B.ActivationEpoch} FROM {B.Table} WHERE {B.Id} = @id"; break;
             case ScopeKind.Warehouse: sql = $"SELECT {W.IsActive}, {W.ActivationEpoch} FROM {W.Table} WHERE {W.Id} = @id"; break;
+            case ScopeKind.CostCenter: sql = $"SELECT {CompanySchema.CostCenter.IsActive}, {CompanySchema.CostCenterPolicy.ActivationEpoch} FROM {CompanySchema.CostCenter.Table} WHERE {CompanySchema.CostCenter.Id} = @id"; break;
             default: return null;
         }
         // The resolver is created on first use: hosts without a company runtime configuration still start, and every lookup then fails closed.

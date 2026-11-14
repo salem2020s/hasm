@@ -182,6 +182,31 @@ public static class SystemSchema
         public const string GuardFunction = "f_69804ba6";
         public const string GuardTrigger = "r_3bdbbc04";
     }
+    public static class CostCenterAssignment
+    {
+        public const string Table = "t_83b6fff2";
+        public const string Id = "c_c94f910f";
+        public const string UserId = "c_be1b97e6";
+        public const string CompanyId = "c_8f432b32";
+        public const string RoleId = "c_4d6410a1";
+        public const string CostCenterId = "c_8fbf9b9d";
+        public const string Epoch = "c_92465d23";
+        public const string GrantedAtUtc = "c_c8ea3e0d";
+        public const string GrantedBy = "c_3a2484e7";
+        public const string RevokedAtUtc = "c_7bddc39a";
+        public const string RevokedBy = "c_01c768f2";
+        public const string PrimaryKey = "k_8bb0ef86";
+        public const string ForeignKeyMembership = "k_dcf9432f";
+        public const string ForeignKeyRole = "k_eb86a5f4";
+        public const string ForeignKeyGrantedBy = "k_bb9af908";
+        public const string ForeignKeyRevokedBy = "k_b3e94581";
+        public const string CheckRevocation = "k_2a9e912a";
+        public const string CheckEpoch = "k_9213224c";
+        public const string UniqueActive = "k_87e878b9";
+        public const string IndexMember = "k_58461e5f";
+        public const string GuardFunction = "f_b0860418";
+        public const string GuardTrigger = "r_e867423b";
+    }
     public static class AccessAudit
     {
         public const string Table = "t_dcb6ad92";
@@ -372,6 +397,28 @@ public static class SystemSchema
         ["RoleAssignment.EpochGuardTrigger"] = RoleAssignment.EpochGuardTrigger,
         ["RoleAssignment.GuardFunction"] = RoleAssignment.GuardFunction,
         ["RoleAssignment.GuardTrigger"] = RoleAssignment.GuardTrigger,
+        ["CostCenterAssignment.Table"] = CostCenterAssignment.Table,
+        ["CostCenterAssignment.Id"] = CostCenterAssignment.Id,
+        ["CostCenterAssignment.UserId"] = CostCenterAssignment.UserId,
+        ["CostCenterAssignment.CompanyId"] = CostCenterAssignment.CompanyId,
+        ["CostCenterAssignment.RoleId"] = CostCenterAssignment.RoleId,
+        ["CostCenterAssignment.CostCenterId"] = CostCenterAssignment.CostCenterId,
+        ["CostCenterAssignment.Epoch"] = CostCenterAssignment.Epoch,
+        ["CostCenterAssignment.GrantedAtUtc"] = CostCenterAssignment.GrantedAtUtc,
+        ["CostCenterAssignment.GrantedBy"] = CostCenterAssignment.GrantedBy,
+        ["CostCenterAssignment.RevokedAtUtc"] = CostCenterAssignment.RevokedAtUtc,
+        ["CostCenterAssignment.RevokedBy"] = CostCenterAssignment.RevokedBy,
+        ["CostCenterAssignment.PrimaryKey"] = CostCenterAssignment.PrimaryKey,
+        ["CostCenterAssignment.ForeignKeyMembership"] = CostCenterAssignment.ForeignKeyMembership,
+        ["CostCenterAssignment.ForeignKeyRole"] = CostCenterAssignment.ForeignKeyRole,
+        ["CostCenterAssignment.ForeignKeyGrantedBy"] = CostCenterAssignment.ForeignKeyGrantedBy,
+        ["CostCenterAssignment.ForeignKeyRevokedBy"] = CostCenterAssignment.ForeignKeyRevokedBy,
+        ["CostCenterAssignment.CheckRevocation"] = CostCenterAssignment.CheckRevocation,
+        ["CostCenterAssignment.CheckEpoch"] = CostCenterAssignment.CheckEpoch,
+        ["CostCenterAssignment.UniqueActive"] = CostCenterAssignment.UniqueActive,
+        ["CostCenterAssignment.IndexMember"] = CostCenterAssignment.IndexMember,
+        ["CostCenterAssignment.GuardFunction"] = CostCenterAssignment.GuardFunction,
+        ["CostCenterAssignment.GuardTrigger"] = CostCenterAssignment.GuardTrigger,
         ["AccessAudit.Table"] = AccessAudit.Table,
         ["AccessAudit.Id"] = AccessAudit.Id,
         ["AccessAudit.OccurredAtUtc"] = AccessAudit.OccurredAtUtc,

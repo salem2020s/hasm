@@ -77,7 +77,7 @@ public class FiscalMigrationTests : FiscalTestBase
     public async Task A_freshly_provisioned_company_has_the_calendar_tables_and_no_data_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(8L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(9L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Calendar().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Fy.Table));
         Assert.Equal(0L, await Count(Company, Fp.Table));
@@ -93,7 +93,7 @@ public class FiscalMigrationTests : FiscalTestBase
         await Sql("CREATE TABLE zz_existing (a int); INSERT INTO zz_existing VALUES (7)", legacy);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([6, 7, 8], outcome.Applied);
+        Assert.Equal([6, 7, 8, 9], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(0L, await Count(legacy, Fy.Table));                          // nothing is seeded
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
@@ -556,9 +556,9 @@ public class FiscalServiceTests : FiscalTestBase
     {
         await PrepareFiscal();
         var p = (await NewYear("FY2026", 2026)).Periods[0];
-        Assert.Equal(3, Calendar().UnimplementedCloseChecks.Count);                                                                 // nothing is verified yet: never presented as safe
+        Assert.Equal(4, Calendar().UnimplementedCloseChecks.Count);                                                                 // nothing is verified yet: never presented as safe
         var blocking = new PeriodCloseGuard([new BlockingProbe("pending_accounting_postings", true)]);
-        Assert.Equal(2, Calendar(blocking).UnimplementedCloseChecks.Count);
+        Assert.Equal(3, Calendar(blocking).UnimplementedCloseChecks.Count);
         var refused = await Calendar(blocking).SoftCloseAsync(Admin.Id, Company.Id, p.Id, 1);
         Assert.Equal("period_close_blocked", refused.Code);
         Assert.Equal(FiscalPeriodState.Open, (await Calendar().FindPeriodAsync(Company.Id, new DateOnly(2026, 1, 5)))!.State);

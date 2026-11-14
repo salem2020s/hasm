@@ -33,6 +33,8 @@ public interface IPeriodCloseProbe
 {
     string Domain { get; }
     bool Implemented { get; }
+    /// <summary>True for a domain whose owning module is not part of this release (nothing can exist to check): reported as "not applicable", NEVER as passed, and it does not make closing refuse.</summary>
+    bool ModuleAbsent => false;
     Task<bool> HasBlockersAsync(Guid companyId, FiscalPeriodView period, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct);
 }
 
@@ -46,7 +48,7 @@ public sealed class UnimplementedPeriodCloseProbe(string domain) : IPeriodCloseP
 /// <summary>Evaluates every REQUIRED domain; a registered real probe replaces the placeholder for its domain.</summary>
 public sealed class PeriodCloseGuard
 {
-    public static readonly string[] RequiredDomains = ["pending_accounting_postings", "inventory_valuation_differences", "pending_adjustments"];
+    public static readonly string[] RequiredDomains = ["pending_accounting_postings", "inventory_valuation_differences", "pending_adjustments", "year_end_closing"];
 
     private readonly Dictionary<string, IPeriodCloseProbe> probes;
 
@@ -56,7 +58,10 @@ public sealed class PeriodCloseGuard
         foreach (var p in registered ?? []) probes[p.Domain] = p;
     }
 
-    public IReadOnlyList<string> UnimplementedDomains => [.. probes.Values.Where(p => !p.Implemented).Select(p => p.Domain).Order(StringComparer.Ordinal)];
+    public IReadOnlyList<string> UnimplementedDomains => [.. probes.Values.Where(p => !p.Implemented && !p.ModuleAbsent).Select(p => p.Domain).Order(StringComparer.Ordinal)];
+
+    /// <summary>Domains whose module does not exist in this release; listed honestly by the API and the year-end closing, never presented as passed.</summary>
+    public IReadOnlyList<string> NotApplicableDomains => [.. probes.Values.Where(p => !p.Implemented && p.ModuleAbsent).Select(p => p.Domain).Order(StringComparer.Ordinal)];
 
     public async Task<bool> IsBlockedAsync(Guid companyId, FiscalPeriodView period, NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken ct)
     {

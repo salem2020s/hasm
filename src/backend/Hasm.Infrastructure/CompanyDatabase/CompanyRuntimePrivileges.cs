@@ -61,6 +61,17 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.JournalLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
         (CompanySchema.JournalAllocation.Table, ["SELECT", "INSERT", "DELETE"]),
         (CompanySchema.JournalEvent.Table, ["SELECT", "INSERT"]),
+        // General Ledger completion (Phase 3.2C): policies are never deleted; the policy history is append-only.
+        (CompanySchema.PolicyHistory.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.AccountCostCenterRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CostCenterBranchRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CostCenterBranchEligibility.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Approval stages and bindings (S2) and year-end processing (S3): append-only except the single settings row.
+        (CompanySchema.ApprovalPolicyStage.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.DocumentApprovalBinding.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.ClosingSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.FiscalYearClosing.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.FiscalYearCarryforward.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -120,6 +131,7 @@ public static class CompanyRuntimePrivileges
           UNION ALL SELECT 'account_history_modifiable' WHERE to_regclass(@account_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@account_history), p))
           UNION ALL SELECT 'account_modifiable' FROM unnest(@account_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
           UNION ALL SELECT 'ledger_history_modifiable' WHERE to_regclass(@ledger_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@ledger_history), p))
+          UNION ALL SELECT 'policy_history_modifiable' WHERE to_regclass(@policy_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@policy_history), p))
           UNION ALL SELECT 'ledger_modifiable' FROM unnest(@ledger_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
           UNION ALL SELECT 'journal_event_modifiable' WHERE to_regclass(@journal_event) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@journal_event), p))
           UNION ALL SELECT 'journal_draft_modifiable' FROM unnest(@journal_draft_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_draft::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
@@ -147,7 +159,8 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("fiscal_history", CompanySchema.FiscalHistory.Table);
         cmd.Parameters.AddWithValue("account_history", CompanySchema.AccountRevision.Table);
         cmd.Parameters.AddWithValue("ledger_history", CompanySchema.LedgerHistory.Table);
-        cmd.Parameters.AddWithValue("ledger_tables", new[] { CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table, CompanySchema.ExchangeRate.Table, CompanySchema.CostCenter.Table, CompanySchema.ApprovalPolicy.Table, CompanySchema.ApprovalDecision.Table, CompanySchema.LedgerSettings.Table, CompanySchema.JournalEntry.Table });
+        cmd.Parameters.AddWithValue("policy_history", CompanySchema.PolicyHistory.Table);
+        cmd.Parameters.AddWithValue("ledger_tables", new[] { CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table, CompanySchema.ExchangeRate.Table, CompanySchema.CostCenter.Table, CompanySchema.ApprovalPolicy.Table, CompanySchema.ApprovalDecision.Table, CompanySchema.LedgerSettings.Table, CompanySchema.JournalEntry.Table, CompanySchema.AccountCostCenterRule.Table, CompanySchema.CostCenterBranchRule.Table, CompanySchema.CostCenterBranchEligibility.Table, CompanySchema.ApprovalPolicyStage.Table, CompanySchema.DocumentApprovalBinding.Table, CompanySchema.ClosingSettings.Table, CompanySchema.FiscalYearClosing.Table, CompanySchema.FiscalYearCarryforward.Table });
         cmd.Parameters.AddWithValue("journal_event", CompanySchema.JournalEvent.Table);
         cmd.Parameters.AddWithValue("journal_draft_tables", new[] { CompanySchema.JournalLine.Table, CompanySchema.JournalAllocation.Table });
         cmd.Parameters.AddWithValue("forbidden_draft", ForbiddenOnDraftTables);

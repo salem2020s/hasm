@@ -97,7 +97,7 @@ public static class AccessEndpoints
 
     private static bool TryParseScope(string? text, out ScopeKind kind)
     {
-        kind = text?.ToLowerInvariant() switch { "company" => ScopeKind.Company, "branch" => ScopeKind.Branch, "warehouse" => ScopeKind.Warehouse, _ => (ScopeKind)(-1) };
+        kind = text?.ToLowerInvariant() switch { "company" => ScopeKind.Company, "branch" => ScopeKind.Branch, "warehouse" => ScopeKind.Warehouse, "costcenter" => ScopeKind.CostCenter, _ => (ScopeKind)(-1) };
         return Enum.IsDefined(kind);
     }
 

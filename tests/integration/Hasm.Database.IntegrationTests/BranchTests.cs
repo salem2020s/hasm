@@ -76,7 +76,7 @@ public class BranchMigrationTests : BranchTestBase
     public async Task A_freshly_provisioned_company_has_exactly_one_active_main_branch_with_recorded_provenance()
     {
         await Prepare();
-        Assert.Equal(8L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(9L, await Count(Company, SystemSchema.MigrationJournalTable));
         var main = Assert.Single(await Branches().ListAsync(Company.Id));
         Assert.Equal("MAIN", main.Data.Code);
         Assert.Equal(MainArabic, main.Data.NameAr);                      // logical Unicode order
@@ -102,7 +102,7 @@ public class BranchMigrationTests : BranchTestBase
 
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([4, 5, 6, 7, 8], outcome.Applied);
+        Assert.Equal([4, 5, 6, 7, 8, 9], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(1L, await Count(legacy, Br.Table));
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
@@ -122,9 +122,9 @@ public class BranchMigrationTests : BranchTestBase
         await StartCompanies();
         var legacy = await ReadyCompany([.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version <= 2)]);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
-        Assert.Equal([3, 4, 5, 6, 7, 8], outcome.Applied);
+        Assert.Equal([3, 4, 5, 6, 7, 8, 9], outcome.Applied);
         Assert.Equal(1L, await Count(legacy, Br.Table));
-        Assert.Equal(8L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(9L, await Count(legacy, SystemSchema.MigrationJournalTable));
     }
 
     [PostgresFact]

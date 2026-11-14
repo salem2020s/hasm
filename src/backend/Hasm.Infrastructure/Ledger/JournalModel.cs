@@ -11,7 +11,29 @@ public enum JournalType : short { Normal = 1, Reversal = 2, Adjusting = 3 }
 /// <summary>Journal event kinds (the append-only event log). Persisted; never renumber.</summary>
 public enum JournalEventKind : short { Created = 1, Updated = 2, Submitted = 3, ReturnedToDraft = 4, Cancelled = 5, Approved = 6, Rejected = 7, Posted = 8, ReversalDrafted = 9, AdjustingDrafted = 10, Reversed = 11, DecisionRecorded = 12 }
 
-public sealed record JournalAllocationInput(Guid? CostCenterId, decimal? Amount);
+/// <summary>One allocation: an exact <see cref="Amount"/> in the line currency OR a <see cref="Percent"/> (all allocations of a line use the same mode; percentages must total exactly 100 and are converted by <see cref="AllocationMath"/>).</summary>
+public sealed record JournalAllocationInput(Guid? CostCenterId, decimal? Amount, decimal? Percent = null);
+
+/// <summary>
+/// Deterministic distribution of an amount by percentages (largest-remainder method on exact decimals): every share is floored to the currency's minor units, the leftover units go one by one
+/// to the largest fractional remainders, ties to the larger percentage and then to the lower cost-center id, so the SAME inputs always give the SAME amounts, whatever the order they were entered in,
+/// and the shares always add up to the total exactly.
+/// </summary>
+public static class AllocationMath
+{
+    public static IReadOnlyDictionary<Guid, decimal> Distribute(decimal total, int minorUnits, IReadOnlyList<(Guid CostCenterId, decimal Percent)> parts)
+    {
+        if (parts.Count == 0) throw new ArgumentException("no parts", nameof(parts));
+        if (parts.Sum(p => p.Percent) != 100m || parts.Any(p => p.Percent <= 0)) throw new ArgumentException("percentages must be positive and total exactly 100", nameof(parts));
+        var unit = (decimal)Math.Pow(10, -minorUnits);
+        var units = decimal.Round(total / unit, 0);
+        if (units * unit != total) throw new ArgumentException("the total has more decimals than the currency allows", nameof(total));
+        var rows = parts.Select(p => { var exact = units * p.Percent / 100m; var floor = decimal.Floor(exact); return (p.CostCenterId, p.Percent, Floor: floor, Remainder: exact - floor); }).ToList();
+        var leftover = (int)(units - rows.Sum(r => r.Floor));
+        var bonus = rows.OrderByDescending(r => r.Remainder).ThenByDescending(r => r.Percent).ThenBy(r => r.CostCenterId).Take(leftover).Select(r => r.CostCenterId).ToHashSet();
+        return rows.ToDictionary(r => r.CostCenterId, r => (r.Floor + (bonus.Contains(r.CostCenterId) ? 1m : 0m)) * unit);
+    }
+}
 
 /// <summary>
 /// One line as entered. Exactly one of <see cref="Debit"/> / <see cref="Credit"/> is positive. <see cref="Currency"/> defaults to the base currency. The exchange rate is NEVER
@@ -38,13 +60,13 @@ public sealed record JournalEntrySummary(
 /// <summary>A full entry. <see cref="Balanced"/> is computed from the stored base amounts; <see cref="RequiredApprovals"/> from the strictest matching active policy.</summary>
 public sealed record JournalEntryView(
     JournalEntrySummary Header, bool Balanced, decimal BaseDebitTotal, decimal BaseCreditTotal, int RequiredApprovals, IReadOnlyList<JournalLineView> Lines,
-    IReadOnlyList<ApprovalDecisionView> Approvals, IReadOnlyList<JournalEventView> Events);
+    IReadOnlyList<ApprovalDecisionView> Approvals, IReadOnlyList<JournalEventView> Events, IReadOnlyList<ApprovalStageProgress>? Plan = null);
 
 public sealed record LedgerSettingsView(Guid? RoundingAccountId, long Revision, bool Exists);
 public sealed record LedgerSettingsInput(Guid? RoundingAccountId);
 
 public sealed record JournalFilter(JournalStatus? Status, DateOnly? From, DateOnly? To, Guid? BranchId, string? Text, int Limit = 100, int Offset = 0,
-    IReadOnlyList<Guid>? AllowedBranches = null);
+    IReadOnlyList<Guid>? AllowedBranches = null, IReadOnlyList<Guid>? AllowedCostCenters = null);
 
 public sealed record ApprovalDecisionInput(bool? Approve, string? Comment);
 public sealed record ReversalInput(DateOnly? EntryDate, string? Description);

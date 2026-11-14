@@ -17,7 +17,7 @@ public abstract class LedgerReportTestBase : JournalTestBase
     {
         await PrepareJournal();
         Reports = new LedgerReportService(Resolver);
-        RMg = new LedgerReportManagementService(Rbac, Reports);
+        RMg = new LedgerReportManagementService(Rbac, Reports, Journal);
     }
 
     protected static ReportScope Scope(string from, string to, Guid? branch = null, Guid? cc = null, IReadOnlyList<Guid>? branches = null) => new(DateOnly.Parse(from), DateOnly.Parse(to), branch, cc, branches);

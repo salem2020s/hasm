@@ -12,7 +12,8 @@ public static class FiscalSetup
 {
     public static IServiceCollection AddHasmFiscalCalendar(this IServiceCollection services)
     {
-        services.AddSingleton(new PeriodCloseGuard([new Hasm.Infrastructure.Ledger.PendingJournalPeriodCloseProbe()]));   // pending journal entries block a close; inventory and adjustment modules register theirs later
+        // Real probes: pending entries, pending adjustments and year-end consistency block a close. Inventory valuation differences belong to a module that does not exist in this release: listed as not applicable, never as passed.
+        services.AddSingleton(new PeriodCloseGuard([new Hasm.Infrastructure.Ledger.PendingJournalPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.PendingAdjustmentsPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.YearEndClosingPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.ModuleAbsentPeriodCloseProbe("inventory_valuation_differences")]));
         services.AddSingleton(sp => new FiscalCalendarService(
             sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
             sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<FinancialHistoryGuard>(), sp.GetRequiredService<TimeProvider>()));
@@ -81,6 +82,7 @@ public static class FiscalEndpoints
             today = today?.ToString("yyyy-MM-dd"),
             // Closing consults modules that do not exist yet; the UI must not present a close as verified while this is false.
             closeChecksImplemented = calendar.UnimplementedCloseChecks.Count == 0,
+            closeChecksNotApplicable = calendar.NotApplicableCloseChecks,
             can = new
             {
                 create = eff.Has(PermissionCatalog.Codes.FiscalYearsCreate, ScopeTarget.Company),

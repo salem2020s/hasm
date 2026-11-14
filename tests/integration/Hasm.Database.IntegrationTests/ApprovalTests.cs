@@ -254,7 +254,7 @@ public class ApprovalDatabaseGuardTests : ApprovalTestBase
         Assert.Equal("P0001", await RawFails($"DELETE FROM {Ad.Table}"));
         Assert.Equal("P0001", await RawFails($"TRUNCATE {Ad.Table}"));
         Assert.Equal("P0001", await RawFails($"DELETE FROM {Ap.Table}"));
-        Assert.Equal("P0001", await RawFails($"TRUNCATE {Ap.Table}"));
+        Assert.Equal("0A000", await RawFails($"TRUNCATE {Ap.Table}"));   // referenced by the stage table: PostgreSQL itself refuses to truncate it
         Assert.Equal("P0001", await RawFails($"UPDATE {Ap.Table} SET {Ap.DocType} = 'other_type', {Ap.Revision} = {Ap.Revision} + 1"));
         Assert.Equal("P0001", await RawFails($"UPDATE {Ap.Table} SET {Ap.Id} = gen_random_uuid(), {Ap.Revision} = {Ap.Revision} + 1"));
         Assert.Equal("P0001", await RawFails($"UPDATE {Ap.Table} SET {Ap.RequiredApprovals} = 2"));                                 // revision must advance

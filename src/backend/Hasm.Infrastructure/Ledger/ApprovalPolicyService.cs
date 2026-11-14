@@ -10,6 +10,12 @@ using AP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalPolicy;
 using AD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalDecision;
 using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LedgerHistory;
 using BR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
+using AC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalPolicyConditions;
+using AS = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalPolicyStage;
+using AB = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentApprovalBinding;
+using AG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalStaging;
+using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
+using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ClosingLogic;
 
 namespace Hasm.Infrastructure.Ledger;
 
@@ -28,7 +34,11 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
     }
 
     private static readonly string Columns =
-        $"p.{AP.Id}, p.{AP.DocType}, p.{AP.Source}, p.{AP.BranchId}, p.{AP.MinAmount}, p.{AP.RequiredApprovals}, p.{AP.NameAr}, p.{AP.NameEn}, p.{AP.IsActive}, p.{AP.Revision}, p.{AP.CreatedAtUtc}, p.{AP.UpdatedAtUtc}";
+        $"p.{AP.Id}, p.{AP.DocType}, p.{AP.Source}, p.{AP.BranchId}, p.{AP.MinAmount}, p.{AP.RequiredApprovals}, p.{AP.NameAr}, p.{AP.NameEn}, p.{AP.IsActive}, p.{AP.Revision}, p.{AP.CreatedAtUtc}, p.{AP.UpdatedAtUtc}, p.{AC.JournalType}, p.{AC.RateOverride}, p.{AC.SoftClosed}, p.{CL.PolicyClosingKind}";
+
+    internal static string ClosingKindName(short? t) => t switch { 1 => "closing", 2 => "opening", _ => "any" };
+
+    internal static string JournalTypeName(short? t) => t switch { 1 => "normal", 2 => "reversal", 3 => "adjusting", _ => "any" };
 
     public async Task<IReadOnlyList<ApprovalPolicyView>> ListAsync(Guid companyId, CancellationToken ct = default)
     {
@@ -54,25 +64,43 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
         await using var cmd = new NpgsqlCommand($"SELECT {Columns} FROM {AP.Table} p {(id is null ? "" : $"WHERE p.{AP.Id} = @id")} ORDER BY p.{AP.DocType}, p.{AP.MinAmount}, p.{AP.CreatedAtUtc}, p.{AP.Id}{(forUpdate ? " FOR UPDATE OF p" : "")}", conn, tx);
         if (id is not null) cmd.Parameters.AddWithValue("id", id.Value);
         var list = new List<ApprovalPolicyView>();
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct))
-            list.Add(new ApprovalPolicyView(r.GetGuid(0), r.GetString(1), (PolicySource)r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.GetDecimal(4), r.GetInt16(5),
-                r.IsDBNull(6) ? null : r.GetString(6), r.IsDBNull(7) ? null : r.GetString(7), r.GetBoolean(8), r.GetInt64(9), new DateTimeOffset(r.GetDateTime(10), TimeSpan.Zero), new DateTimeOffset(r.GetDateTime(11), TimeSpan.Zero)));
-        return list;
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct))
+                list.Add(new ApprovalPolicyView(r.GetGuid(0), r.GetString(1), (PolicySource)r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.GetDecimal(4), r.GetInt16(5),
+                    r.IsDBNull(6) ? null : r.GetString(6), r.IsDBNull(7) ? null : r.GetString(7), r.GetBoolean(8), r.GetInt64(9), new DateTimeOffset(r.GetDateTime(10), TimeSpan.Zero), new DateTimeOffset(r.GetDateTime(11), TimeSpan.Zero),
+                    r.IsDBNull(12) ? null : JournalTypeName(r.GetInt16(12)), r.IsDBNull(13) ? null : r.GetBoolean(13), r.IsDBNull(14) ? null : r.GetBoolean(14), null, r.IsDBNull(15) ? null : ClosingKindName(r.GetInt16(15))));
+        if (list.Count == 0) return list;
+        // The stages of each policy's CURRENT revision (none = a classic single-stage policy).
+        var stages = new Dictionary<Guid, List<ApprovalStageView>>();
+        await using (var sc = new NpgsqlCommand(
+            $"SELECT st.{AS.PolicyId}, st.{AS.StageNo}, st.{AS.Required}, st.{AS.RoleId} FROM {AS.Table} st JOIN {AP.Table} p ON p.{AP.Id} = st.{AS.PolicyId} AND p.{AP.Revision} = st.{AS.PolicyRevision} {(id is null ? "" : $"WHERE p.{AP.Id} = @id")} ORDER BY st.{AS.PolicyId}, st.{AS.StageNo}", conn, tx))
+        {
+            if (id is not null) sc.Parameters.AddWithValue("id", id.Value);
+            await using var r = await sc.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct))
+            {
+                if (!stages.TryGetValue(r.GetGuid(0), out var l)) stages[r.GetGuid(0)] = l = [];
+                l.Add(new ApprovalStageView(r.GetInt16(1), r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3)));
+            }
+        }
+        return [.. list.Select(p => stages.TryGetValue(p.Id, out var s) ? p with { Stages = s, RequiredApprovals = s.Sum(x => x.Required) } : p)];
     }
 
     public async Task<ConfigResult<ApprovalPolicyView>> CreateAsync(Guid actor, Guid companyId, ApprovalPolicyInput? input, CancellationToken ct = default)
     {
-        if (!ApprovalValidation.TryNormalize(input, out var docType, out var source, out var min, out var required, out var nameAr, out var nameEn, out var errors)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
+        if (!ApprovalValidation.TryNormalizeFull(input, out var np, out var errors)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
+        var (docType, source, min, required, nameAr, nameEn) = (np.DocType, np.Source, np.MinAmount, np.Required, np.NameAr, np.NameEn);
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
             if (input!.BranchId is { } bid) await RequireActiveBranchAsync(work, bid, ct);
             var id = Guid.NewGuid();
             var now = clock.GetUtcNow().UtcDateTime;
-            await ExecAsync(work, $"INSERT INTO {AP.Table} ({AP.Id}, {AP.DocType}, {AP.Source}, {AP.BranchId}, {AP.MinAmount}, {AP.RequiredApprovals}, {AP.NameAr}, {AP.NameEn}, {AP.IsActive}, {AP.Revision}, {AP.CreatedAtUtc}, {AP.UpdatedAtUtc}) VALUES (@id, @doc, @src, @branch, @min, @req, @ar, @en, true, 1, @now, @now)",
-                p => Bind(p, id, docType, source, input.BranchId, min, required, nameAr, nameEn, now));
-            var changes = new JsonObject { ["docType"] = docType, ["source"] = source.ToString(), ["branchId"] = input.BranchId?.ToString(), ["minAmount"] = min.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), ["requiredApprovals"] = required, ["nameAr"] = nameAr, ["nameEn"] = nameEn };
+            await ExecAsync(work, $"INSERT INTO {AP.Table} ({AP.Id}, {AP.DocType}, {AP.Source}, {AP.BranchId}, {AP.MinAmount}, {AP.RequiredApprovals}, {AP.NameAr}, {AP.NameEn}, {AP.IsActive}, {AP.Revision}, {AP.CreatedAtUtc}, {AP.UpdatedAtUtc}, {AC.JournalType}, {AC.RateOverride}, {AC.SoftClosed}, {CL.PolicyClosingKind}) VALUES (@id, @doc, @src, @branch, @min, @req, @ar, @en, true, 1, @now, @now, @jt, @ro, @sc, @ck)",
+                p => { Bind(p, id, docType, source, input.BranchId, min, required, nameAr, nameEn, now); BindConditions(p, np); });
+            await InsertStagesAsync(work, id, 1, np.Stages, ct);
+            var changes = new JsonObject { ["docType"] = docType, ["source"] = source.ToString(), ["branchId"] = input.BranchId?.ToString(), ["minAmount"] = min.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), ["requiredApprovals"] = np.Total, ["nameAr"] = nameAr, ["nameEn"] = nameEn,
+                ["journalType"] = JournalTypeName(np.JournalType), ["rateOverride"] = np.RateOverride?.ToString(), ["softClosed"] = np.SoftClosed?.ToString(), ["closingKind"] = ClosingKindName(np.ClosingKind), ["stages"] = StagesText(np.Stages) };
             await RecordAsync(work, LedgerAuditEvents.ApprovalPolicyCreated, actor, id, 1, changes, "approval policy created", ct);
             return (await LoadAsync(work.Connection, work.Transaction, id, false, ct)).Single();
         }, ct);
@@ -81,19 +109,28 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
     public async Task<ConfigResult<ApprovalPolicyView>> UpdateAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, ApprovalPolicyDetailsInput? input, CancellationToken ct = default)
     {
         if (expectedRevision is null) return ConfigResult<ApprovalPolicyView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
-        if (!ApprovalValidation.TryNormalizeDetails(input, out var source, out var min, out var required, out var nameAr, out var nameEn, out var errors)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
+        if (!ApprovalValidation.TryNormalizeDetailsFull(input, "", out var np, out var errors)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
+        var (source, min, required, nameAr, nameEn) = (np.Source, np.MinAmount, np.Required, np.NameAr, np.NameEn);
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
             var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
-            if (cur.Source == source && cur.BranchId == input!.BranchId && cur.MinAmount == min && cur.RequiredApprovals == required && cur.NameAr == nameAr && cur.NameEn == nameEn) throw new Abort(ConfigStatus.Ok, "unchanged");
+            var curStages = cur.Stages ?? [];
+            var sameStages = curStages.Count == np.Stages.Count && curStages.Zip(np.Stages).All(z => z.First.Required == z.Second.Required && z.First.RoleId == z.Second.RoleId);
+            var sameRequired = np.Stages.Count > 0 || cur.IsStaged ? sameStages : cur.RequiredApprovals == required;
+            if (cur.Source == source && cur.BranchId == input!.BranchId && cur.MinAmount == min && sameRequired && sameStages && cur.NameAr == nameAr && cur.NameEn == nameEn
+                && cur.JournalType == (np.JournalType is null ? null : JournalTypeName(np.JournalType)) && cur.RateOverride == np.RateOverride && cur.SoftClosed == np.SoftClosed
+                && cur.ClosingKind == (np.ClosingKind is null ? null : ClosingKindName(np.ClosingKind))) throw new Abort(ConfigStatus.Ok, "unchanged");
             if (input!.BranchId is { } bid && bid != cur.BranchId) await RequireActiveBranchAsync(work, bid, ct);
-            await ExecAsync(work, $"UPDATE {AP.Table} SET {AP.Source} = @src, {AP.BranchId} = @branch, {AP.MinAmount} = @min, {AP.RequiredApprovals} = @req, {AP.NameAr} = @ar, {AP.NameEn} = @en, {AP.Revision} = {AP.Revision} + 1, {AP.UpdatedAtUtc} = @now WHERE {AP.Id} = @id",
-                p => Bind(p, id, cur.DocType, source, input.BranchId, min, required, nameAr, nameEn, clock.GetUtcNow().UtcDateTime));
+            await ExecAsync(work, $"UPDATE {AP.Table} SET {AP.Source} = @src, {AP.BranchId} = @branch, {AP.MinAmount} = @min, {AP.RequiredApprovals} = @req, {AP.NameAr} = @ar, {AP.NameEn} = @en, {AC.JournalType} = @jt, {AC.RateOverride} = @ro, {AC.SoftClosed} = @sc, {CL.PolicyClosingKind} = @ck, {AP.Revision} = {AP.Revision} + 1, {AP.UpdatedAtUtc} = @now WHERE {AP.Id} = @id",
+                p => { Bind(p, id, cur.DocType, source, input.BranchId, min, required, nameAr, nameEn, clock.GetUtcNow().UtcDateTime); BindConditions(p, np); });
+            await InsertStagesAsync(work, id, cur.Revision + 1, np.Stages, ct);
             var changes = new JsonObject();
             Diff(changes, "source", cur.Source.ToString(), source.ToString()); Diff(changes, "branchId", cur.BranchId?.ToString(), input.BranchId?.ToString());
             Diff(changes, "minAmount", cur.MinAmount.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), min.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture));
-            Diff(changes, "requiredApprovals", cur.RequiredApprovals.ToString(), required.ToString()); Diff(changes, "nameAr", cur.NameAr, nameAr); Diff(changes, "nameEn", cur.NameEn, nameEn);
+            Diff(changes, "requiredApprovals", cur.RequiredApprovals.ToString(), np.Total.ToString()); Diff(changes, "nameAr", cur.NameAr, nameAr); Diff(changes, "nameEn", cur.NameEn, nameEn);
+            Diff(changes, "journalType", cur.JournalType ?? "any", JournalTypeName(np.JournalType)); Diff(changes, "rateOverride", cur.RateOverride?.ToString(), np.RateOverride?.ToString()); Diff(changes, "softClosed", cur.SoftClosed?.ToString(), np.SoftClosed?.ToString()); Diff(changes, "closingKind", cur.ClosingKind ?? "any", ClosingKindName(np.ClosingKind));
+            Diff(changes, "stages", StagesText(curStages), StagesText(np.Stages));
             await RecordAsync(work, LedgerAuditEvents.ApprovalPolicyUpdated, actor, id, cur.Revision + 1, changes, "approval policy updated", ct);
             return (await LoadAsync(work.Connection, work.Transaction, id, false, ct)).Single();
         }, ct, onUnchanged: async () => await GetAsync(companyId, id, ct));
@@ -113,6 +150,7 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
             if (cur.IsActive == active) throw new Abort(ConfigStatus.Ok, "unchanged");
             await ExecAsync(work, $"UPDATE {AP.Table} SET {AP.IsActive} = @a, {AP.Revision} = {AP.Revision} + 1, {AP.UpdatedAtUtc} = @now WHERE {AP.Id} = @id",
                 p => { p.AddWithValue("id", id); p.AddWithValue("a", active); p.AddWithValue("now", clock.GetUtcNow().UtcDateTime); });
+            await InsertStagesAsync(work, id, cur.Revision + 1, cur.Stages ?? [], ct);   // the stage set follows every revision of the policy
             var changes = new JsonObject(); Diff(changes, "isActive", cur.IsActive.ToString(), active.ToString());
             await RecordAsync(work, active ? LedgerAuditEvents.ApprovalPolicyReactivated : LedgerAuditEvents.ApprovalPolicyDeactivated, actor, id, cur.Revision + 1, changes, active ? "approval policy reactivated" : "approval policy deactivated", ct);
             return (await LoadAsync(work.Connection, work.Transaction, id, false, ct)).Single();
@@ -129,6 +167,27 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
         p.Add(new NpgsqlParameter("ar", NpgsqlDbType.Varchar) { Value = (object?)ar ?? DBNull.Value });
         p.Add(new NpgsqlParameter("en", NpgsqlDbType.Varchar) { Value = (object?)en ?? DBNull.Value });
         p.AddWithValue("now", now);
+    }
+
+    private static void BindConditions(NpgsqlParameterCollection p, NormalizedPolicy np)
+    {
+        p.Add(new NpgsqlParameter("jt", NpgsqlDbType.Smallint) { Value = (object?)np.JournalType ?? DBNull.Value });
+        p.Add(new NpgsqlParameter("ro", NpgsqlDbType.Boolean) { Value = (object?)np.RateOverride ?? DBNull.Value });
+        p.Add(new NpgsqlParameter("sc", NpgsqlDbType.Boolean) { Value = (object?)np.SoftClosed ?? DBNull.Value });
+        p.Add(new NpgsqlParameter("ck", NpgsqlDbType.Smallint) { Value = (object?)np.ClosingKind ?? DBNull.Value });
+    }
+
+    private static string StagesText(IReadOnlyList<ApprovalStageView> stages) => string.Join(" > ", stages.Select(s => s.RoleId is null ? s.Required.ToString() : $"{s.Required}@{s.RoleId}"));
+
+    private static async Task InsertStagesAsync(CompanyAuditedWork work, Guid policyId, long revision, IReadOnlyList<ApprovalStageView> stages, CancellationToken ct)
+    {
+        foreach (var s in stages)
+        {
+            await using var cmd = new NpgsqlCommand($"INSERT INTO {AS.Table} ({AS.PolicyId}, {AS.PolicyRevision}, {AS.StageNo}, {AS.Required}, {AS.RoleId}) VALUES (@p, @r, @n, @q, @role)", work.Connection, work.Transaction);
+            cmd.Parameters.AddWithValue("p", policyId); cmd.Parameters.AddWithValue("r", revision); cmd.Parameters.AddWithValue("n", (short)s.StageNo); cmd.Parameters.AddWithValue("q", (short)s.Required);
+            cmd.Parameters.Add(new NpgsqlParameter("role", NpgsqlDbType.Uuid) { Value = (object?)s.RoleId ?? DBNull.Value });
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 
     private static void Diff(JsonObject changes, string name, string? old, string? @new)
@@ -206,6 +265,41 @@ public static class DocumentApprovals
         return (int)(await cmd.ExecuteScalarAsync(ct))!;
     }
 
+    /// <summary>
+    /// The effective approval plan of a journal entry for its current revision with the progress of every stage: the governing policy right now raised to the plan the revision was
+    /// submitted under (the same SQL function the database gate uses). Empty = no approval needed.
+    /// </summary>
+    public static async Task<IReadOnlyList<ApprovalStageProgress>> PlanAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid entryId, long revision, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT pl.stage_no, pl.required, pl.role_id, (SELECT count(DISTINCT d.{AD.Approver}) FROM {AD.Table} d WHERE d.{AD.DocType} = 'journal_entry' AND d.{AD.DocumentId} = @e AND d.{AD.DocumentRevision} = @r AND d.{AD.Decision} = 1 AND d.{AG.DecisionStage} = pl.stage_no) " +
+            $"FROM {AG.PlanFunction}(@e) pl ORDER BY pl.stage_no", conn, tx);
+        cmd.Parameters.AddWithValue("e", entryId); cmd.Parameters.AddWithValue("r", revision);
+        var list = new List<ApprovalStageProgress>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add(new ApprovalStageProgress(r.GetInt32(0), r.GetInt32(1), (int)r.GetInt64(3), r.IsDBNull(2) ? null : r.GetGuid(2)));
+        return list;
+    }
+
+    /// <summary>Snapshots the effective plan under which this revision was submitted (an append-only floor: a later policy change can only add requirements).</summary>
+    public static async Task BindAsync(CompanyAuditedWork work, Guid entryId, long revision, DateTime nowUtc, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            $"INSERT INTO {AB.Table} ({AB.DocType}, {AB.DocumentId}, {AB.DocumentRevision}, {AB.StageNo}, {AB.Required}, {AB.RoleId}, {AB.PolicyId}, {AB.PolicyRevision}, {AB.BoundAtUtc}) " +
+            $"SELECT 'journal_entry', @e, @r, pl.stage_no, pl.required, pl.role_id, pk.policy_id, pk.policy_revision, @t FROM {AG.PlanFunction}(@e) pl LEFT JOIN {AG.PickFunction}(@e) pk ON true " +
+            $"ON CONFLICT ({AB.DocType}, {AB.DocumentId}, {AB.DocumentRevision}, {AB.StageNo}) DO NOTHING", work.Connection, work.Transaction);
+        cmd.Parameters.AddWithValue("e", entryId); cmd.Parameters.AddWithValue("r", revision); cmd.Parameters.AddWithValue("t", nowUtc);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>True when nobody rejected the current revision and every stage of the effective plan is complete (the database gate uses the same function).</summary>
+    public static async Task<bool> PlanSatisfiedAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid entryId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand($"SELECT {AG.SatisfiedFunction}(@e)", conn, tx);
+        cmd.Parameters.AddWithValue("e", entryId);
+        return (bool)(await cmd.ExecuteScalarAsync(ct))!;
+    }
+
     public static async Task<bool> SatisfiedAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string docType, Guid documentId, long documentRevision, int required, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand($"SELECT {AP.SatisfiedFunction}(@d, @i, @r, @n)", conn, tx);
@@ -216,12 +310,12 @@ public static class DocumentApprovals
     public static async Task<IReadOnlyList<ApprovalDecisionView>> ListAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, string docType, Guid documentId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {AD.Id}, {AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment} FROM {AD.Table} WHERE {AD.DocType} = @d AND {AD.DocumentId} = @i ORDER BY {AD.Id}", conn, tx);
+            $"SELECT {AD.Id}, {AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment}, {AG.DecisionStage} FROM {AD.Table} WHERE {AD.DocType} = @d AND {AD.DocumentId} = @i ORDER BY {AD.Id}", conn, tx);
         cmd.Parameters.AddWithValue("d", docType); cmd.Parameters.AddWithValue("i", documentId);
         var list = new List<ApprovalDecisionView>();
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
-            list.Add(new ApprovalDecisionView(r.GetInt64(0), r.GetString(1), r.GetGuid(2), r.GetInt64(3), r.GetGuid(4), r.GetInt16(5) == 1, new DateTimeOffset(r.GetDateTime(6), TimeSpan.Zero), r.IsDBNull(7) ? null : r.GetString(7)));
+            list.Add(new ApprovalDecisionView(r.GetInt64(0), r.GetString(1), r.GetGuid(2), r.GetInt64(3), r.GetGuid(4), r.GetInt16(5) == 1, new DateTimeOffset(r.GetDateTime(6), TimeSpan.Zero), r.IsDBNull(7) ? null : r.GetString(7), r.GetInt16(8)));
         return list;
     }
 
@@ -244,15 +338,15 @@ public static class DocumentApprovals
             Detail: $"approval {(request.Approve ? "approved" : "rejected")} {request.DocType} rev {request.DocumentRevision}"), ct);
         long id;
         await using (var ins = new NpgsqlCommand(
-            $"INSERT INTO {AD.Table} ({AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment}, {AD.AuditStream}, {AD.AuditSeq}) VALUES (@d, @i, @r, @a, @x, @t, @c, @s, @q) RETURNING {AD.Id}",
+            $"INSERT INTO {AD.Table} ({AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment}, {AD.AuditStream}, {AD.AuditSeq}, {AG.DecisionStage}) VALUES (@d, @i, @r, @a, @x, @t, @c, @s, @q, @st) RETURNING {AD.Id}",
             work.Connection, work.Transaction))
         {
             ins.Parameters.AddWithValue("d", request.DocType); ins.Parameters.AddWithValue("i", request.DocumentId); ins.Parameters.AddWithValue("r", request.DocumentRevision);
             ins.Parameters.AddWithValue("a", request.ApproverId); ins.Parameters.AddWithValue("x", (short)(request.Approve ? 1 : 2)); ins.Parameters.AddWithValue("t", nowUtc);
             ins.Parameters.Add(new NpgsqlParameter("c", NpgsqlDbType.Varchar) { Value = (object?)comment ?? DBNull.Value });
-            ins.Parameters.AddWithValue("s", receipt.StreamKey); ins.Parameters.AddWithValue("q", receipt.Seq);
+            ins.Parameters.AddWithValue("s", receipt.StreamKey); ins.Parameters.AddWithValue("q", receipt.Seq); ins.Parameters.AddWithValue("st", (short)request.Stage);
             id = (long)(await ins.ExecuteScalarAsync(ct))!;
         }
-        return new(ApprovalRecordStatus.Recorded, new ApprovalDecisionView(id, request.DocType, request.DocumentId, request.DocumentRevision, request.ApproverId, request.Approve, new DateTimeOffset(nowUtc, TimeSpan.Zero), comment));
+        return new(ApprovalRecordStatus.Recorded, new ApprovalDecisionView(id, request.DocType, request.DocumentId, request.DocumentRevision, request.ApproverId, request.Approve, new DateTimeOffset(nowUtc, TimeSpan.Zero), comment, request.Stage));
     }
 }

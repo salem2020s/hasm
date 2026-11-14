@@ -13,7 +13,7 @@ namespace Hasm.Api.Company;
 /// </summary>
 public static class ApprovalPolicyEndpoints
 {
-    private sealed class BodyLimit : IRequestSizeLimitMetadata { public long? MaxRequestBodySize => 8 * 1024; }
+    private sealed class BodyLimit : IRequestSizeLimitMetadata { public long? MaxRequestBodySize => 256 * 1024; }
 
     public static void MapApprovalPolicyEndpoints(this WebApplication app)
     {
@@ -31,6 +31,8 @@ public static class ApprovalPolicyEndpoints
         id = p.Id, docType = p.DocType, source = p.Source.ToString().ToLowerInvariant(), branchId = p.BranchId,
         minAmount = p.MinAmount.ToString("0.0000", CultureInfo.InvariantCulture), requiredApprovals = p.RequiredApprovals,
         nameAr = p.NameAr, nameEn = p.NameEn, isActive = p.IsActive, revision = p.Revision, createdAtUtc = p.CreatedAtUtc, updatedAtUtc = p.UpdatedAtUtc,
+        journalType = p.JournalType, rateOverride = p.RateOverride, softClosed = p.SoftClosed, closingKind = p.ClosingKind, isStaged = p.IsStaged,
+        stages = (p.Stages ?? []).Select(s => new { stage = s.StageNo, required = s.Required, roleId = s.RoleId }),
     };
 
     private static async Task<IResult> List(HttpContext http, AccessService access, ApprovalPolicyManagementService svc)
