@@ -30,7 +30,7 @@ public class ChartTemplateTests
     [Fact]
     public void The_three_proposed_templates_have_the_reviewed_sizes_and_are_not_registered_for_production()
     {
-        Assert.Equal([51, 62, 61], ProposedChartTemplates.All.Select(t => t.Accounts.Count));
+        Assert.Equal([54, 65, 64], ProposedChartTemplates.All.Select(t => t.Accounts.Count));
         Assert.Equal(["service", "retail", "wholesale"], ProposedChartTemplates.All.Select(t => t.Key));
         Assert.Null(ChartTemplates.Find("service"));
         Assert.Null(ChartTemplates.Find("retail"));
@@ -47,7 +47,7 @@ public class ChartTemplateTests
             if (contra) Assert.False(a.IsGroup, a.Code);
         }
         var contras = template.Accounts.Where(a => a.Nature != ConfigurationValidation.DefaultNature(a.Type)).Select(a => a.NameEn).Order().ToList();
-        var expected = new List<string> { "Accumulated depreciation" };
+        var expected = new List<string> { "Accumulated amortization", "Accumulated depreciation" };
         if (template.Key == "service") expected.Add("Discounts allowed");
         else
         {
@@ -104,6 +104,49 @@ public class ChartTemplateTests
         Assert.Equal("تكلفة البضاعة المباعة", Ar("Cost of goods sold"));
         Assert.Equal("بضاعة في الطريق", Ar("Goods in transit"));
         Assert.Equal("مصاريف شحن المشتريات وتكاليف الاستيراد", Ar("Freight-in and import costs"));
+    }
+
+    // Arabic must be stored in logical Unicode order. The strings below are written as code points, independent of how any editor or terminal displays right-to-left text.
+    private static string U(params int[] cp) => string.Concat(cp.Select(char.ConvertFromUtf32));
+
+    [Fact]
+    public void Arabic_names_are_stored_in_logical_unicode_order_not_reversed()
+    {
+        var retained = U(0x627, 0x644, 0x623, 0x631, 0x628, 0x627, 0x62D) + " " + U(0x627, 0x644, 0x645, 0x62D, 0x62A, 0x62C, 0x632, 0x629);                 // الأرباح المحتجزة
+        var accumulated = U(0x645, 0x62C, 0x645, 0x639) + " " + U(0x627, 0x644, 0x625, 0x647, 0x644, 0x627, 0x643);                                          // مجمع الإهلاك
+        var salesReturns = U(0x645, 0x631, 0x62F, 0x648, 0x62F, 0x627, 0x62A) + " " + U(0x627, 0x644, 0x645, 0x628, 0x64A, 0x639, 0x627, 0x62A);             // مردودات المبيعات
+        var purchaseReturns = U(0x645, 0x631, 0x62F, 0x648, 0x62F, 0x627, 0x62A) + " " + U(0x627, 0x644, 0x645, 0x634, 0x62A, 0x631, 0x64A, 0x627, 0x62A);  // مردودات المشتريات
+        var amortization = U(0x645, 0x62C, 0x645, 0x639) + " " + U(0x627, 0x644, 0x625, 0x637, 0x641, 0x627, 0x621);                                         // مجمع الإطفاء
+        foreach (var t in ProposedChartTemplates.All)
+        {
+            var ar = t.Accounts.ToDictionary(a => a.NameEn, a => a.NameAr);
+            Assert.Equal(retained, ar["Retained earnings"]);
+            Assert.Equal(accumulated, ar["Accumulated depreciation"]);
+            Assert.Equal(amortization, ar["Accumulated amortization"]);
+            if (t.Key != "service") { Assert.Equal(salesReturns, ar["Sales returns"]); Assert.Equal(purchaseReturns, ar["Purchase returns"]); }
+        }
+        // a reversed Arabic word would start with a letter that only occurs at the END of words (ta marbuta, final forms)
+        foreach (var name in ProposedChartTemplates.All.Concat(ChartTemplates.All).SelectMany(t => t.Accounts).Select(a => a.NameAr).Distinct())
+            foreach (var word in name.Split([' ', '(', ')', '/'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                Assert.NotEqual('\u0629', word[0]);          // ة never starts a word
+                Assert.NotEqual('\u0649', word[0]);          // ى never starts a word
+            }
+    }
+
+    [Fact]
+    public void Tangible_depreciation_and_intangible_amortization_are_separate_accounts_in_every_template()
+    {
+        foreach (var t in ProposedChartTemplates.All)
+        {
+            var by = t.Accounts.ToDictionary(a => a.NameEn);
+            Assert.Equal((AccountType.Asset, AccountNature.Credit, false), (by["Accumulated depreciation"].Type, by["Accumulated depreciation"].Nature, by["Accumulated depreciation"].IsGroup));
+            Assert.Equal((AccountType.Asset, AccountNature.Credit, false), (by["Accumulated amortization"].Type, by["Accumulated amortization"].Nature, by["Accumulated amortization"].IsGroup));
+            Assert.Equal((AccountType.Asset, AccountNature.Debit), (by["Software and other intangible assets"].Type, by["Software and other intangible assets"].Nature));
+            Assert.Equal((AccountType.Expense, AccountType.Expense), (by["Depreciation expense"].Type, by["Amortization expense"].Type));
+            Assert.Equal(by["Accumulated depreciation"].ParentCode, by["Accumulated amortization"].ParentCode);
+            Assert.DoesNotContain(t.Accounts, a => a.NameEn.Contains("software", StringComparison.OrdinalIgnoreCase) && a.NameEn.Contains("computers", StringComparison.OrdinalIgnoreCase));      // software is no longer mixed with tangible computers
+        }
     }
 
     [Fact]
