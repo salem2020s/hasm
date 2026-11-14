@@ -26,6 +26,7 @@ public static class LedgerSetup
         services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<Hasm.Infrastructure.Reporting.ReportOptions>(), sp.GetRequiredService<FiscalCalendarService>()));
         services.AddSingleton(sp => Hasm.Infrastructure.Reporting.ReportOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<Hasm.Infrastructure.Reporting.IReportRenderer, Hasm.Infrastructure.Reporting.CsvReportRenderer>();
+        services.AddSingleton<Hasm.Infrastructure.Reporting.IReportRenderer, Hasm.Infrastructure.Reporting.XlsxReportRenderer>();
         services.AddSingleton(sp => new Hasm.Infrastructure.Reporting.ReportExportService(sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<Hasm.Infrastructure.Reporting.ReportOptions>(), sp.GetServices<Hasm.Infrastructure.Reporting.IReportRenderer>()));
         services.AddSingleton(sp => new CostCenterPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new CostCenterPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterPolicyService>()));

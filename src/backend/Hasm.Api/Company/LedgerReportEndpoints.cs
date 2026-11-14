@@ -30,13 +30,13 @@ public static class LedgerReportEndpoints
     internal static bool IsExport(string? format) => !string.IsNullOrWhiteSpace(format) && !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Builds the document (authorized, export permission), exports it through the shared service and returns the finished file. The file is deleted when the response ends.</summary>
-    internal static async Task<IResult> ExportAsync(HttpContext http, ReportExportService exporter, Guid companyId, Guid userId, string format, string? columns, string stem, Func<Task<ConfigResult<ReportDocument>>> build)
+    internal static async Task<IResult> ExportAsync(HttpContext http, ReportExportService exporter, Guid companyId, Guid userId, string format, string? columns, string stem, Func<Task<ConfigResult<ReportDocument>>> build, string? lang = null)
     {
         var built = await build();
         if (!built.IsOk) return CompanyConfigurationEndpoints.Map(built, _ => new { });
         await using var doc = built.Value!;
         var cols = string.IsNullOrWhiteSpace(columns) ? null : columns.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var r = await exporter.ExportAsync(new ReportExportRequest(companyId, userId, doc, format, cols, stem), http.RequestAborted);
+        var r = await exporter.ExportAsync(new ReportExportRequest(companyId, userId, doc, format, cols, stem, string.Equals(lang, "ar", StringComparison.OrdinalIgnoreCase) ? "ar" : "en"), http.RequestAborted);
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
         var file = r.Value!;
         http.Response.RegisterForDisposeAsync(file);
@@ -83,7 +83,7 @@ public static class LedgerReportEndpoints
 
     private static object Cmp(ComparativeTrialBalanceRow x) => new { opening = M(x.CmpOpening ?? 0), debit = M(x.CmpDebit ?? 0), credit = M(x.CmpCredit ?? 0), closing = M(x.CmpClosing ?? 0) };
 
-    private static async Task<IResult> TrialBalance(DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, string? comparison, Guid? branchId, Guid? costCenterId, bool? includeZero, bool? excludeClosing, int? maxLevel, string? sort, string? format, string? columns,
+    private static async Task<IResult> TrialBalance(DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, string? comparison, Guid? branchId, Guid? costCenterId, bool? includeZero, bool? excludeClosing, int? maxLevel, string? sort, string? format, string? columns, string? lang,
         HttpContext http, AccessService access, LedgerReportManagementService svc, ReportExportService exporter)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
@@ -93,7 +93,7 @@ public static class LedgerReportEndpoints
         var period = new ReportPeriodRequest(fiscalYearId, fiscalPeriodId, from, to, mode);
         if (IsExport(format))
             return await ExportAsync(http, exporter, actor!.CompanyId, actor.UserId, format!, columns, from is not null && to is not null ? $"trial-balance-{D(from.Value)}-{D(to.Value)}" : "trial-balance",
-                () => svc.TrialBalanceDocumentAsync(actor.UserId, actor.CompanyId, period, branchId, costCenterId, includeZero ?? false, excludeClosing ?? false, maxLevel, sort, http.RequestAborted));
+                () => svc.TrialBalanceDocumentAsync(actor.UserId, actor.CompanyId, period, branchId, costCenterId, includeZero ?? false, excludeClosing ?? false, maxLevel, sort, http.RequestAborted), lang);
         var r = await svc.TrialBalanceReportAsync(actor!.UserId, actor.CompanyId, period, branchId, costCenterId, includeZero ?? false, excludeClosing ?? false, maxLevel, sort, false, http.RequestAborted);
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
         var v = r.Value!; var cur = v.Current; var cmp = v.Comparative;
@@ -119,7 +119,7 @@ public static class LedgerReportEndpoints
         return r.IsOk ? (r.Value!.Current.From, r.Value.Current.To) : null;
     }
 
-    private static async Task<IResult> GeneralLedger(Guid? accountId, DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, Guid? branchId, Guid? costCenterId, int? limit, int? offset, bool? excludeClosing, string? grouping, string? format, string? columns,
+    private static async Task<IResult> GeneralLedger(Guid? accountId, DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, Guid? branchId, Guid? costCenterId, int? limit, int? offset, bool? excludeClosing, string? grouping, string? format, string? columns, string? lang,
         HttpContext http, AccessService access, LedgerReportManagementService svc, ReportExportService exporter)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
@@ -131,7 +131,7 @@ public static class LedgerReportEndpoints
         if (grouping is not null and not ("month" or "none")) return CompanyConfigurationEndpoints.Error(400, "invalid_grouping");
         if (IsExport(format))
             return await ExportAsync(http, exporter, actor.CompanyId, actor.UserId, format!, columns, $"general-ledger-{D(from.Value)}-{D(to.Value)}",
-                () => svc.GeneralLedgerDocumentAsync(actor.UserId, actor.CompanyId, accountId.Value, from.Value, to.Value, branchId, costCenterId, excludeClosing ?? false, http.RequestAborted, grouping == "month"));
+                () => svc.GeneralLedgerDocumentAsync(actor.UserId, actor.CompanyId, accountId.Value, from.Value, to.Value, branchId, costCenterId, excludeClosing ?? false, http.RequestAborted, grouping == "month"), lang);
         var r = await svc.GeneralLedgerAsync(actor.UserId, actor.CompanyId, accountId.Value, from.Value, to.Value, branchId, costCenterId, limit ?? 200, offset ?? 0, false, http.RequestAborted, excludeClosing ?? false);
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
         var v = r.Value!;

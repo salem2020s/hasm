@@ -332,6 +332,27 @@ public class FinancialStatementTests : FiscalClosingTestBase
         Assert.Contains(doc.Notices, n => n.Code == "not_applicable");
     }
 
+    [PostgresFact]
+    public async Task A_statement_exports_to_xlsx_with_bilingual_titles_typed_amounts_the_classification_version_and_the_incomplete_warning()
+    {
+        await Prepare(applyDefaults: false);
+        await Seed2026();
+        var defaults = (await MapSvc.ProposeDefaultAsync(Company.Id)).ToDictionary(k => k.Key, k => k.Value);
+        defaults.Remove(Acc["52"].Id);                                                                                      // operating expenses lose their classification: the statement is incomplete
+        foreach (var code in new[] { "5201", "5203", "5204", "5205", "5208", "5209", "5210", "5211", "5212", "5214", "5216" }) defaults[Acc[code].Id] = StatementSection.OperatingExpenses;
+        Ok(await MapSvc.SaveAsync(Admin.Id, Company.Id, 0, ToInput(defaults)));
+        await using var doc = Ok(await Fin.StatementDocumentAsync(Admin.Id, Company.Id, StatementKind.ProfitAndLoss, new ReportPeriodRequest(Year.Id, null, null, null, ComparisonMode.PreviousYear), null, null, null));
+        var export = new ReportExportService(Tx, new ReportOptions(), [new XlsxReportRenderer()]);
+        await using var file = Ok(await export.ExportAsync(new ReportExportRequest(Company.Id, Admin.Id, doc, "xlsx", null, "pl", "en")));
+        var rows = ExcelExportTests.ReadRows(file.Content);
+        Assert.Equal("Profit and loss statement", rows[0][0]);
+        Assert.Contains(rows, r => r.Count >= 2 && r[0] == "Classification version" && r[1] == "v1");
+        Assert.Contains(rows, r => r.Contains("Merchandise sales") && r.Contains("1500"));                                  // typed number, code and English title
+        Assert.Contains(rows, r => r.Contains("Profit or loss for the period") && r.Contains("630"));
+        Assert.Contains(rows, r => r.Count > 0 && r[0].StartsWith("Warning: this statement is INCOMPLETE"));
+        Assert.Contains(rows, r => r.Contains("Comparative") && r.Any(c => c.Contains("n/a: no_previous_year")));
+    }
+
     // ------------------------------------------------------------------------------------------------------------------------------------ authorization
 
     [PostgresFact]

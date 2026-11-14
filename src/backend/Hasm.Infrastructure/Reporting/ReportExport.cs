@@ -23,7 +23,8 @@ public interface IReportRenderer
     string ContentType { get; }
     string Extension { get; }
     /// <summary>Writes the document (only the selected columns, by index into <see cref="ReportDocument.Columns"/>) to <paramref name="output"/>. May stream; must not buffer the whole report.</summary>
-    Task RenderAsync(ReportDocument document, IReadOnlyList<int> columns, Stream output, CancellationToken ct);
+    /// <param name="language">"ar" or "en": which titles to print and (spreadsheets) the reading direction.</param>
+    Task RenderAsync(ReportDocument document, IReadOnlyList<int> columns, Stream output, CancellationToken ct, string language = "en");
 }
 
 /// <summary>A finished export on a short-lived temporary file that is deleted when the response ends. Nothing is sent before the whole file exists, so a failure can never produce a partial download.</summary>
@@ -36,7 +37,7 @@ public sealed class ExportFile(Stream content, string fileName, string contentTy
     public ValueTask DisposeAsync() => Content.DisposeAsync();
 }
 
-public sealed record ReportExportRequest(Guid CompanyId, Guid UserId, ReportDocument Document, string Format, IReadOnlyList<string>? Columns, string FileStem);
+public sealed record ReportExportRequest(Guid CompanyId, Guid UserId, ReportDocument Document, string Format, IReadOnlyList<string>? Columns, string FileStem, string Language = "en");
 
 /// <summary>
 /// The one place where a report becomes a file: column selection, the format, the explicit row limit (refused BEFORE rendering, never a silent cut), a temporary file, and an audit record of every outcome
@@ -64,7 +65,7 @@ public sealed class ReportExportService(CompanyAuditedTransactions transactions,
         }
         if (indexes.Count == 0) return ConfigResult<ExportFile>.Invalid([new("columns", "invalid_columns")]);
 
-        var limit = format == "pdf" ? options.MaxPdfRows : options.MaxExportRows;
+        var limit = format == "pdf" ? options.MaxPdfRows : format == "xlsx" ? (int)Math.Min(options.MaxExportRows, XlsxReportRenderer.MaxSheetRows - 100) : options.MaxExportRows;
         if (doc.RowCount > limit)
         {
             await AuditAsync(request, format, ReportAuditEvents.ExportRefused, doc.RowCount, 0, "refused_too_large", ct);
@@ -84,7 +85,7 @@ public sealed class ReportExportService(CompanyAuditedTransactions transactions,
         }
         try
         {
-            await renderer.RenderAsync(doc, indexes, file, ct);
+            await renderer.RenderAsync(doc, indexes, file, ct, request.Language);
             await file.FlushAsync(ct);
             file.Position = 0;
         }
@@ -132,7 +133,7 @@ public sealed class CsvReportRenderer : IReportRenderer
         _ => v.ToString() ?? "",
     };
 
-    public async Task RenderAsync(ReportDocument document, IReadOnlyList<int> columns, Stream output, CancellationToken ct)
+    public async Task RenderAsync(ReportDocument document, IReadOnlyList<int> columns, Stream output, CancellationToken ct, string language = "en")
     {
         await using var w = new StreamWriter(output, new UTF8Encoding(true), 65536, leaveOpen: true) { NewLine = "\r\n" };
         await w.WriteLineAsync(string.Join(',', columns.Select(i => Cell(document.Columns[i].TitleEn))));

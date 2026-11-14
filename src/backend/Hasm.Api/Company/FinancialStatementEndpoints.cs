@@ -47,7 +47,7 @@ public static class FinancialStatementEndpoints
     private static object? VersionBody(StatementMappingVersionView? v) =>
         v is null ? null : new { id = v.Id, versionNo = v.VersionNo, createdAtUtc = v.CreatedAtUtc, createdBy = v.CreatedBy, source = v.Source == 2 ? "template" : "manual", note = v.Note, entryCount = v.EntryCount, contentHash = v.ContentHash };
 
-    private static async Task<IResult> Statement(string kind, DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, string? comparison, Guid? branchId, Guid? costCenterId, int? mappingVersion, string? format, string? columns,
+    private static async Task<IResult> Statement(string kind, DateOnly? from, DateOnly? to, Guid? fiscalYearId, Guid? fiscalPeriodId, string? comparison, Guid? branchId, Guid? costCenterId, int? mappingVersion, string? format, string? columns, string? lang,
         HttpContext http, AccessService access, FinancialStatementManagementService svc, ReportExportService exporter)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
@@ -58,7 +58,7 @@ public static class FinancialStatementEndpoints
         var period = new ReportPeriodRequest(fiscalYearId, fiscalPeriodId, from, to, mode);
         if (LedgerReportEndpoints.IsExport(format))
             return await LedgerReportEndpoints.ExportAsync(http, exporter, actor!.CompanyId, actor.UserId, format!, columns, kind + (to is not null ? "-" + D(to.Value) : ""),
-                () => svc.StatementDocumentAsync(actor.UserId, actor.CompanyId, k, period, branchId, costCenterId, mappingVersion, http.RequestAborted));
+                () => svc.StatementDocumentAsync(actor.UserId, actor.CompanyId, k, period, branchId, costCenterId, mappingVersion, http.RequestAborted), lang);
         var r = await svc.StatementAsync(actor!.UserId, actor.CompanyId, k, period, branchId, costCenterId, mappingVersion, false, http.RequestAborted);
         return CompanyConfigurationEndpoints.Map(r, v => new
         {
