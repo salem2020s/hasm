@@ -34,7 +34,7 @@ function accounts(rows: Row[]): Account[] {
 
 const response = (list: Account[]): AccountsResponse => ({
   accounts: list, settings: { segmentWidth: 2, autoCodes: true, revision: 0, configured: false }, templates: [], usageChecksImplemented: false,
-  can: { create: true, update: true, activate: true, recode: true, restructure: true, configure: true }, 
+  can: { create: true, update: true, activate: true, recode: true, restructure: true, configure: true },
 } as AccountsResponse);
 
 describe("proposed chart templates in the Arabic RTL chart screen", () => {
