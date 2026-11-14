@@ -359,6 +359,38 @@ export interface ApprovalPolicyInput {
 }
 export type ApprovalPolicyDetailsInput = Omit<ApprovalPolicyInput, "docType">;
 
+
+/** Generic import framework (Phase 3.2D). Staged values are always text; the server owns every rule. */
+export type ImportStatus = "uploaded" | "staged" | "mapped" | "validated" | "submitted" | "approved" | "applying" | "applied" | "failed" | "rejected" | "cancelled" | "expired";
+export interface ImportSheet { index: number; name: string; rows: number; columns: number; hidden: boolean }
+export interface ImportPlanSummary { total: number; valid: number; exact: number; invalid: number; conflict: number; resolved: number; operations: number; blocking: number }
+export interface ImportPlan { v: number; adapter: string; adapterVersion: number; rowsHash: string; mappingHash: string; baseline: string; summary: ImportPlanSummary; reconciliation: { key: string; value: string }[]; canApply: boolean; operationsHash: string }
+export interface ImportMapping { fields: Record<string, { column: number | null; default: string | null }>; options?: { decimalSeparator?: string; thousandsSeparator?: string; dateFormat?: string } }
+export interface ImportBatch {
+  id: string; adapter: string; adapterVersion: number; status: ImportStatus; fileName: string; fileKind: "csv" | "xlsx"; fileSize: number; fileSha256: string; keyId: string;
+  options: { headers?: string[]; sheet?: number; sheetName?: string; headerRow?: number; encoding?: string; delimiter?: string | null };
+  sheets: ImportSheet[]; rowCount: number; rowsHash: string | null; planHash: string | null; revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string;
+  submittedBy: string | null; submittedAtUtc: string | null; expiresAtUtc: string; terminalAtUtc: string | null; originalAvailable: boolean; rowsAvailable: boolean; purgeAfterUtc: string | null;
+  mapping: ImportMapping | null; plan: ImportPlan | null; result: Record<string, unknown> | null;
+}
+export interface ImportAdapterInfo { code: string; version: number; nameAr: string; nameEn: string; canUpload: boolean }
+export interface ImportAdaptersResponse { adapters: ImportAdapterInfo[]; limits: { maxFileBytes: number; maxRows: number; maxColumns: number; formats: string[]; encodings: string[] } }
+export interface ImportFieldDef { key: string; nameAr: string; nameEn: string; type: "text" | "code" | "integer" | "decimal" | "date" | "boolean" | "enum"; required: boolean; maxLength: number; isKey: boolean; values?: { value: string; aliases: string[] }[] | null }
+export interface ImportFieldsResponse { fields: ImportFieldDef[]; resolutions: string[]; options: { decimalSeparators: string[]; thousandsSeparators: string[]; dateFormats: string[] } }
+export interface ImportRowItem {
+  rowNo: number; cells: (string | null)[]; status: number; normalized: Record<string, string | null> | null; issues: { field: string; code: string; detail: string | null }[] | null;
+  resolution: string | null; operation: Record<string, unknown> | null; explanation: string | null; allowedResolutions: string[] | null;
+}
+export interface ImportRowsPage { headers: string[]; total: number; offset: number; rows: ImportRowItem[] }
+export interface ImportEvent { id: number; kind: string; revision: number; actorUserId: string | null; atUtc: string; detail: Record<string, unknown> }
+export interface ImportDecision { approver: string; approved: boolean; revision: number; atUtc: string; comment: string | null }
+export interface ImportSettings { retentionDays: number; pendingExpiryDays: number; revision: number; configured: boolean }
+export interface ImportSettingsResponse { settings: ImportSettings; can: { configure: boolean } }
+export interface ImportStageOptions { sheet?: number; headerRow?: number; encoding?: string; delimiter?: string }
+export interface ImportResolutionInput { rowNo: number; action: string | null }
+/** Row status codes persisted by the server. */
+export const ImportRowStatus = { staged: 1, valid: 2, invalid: 3, conflict: 4, resolved: 5, applied: 6, exact: 7 } as const;
+
 /** Year-end closing and opening balances (Phase 3.2C S3). */
 export interface ClosingSettings { equityAccountId: string | null; equityCode: string | null; equityNameAr: string | null; equityNameEn: string | null; requireApproval: boolean; revision: number; configured: boolean }
 export interface ClosingSettingsResponse { settings: ClosingSettings; can: { configure: boolean; create: boolean; reverse: boolean } }
@@ -603,6 +635,52 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** `latestId` is the currency's latest entry id from the overview (0 when it has none): a concurrent entry makes this fail with 412. */
     enterExchangeRate: (rate: ExchangeRateInput, latestId: number) => request<ExchangeRate>("POST", "/api/v1/company/exchange-rates", { body: rate, ifMatch: latestId }),
     listCostCenters: () => get<CostCentersResponse>("/api/v1/company/cost-centers"),
+    // Generic import framework (3.2D). Every change carries the batch revision as If-Match; the upload sends the raw file (never multipart).
+    importAdapters: () => get<ImportAdaptersResponse>("/api/v1/company/imports/adapters"),
+    listImports: (q: { status?: ImportStatus; adapter?: string; limit?: number; offset?: number } = {}) => {
+      const p = new URLSearchParams();
+      if (q.status) p.set("status", q.status);
+      if (q.adapter) p.set("adapter", q.adapter);
+      if (q.limit) p.set("limit", String(q.limit));
+      if (q.offset) p.set("offset", String(q.offset));
+      const qs = p.toString();
+      return get<{ imports: ImportBatch[] }>(`/api/v1/company/imports/${qs ? `?${qs}` : ""}`);
+    },
+    uploadImport: async (adapter: string, file: Blob, fileName: string, idempotencyKey?: string): Promise<ImportBatch> => {
+      const headers: Record<string, string> = { Accept: "application/json", "X-Hasm-Request": "1", "Content-Type": "application/octet-stream" };
+      if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+      if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+      const response = await fetchImpl(`${root}/api/v1/company/imports?adapter=${enc(adapter)}&fileName=${enc(fileName)}`, { method: "POST", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store", body: file });
+      if (!response.ok) {
+        let payload: { error?: string; fields?: { field: string; code: string }[] } = {};
+        try { payload = (await response.json()) as typeof payload; } catch { /* non-JSON error body */ }
+        if (response.status === 401) options.onUnauthenticated?.();
+        throw new ApiError(response.status, payload.error ?? "request_failed", { fields: payload.fields });
+      }
+      return (await response.json()) as ImportBatch;
+    },
+    getImport: (id: string) => get<ImportBatch>(`/api/v1/company/imports/${enc(id)}`),
+    stageImport: (id: string, o: ImportStageOptions, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/stage`, { body: o, ifMatch: revision }),
+    importRows: (id: string, q: { offset?: number; limit?: number; status?: number } = {}) =>
+      get<ImportRowsPage>(`/api/v1/company/imports/${enc(id)}/rows?offset=${q.offset ?? 0}&limit=${q.limit ?? 100}${q.status ? `&status=${q.status}` : ""}`),
+    importEvents: (id: string) => get<{ events: ImportEvent[] }>(`/api/v1/company/imports/${enc(id)}/events`),
+    importFields: (id: string) => get<ImportFieldsResponse>(`/api/v1/company/imports/${enc(id)}/fields`),
+    suggestImportMapping: (id: string) => get<{ mapping: ImportMapping }>(`/api/v1/company/imports/${enc(id)}/mapping/suggestion`),
+    setImportMapping: (id: string, mapping: ImportMapping, revision: number) => request<ImportBatch>("PUT", `/api/v1/company/imports/${enc(id)}/mapping`, { body: mapping, ifMatch: revision }),
+    dryRunImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/dry-run`, { ifMatch: revision }),
+    setImportResolutions: (id: string, resolutions: ImportResolutionInput[], revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/resolutions`, { body: { resolutions }, ifMatch: revision }),
+    checkImportPlan: (id: string) => get<{ fresh: boolean; currentPlanHash: string; approvedPlanHash: string | null; blocking: number }>(`/api/v1/company/imports/${enc(id)}/plan-check`),
+    submitImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveImport: (id: string, comment: string | null, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/approve`, { body: { comment }, ifMatch: revision }),
+    rejectImport: (id: string, comment: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/reject`, { body: { comment }, ifMatch: revision }),
+    applyImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/apply`, { ifMatch: revision }),
+    cancelImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/cancel`, { ifMatch: revision }),
+    renewImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/renew`, { ifMatch: revision }),
+    importDecisions: (id: string) => get<{ decisions: ImportDecision[] }>(`/api/v1/company/imports/${enc(id)}/decisions`),
+    getImportSettings: () => get<ImportSettingsResponse>("/api/v1/company/imports/settings"),
+    putImportSettings: (retentionDays: number, pendingExpiryDays: number, revision: number) => request<ImportSettings>("PUT", "/api/v1/company/imports/settings", { body: { retentionDays, pendingExpiryDays }, ifMatch: revision }),
+    runImportMaintenance: () => request<{ expired: number; purged: number; rewrapped: number }>("POST", "/api/v1/company/imports/maintenance/run"),
     getClosingSettings: () => get<ClosingSettingsResponse>("/api/v1/company/fiscal-closing/settings"),
     putClosingSettings: (body: { equityAccountId: string }, revision: number) => request<ClosingSettings>("PUT", "/api/v1/company/fiscal-closing/settings", { body, ifMatch: revision }),
     listYearEnd: () => get<{ years: YearEndStatus[] }>("/api/v1/company/fiscal-closing/years"),
