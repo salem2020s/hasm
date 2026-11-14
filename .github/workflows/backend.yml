@@ -99,7 +99,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 693 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 740 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -153,8 +153,10 @@ jobs:
               "ApprovalStageTests": 8, "FiscalClosingTests": 11,
               # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
               "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
+              # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
+              "ImportDatabaseGuardTests": 3, "ImportServiceTests": 9, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11,
           }
-          TOTAL = sum(EXPECTED.values())  # 693
+          TOTAL = sum(EXPECTED.values())  # 740
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

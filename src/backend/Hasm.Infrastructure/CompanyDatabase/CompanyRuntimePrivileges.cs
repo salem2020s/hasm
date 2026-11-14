@@ -72,6 +72,11 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.ClosingSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.FiscalYearClosing.Table, ["SELECT", "INSERT"]),
         (CompanySchema.FiscalYearCarryforward.Table, ["SELECT", "INSERT"]),
+        // Generic import framework (Phase 3.2D): batches are never deleted; the history is append-only. DELETE is granted ONLY on the staged rows, which PostgreSQL lets change only in the states that allow it (restaging, retention purge of a finished batch).
+        (CompanySchema.ImportBatch.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ImportRow.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.ImportEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.ImportSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

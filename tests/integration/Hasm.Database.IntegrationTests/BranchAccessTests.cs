@@ -271,7 +271,7 @@ public abstract class HttpApiTestBase : BranchAccessTestBase
     protected HttpClient client = null!;
     protected readonly LogCapture apiLogs = new();
 
-    protected async Task StartApi(IEntitlementPolicy? policy = null)
+    protected async Task StartApi(IEntitlementPolicy? policy = null, Action<IWebHostBuilder>? configure = null)
     {
         await PrepareRbac();
         var resolver = Resolver;
@@ -289,6 +289,7 @@ public abstract class HttpApiTestBase : BranchAccessTestBase
             b.UseSetting("Hasm:Database:AllowInsecureTransport", "true");       // disposable loopback test server only
             b.UseSetting("Hasm:Database:CompanyCredentialDirectory", CredentialDirectory);
             b.UseSetting("Hasm:Auth:Pbkdf2Iterations", "100000");
+            configure?.Invoke(b);
             b.ConfigureLogging(l => l.SetMinimumLevel(LogLevel.Debug).AddProvider(apiLogs));
             b.ConfigureServices(s =>
             {

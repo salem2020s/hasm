@@ -881,6 +881,8 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
     /// <summary>Offline delegation of the preset Journal Approver role (company-wide), exactly like the Fiscal Approver: no company user can grant journal approval (the administrator lacks it), so the first approver comes from the administrative tool. Per-entry separation of duties still applies.</summary>
     public Task<FiscalApproverStatus> GrantJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
+    public Task<FiscalApproverStatus> GrantImportApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.ImportApproverId, "import approver", ct);
+    public Task<FiscalApproverStatus> RevokeImportApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.ImportApproverId, "import approver", ct);
     public Task<FiscalApproverStatus> RevokeJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
 
     private static async Task<(Guid? UserId, FiscalApproverStatus Status)> FindMemberForDelegationAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string login, Guid companyId, CancellationToken ct)
