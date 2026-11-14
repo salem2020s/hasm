@@ -19,7 +19,7 @@ Status of this file: records the owner-confirmed phase sequence (confirmed 2026-
 | 3.2A | Chart of Accounts foundation — see `docs/PHASE-3.2A.md` | merged (PR #16) |
 | 3.2A-2 | Business-type Chart of Accounts templates (mandatory Release 1; see `docs/PHASE-3.2A.md`) | not started |
 | 3.2A-3 | Chart of Accounts Excel import: validation, dry run, reconciliation, required approval (mandatory Release 1; no empty-chart-only restriction, merge and conflict rules defined with the import) | not started |
-| 3.2B | General Ledger and journal posting — see `docs/PHASE-3.2B.md` (slices S1 numbering, S2 exchange rates, S3 cost centers, S4 approval policies, S5 journal and posting, S6 ledger reports, S7 shared UI) | implemented locally (S1-S7 verified; PR pending owner authorization) |
+| 3.2B | General Ledger and journal posting — see `docs/PHASE-3.2B.md` (slices S1 numbering, S2 exchange rates, S3 cost centers, S4 approval policies, S5 journal and posting, S6 ledger reports, S7 shared UI) | merged (PR #17, merge commit `d2d2a11`, includes the journal-list branch-filter fix `29fadd9`) |
 
 ## Remaining Release 1 requirements after Phase 3.2B (NOT complete; none is implemented in 3.2B)
 | Item | State |

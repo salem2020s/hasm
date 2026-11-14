@@ -1,6 +1,6 @@
 # Phase 3.2B — General Ledger and Journal Posting
 
-**Status:** implemented locally on `feature/phase-3-2b-general-ledger` (slices S1-S7 verified on the disposable test cluster; not pushed). Nothing is applied to any permanent database.
+**Status:** merged into main (PR #17, merge commit `d2d2a11`; slices S1-S7 verified on the disposable test cluster and by GitHub Actions). Nothing is applied to any permanent database.
 
 ## Approved basis
 SRS section 5 (manual and automatic entries, balanced, atomic, never edited or deleted once posted; correction by reversal or adjusting entry with a preserved reference chain; branch and cost-center distribution; multi-currency with a base currency, effective-dated rates, an overridable rate with permission, reason and audit, recognition of FX differences), section 7 (flexible numbering by company/branch/document type/fiscal year, concurrency-safe, official number at approval/issue, a voided number is never reused automatically), section 4 and 19 (configurable approval policies by document type, value, branch and risk; separation of duties; no posting into a Final Closed period; automatic posting never bypasses approvals; idempotency per business event; full traceability including the rate and the source of the approval decision), D-009, D-010, D-011, D-015, D-024. The completed phases provide the fiscal calendar and its `FiscalPeriodGate`, branches, the chart of accounts (postable = active and not a group), the approval-request pattern (fiscal reopening), the period close probes and the financial-history probes.
