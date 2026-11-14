@@ -164,7 +164,7 @@ Substantive corrections (the approved structure is otherwise unchanged):
 | Owners' current account | جاري الشركاء | جاري المالك (sole owner) | |
 
 ## I. Validation and tests (all executed)
-* `ChartTemplateValidator` (pure, product code) and `ChartTemplateTests` (backend unit): structural rules on the generic template and the three business templates, the decisions above as assertions, Arabic stored as correct code points, ta-marbuta-never-starts-a-word check, tangible/intangible split, and that the proposals are not registered in `ChartTemplates.All`.
+* `ChartTemplateValidator` (pure, product code) and `ChartTemplateTests` (backend unit): structural rules on the generic template and the three business templates, the decisions above as assertions, Arabic stored as correct code points, ta-marbuta-never-starts-a-word check, tangible/intangible split, and that the templates are registered after the unchanged generic one with the approved exact sizes.
 * `chartTemplatesRender.test.tsx` (frontend): every name of all three templates rendered through the existing Arabic RTL chart screen (document direction rtl, names present exactly as stored, no reversed words).
 
 ## J. Implementation (done)
