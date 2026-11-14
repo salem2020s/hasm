@@ -1,0 +1,38 @@
+# PROPOSAL — Phase 3.2D generic import framework
+
+**Status: PROPOSAL. Not approved, not implemented.** Sources: SRS §14 (migration: Excel/CSV, column mapping, Staging, Dry Run, duplicate and consistency checks, opening entries/receivables/inventory; **mandatory authorized approval before the final import; no duplicated documents or balances**), §11 (bank-statement import with preview, column mapping, duplicate detection), ARCHITECTURE (Import & Export: staging and Dry Run, import separated from financial data until approval), D-004/D-006/D-009 (atomicity inside one company database), attachments rules (server files, company isolation). The SRS defines **no** merge or overwrite policy for imports; none is invented here.
+
+## Design
+
+**Isolation rule.** Imports only ever write to import tables (staging). Business tables are touched only by an adapter's *apply* step, after validation, a successful dry run, an independent approval and a re-validation against the current data, inside one audited company transaction (or recoverable chunks, see decision 3).
+
+**Framework (generic, no business rules)**
+* *Tables (company migration 0010, opaque names like all migrations, append-only where history matters):* `ImportBatch` (adapter code, status, file name/size/SHA-256, mapping, options, plan evidence hash, creator/submitter, revision), `ImportRow` (row number, raw cells, normalized values, status, errors, row hash, resolution), `ImportEvent` (every state change). No foreign key from staging to business tables.
+* *State machine (enforced by a PostgreSQL trigger and the service):* `uploaded → mapped → validated (dry run) → submitted → approved → applying → applied`; side exits `failed` (recoverable, resumable), `rejected`, `cancelled`, `expired`. Any change to file, mapping, options or resolutions returns the batch to `mapped` and voids earlier approvals (revision bound, like journal approvals).
+* *Parsing (backend only):* CSV (UTF-8/BOM, delimiter detection, quoting) and `.xlsx` (read-only; values only, formulas never evaluated, no macros/external links, `.xlsm`/`.xls` rejected), content sniffing not just extension, size/row/column/zip-expansion limits, formula-injection neutralisation on any export of errors.
+* *Mapping and normalization:* adapter declares target fields (name, type, required, normalizers: trim, Unicode NFC, Arabic-Indic digits, decimals, dates with explicit format, enum aliases); the user maps source columns; saved mapping templates per adapter and company.
+* *Dry run:* per-row validation, intra-file and against-database duplicate detection, conflict classification, a **plan** (exact operations the apply would perform), reconciliation totals (counts, sums, debit = credit where relevant) and a reproducible evidence hash. Nothing business-side is written.
+* *Approval:* reuses the existing approval machinery (document type `import_batch`, ordered stages allowed). **Floor of one independent approval that no setting can lower** (same pattern as year-end): the uploader/submitter can never approve, PostgreSQL refuses it, approvers must be currently authorized at apply time, approval binds to the batch revision and evidence hash.
+* *Apply:* idempotent (batch status transition under a lock, source keys, plan-hash check: refuses if data changed since the dry run), atomic per adapter declaration, progress counters, safe retry/resume, cancel before apply, audit event per transition and summary of results.
+* *RBAC:* `company.imports.view|upload|configure|submit|approve|apply|cancel` plus the adapter's own business permission (importing accounts needs the right to create accounts); company isolation by the existing per-company database/runtime role; every call re-reads permissions.
+* *Adapter contract (separate code per domain):* `Code`, required permission, field schema, `Validate(row, context)`, `DetectConflicts`, `Plan`, `Apply(work, plan)` (uses the module's own services so every business rule, approval policy and DB trigger still applies), `Atomicity` (single transaction vs idempotent chunks). Chart of Accounts, opening balances, parties, items/inventory and bank statements are later adapters; none of their rules enter the framework.
+* *UI:* one shared React wizard (Web and Tauri): upload, mapping, dry-run results with filters, conflicts and resolutions, reconciliation, submit, approval inbox, progress and history. Arabic RTL / English LTR.
+
+## Slices (each independently verifiable on the 5433 cluster)
+| Slice | Content | Verified by |
+|---|---|---|
+| S1 | Migration 0010 + system migration for permissions; batch/row/event tables, state machine and triggers, audit events, upload service and API, CSV/xlsx parsers with hostile-file tests, retention/expiry | DB guard tests, parser fuzz/limit tests, RBAC and isolation tests |
+| S2 | Mapping, normalizers, adapter contract, dry-run engine, duplicate/conflict detection, plan, reconciliation, evidence hash; test-only adapter | Deterministic dry-run tests, no-business-write proof (row counts), stale-plan tests |
+| S3 | Submit/approve (mandatory independent floor), apply engine: idempotent, recoverable, progress, cancel, retry, concurrent apply | Separation-of-duties DB tests, revoked approver, crash/resume, duplicate apply, parallel apply |
+| S4 | Shared UI wizard + api-client + messages (ar/en) | Component tests, typecheck, build, Tauri build |
+| S5 (see decision 1) | First real adapter: Chart of Accounts (roadmap 3.2A-3 rules) as proof of the contract | Adapter tests incl. hierarchy, no silent overwrite, no type change |
+
+Dependencies: S2→S1, S3→S2, S4→S3 (API), S5→S3. Proposed branch: `feature/phase-3-2d-import-framework` from current `main`. CI test counts are extended per slice as before.
+
+## Decisions needed from the owner (only the consequential ones)
+1. **Scope of S5.** Ship the Chart adapter inside 3.2D as the framework's first real consumer (recommended), or finish 3.2D with a test-only adapter and deliver Chart import as 3.2A-3?
+2. **`.xlsx` reading.** No spreadsheet library exists in the repo. Recommended: a minimal read-only reader (System.IO.Compression + XmlReader, hard limits, no new dependency); alternative: adopt a vetted third-party package.
+3. **Large imports.** Recommended: one transaction for adapters that need atomicity (chart, opening balances) with a documented row ceiling, and idempotent resumable chunks only for adapters that declare it (parties, items). Confirm, and set the ceilings (proposal: 10 MB, 50 000 rows).
+4. **Original file retention.** Keep only the parsed staging rows plus SHA-256 (recommended; the file is discarded after parsing), or keep the original file on the server as encrypted evidence like sensitive attachments (D-031/D-032)? Staging rows expire after N days unless applied (proposal 30).
+5. **Conflict resolution vocabulary.** The SRS only demands duplicate prevention and approval. Recommended neutral framework rule: an existing record is **never** overwritten or merged by default; each adapter may declare allowed resolutions (e.g. skip, or an explicit per-row update where its own business rules permit), every resolution is recorded per row, shown in the plan and covered by the approval. Whether any adapter may update existing records is decided per adapter when it is designed.
+6. **Financial adapters and the approval chain.** For opening balances, should the import approval be the only approval and the adapter post directly, or should the adapter create ordinary draft journal entries that then follow the normal journal approval and posting workflow (recommended, so no accounting control is bypassed, at the price of two approvals)?
