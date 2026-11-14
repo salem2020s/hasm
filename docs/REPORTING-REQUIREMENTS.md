@@ -54,6 +54,34 @@ Common to all reports: results identical for the same filters on repeated runs (
 11. **Excel:** real .xlsx that opens in Excel; numbers and dates are typed cells with correct formats, base/original currencies shown with their codes; any text beginning with `=`, `+`, `-`, `@`, tab or carriage return (including after leading spaces) is neutralised and tests prove no formula is ever produced from data; the full filtered result is exported regardless of page size, within documented limits that fail with a clear message instead of truncating silently; selected columns, sorting, grouping and subtotals preserved; same authorization as the report; export is audited. Import acceptance is the 3.2D acceptance plus mapping templates (saved per company and adapter, versioned, never bypassing validation, dry run or approval).
 12. **Standards:** the common criteria above for every report, each with automated correctness and security tests (authorization before pagination/export, cross-company and cross-branch denial).
 
+## 3A. Exact filters and options requested by the owner (binding checklist per report)
+
+These lists reproduce the owner's requested options. Each item is mandatory for its report; none may be dropped or merged without a new owner decision. Common to all: authorization (company, branch, warehouse, cost center) is applied before pagination, totals and export.
+
+**1. Inventory movement** — filters: item, item group, one / several / all warehouses, date range. Columns: opening quantity, incoming, outgoing, closing quantity, movement type and source document. Grouping and subtotals by item, item group and warehouse. Drill-down to source transactions. Detailed and summarized views.
+
+**2. Inventory stocktaking and valuation** — quantities as of a selected historical date; filters: item, item group, warehouse, one or several warehouses, as-of date. Valuation displays: consumer selling price, moving weighted-average cost, last purchase price; FIFO valuation preserved when it is the company's approved method. Alternative displays are informational only, never change the official valuation method, and are labelled apart from the official inventory book value. Historical reports use the selected date's data, never today's stock or prices.
+
+**3. Customer account statement** — customer selection, date filters, branch filter where authorized; opening balance; debit and credit transactions (sales invoices, sales returns, receipts and payments where applicable, adjustments); running balance; closing balance; source document references; detailed and summarized views.
+
+**4. Cash account movement** — filters: cashbox or cash account, branch, date range, transaction type (receipt voucher, payment voucher, journal entry, all types). Opening balance, debit, credit, running balance, closing balance. Navigation to source vouchers and journal entries.
+
+**5. Customer and supplier invoice movement** — filters: customer or supplier (as applicable), item, item group, warehouse selection, date range, branch; document types: sales invoices, purchase invoices, sales returns, purchase returns. Customer-facing and supplier-facing documents stay distinct. Quantities and monetary values, subtotals, source-document drill-down.
+
+**6. Daily transaction report** — chronological list of sales invoices, purchase invoices, sales returns and purchase returns created in the period; filters: date range, customer or supplier, sales representative, warehouse, branch, document type, document status where applicable. Document totals and summaries.
+
+**7. Profitability** — per sales invoice, per sold item, aggregated by item group; filters: date, customer, representative, branch, warehouse. Uses the actual cost of goods sold of the approved valuation method, with applicable discounts, returns and cost corrections. Minimum columns: net sales excluding applicable tax components, cost of goods sold, gross profit, gross margin percentage. Never labelled net profit; a net-profit report needs an owner-approved expense-allocation methodology first. Posted history stays reproducible.
+
+**8. General Ledger account report** — account selection, date range, opening balance, debit and credit transactions, running balance, closing balance, source journal and document references, branch and cost-center filters as appropriate. Review against the existing 3.2B S6 report; unfinished options are not marked implemented; no duplicate engine.
+
+**9. Trial balance** — opening balances, period debit and credit totals, closing debit and credit balances, account hierarchy and grouping, date and fiscal-period filters, branch and cost-center filters where applicable, reconciliation against posted General Ledger data, no double counting of parent and child accounts.
+
+**10. Final financial statements** — Trading Account / Cost of Sales (where applicable), Profit and Loss, Balance Sheet; approved Chart classification and posted ledger data; fiscal-year and period selection; branch-level reporting where authorized; appropriate comparisons; reconciliation to the trial balance; totals and subtotals; integration with the planned reporting and report-designer functionality.
+
+**11. Flexible Excel import and export** — Import: reuse the 3.2D framework (field mapping, **reusable mapping templates**, validation and dry run, conflict resolution, independent approval, reconciliation, audit). Export: real .xlsx; user-selected visible/exported columns; active filters and sorting respected; grouping and subtotals; detailed or summarized output; accurate numeric, date and currency values; spreadsheet formula-injection protection; same company/branch/warehouse/cost-center authorization as the source report; never truncated merely because the screen is paginated. PDF export stays a separate mandatory capability.
+
+**12. Shared standards** — Arabic and English, RTL and LTR, one shared React frontend for Web and Tauri, fine-grained RBAC, company isolation, branch and warehouse authorization, date filtering, deterministic results, grouping and subtotals, consistent currency and number formatting, drill-down, Excel/PDF per approved scope, automated correctness and security tests.
+
 ## 4. Dependencies and duplication rules
 
 * One reporting layer: ledger-based reports (GL, trial balance, statements, cash-by-journal) share the existing ledger query engine; operational reports (inventory, sales, purchases, statements of accounts) share document/stock-movement queries; **profitability reads posted COGS from the inventory ledger, it never recomputes cost**. No report re-implements another's query.
