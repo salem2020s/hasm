@@ -20,18 +20,22 @@ Status of this file: records the owner-confirmed phase sequence (confirmed 2026-
 | 3.2A-2 | Business-type Chart of Accounts templates (mandatory Release 1; see `docs/PHASE-3.2A.md`) | not started |
 | 3.2A-3 | Chart of Accounts Excel import: validation, dry run, reconciliation, required approval (mandatory Release 1; no empty-chart-only restriction, merge and conflict rules defined with the import) | not started |
 | 3.2B | General Ledger and journal posting — see `docs/PHASE-3.2B.md` (slices S1 numbering, S2 exchange rates, S3 cost centers, S4 approval policies, S5 journal and posting, S6 ledger reports, S7 shared UI) | merged (PR #17, merge commit `d2d2a11`, includes the journal-list branch-filter fix `29fadd9`) |
+| 3.2C | General Ledger completion — see `docs/PHASE-3.2C.md` (S1 cost-center accounting policies and cost-center-scoped access, S2 risk-based and ordered approval policies, S3 fiscal-year closing and opening balances) | implemented locally on `feature/phase-3-2c-gl-completion` (PR pending owner authorization) |
+| 3.2D | Generic import framework: staging, validation, dry run, reconciliation, independent approval (mandatory Release 1; also serves opening balances, bank statements and item/party imports) | not started (next) |
+| 3.3 | Excel/PDF export and the financial statements required by the SRS (mandatory Release 1) | not started |
 
-## Remaining Release 1 requirements after Phase 3.2B (NOT complete; none is implemented in 3.2B)
+## Remaining Release 1 requirements after Phase 3.2C (NOT complete; none is implemented in 3.2B or 3.2C)
 | Item | State |
 |---|---|
-| Cost-center allocation policy refinements (mandatory cost center per line/account, branch matching, per-user restrictions) | open, owner decision required |
-| Risk-based and ordered multi-level approval policies | open, owner decision required (3.2B counts distinct approvers only) |
-| Year-end closing entries and opening-balance carryforward | not started |
+| Cost-center allocation policy: per-account requirement, optional branch eligibility and cost-center-scoped access are DONE in 3.2C S1; cost-center carry into opening balances and a role-assignment screen remain open | partly done (3.2C S1) |
+| Risk-based and ordered multi-level approval policies | done in 3.2C S2 (conditions: type, amount, branch, manual rate override, soft-closed period, year-end class; ordered stages; other risk classifications need an owner decision) |
+| Year-end closing entries and opening-balance carryforward | done in 3.2C S3 for base-currency balances; foreign-currency balances need the FX policy (below) |
 | Realized and unrealized foreign-exchange differences | not started (with receivables, payables and banking) |
-| Business-type Chart of Accounts templates (3.2A-2) | not started |
-| Excel Chart of Accounts import (3.2A-3) | not started |
+| Business-type Chart of Accounts templates (3.2A-2) | not started (proposed bilingual service and trading templates are in `docs/PROPOSAL-COA-TEMPLATES.md`, NOT approved) |
+| Excel Chart of Accounts import (3.2A-3) | not started (after 3.2D; existing records are preserved by default, conflicts need explicit resolution and approval, no silent overwrite, no type change of existing accounts, hierarchy validation always applies) |
 | Remaining report export formats required by the approved SRS (Excel, PDF; 3.2B provides CSV only) | not started |
+| Taxes, sales and purchases, inventory and costing, receivables and payables, cheques, bank reconciliation, recurring documents, legacy migration, licensing, backup and the remaining operational modules (SRS sections 6 to 16) | not started |
 
-Posting limitation to respect until these exist: manual and automatic journals are safe for same-period, single-entry postings, but there is no year-end close or opening-balance carryforward, no FX revaluation or settlement differences, and approval counts distinct approvers without ordering or risk classes. Do not rely on 3.2B for those workflows.
+Posting limitation to respect (3.2C): year-end closing and opening balances refuse any foreign-currency balance-sheet position or foreign-currency-tied account (no FX revaluation or realized/unrealized difference exists yet); a company holding such balances cannot close the year in the application until the FX policy of the receivables, payables and banking phases exists. Cost centers and other analytic dimensions are not carried into opening balances. Business-type templates, Excel imports and Excel/PDF exports are not available.
 
 Rules: one phase at a time; no Warehouse or Fiscal-Period work inside 3.1B; no inter-branch accounting entries or branch financial reports before their accounting modules exist (the branch model must leave room for them).

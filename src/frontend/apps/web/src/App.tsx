@@ -14,6 +14,8 @@ import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
 import { CostCentersPage } from "./pages/CostCenters";
+import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
+import { FiscalClosingPage } from "./pages/FiscalClosing";
 import { ExchangeRatesPage } from "./pages/ExchangeRates";
 import { JournalPage } from "./pages/Journal";
 import { LedgerReportsPage } from "./pages/LedgerReports";
@@ -60,6 +62,8 @@ const ROUTES: RouteDef[] = [
   { path: "/company/numbering", permission: "company.numbering.view", element: <NumberingPage /> },
   { path: "/company/exchange-rates", permission: "company.exchangerates.view", element: <ExchangeRatesPage /> },
   { path: "/company/cost-centers", permission: "company.costcenters.view", element: <CostCentersPage /> },
+  { path: "/company/cost-center-policies", permission: "company.costcenterpolicies.view", element: <CostCenterPoliciesPage /> },
+  { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
@@ -99,6 +103,8 @@ function Shell() {
       { id: "/company/numbering", label: t("nav.numbering"), permission: "company.numbering.view" },
       { id: "/company/exchange-rates", label: t("nav.exchange_rates"), permission: "company.exchangerates.view" },
       { id: "/company/cost-centers", label: t("nav.cost_centers"), permission: "company.costcenters.view" },
+      { id: "/company/cost-center-policies", label: t("nav.cost_center_policies"), permission: "company.costcenterpolicies.view" },
+      { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));

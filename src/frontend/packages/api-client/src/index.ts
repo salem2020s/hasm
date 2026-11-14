@@ -340,13 +340,44 @@ export interface CostCenterInput { code?: string | null; parentId?: string | nul
 export type CostCenterDetailsInput = Pick<CostCenterInput, "nameAr" | "nameEn" | "branchId" | "isGroup">;
 
 export type PolicySource = "manual" | "automatic" | "any";
+/** One ordered stage of a policy: stages complete strictly in order; `roleId` (optional) restricts the stage to holders of that role. */
+export interface ApprovalStage { stage: number; required: number; roleId: string | null }
+export type PolicyJournalType = "normal" | "reversal" | "adjusting";
 export interface ApprovalPolicy {
   id: string; docType: string; source: PolicySource; branchId: string | null; minAmount: string; requiredApprovals: number;
   nameAr: string | null; nameEn: string | null; isActive: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string;
+  /** Risk conditions (null / "any" = do not care). A staged policy's requiredApprovals is the total over its stages. */
+  journalType?: PolicyJournalType | "any" | null; rateOverride?: boolean | null; softClosed?: boolean | null; isStaged?: boolean; stages?: ApprovalStage[];
+  /** Year-end condition: entries of the year-end closing ("closing") or of the opening balances ("opening"), reversals included. */
+  closingKind?: "closing" | "opening" | "any" | null;
 }
 export interface ApprovalPoliciesResponse { policies: ApprovalPolicy[]; documentTypes: string[]; can: { create: boolean; update: boolean; activate: boolean } }
-export interface ApprovalPolicyInput { docType: string; source: PolicySource; branchId?: string | null; minAmount: string | number; requiredApprovals: number; nameAr: string | null; nameEn: string | null }
+export interface ApprovalPolicyInput {
+  docType: string; source: PolicySource; branchId?: string | null; minAmount: string | number; requiredApprovals?: number; nameAr: string | null; nameEn: string | null;
+  journalType?: PolicyJournalType | null; rateOverride?: boolean | null; softClosed?: boolean | null; stages?: { required: number; roleId?: string | null }[] | null;
+  closingKind?: "closing" | "opening" | null;
+}
 export type ApprovalPolicyDetailsInput = Omit<ApprovalPolicyInput, "docType">;
+
+/** Year-end closing and opening balances (Phase 3.2C S3). */
+export interface ClosingSettings { equityAccountId: string | null; equityCode: string | null; equityNameAr: string | null; equityNameEn: string | null; requireApproval: boolean; revision: number; configured: boolean }
+export interface ClosingSettingsResponse { settings: ClosingSettings; can: { configure: boolean; create: boolean; reverse: boolean } }
+/** A validation of the closing. A check of a module that does not exist is "not_applicable", never "passed". */
+export interface ClosingCheck { code: string; status: "passed" | "blocked" | "not_applicable"; detail: string | null; phase: "close" | "carry" | "both" }
+export interface YearEndLine { accountId: string; branchId: string; debit: string; credit: string }
+export interface ClosingPreview {
+  yearId: string; yearName: string; yearStart: string; yearEnd: string; baseCurrency: string; equityAccountId: string | null; netResult: string; isProfit: boolean;
+  closingLines: YearEndLine[]; openingLines: YearEndLine[]; nextYearId: string | null; nextYearStart: string | null; checks: ClosingCheck[];
+  canClose: boolean; canCarryForward: boolean; nextVersion: number; evidenceHash: string; activeClosingId: string | null;
+}
+export type ClosingState = "prepared" | "closed" | "opening_prepared" | "carried_forward" | "reversed" | "cancelled";
+export interface FiscalYearClosing {
+  id: string; yearId: string; version: number; netResult: string; equityAccountId: string; closingEntryId: string; closingStatus: string; closingNumber: string | null;
+  carryforwardId: string | null; openingEntryId: string | null; openingStatus: string | null; openingNumber: string | null; toYearId: string | null;
+  state: ClosingState; stale: boolean; evidenceHash: string; createdAtUtc: string; createdBy: string;
+}
+export interface FiscalYearCarryforward { id: string; fromYearId: string; closingId: string | null; toYearId: string; entryId: string; entryStatus: string; entryNumber: string | null; stale: boolean; evidenceHash: string; createdAtUtc: string; createdBy: string }
+export interface YearEndStatus { yearId: string; name: string; startDate: string; endDate: string; closings: FiscalYearClosing[]; carryforwards: FiscalYearCarryforward[] }
 
 export type JournalStatus = "draft" | "pending_approval" | "approved" | "posted" | "reversed" | "cancelled";
 export interface JournalHeader {
@@ -360,17 +391,27 @@ export interface JournalLine {
   id: string; lineNo: number; accountId: string; description: string | null; currency: string; debit: string; credit: string; rate: string; rateId: number | null;
   rateOverrideReason: string | null; baseDebit: string; baseCredit: string; branchId: string; isRounding: boolean; reversesLineId: string | null; allocations: JournalAllocation[];
 }
-export interface JournalApprovalDecision { id: number; documentRevision: number; approver: string; approved: boolean; decidedAtUtc: string; comment: string | null }
+export interface JournalApprovalDecision { id: number; documentRevision: number; approver: string; approved: boolean; decidedAtUtc: string; comment: string | null; stage?: number }
+/** Progress of one stage of the effective approval plan of the current revision. */
+export interface JournalPlanStage { stage: number; required: number; approved: number; roleId: string | null }
 export interface JournalEventInfo { id: number; kind: string; actor: string; atUtc: string; revision: number; detail: string | null }
 export interface JournalEntry {
   entry: JournalHeader; balanced: boolean; baseDebitTotal: string; baseCreditTotal: string; requiredApprovals: number;
-  lines: JournalLine[]; approvals: JournalApprovalDecision[]; events: JournalEventInfo[];
+  lines: JournalLine[]; approvals: JournalApprovalDecision[]; events: JournalEventInfo[]; plan?: JournalPlanStage[];
 }
 export interface JournalListResponse {
   entries: JournalHeader[];
   can: { create: boolean; approve: boolean; post: boolean; reverse: boolean; rateOverride: boolean; postInSoftClosed: boolean };
 }
-export interface JournalAllocationInput { costCenterId: string; amount: string | number }
+/** Exactly one of amount / percent per allocation, and the same mode for every allocation of a line (percentages must total exactly 100; the server converts them deterministically). */
+export interface JournalAllocationInput { costCenterId: string; amount?: string | number | null; percent?: string | number | null }
+/** A cost center the caller may allocate to (an active leaf inside their grants): what the journal editor offers. */
+export interface AllocatableCostCenter { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; branchId: string | null }
+
+export interface AccountCostCenterRule { accountId: string; code: string; nameAr: string | null; nameEn: string | null; required: boolean; revision: number }
+export interface AccountCostCenterRulesResponse { accounts: AccountCostCenterRule[]; can: { configure: boolean } }
+export interface CostCenterBranchRule { costCenterId: string; restricted: boolean; branchIds: string[]; revision: number }
+export interface CostCenterBranchRulesResponse { costCenters: CostCenterBranchRule[]; can: { configure: boolean } }
 export interface JournalLineInput {
   accountId: string; description?: string | null; currency?: string | null; debit?: string | number | null; credit?: string | number | null; branchId?: string | null;
   rateOverride?: string | number | null; rateOverrideReason?: string | null; allocations?: JournalAllocationInput[] | null;
@@ -388,7 +429,7 @@ export interface GeneralLedgerResponse {
   from: string; to: string; baseCurrency: string; accountId: string; includesDescendants: boolean; opening: string; totalDebit: string; totalCredit: string; closing: string;
   totalLines: number; offset: number; lines: GeneralLedgerLineInfo[];
 }
-export interface ReportQuery { from: string; to: string; branchId?: string; costCenterId?: string }
+export interface ReportQuery { from: string; to: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean }
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -455,8 +496,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     }
     return await response.blob();
   }
-  const reportQuery = (q: { from: string; to: string; branchId?: string; costCenterId?: string }) =>
-    `from=${enc(q.from)}&to=${enc(q.to)}${q.branchId ? `&branchId=${enc(q.branchId)}` : ""}${q.costCenterId ? `&costCenterId=${enc(q.costCenterId)}` : ""}`;
+  const reportQuery = (q: { from: string; to: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean }) =>
+    `from=${enc(q.from)}&to=${enc(q.to)}${q.branchId ? `&branchId=${enc(q.branchId)}` : ""}${q.costCenterId ? `&costCenterId=${enc(q.costCenterId)}` : ""}${q.excludeClosing ? "&excludeClosing=true" : ""}`;
 
   return {
     getHealth: () => get<HealthResponse>("/api/v1/health"),
@@ -562,6 +603,23 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** `latestId` is the currency's latest entry id from the overview (0 when it has none): a concurrent entry makes this fail with 412. */
     enterExchangeRate: (rate: ExchangeRateInput, latestId: number) => request<ExchangeRate>("POST", "/api/v1/company/exchange-rates", { body: rate, ifMatch: latestId }),
     listCostCenters: () => get<CostCentersResponse>("/api/v1/company/cost-centers"),
+    getClosingSettings: () => get<ClosingSettingsResponse>("/api/v1/company/fiscal-closing/settings"),
+    putClosingSettings: (body: { equityAccountId: string; requireApproval: boolean }, revision: number) => request<ClosingSettings>("PUT", "/api/v1/company/fiscal-closing/settings", { body, ifMatch: revision }),
+    listYearEnd: () => get<{ years: YearEndStatus[] }>("/api/v1/company/fiscal-closing/years"),
+    previewYearEnd: (yearId: string) => get<ClosingPreview>(`/api/v1/company/fiscal-closing/years/${enc(yearId)}/preview`),
+    startYearClosing: (yearId: string) => request<FiscalYearClosing>("POST", `/api/v1/company/fiscal-closing/years/${enc(yearId)}/close`),
+    carryForwardYear: (yearId: string) => request<FiscalYearCarryforward>("POST", `/api/v1/company/fiscal-closing/years/${enc(yearId)}/carry-forward`),
+    reverseYearOpening: (yearId: string, entryDate?: string) => request<{ entryId: string; status: string }>("POST", `/api/v1/company/fiscal-closing/years/${enc(yearId)}/reverse-opening`, { body: { entryDate: entryDate ?? null } }),
+    reverseYearClosing: (yearId: string, entryDate?: string) => request<{ entryId: string; status: string }>("POST", `/api/v1/company/fiscal-closing/years/${enc(yearId)}/reverse-closing`, { body: { entryDate: entryDate ?? null } }),
+    listAllocatableCostCenters: () => get<{ costCenters: AllocatableCostCenter[] }>("/api/v1/company/journal/cost-centers"),
+    listRequiredCostCenterAccounts: () => get<AccountCostCenterRulesResponse>("/api/v1/company/cost-center-policies/accounts"),
+    getAccountCostCenterRule: (accountId: string) => get<AccountCostCenterRule>(`/api/v1/company/cost-center-policies/accounts/${enc(accountId)}`),
+    setAccountCostCenterRule: (accountId: string, required: boolean, revision: number) =>
+      request<AccountCostCenterRule>("PUT", `/api/v1/company/cost-center-policies/accounts/${enc(accountId)}`, { body: { required }, ifMatch: revision }),
+    listRestrictedCostCenters: () => get<CostCenterBranchRulesResponse>("/api/v1/company/cost-center-policies/branches"),
+    getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
+    setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
+      request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
     recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),
