@@ -664,7 +664,8 @@ public class ImportApiTests : ImportTestBase
         await Start();
         var cookie = await SignIn(Admin);
         var adapters = await Send(HttpMethod.Get, $"{Base}/adapters", cookie: cookie);
-        Assert.Equal("test-adapter", adapters.Json.GetProperty("adapters")[0].GetProperty("code").GetString());
+        Assert.Contains("test-adapter", adapters.Json.GetProperty("adapters").EnumerateArray().Select(a => a.GetProperty("code").GetString()));
+        Assert.Contains("chart-of-accounts", adapters.Json.GetProperty("adapters").EnumerateArray().Select(a => a.GetProperty("code").GetString()));   // the real adapter is registered by the API
         Assert.Equal(4000, adapters.Json.GetProperty("limits").GetProperty("maxFileBytes").GetInt32());
         var sb = new StringBuilder("code,name\n");
         for (var i = 1; i <= 120; i++) sb.Append($"{i:0000},Account {i}\n");
