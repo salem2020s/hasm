@@ -148,8 +148,37 @@ public sealed class JournalManagementService(AccessService access, JournalServic
     {
         var cur = await Authorized(userId, companyId, id, PermissionCatalog.Codes.JournalPost, ct);
         if (!cur.IsOk) return cur;
+        // Year-end documents: every approval that counts must come from an INDEPENDENT approver who is STILL authorized right now (permission for everything the entry touches, and the stage role
+        // where one is required). An approver whose access was revoked after approving no longer counts; the entry then has to be withdrawn and approved again. PostgreSQL separately refuses
+        // decisions by the creator or submitter and an unsatisfied plan, so the two layers agree.
+        if (cur.Value!.Header.Status == JournalStatus.Approved && await journal.IsYearEndAsync(companyId, id, ct))
+        {
+            var denial = await YearEndApprovalsStillValidAsync(companyId, cur.Value, ct);
+            if (denial is not null) return ConfigResult<JournalEntryView>.Fail(ConfigStatus.Conflict, denial);
+        }
         var soft = await access.IsAllowedAsync(userId, companyId, PermissionCatalog.Codes.JournalSoftClosedPost, ScopeTarget.Company, ct);
         return await journal.PostAsync(userId, companyId, id, revision, soft, ct);
+    }
+
+    private async Task<string?> YearEndApprovalsStillValidAsync(Guid companyId, JournalEntryView view, CancellationToken ct)
+    {
+        var h = view.Header;
+        var shape = ShapeOf(view);
+        var valid = new Dictionary<Guid, bool>();
+        foreach (var plan in view.Plan ?? [])
+        {
+            var counted = new HashSet<Guid>();
+            foreach (var d in view.Approvals.Where(d => d.Approved && d.DocumentRevision == h.Revision && d.Stage == plan.Stage))
+            {
+                if (d.Approver == h.CreatedBy || d.Approver == h.SubmittedBy) continue;
+                var eff = await access.GetEffectivePermissionsAsync(d.Approver, companyId, ct);
+                if (!valid.TryGetValue(d.Approver, out var ok))
+                    valid[d.Approver] = ok = await CoversAsync(d.Approver, companyId, PermissionCatalog.Codes.JournalApprove, shape, ct);
+                if (ok && (plan.RoleId is not { } role || eff.Grants.Any(g => g.RoleId == role))) counted.Add(d.Approver);
+            }
+            if (counted.Count < plan.Required) return "approver_no_longer_authorized";
+        }
+        return null;
     }
 
     public async Task<ConfigResult<JournalEntryView>> ReverseAsync(Guid userId, Guid companyId, Guid id, long? revision, ReversalInput? input, CancellationToken ct = default)

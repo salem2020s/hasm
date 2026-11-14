@@ -50,6 +50,15 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         return await LoadViewAsync(conn, null, id, false, ct);
     }
 
+    /// <summary>True when the entry is a year-end closing or opening entry or the reversal of one (the database function that defines the class, so the service and PostgreSQL always agree).</summary>
+    public async Task<bool> IsYearEndAsync(Guid companyId, Guid id, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var q = new NpgsqlCommand($"SELECT {CompanySchema.ClosingLogic.KindFunction}(@id) IS NOT NULL", conn);
+        q.Parameters.AddWithValue("id", id);
+        return (bool)(await q.ExecuteScalarAsync(ct))!;
+    }
+
     public async Task<IReadOnlyList<JournalEntrySummary>> ListAsync(Guid companyId, JournalFilter filter, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
@@ -201,9 +210,9 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     }
 
     /// <summary>Creates a draft inside the caller's audited transaction (used by year-end processing so the entry and its closing record commit together). Throws <see cref="Abort"/> on a refusal.</summary>
-    internal async Task<JournalEntryView> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, JournalInput input, bool mayOverrideRate, DocumentSource source, string? sourceKey, CancellationToken ct)
+    internal async Task<JournalEntryView> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, JournalInput input, bool mayOverrideRate, DocumentSource source, string? sourceKey, CancellationToken ct, bool yearEnd = false)
     {
-        var ctx = await PrepareHeaderAsync(work, input, ct);
+        var ctx = await PrepareHeaderAsync(work, input, ct, yearEnd ? int.MaxValue : JournalValidation.MaxLines);
         var type = input.AdjustsId is null ? JournalType.Normal : JournalType.Adjusting;
         if (input.AdjustsId is { } adj)
         {
@@ -211,7 +220,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
             if (target is null) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("adjustsId", "entry_not_found")]);
             if (target.Status is not (JournalStatus.Posted or JournalStatus.Reversed)) throw new Abort(ConfigStatus.Conflict, "adjusted_entry_not_posted");
         }
-        var lines = await ComputeLinesAsync(work, ctx, input.Lines, input.EntryDate!.Value, mayOverrideRate, ct);
+        var lines = await ComputeLinesAsync(work, ctx, input.Lines, input.EntryDate!.Value, mayOverrideRate, ct, yearEnd);
         var id = Guid.NewGuid();
         var now = clock.GetUtcNow().UtcDateTime;
         var baseTotal = lines.Sum(l => l.BaseDebit);
@@ -469,7 +478,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
 
     private sealed record HeaderContext(Guid BranchId, string BaseCurrency, int BaseMinor, string? Description, Dictionary<string, int?> Currencies, Guid? RoundingAccountId);
 
-    private async Task<HeaderContext> PrepareHeaderAsync(CompanyAuditedWork work, JournalInput input, CancellationToken ct)
+    private async Task<HeaderContext> PrepareHeaderAsync(CompanyAuditedWork work, JournalInput input, CancellationToken ct, int maxLines = JournalValidation.MaxLines)
     {
         var errors = new List<FieldError>();
         if (input.EntryDate is null) errors.Add(new("entryDate", "required"));
@@ -477,7 +486,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         var description = JournalValidation.CleanText(input.Description, 500, "description", errors);
         if (input.BranchId is null) errors.Add(new("branchId", "required"));
         if (input.Lines is null || input.Lines.Count == 0) errors.Add(new("lines", "required"));
-        else if (input.Lines.Count > JournalValidation.MaxLines) errors.Add(new("lines", "too_many"));
+        else if (input.Lines.Count > maxLines) errors.Add(new("lines", "too_many"));
         if (errors.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: errors);
 
         var currencies = new Dictionary<string, int?>();
@@ -506,7 +515,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         return new HeaderContext(input.BranchId!.Value, baseCode, baseMinor.Value, description, currencies, rounding);
     }
 
-    private async Task<List<Computed>> ComputeLinesAsync(CompanyAuditedWork work, HeaderContext ctx, IReadOnlyList<JournalLineInput>? inputs, DateOnly date, bool mayOverrideRate, CancellationToken ct)
+    private async Task<List<Computed>> ComputeLinesAsync(CompanyAuditedWork work, HeaderContext ctx, IReadOnlyList<JournalLineInput>? inputs, DateOnly date, bool mayOverrideRate, CancellationToken ct, bool historicalCostCenters = false)
     {
         var errors = new List<FieldError>();
         inputs ??= [];
@@ -619,7 +628,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
                     string AF(string n) => $"lines[{i}].allocations[{k}].{n}";
                     if (al.CostCenterId is null) { errors.Add(new(AF("costCenterId"), "required")); bad = true; continue; }
                     if (!centers.TryGetValue(al.CostCenterId.Value, out var cc)) { errors.Add(new(AF("costCenterId"), "cost_center_not_found")); bad = true; continue; }
-                    if (cc.Group || !cc.Active) { errors.Add(new(AF("costCenterId"), "cost_center_not_allocatable")); bad = true; continue; }
+                    if (!historicalCostCenters && (cc.Group || !cc.Active)) { errors.Add(new(AF("costCenterId"), "cost_center_not_allocatable")); bad = true; continue; }
                     if (!seen.Add(al.CostCenterId.Value)) { errors.Add(new(AF("costCenterId"), "duplicate_cost_center")); bad = true; continue; }
                     if (al.Amount is null or <= 0) { errors.Add(new(AF("amount"), "must_be_positive")); bad = true; continue; }
                     if (al.Amount.Value != decimal.Round(al.Amount.Value, minor)) { errors.Add(new(AF("amount"), "too_many_decimals")); bad = true; continue; }
@@ -696,6 +705,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     /// <summary>Stable codes for the rules PostgreSQL enforces (the database message is never shown to clients).</summary>
     internal static string MapDatabaseRule(string message) => message switch
     {
+        _ when message.Contains("independent approver") => "separation_of_duties",
         _ when message.Contains("not balanced") => "entry_not_balanced",
         _ when message.Contains("at least two lines") => "entry_needs_two_lines",
         _ when message.Contains("base currency") => "base_currency_mismatch",

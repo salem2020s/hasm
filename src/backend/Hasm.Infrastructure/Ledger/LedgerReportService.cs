@@ -51,15 +51,7 @@ public sealed class LedgerReportService(CompanyDatabaseResolver resolver)
         return (conn, tx, code.Trim());
     }
 
-    /// <summary>Balance-sheet accounts are reported from the start of the latest fiscal year that received posted opening balances at or before the end date (its opening entry stands for everything earlier); null = no carryforward.</summary>
-    private static async Task<DateOnly?> BsFloorAsync(NpgsqlConnection conn, NpgsqlTransaction tx, ReportScope s, CancellationToken ct)
-    {
-        await using var q = new NpgsqlCommand($"SELECT {CompanySchema.ClosingLogic.FloorFunction}(@to)", conn, tx);
-        q.Parameters.Add(new NpgsqlParameter("to", NpgsqlDbType.Date) { Value = s.To.ToDateTime(TimeOnly.MinValue) });
-        return await q.ExecuteScalarAsync(ct) switch { DateTime d => DateOnly.FromDateTime(d), DateOnly d => d, _ => null };
-    }
-
-    private static void BindScope(NpgsqlParameterCollection p, ReportScope s, DateOnly? bsFloor)
+    private static void BindScope(NpgsqlParameterCollection p, ReportScope s)
     {
         p.Add(new NpgsqlParameter("from", NpgsqlDbType.Date) { Value = s.From.ToDateTime(TimeOnly.MinValue) });
         p.Add(new NpgsqlParameter("to", NpgsqlDbType.Date) { Value = s.To.ToDateTime(TimeOnly.MinValue) });
@@ -68,10 +60,11 @@ public sealed class LedgerReportService(CompanyDatabaseResolver resolver)
         p.Add(new NpgsqlParameter("cc", NpgsqlDbType.Uuid) { Value = (object?)s.CostCenterId ?? DBNull.Value });
         p.Add(new NpgsqlParameter("vcc", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = s.CostCenters is null ? DBNull.Value : s.CostCenters.ToArray() });
         p.Add(new NpgsqlParameter("exclclose", NpgsqlDbType.Boolean) { Value = s.ExcludeClosing });
-        p.Add(new NpgsqlParameter("bsfloor", NpgsqlDbType.Date) { Value = bsFloor is null ? DBNull.Value : bsFloor.Value.ToDateTime(TimeOnly.MinValue) });
     }
 
     /// <summary>
+    /// Year-end OPENING entries (and their reversals) never count: they only restate balances that the ledger history already holds, so every balance is the same whatever the carryforward state
+    /// (no double counting, earlier years and comparatives never change, any date range is reproducible). Closing entries count (they move profit and loss into equity) unless the report excludes them.
     /// The lines that count for a scope, as (account, entry date, base debit, base credit): posted or reversed entries up to the end date, filtered by branch restriction, branch and cost center.
     /// With a cost center (and its descendants), each line contributes its ALLOCATED base share on its own side; lines without allocation are outside that dimension.
     /// Viewer restriction (applied INSIDE the query): a line whose branch the viewer may see counts in full (company-wide viewers: every line); every other line counts only through
@@ -101,7 +94,7 @@ scoped AS (
     LEFT JOIN alloc_v v ON v.line = l.{JL.Id}
     WHERE e.{JE.Status} IN {PostedStatuses} AND e.{JE.Date} <= @to
       AND (NOT @exclclose OR COALESCE({CompanySchema.ClosingLogic.KindFunction}(e.{JE.Id}), 0) NOT IN (1, 3))
-      AND (acc.{AC.Statement} = 2 OR @bsfloor::date IS NULL OR e.{JE.Date} >= @bsfloor)
+      AND NOT EXISTS (SELECT 1 FROM {CompanySchema.FiscalYearCarryforward.Table} k WHERE k.{CompanySchema.FiscalYearCarryforward.EntryId} IN (e.{JE.Id}, e.{JE.Reverses}))
       AND (@branch::uuid IS NULL OR l.{JL.Branch} = @branch)
       AND ((x.full AND (@cc::uuid IS NULL OR a.line IS NOT NULL)) OR (NOT x.full AND v.line IS NOT NULL)))";
 
@@ -109,13 +102,12 @@ scoped AS (
     {
         var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
         await using var _c = conn; await using var _t = tx;
-        var bsFloor = await BsFloorAsync(conn, tx, scope, ct);
         var sums = new Dictionary<Guid, (decimal Opening, decimal Debit, decimal Credit)>();
         await using (var cmd = new NpgsqlCommand(
             LinesCte + $@"
 SELECT account, COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM(bd) FILTER (WHERE d >= @from), 0), COALESCE(SUM(bc) FILTER (WHERE d >= @from), 0) FROM scoped GROUP BY account", conn, tx))
         {
-            BindScope(cmd.Parameters, scope, bsFloor);
+            BindScope(cmd.Parameters, scope);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) sums[r.GetGuid(0)] = (r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3));
         }
@@ -157,7 +149,6 @@ SELECT account, COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM
     {
         var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
         await using var _c = conn; await using var _t = tx;
-        var bsFloor = await BsFloorAsync(conn, tx, scope, ct);
         Guid[] accounts;
         bool group;
         await using (var q = new NpgsqlCommand(
@@ -176,7 +167,7 @@ SELECT account, COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM
 SELECT COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM(bd) FILTER (WHERE d >= @from), 0), COALESCE(SUM(bc) FILTER (WHERE d >= @from), 0), count(*) FILTER (WHERE d >= @from)
 FROM scoped WHERE account = ANY(@accounts)", conn, tx))
         {
-            BindScope(cmd.Parameters, scope, bsFloor);
+            BindScope(cmd.Parameters, scope);
             cmd.Parameters.Add(new NpgsqlParameter("accounts", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = accounts });
             await using var r = await cmd.ExecuteReaderAsync(ct);
             await r.ReadAsync(ct);
@@ -192,7 +183,7 @@ SELECT e.{JE.Id}, e.{JE.Number}, e.{JE.Date}, e.{JE.Desc}, l.{JL.Desc}, l.{JL.Ac
 FROM ranked r JOIN {JL.Table} l ON l.{JL.Id} = r.lid JOIN {JE.Table} e ON e.{JE.Id} = l.{JL.Entry}
 ORDER BY r.d, r.number, r.line_no LIMIT @l OFFSET @o", conn, tx))
         {
-            BindScope(cmd.Parameters, scope, bsFloor);
+            BindScope(cmd.Parameters, scope);
             cmd.Parameters.Add(new NpgsqlParameter("accounts", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = accounts });
             cmd.Parameters.AddWithValue("opening", opening); cmd.Parameters.AddWithValue("l", Math.Clamp(limit, 1, 5000)); cmd.Parameters.AddWithValue("o", Math.Max(0, offset));
             await using var r = await cmd.ExecuteReaderAsync(ct);

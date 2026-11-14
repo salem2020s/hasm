@@ -91,11 +91,11 @@ public class FiscalClosingTests : FiscalClosingTestBase
         var set = Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 0, new ClosingSettingsInput(Equity.Id, null)));
         Assert.Equal((true, 1L, true), (set.Configured, set.Revision, set.RequireApproval));
         Assert.Equal(1L, Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 1, new ClosingSettingsInput(Equity.Id, true))).Revision);   // unchanged: no new revision
-        Assert.Equal(ConfigStatus.PreconditionFailed, (await Closing.PutSettingsAsync(Admin.Id, Company.Id, 0, new ClosingSettingsInput(Equity.Id, false))).Status);
-        Assert.Equal(ConfigStatus.PreconditionRequired, (await Closing.PutSettingsAsync(Admin.Id, Company.Id, null, new ClosingSettingsInput(Equity.Id, false))).Status);
+        Assert.Equal(ConfigStatus.PreconditionFailed, (await Closing.PutSettingsAsync(Admin.Id, Company.Id, 0, new ClosingSettingsInput(Equity.Id, null))).Status);
+        Assert.Equal(ConfigStatus.PreconditionRequired, (await Closing.PutSettingsAsync(Admin.Id, Company.Id, null, new ClosingSettingsInput(Equity.Id, null))).Status);
         var other = await NewAccount("3103", "equity");
-        var s2 = Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 1, new ClosingSettingsInput(other.Id, false)));
-        Assert.Equal((other.Id, 2L, false), (s2.EquityAccountId!.Value, s2.Revision, s2.RequireApproval));
+        var s2 = Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 1, new ClosingSettingsInput(other.Id, null)));
+        Assert.Equal((other.Id, 2L, true), (s2.EquityAccountId!.Value, s2.Revision, s2.RequireApproval));      // independent approval is always on
         Assert.Equal(2L, await Sql<long>($"SELECT count(*) FROM {CompanySchema.PolicyHistory.Table} WHERE {CompanySchema.PolicyHistory.Entity} = 4"));
         // PostgreSQL itself refuses a non-equity account and any deletion, whoever writes.
         Assert.Equal("P0001", await Fails($"UPDATE {CompanySchema.ClosingSettings.Table} SET {CompanySchema.ClosingSettings.EquityAccountId} = '{Cash.Id}', {CompanySchema.ClosingSettings.Revision} = {CompanySchema.ClosingSettings.Revision} + 1"));
@@ -343,10 +343,10 @@ public class FiscalClosingTests : FiscalClosingTestBase
     }
 
     [PostgresFact]
-    public async Task Approval_for_year_end_entries_is_configurable_by_policy_and_by_the_company_setting_and_never_touches_ordinary_entries()
+    public async Task Year_end_policies_only_add_to_the_mandatory_floor_and_never_touch_ordinary_entries()
     {
         await PrepareClosing();
-        // A policy aimed at year-end closing entries adds ordered stages on top of the implicit floor and does NOT touch ordinary entries.
+        // A policy aimed at year-end closing entries adds ordered stages on top of the mandatory floor and does NOT touch ordinary entries.
         Ok(await Policies.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(Doc, "any", null, 0m, null, "سياسة", "Closing policy", ClosingKind: "closing", Stages: [new(1, null), new(1, null)])));
         var normal = await Posted(Simple("2026-07-01", 3m));                                                               // an ordinary entry is not touched by the year-end policy
         Assert.Equal((JournalStatus.Posted, 0), (normal.Header.Status, normal.RequiredApprovals));
@@ -359,14 +359,12 @@ public class FiscalClosingTests : FiscalClosingTestBase
         var a2 = Ok(await Approve(a1, Checker2));
         Assert.Equal(JournalStatus.Approved, a2.Header.Status);
         Ok(await Journal.PostAsync(Checker3, Company.Id, entry.Header.Id, a2.Header.Revision, false));
-        // The company can switch the independent-approval floor off for year-end entries (audited, revisioned): an opening entry then needs none (no policy targets it).
-        Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 1, new ClosingSettingsInput(Equity.Id, false)));
+        // The independent-approval floor is MANDATORY: it cannot be switched off (service and PostgreSQL agree), so an opening entry no policy targets still needs one independent approval.
+        Assert.Equal("approval_mandatory", (await Closing.PutSettingsAsync(Admin.Id, Company.Id, 1, new ClosingSettingsInput(Equity.Id, false))).Fields!.Single().Code);
+        Assert.Equal("23514", await Fails($"UPDATE {CompanySchema.ClosingSettings.Table} SET {CompanySchema.ClosingSettings.RequireApproval} = false, {CompanySchema.ClosingSettings.Revision} = {CompanySchema.ClosingSettings.Revision} + 1"));
         var carry = await Carry();
         var open = Ok(await Journal.SubmitAsync(Admin.Id, Company.Id, carry.EntryId, (await Reload(carry.EntryId)).Header.Revision));
-        Assert.Equal((JournalStatus.Approved, 0), (open.Header.Status, open.RequiredApprovals));
-        // With the floor on (the default) the same entry would need an independent approval, and PostgreSQL refuses to post it without one.
-        Ok(await Closing.PutSettingsAsync(Admin.Id, Company.Id, 2, new ClosingSettingsInput(Equity.Id, true)));
-        Assert.Equal(1, (await Reload(carry.EntryId)).RequiredApprovals);
+        Assert.Equal((JournalStatus.PendingApproval, 1), (open.Header.Status, open.RequiredApprovals));
         Assert.Contains("required approvals", await MessageOf($"UPDATE {Je.Table} SET {Je.Status} = 4 WHERE {Je.Id} = '{carry.EntryId}'"));
     }
 

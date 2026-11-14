@@ -159,6 +159,7 @@ public static partial class CompanySchema
         public const string PrimaryKey = "k_09835e78";
         public const string ForeignKeyAccount = "k_8620669f";
         public const string CheckValues = "k_f5ab1009";
+        public const string CheckApprovalMandatory = "k_a845fff4";
         public const string GuardFunction = "f_fde6d5fe";
         public const string GuardRow = "r_edf794c1";
         public const string GuardTruncate = "r_1e8a2ca7";
@@ -227,7 +228,8 @@ public static partial class CompanySchema
         public const string MatchClosingFunction = "f_b6fc8d8c";
         public const string MatchOpeningFunction = "f_457ef32f";
         public const string StaleFunction = "f_26ca2fc5";
-        public const string FloorFunction = "f_ff94e130";
+        public const string DimensionBalanceFunction = "f_1246db8b";
+        public const string EntryDimensionFunction = "f_31b2e5fb";
         public const string PostFunction = "f_64d2a45a";
         public const string PostTrigger = "r_a0ce1bf4";
     }
@@ -350,6 +352,7 @@ public static partial class CompanySchema
         ["ClosingSettings.PrimaryKey"] = ClosingSettings.PrimaryKey,
         ["ClosingSettings.ForeignKeyAccount"] = ClosingSettings.ForeignKeyAccount,
         ["ClosingSettings.CheckValues"] = ClosingSettings.CheckValues,
+        ["ClosingSettings.CheckApprovalMandatory"] = ClosingSettings.CheckApprovalMandatory,
         ["ClosingSettings.GuardFunction"] = ClosingSettings.GuardFunction,
         ["ClosingSettings.GuardRow"] = ClosingSettings.GuardRow,
         ["ClosingSettings.GuardTruncate"] = ClosingSettings.GuardTruncate,
@@ -406,7 +409,8 @@ public static partial class CompanySchema
         ["ClosingLogic.MatchClosingFunction"] = ClosingLogic.MatchClosingFunction,
         ["ClosingLogic.MatchOpeningFunction"] = ClosingLogic.MatchOpeningFunction,
         ["ClosingLogic.StaleFunction"] = ClosingLogic.StaleFunction,
-        ["ClosingLogic.FloorFunction"] = ClosingLogic.FloorFunction,
+        ["ClosingLogic.DimensionBalanceFunction"] = ClosingLogic.DimensionBalanceFunction,
+        ["ClosingLogic.EntryDimensionFunction"] = ClosingLogic.EntryDimensionFunction,
         ["ClosingLogic.PostFunction"] = ClosingLogic.PostFunction,
         ["ClosingLogic.PostTrigger"] = ClosingLogic.PostTrigger,
     });

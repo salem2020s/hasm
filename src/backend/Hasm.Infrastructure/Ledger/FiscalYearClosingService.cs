@@ -33,7 +33,6 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
 {
     internal const int LockKey1 = 0x48434659;   // "HCFY": advisory-lock namespace of year-end processing
     internal const int LockKey2 = 1;
-    private const int MaxLines = JournalValidation.MaxLines;
 
     // ------------------------------------------------------------------------------------------------------------------------- settings
 
@@ -54,7 +53,8 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
     {
         if (expectedRevision is null) return ConfigResult<ClosingSettingsView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         if (input?.EquityAccountId is null) return ConfigResult<ClosingSettingsView>.Invalid([new("equityAccountId", "required")]);
-        var requireApproval = input.RequireApproval ?? true;
+        if (input.RequireApproval == false) return ConfigResult<ClosingSettingsView>.Invalid([new("requireApproval", "approval_mandatory")]);   // the safeguard is not configurable
+        const bool requireApproval = true;
         return await MutateAsync(companyId, async work =>
         {
             await LockAsync(work, ct);
@@ -135,11 +135,16 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
             closingLines.Add(eb > 0 ? new(eq, g.Key, eb, 0m) : new(eq, g.Key, 0m, -eb));
         }
         // Balance-sheet balances at the end of the year (cumulative over the whole ledger up to the year end).
-        var bs = await ReadBalancesAsync(conn, tx,
-            $"SELECT l.{JL.Account}, l.{JL.Branch}, SUM(l.{JL.BaseDebit} - l.{JL.BaseCredit}) FROM {JL.Table} l JOIN {JE.Table} e ON e.{JE.Id} = l.{JL.Entry} JOIN {AC.Table} a ON a.{AC.Id} = l.{JL.Account} AND a.{AC.Statement} = 1 " +
-            $"WHERE e.{JE.Status} IN (4, 5) AND e.{JE.Date} <= @end AND e.{JE.Date} >= COALESCE({CL.FloorFunction}(@end), '-infinity'::date) GROUP BY l.{JL.Account}, l.{JL.Branch} HAVING SUM(l.{JL.BaseDebit} - l.{JL.BaseCredit}) <> 0 ORDER BY 1, 2",
-            p => p.Add(new NpgsqlParameter("end", NpgsqlDbType.Date) { Value = year.End.ToDateTime(TimeOnly.MinValue) }), ct);
-        var openingLines = bs.Select(x => x.Balance > 0 ? new YearEndLine(x.Account, x.Branch, x.Balance, 0m) : new YearEndLine(x.Account, x.Branch, 0m, -x.Balance)).ToList();
+        // Per account, branch and cost center (null = not allocated), from the FULL history up to the year end with earlier carryforward entries left out (they only restate it): the same figure the database
+        // verifies before an opening entry can post. A balance tagged to a cost center keeps that tag exactly; nothing is allocated that history did not allocate.
+        var bs = new List<(Guid Account, Guid Branch, Guid? CostCenter, decimal Balance)>();
+        await using (var q = new NpgsqlCommand($"SELECT account, branch, cost_center, balance FROM {CL.DimensionBalanceFunction}(@end, NULL) ORDER BY account, branch, cost_center NULLS FIRST", conn, tx))
+        {
+            q.Parameters.Add(new NpgsqlParameter("end", NpgsqlDbType.Date) { Value = year.End.ToDateTime(TimeOnly.MinValue) });
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) bs.Add((r.GetGuid(0), r.GetGuid(1), r.IsDBNull(2) ? null : r.GetGuid(2), r.GetDecimal(3)));
+        }
+        var openingLines = bs.Select(x => x.Balance > 0 ? new YearEndLine(x.Account, x.Branch, x.Balance, 0m, x.CostCenter) : new YearEndLine(x.Account, x.Branch, 0m, -x.Balance, x.CostCenter)).ToList();
 
         // ---- validations -------------------------------------------------------------------------------------------------------------------------------
         checks.Add(settings.Configured ? new("settings", "passed", settings.EquityCode, "close") : new("settings", "blocked", "profit_loss_account_not_configured", "close"));
@@ -211,8 +216,6 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
             while (await r.ReadAsync(ct)) foreign.Add(r.GetString(0));
         }
         checks.Add(foreign.Count == 0 ? new("foreign_currency_balances", "passed", null, "carry") : new("foreign_currency_balances", "blocked", string.Join(", ", foreign) + " (revaluation policy needed)", "carry"));
-        if (closingLines.Count > MaxLines) checks.Add(new("entry_size", "blocked", $"closing {closingLines.Count} lines (limit {MaxLines})", "close"));
-        if (openingLines.Count > MaxLines) checks.Add(new("entry_size_opening", "blocked", $"opening {openingLines.Count} lines (limit {MaxLines})", "carry"));
         // the other close-check domains: real probes run when a period closes; modules that do not exist are reported as such, never as passed
         foreach (var d in closeGuard.UnimplementedDomains) checks.Add(new($"domain:{d}", "blocked", "unimplemented", "both"));
         foreach (var d in closeGuard.NotApplicableDomains) checks.Add(new($"domain:{d}", "not_applicable", "module_not_part_of_this_release", "both"));
@@ -254,7 +257,7 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
         bool Blocked(string phase) => checks.Any(c => c.Status == "blocked" && (c.Phase == "both" || c.Phase == phase));
         var canClose = !Blocked("close") && closingLines.Count > 0;
         var canCarry = !Blocked("carry") && openingLines.Count > 0;
-        var evidence = Hash([year.Id.ToString(), Num(net), .. closingLines.Select(l => $"C|{l.AccountId}|{l.BranchId}|{Num(l.Debit)}|{Num(l.Credit)}"), .. openingLines.Select(l => $"O|{l.AccountId}|{l.BranchId}|{Num(l.Debit)}|{Num(l.Credit)}")]);
+        var evidence = Hash([year.Id.ToString(), Num(net), .. closingLines.Select(l => $"C|{l.AccountId}|{l.BranchId}|{Num(l.Debit)}|{Num(l.Credit)}"), .. openingLines.Select(l => $"O|{l.AccountId}|{l.BranchId}|{l.CostCenterId}|{Num(l.Debit)}|{Num(l.Credit)}")]);
         return new ClosingPreview(year.Id, year.Name, year.Start, year.End, baseCurrency, settings.EquityAccountId, net, closingLines, openingLines, nextYear, nextStart, checks, canClose, canCarry, version, evidence, active);
     }
 
@@ -276,7 +279,8 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
         return await q.ExecuteScalarAsync(ct) as Guid? ?? throw new JournalService.Abort(ConfigStatus.Conflict, "no_main_branch");
     }
 
-    private static JournalLineInput Line(YearEndLine l) => new(l.AccountId, null, null, l.Debit > 0 ? l.Debit : null, l.Credit > 0 ? l.Credit : null, l.BranchId, null, null, null);
+    private static JournalLineInput Line(YearEndLine l) => new(l.AccountId, null, null, l.Debit > 0 ? l.Debit : null, l.Credit > 0 ? l.Credit : null, l.BranchId, null, null,
+        l.CostCenterId is { } cc ? [new JournalAllocationInput(cc, l.Debit > 0 ? l.Debit : l.Credit)] : null);
 
     /// <summary>Generates the draft closing entry of a year (dated its last day) and records the closing. The entry then follows the normal journal workflow.</summary>
     public async Task<ConfigResult<FiscalYearClosingView>> StartClosingAsync(Guid actor, Guid companyId, Guid yearId, CancellationToken ct = default) =>
@@ -286,7 +290,7 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
             var p = await ComputeAsync(work.Connection, work.Transaction, yearId, ct) ?? throw new JournalService.Abort(ConfigStatus.NotFound, "fiscal_year_not_found");
             if (!p.CanClose) throw Blocked(p, "close");
             var key = $"yearclose:{yearId}:{p.NextVersion}";
-            var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(p.YearEnd, $"Year-end closing {p.YearName} (v{p.NextVersion})", await MainBranchAsync(work, ct), [.. p.ClosingLines.Select(Line)], null), false, DocumentSource.Automatic, key, ct);
+            var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(p.YearEnd, $"Year-end closing {p.YearName} (v{p.NextVersion})", await MainBranchAsync(work, ct), [.. p.ClosingLines.Select(Line)], null), false, DocumentSource.Automatic, key, ct, yearEnd: true);
             var id = Guid.NewGuid();
             var evidence = new JsonObject { ["hash"] = p.EvidenceHash, ["netResult"] = Num(p.NetResult), ["lines"] = p.ClosingLines.Count, ["equityAccountId"] = p.EquityAccountId!.Value.ToString() };
             await using (var ins = new NpgsqlCommand(
@@ -316,7 +320,7 @@ public sealed class FiscalYearClosingService(CompanyDatabaseResolver resolver, C
             { q.Parameters.AddWithValue("y", yearId); closingId = await q.ExecuteScalarAsync(ct) as Guid?; }
             long n;
             await using (var q = new NpgsqlCommand($"SELECT count(*) FROM {FK.Table} WHERE {FK.FromYearId} = @y", work.Connection, work.Transaction)) { q.Parameters.AddWithValue("y", yearId); n = (long)(await q.ExecuteScalarAsync(ct))! + 1; }
-            var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(p.NextYearStart.Value, $"Opening balances {p.YearName} → next year (#{n})", await MainBranchAsync(work, ct), [.. p.OpeningLines.Select(Line)], null), false, DocumentSource.Automatic, $"yearopen:{yearId}:{n}", ct);
+            var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(p.NextYearStart.Value, $"Opening balances {p.YearName} → next year (#{n})", await MainBranchAsync(work, ct), [.. p.OpeningLines.Select(Line)], null), false, DocumentSource.Automatic, $"yearopen:{yearId}:{n}", ct, yearEnd: true);
             var id = Guid.NewGuid();
             var evidence = new JsonObject { ["hash"] = p.EvidenceHash, ["lines"] = p.OpeningLines.Count };
             await using (var ins = new NpgsqlCommand(

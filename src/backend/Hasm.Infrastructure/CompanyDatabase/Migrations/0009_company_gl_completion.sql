@@ -128,10 +128,11 @@ $$;
 CREATE TRIGGER r_6023e975 BEFORE UPDATE ON t_939ae118 FOR EACH ROW EXECUTE FUNCTION f_ff034cd6();
 
 -- Submission and posting enforce the policies in PostgreSQL (the service validates earlier for friendly messages; a direct write cannot bypass this).
--- Reversals are exempt (they mirror an earlier posting and must stay possible after a policy was introduced); system rounding lines are exempt.
+-- Reversals are exempt (they mirror an earlier posting and must stay possible after a policy was introduced); system rounding lines are exempt. Year-end CLOSING entries carry no cost-center
+-- dimension (profit and loss is closed per account and branch) and OPENING entries reproduce, exactly and verified against the ledger, the dimensions that history holds, so both are exempt too.
 CREATE FUNCTION f_03f44dbc() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.c_4e4c6448 IN (2, 3, 4) AND NEW.c_4e4c6448 IS DISTINCT FROM OLD.c_4e4c6448 AND NEW.c_e11acf50 IS NULL THEN
+    IF NEW.c_4e4c6448 IN (2, 3, 4) AND NEW.c_4e4c6448 IS DISTINCT FROM OLD.c_4e4c6448 AND NEW.c_e11acf50 IS NULL AND COALESCE(f_09413dbf(NEW.c_14f317c6), 0) NOT IN (1, 2) THEN
         IF EXISTS (
             SELECT 1 FROM t_783c8d98 l JOIN t_6e4ce78a r ON r.c_7d1b8b04 = l.c_e6bfb072 AND r.c_5528e5aa
             WHERE l.c_39596059 = NEW.c_14f317c6 AND NOT l.c_781e3043
@@ -288,6 +289,10 @@ DECLARE
     v_open integer;
 BEGIN
     IF NEW.c_9adee5c9 <> 'journal_entry' THEN RETURN NEW; END IF;
+    -- Year-end documents need an INDEPENDENT approver (separation of duties in the database as well as in the service): nobody who created or submitted the entry decides on it.
+    IF EXISTS (SELECT 1 FROM t_f3158869 je WHERE je.c_14f317c6 = NEW.c_175a20c9 AND (NEW.c_942d312c = je.c_2a51947a OR NEW.c_942d312c = je.c_41579554)) AND f_09413dbf(NEW.c_175a20c9) IS NOT NULL THEN
+        RAISE EXCEPTION 'year-end documents need an independent approver: the creator and the submitter cannot decide';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM t_f3158869 je WHERE je.c_14f317c6 = NEW.c_175a20c9 AND je.c_dfe6b7c5 = NEW.c_f399e237) THEN RETURN NEW; END IF;
     IF NOT EXISTS (SELECT 1 FROM f_177b9f61(NEW.c_175a20c9)) THEN RETURN NEW; END IF;
     SELECT min(pl.stage_no) INTO v_open FROM f_177b9f61(NEW.c_175a20c9) pl
@@ -322,7 +327,8 @@ CREATE TRIGGER r_b57e2508 BEFORE UPDATE ON t_f3158869 FOR EACH ROW EXECUTE FUNCT
 -- workflow (numbering, approvals, FiscalPeriodGate, atomic posting). The last period is Final Closed only AFTER the closing entry is posted. A correction is a reversal of the opening
 -- balances and of the closing followed by a new closing version; nothing posted is ever edited. Closing and opening entries are linked to the records below, so duplicates are impossible.
 
--- The company-chosen equity account that receives the annual profit or loss (never hard-coded) and whether closing/opening entries always need an independent approval.
+-- The company-chosen equity account that receives the annual profit or loss (never hard-coded). Independent approval of year-end entries is MANDATORY: the column exists only so the setting is visible,
+-- and a CHECK keeps it true for every writer (no configuration can switch the safeguard off).
 CREATE TABLE t_b80fbcc5 (
     c_a9d7d7ac boolean NOT NULL DEFAULT true,
     c_b4f2a328 uuid NOT NULL,
@@ -331,7 +337,8 @@ CREATE TABLE t_b80fbcc5 (
     c_21160187 timestamptz NOT NULL,
     CONSTRAINT k_09835e78 PRIMARY KEY (c_a9d7d7ac),
     CONSTRAINT k_8620669f FOREIGN KEY (c_b4f2a328) REFERENCES t_11d107a9 (c_29a86598),
-    CONSTRAINT k_f5ab1009 CHECK (c_a9d7d7ac AND c_e421441c >= 1)
+    CONSTRAINT k_f5ab1009 CHECK (c_a9d7d7ac AND c_e421441c >= 1),
+    CONSTRAINT k_a845fff4 CHECK (c_ccdfd1a6)
 );
 CREATE FUNCTION f_fde6d5fe() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -460,17 +467,37 @@ BEGIN
 END;
 $$;
 
--- The balance-sheet FLOOR of a date: the start of the latest fiscal year (starting on or before the date) that received POSTED, not reversed opening balances; NULL when there is none. Balance-sheet balances
--- are cumulative from that floor (its opening entry plus the activity after it); before any carryforward they are cumulative over the whole ledger. Reports apply the same rule, so carried-forward
--- balances are never counted twice and reports of earlier years never change when a later year is carried forward.
-CREATE FUNCTION f_ff94e130(p_date date) RETURNS date LANGUAGE sql STABLE AS $$
-    SELECT max(y.c_5fd77e71) FROM t_c1779e24 k
-    JOIN t_f3158869 ke ON ke.c_14f317c6 = k.c_8fcce06f AND ke.c_4e4c6448 = 4
-    JOIN t_4b5bb222 y ON y.c_cae1c56a = k.c_2435b2f2
-    WHERE y.c_5fd77e71 <= p_date
+-- Balance-sheet balances per account, branch and cost center (NULL = not allocated) at the end of a date: EVERY posted or reversed entry up to that date counts, EXCEPT the year-end
+-- opening entries and their reversals. The opening entries only restate balances that history already holds, so leaving them out is what makes a balance the same whatever the
+-- carryforward state (never counted twice, comparatives never change). A line is either allocated completely or not at all, so allocated and unallocated amounts add up to the account and branch balance.
+CREATE FUNCTION f_1246db8b(p_end date, p_exclude uuid) RETURNS TABLE (account uuid, branch uuid, cost_center uuid, balance numeric) LANGUAGE sql STABLE AS $$
+    SELECT x.account, x.branch, x.cc, SUM(x.amount) FROM (
+        SELECT l.c_e6bfb072 AS account, l.c_147d3982 AS branch, al.c_71376e84 AS cc, CASE WHEN l.c_c560d388 > 0 THEN al.c_aacf931e ELSE -al.c_aacf931e END AS amount
+        FROM t_783c8d98 l JOIN t_f3158869 e ON e.c_14f317c6 = l.c_39596059 JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 AND a.c_4f5cb580 = 1
+        JOIN t_58417560 al ON al.c_0146172b = l.c_5ffa4fb6
+        WHERE e.c_4e4c6448 IN (4, 5) AND e.c_4cb99522 <= p_end AND e.c_14f317c6 IS DISTINCT FROM p_exclude
+          AND NOT EXISTS (SELECT 1 FROM t_c1779e24 k WHERE k.c_8fcce06f = e.c_14f317c6 OR k.c_8fcce06f = e.c_e11acf50)
+        UNION ALL
+        SELECT l.c_e6bfb072, l.c_147d3982, NULL::uuid, l.c_c560d388 - l.c_03200b86
+        FROM t_783c8d98 l JOIN t_f3158869 e ON e.c_14f317c6 = l.c_39596059 JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 AND a.c_4f5cb580 = 1
+        WHERE e.c_4e4c6448 IN (4, 5) AND e.c_4cb99522 <= p_end AND e.c_14f317c6 IS DISTINCT FROM p_exclude
+          AND NOT EXISTS (SELECT 1 FROM t_58417560 al WHERE al.c_0146172b = l.c_5ffa4fb6)
+          AND NOT EXISTS (SELECT 1 FROM t_c1779e24 k WHERE k.c_8fcce06f = e.c_14f317c6 OR k.c_8fcce06f = e.c_e11acf50)
+    ) x GROUP BY x.account, x.branch, x.cc HAVING SUM(x.amount) <> 0
 $$;
 
--- True when an opening-balance ENTRY still matches the balance-sheet balances (per account and branch, base currency) at the end of the year it carries forward, and nothing but balance-sheet
+-- The same dimensions of one ENTRY (what an opening entry says), signed debit minus credit.
+CREATE FUNCTION f_31b2e5fb(p_entry uuid) RETURNS TABLE (account uuid, branch uuid, cost_center uuid, balance numeric) LANGUAGE sql STABLE AS $$
+    SELECT x.account, x.branch, x.cc, SUM(x.amount) FROM (
+        SELECT l.c_e6bfb072 AS account, l.c_147d3982 AS branch, al.c_71376e84 AS cc, CASE WHEN l.c_c560d388 > 0 THEN al.c_aacf931e ELSE -al.c_aacf931e END AS amount
+        FROM t_783c8d98 l JOIN t_58417560 al ON al.c_0146172b = l.c_5ffa4fb6 WHERE l.c_39596059 = p_entry
+        UNION ALL
+        SELECT l.c_e6bfb072, l.c_147d3982, NULL::uuid, l.c_c560d388 - l.c_03200b86
+        FROM t_783c8d98 l WHERE l.c_39596059 = p_entry AND NOT EXISTS (SELECT 1 FROM t_58417560 al WHERE al.c_0146172b = l.c_5ffa4fb6)
+    ) x GROUP BY x.account, x.branch, x.cc HAVING SUM(x.amount) <> 0
+$$;
+
+-- True when an opening-balance ENTRY still matches the balance-sheet balances (per account, branch and cost center, base currency) at the end of the year it carries forward, and nothing but balance-sheet
 -- accounts; a year that had profit-and-loss activity needs its closing posted first.
 CREATE FUNCTION f_457ef32f(p_entry uuid) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -483,20 +510,8 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM t_e040bbbc cl JOIN t_f3158869 ce ON ce.c_14f317c6 = cl.c_bb26888c WHERE cl.c_36778b5b = k.closing_id AND ce.c_4e4c6448 = 4) THEN RETURN false; END IF;
     ELSIF EXISTS (SELECT 1 FROM f_455769bc(k.from_year)) THEN RETURN false; END IF;
     IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 WHERE l.c_39596059 = p_entry AND a.c_4f5cb580 <> 1) THEN RETURN false; END IF;
-    IF EXISTS (
-        (SELECT l.c_e6bfb072, l.c_147d3982, SUM(l.c_c560d388 - l.c_03200b86) FROM t_783c8d98 l
-          JOIN t_f3158869 e ON e.c_14f317c6 = l.c_39596059 JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 AND a.c_4f5cb580 = 1
-          WHERE e.c_4e4c6448 IN (4, 5) AND e.c_4cb99522 <= k.year_end AND e.c_4cb99522 >= COALESCE(f_ff94e130(k.year_end), '-infinity'::date) AND e.c_14f317c6 <> p_entry
-          GROUP BY l.c_e6bfb072, l.c_147d3982 HAVING SUM(l.c_c560d388 - l.c_03200b86) <> 0)
-        EXCEPT
-        (SELECT l.c_e6bfb072, l.c_147d3982, SUM(l.c_c560d388 - l.c_03200b86) FROM t_783c8d98 l WHERE l.c_39596059 = p_entry GROUP BY l.c_e6bfb072, l.c_147d3982)) THEN RETURN false; END IF;
-    IF EXISTS (
-        (SELECT l.c_e6bfb072, l.c_147d3982, SUM(l.c_c560d388 - l.c_03200b86) FROM t_783c8d98 l WHERE l.c_39596059 = p_entry GROUP BY l.c_e6bfb072, l.c_147d3982)
-        EXCEPT
-        (SELECT l.c_e6bfb072, l.c_147d3982, SUM(l.c_c560d388 - l.c_03200b86) FROM t_783c8d98 l
-          JOIN t_f3158869 e ON e.c_14f317c6 = l.c_39596059 JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 AND a.c_4f5cb580 = 1
-          WHERE e.c_4e4c6448 IN (4, 5) AND e.c_4cb99522 <= k.year_end AND e.c_4cb99522 >= COALESCE(f_ff94e130(k.year_end), '-infinity'::date) AND e.c_14f317c6 <> p_entry
-          GROUP BY l.c_e6bfb072, l.c_147d3982 HAVING SUM(l.c_c560d388 - l.c_03200b86) <> 0)) THEN RETURN false; END IF;
+    IF EXISTS ((SELECT account, branch, cost_center, balance FROM f_1246db8b(k.year_end, p_entry)) EXCEPT (SELECT account, branch, cost_center, balance FROM f_31b2e5fb(p_entry))) THEN RETURN false; END IF;
+    IF EXISTS ((SELECT account, branch, cost_center, balance FROM f_31b2e5fb(p_entry)) EXCEPT (SELECT account, branch, cost_center, balance FROM f_1246db8b(k.year_end, p_entry))) THEN RETURN false; END IF;
     RETURN true;
 END;
 $$;
@@ -582,12 +597,95 @@ END;
 $$;
 CREATE TRIGGER r_a0ce1bf4 BEFORE UPDATE ON t_f3158869 FOR EACH ROW EXECUTE FUNCTION f_64d2a45a();
 
+-- Posting-grade validation of 3.2B, replaced: an allocation may keep pointing at a cost center that was deactivated or became a group AFTER the posting it belongs to, when the entry is a
+-- reversal (it mirrors the original) or a year-end OPENING entry (it reproduces the history exactly, verified against the ledger before it can post). New entries still allocate to active leaves only.
+CREATE OR REPLACE FUNCTION f_ba4c6a0d(e t_f3158869, p_post boolean) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_base char(3);
+    v_lines integer; v_deb numeric; v_cre numeric; v_req integer; v_orig t_f3158869; v_status smallint; v_period uuid; v_pstatus smallint;
+BEGIN
+    SELECT cc.c_6da45b20 INTO v_base FROM t_f5bc326a cc WHERE cc.c_5cdc1bc7 AND cc.c_702730ab;
+    IF v_base IS NULL OR v_base <> e.c_429fabdf THEN RAISE EXCEPTION 'the entry base currency is not the company base currency'; END IF;
+
+    SELECT count(*), COALESCE(sum(l.c_c560d388), 0), COALESCE(sum(l.c_03200b86), 0) INTO v_lines, v_deb, v_cre FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6;
+    IF v_lines < 2 THEN RAISE EXCEPTION 'a journal entry needs at least two lines'; END IF;
+    IF v_deb <> v_cre OR v_deb <= 0 THEN RAISE EXCEPTION 'the entry is not balanced in base currency'; END IF;
+    IF e.c_225ac5cd <> v_deb THEN RAISE EXCEPTION 'the recorded base total does not match the lines'; END IF;
+
+    -- Currencies enabled for the company; base-currency lines are exact; foreign lines carry a rate and a base amount consistent with their own fields.
+    IF e.c_960dbf25 <> 2 AND EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND NOT EXISTS (SELECT 1 FROM t_f5bc326a cc WHERE cc.c_6da45b20 = l.c_7a2c36af AND cc.c_702730ab)) THEN
+        RAISE EXCEPTION 'a line currency is not enabled for the company';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_7a2c36af = v_base
+               AND (l.c_62c9d327 <> 1 OR l.c_2fc5b902 IS NOT NULL OR l.c_7931ab9f IS NOT NULL OR l.c_c560d388 <> l.c_d0e33fe9 OR l.c_03200b86 <> l.c_a1befb78)) THEN
+        RAISE EXCEPTION 'a base-currency line must use rate 1 and equal base amounts';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_7a2c36af <> v_base AND l.c_2fc5b902 IS NULL AND l.c_7931ab9f IS NULL) THEN
+        RAISE EXCEPTION 'a foreign-currency line needs an effective rate or a recorded override reason';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_eba5b513 x ON x.c_e3463fc9 = l.c_2fc5b902 WHERE l.c_39596059 = e.c_14f317c6 AND (x.c_3fdf88c5 <> l.c_7a2c36af OR x.c_515a2107 <> l.c_62c9d327)) THEN
+        RAISE EXCEPTION 'the applied rate does not match its rate record';
+    END IF;
+
+    -- Accounts: active, postable (not a group), currency policy respected.
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 WHERE l.c_39596059 = e.c_14f317c6 AND ((NOT a.c_9761052f AND e.c_960dbf25 <> 2) OR a.c_57d34c8a)) THEN
+        RAISE EXCEPTION 'every account must be active and postable';
+    END IF;
+    IF EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_11d107a9 a ON a.c_29a86598 = l.c_e6bfb072 WHERE l.c_39596059 = e.c_14f317c6
+               AND e.c_960dbf25 <> 2 AND ((a.c_dfab26fd = 1 AND l.c_7a2c36af <> v_base) OR (a.c_dfab26fd = 3 AND l.c_7a2c36af <> a.c_76c4ece0))) THEN
+        RAISE EXCEPTION 'a line currency violates the currency policy of its account';
+    END IF;
+    IF e.c_960dbf25 <> 2 AND EXISTS (SELECT 1 FROM t_783c8d98 l JOIN t_8ba6c27d b ON b.c_358158d2 = l.c_147d3982 WHERE l.c_39596059 = e.c_14f317c6 AND NOT b.c_6605fbbc) THEN
+        RAISE EXCEPTION 'every line branch must be active';
+    END IF;
+    -- Allocations: complete sums (also checked at commit) and only active leaf cost centers.
+    IF EXISTS (SELECT 1 FROM t_58417560 al JOIN t_783c8d98 l ON l.c_5ffa4fb6 = al.c_0146172b JOIN t_939ae118 c ON c.c_0770cd8f = al.c_71376e84 WHERE l.c_39596059 = e.c_14f317c6 AND ((c.c_85d71877 OR NOT c.c_8a8af184) AND e.c_960dbf25 <> 2 AND COALESCE(f_09413dbf(e.c_14f317c6), 0) <> 2)) THEN
+        RAISE EXCEPTION 'allocations may only target active leaf cost centers';
+    END IF;
+
+    -- A reversal mirrors exactly the lines of one posted entry; an adjusting entry references a posted one.
+    IF e.c_960dbf25 = 2 THEN
+        SELECT * INTO v_orig FROM t_f3158869 WHERE c_14f317c6 = e.c_e11acf50;
+        IF v_orig.c_4e4c6448 NOT IN (4, 5) THEN RAISE EXCEPTION 'only a posted entry can be reversed'; END IF;
+        IF (SELECT count(*) FROM t_783c8d98 WHERE c_39596059 = v_orig.c_14f317c6) <> v_lines THEN RAISE EXCEPTION 'a reversal must mirror every line of the original'; END IF;
+        IF EXISTS (SELECT 1 FROM t_783c8d98 l LEFT JOIN t_783c8d98 o ON o.c_5ffa4fb6 = l.c_b75ddd12 AND o.c_39596059 = v_orig.c_14f317c6
+                   WHERE l.c_39596059 = e.c_14f317c6 AND (o.c_5ffa4fb6 IS NULL OR o.c_e6bfb072 <> l.c_e6bfb072 OR o.c_7a2c36af <> l.c_7a2c36af OR o.c_62c9d327 <> l.c_62c9d327
+                       OR o.c_2fc5b902 IS DISTINCT FROM l.c_2fc5b902 OR o.c_d0e33fe9 <> l.c_a1befb78 OR o.c_a1befb78 <> l.c_d0e33fe9
+                       OR o.c_c560d388 <> l.c_03200b86 OR o.c_03200b86 <> l.c_c560d388)) THEN
+            RAISE EXCEPTION 'a reversal line must mirror its original line';
+        END IF;
+        IF (SELECT count(DISTINCT c_b75ddd12) FROM t_783c8d98 WHERE c_39596059 = e.c_14f317c6) <> v_lines THEN RAISE EXCEPTION 'every original line must be reversed exactly once'; END IF;
+    ELSE
+        IF EXISTS (SELECT 1 FROM t_783c8d98 WHERE c_39596059 = e.c_14f317c6 AND c_b75ddd12 IS NOT NULL) THEN RAISE EXCEPTION 'only a reversal may reference original lines'; END IF;
+        IF e.c_960dbf25 = 3 THEN
+            SELECT c_4e4c6448 INTO v_status FROM t_f3158869 WHERE c_14f317c6 = e.c_f509b5de;
+            IF v_status NOT IN (4, 5) THEN RAISE EXCEPTION 'an adjusting entry must reference a posted entry'; END IF;
+        END IF;
+        -- The applied rate must be the CURRENT effective rate for the entry date (a newer rate entered since the draft was saved forces a refresh) unless it is a recorded override.
+        IF p_post AND EXISTS (SELECT 1 FROM t_783c8d98 l WHERE l.c_39596059 = e.c_14f317c6 AND l.c_2fc5b902 IS NOT NULL AND l.c_2fc5b902 IS DISTINCT FROM f_56eae1de(l.c_7a2c36af, e.c_4cb99522)) THEN
+            RAISE EXCEPTION 'the applied exchange rate is no longer the effective rate';
+        END IF;
+    END IF;
+
+    IF p_post THEN
+        v_req := f_660e4c73('journal_entry', e.c_41c437ea, e.c_59a672dc, e.c_225ac5cd);
+        IF NOT f_7cdbb48f('journal_entry', e.c_14f317c6, e.c_dfe6b7c5, v_req) THEN RAISE EXCEPTION 'the required approvals for this revision are missing'; END IF;
+        SELECT fp.c_d61cbb9c, fp.c_0a0b7f19 INTO v_period, v_pstatus FROM t_ae996edc fp WHERE e.c_4cb99522 BETWEEN fp.c_8299fb3d AND fp.c_c0322bcf FOR SHARE;
+        IF v_period IS NULL THEN RAISE EXCEPTION 'the entry date is outside every fiscal period'; END IF;
+        IF v_pstatus = 3 THEN RAISE EXCEPTION 'the fiscal period is final closed'; END IF;
+        IF v_pstatus = 2 AND NOT e.c_e5cc9a38 THEN RAISE EXCEPTION 'the fiscal period is soft closed'; END IF;
+        IF v_pstatus = 1 AND e.c_e5cc9a38 THEN RAISE EXCEPTION 'the soft-closed flag is only valid for a soft-closed period'; END IF;
+        IF e.c_dc0c9baf IS DISTINCT FROM v_period THEN RAISE EXCEPTION 'the recorded fiscal period is not the period of the entry date'; END IF;
+    END IF;
+END;
+$$;
+
 -- Approval policies may now also target year-end processing (1 closing entries and their reversals, 2 opening-balance entries and their reversals).
 ALTER TABLE t_8f2462c5 ADD COLUMN c_43137a95 smallint NULL;
 ALTER TABLE t_8f2462c5 ADD CONSTRAINT k_7286962e CHECK (c_43137a95 IS NULL OR c_43137a95 IN (1, 2));
 
--- The governing-policy and plan functions of S2, extended: the year-end condition, and an implicit floor of ONE independent approval for every year-end entry while the company keeps
--- "require approval" switched on (the default), whatever the policies say.
+-- The governing-policy and plan functions of S2, extended: the year-end condition, and an implicit floor of ONE independent approval for every year-end entry,
+-- an UNCONDITIONAL floor of ONE independent approval for every year-end entry (no company setting can lower it; policies may only add to it).
 CREATE OR REPLACE FUNCTION f_e565501a(p_entry uuid) RETURNS TABLE (policy_id uuid, policy_revision bigint) LANGUAGE sql STABLE AS $$
     WITH e AS (
         SELECT je.c_14f317c6 AS id, je.c_41c437ea AS source, je.c_59a672dc AS branch, je.c_225ac5cd AS base_total, je.c_960dbf25 AS jtype, je.c_4cb99522 AS d,
@@ -618,8 +716,19 @@ CREATE OR REPLACE FUNCTION f_177b9f61(p_entry uuid) RETURNS TABLE (stage_no inte
         FROM t_9e0faeaf b JOIN t_f3158869 je ON je.c_14f317c6 = b.c_5e3e1a37 AND je.c_dfe6b7c5 = b.c_63b7acab
         WHERE b.c_17ea6905 = 'journal_entry' AND b.c_5e3e1a37 = p_entry
         UNION ALL
-        SELECT 1, 1, NULL::uuid, 3 WHERE f_09413dbf(p_entry) IS NOT NULL
-          AND COALESCE((SELECT cs.c_ccdfd1a6 FROM t_b80fbcc5 cs LIMIT 1), true))
+        SELECT 1, 1, NULL::uuid, 3 WHERE f_09413dbf(p_entry) IS NOT NULL)
     SELECT stage_no, max(required)::integer, (array_agg(role_id ORDER BY rank) FILTER (WHERE role_id IS NOT NULL))[1]
     FROM parts GROUP BY stage_no ORDER BY stage_no
+$$;
+
+-- Satisfaction of the plan, replaced: for a year-end entry the decisions of its creator and of its submitter NEVER count (the decision trigger refuses them as well; this keeps the gate correct
+-- for any decision that might predate the entry becoming a year-end entry or arrive by another route).
+CREATE OR REPLACE FUNCTION f_a4b5fe50(p_entry uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM t_3fa074e5 d JOIN t_f3158869 je ON je.c_14f317c6 = d.c_175a20c9
+                       WHERE d.c_9adee5c9 = 'journal_entry' AND d.c_175a20c9 = p_entry AND d.c_f399e237 = je.c_dfe6b7c5 AND d.c_3a789977 = 2)
+       AND NOT EXISTS (SELECT 1 FROM f_177b9f61(p_entry) pl
+                       WHERE (SELECT count(DISTINCT d.c_942d312c) FROM t_3fa074e5 d JOIN t_f3158869 je ON je.c_14f317c6 = d.c_175a20c9
+                              WHERE d.c_9adee5c9 = 'journal_entry' AND d.c_175a20c9 = p_entry AND d.c_f399e237 = je.c_dfe6b7c5
+                                AND d.c_3a789977 = 1 AND d.c_da356dc3 = pl.stage_no
+                                AND (d.c_942d312c <> je.c_2a51947a AND d.c_942d312c IS DISTINCT FROM je.c_41579554 OR f_09413dbf(p_entry) IS NULL)) < pl.required)
 $$;
