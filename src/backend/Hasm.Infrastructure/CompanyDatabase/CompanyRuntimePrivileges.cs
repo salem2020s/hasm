@@ -45,11 +45,28 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.Account.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.AccountSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.AccountRevision.Table, ["SELECT", "INSERT"]),
+        // General Ledger foundation (Phase 3.2B). Numbering: counters only advance, issued numbers are never deleted, history is append-only.
+        (CompanySchema.LedgerHistory.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NumberingRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.NumberCounter.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.NumberIssue.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ExchangeRate.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CostCenter.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ApprovalPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ApprovalDecision.Table, ["SELECT", "INSERT"]),
+        // Journal (slice S5). Entries are never deleted; the event log is append-only. DELETE is granted ONLY on the line and allocation tables, whose rows PostgreSQL lets change only while
+        // the parent entry is a Draft (a draft edit rewrites its lines); posted, reversed and cancelled entries keep their lines forever.
+        (CompanySchema.LedgerSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.JournalEntry.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.JournalLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.JournalAllocation.Table, ["SELECT", "INSERT", "DELETE"]),
+        (CompanySchema.JournalEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
     internal static readonly string[] ForbiddenOnAudit = ["UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
     internal static readonly string[] ForbiddenOnBranch = ["DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
+    internal static readonly string[] ForbiddenOnDraftTables = ["TRUNCATE", "REFERENCES", "TRIGGER"];
     internal static readonly string[] ForbiddenOnState = ["INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
     private static string Q(string identifier) => new NpgsqlCommandBuilder().QuoteIdentifier(identifier);
@@ -102,6 +119,10 @@ public static class CompanyRuntimePrivileges
           UNION ALL SELECT 'fiscal_modifiable' FROM unnest(@fiscal_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
           UNION ALL SELECT 'account_history_modifiable' WHERE to_regclass(@account_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@account_history), p))
           UNION ALL SELECT 'account_modifiable' FROM unnest(@account_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
+          UNION ALL SELECT 'ledger_history_modifiable' WHERE to_regclass(@ledger_history) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@ledger_history), p))
+          UNION ALL SELECT 'ledger_modifiable' FROM unnest(@ledger_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_branch::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
+          UNION ALL SELECT 'journal_event_modifiable' WHERE to_regclass(@journal_event) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_audit::text[]) p WHERE has_table_privilege(@r::name, to_regclass(@journal_event), p))
+          UNION ALL SELECT 'journal_draft_modifiable' FROM unnest(@journal_draft_tables::text[]) t WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_draft::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
           UNION ALL SELECT 'state_modifiable' FROM unnest(@state_tables::text[]) t
               WHERE to_regclass(t) IS NOT NULL AND EXISTS (SELECT 1 FROM unnest(@forbidden_state::text[]) p WHERE has_table_privilege(@r::name, to_regclass(t), p))
         ) v
@@ -125,6 +146,11 @@ public static class CompanyRuntimePrivileges
         cmd.Parameters.AddWithValue("warehouse_history", CompanySchema.WarehouseRevision.Table);
         cmd.Parameters.AddWithValue("fiscal_history", CompanySchema.FiscalHistory.Table);
         cmd.Parameters.AddWithValue("account_history", CompanySchema.AccountRevision.Table);
+        cmd.Parameters.AddWithValue("ledger_history", CompanySchema.LedgerHistory.Table);
+        cmd.Parameters.AddWithValue("ledger_tables", new[] { CompanySchema.NumberingRule.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberIssue.Table, CompanySchema.ExchangeRate.Table, CompanySchema.CostCenter.Table, CompanySchema.ApprovalPolicy.Table, CompanySchema.ApprovalDecision.Table, CompanySchema.LedgerSettings.Table, CompanySchema.JournalEntry.Table });
+        cmd.Parameters.AddWithValue("journal_event", CompanySchema.JournalEvent.Table);
+        cmd.Parameters.AddWithValue("journal_draft_tables", new[] { CompanySchema.JournalLine.Table, CompanySchema.JournalAllocation.Table });
+        cmd.Parameters.AddWithValue("forbidden_draft", ForbiddenOnDraftTables);
         cmd.Parameters.AddWithValue("account_tables", new[] { CompanySchema.Account.Table, CompanySchema.AccountSettings.Table });
         cmd.Parameters.AddWithValue("fiscal_tables", new[] { CompanySchema.FiscalYear.Table, CompanySchema.FiscalPeriod.Table, CompanySchema.FiscalReopenRequest.Table });
         cmd.Parameters.AddWithValue("state_tables", new[] { CoIdentity.Table, SystemSchema.MigrationJournalTable, CompanySchema.Currency.Table });

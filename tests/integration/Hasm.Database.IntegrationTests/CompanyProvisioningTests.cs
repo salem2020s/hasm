@@ -32,7 +32,7 @@ public class CompanyProvisioningTests : PostgresTestBase
         return c;
     }
 
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0008_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0009_extra.sql", sql);
     private static IReadOnlyList<MigrationScript> WithExtra(string sql) => [.. MigrationScript.LoadEmbeddedCompany(), Extra(sql)];
 
     private async Task<bool> DatabaseExists(string name)
@@ -73,14 +73,14 @@ public class CompanyProvisioningTests : PostgresTestBase
 
         Assert.Equal(ProvisioningOutcome.Provisioned, result.Outcome);
         Assert.True(result.DatabaseCreated);
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7], result.AppliedMigrations);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8], result.AppliedMigrations);
         var after = (await registry.GetAsync(c.Id))!;
         Assert.Equal(ProvisioningState.Ready, after.State);
         Assert.Equal(1, after.ProvisioningAttempts);
         Assert.Null(after.LastErrorCode);
         Assert.True(await DatabaseExists(c.PhysicalDatabaseName));
         Assert.Equal(c.Id, await InCompany<Guid>(c.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(7L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(8L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     // ---- repeated provisioning -----------------------------------------------------------
@@ -186,7 +186,7 @@ public class CompanyProvisioningTests : PostgresTestBase
 
         Assert.Equal(ProvisioningOutcome.Provisioned, retry.Outcome);
         Assert.False(retry.DatabaseCreated);
-        Assert.Equal([8], retry.AppliedMigrations); // migrations 1-7 already applied before the failure
+        Assert.Equal([9], retry.AppliedMigrations); // migrations 1-8 already applied before the failure
         var ready = (await registry.GetAsync(c.Id))!;
         Assert.Equal(ProvisioningState.Ready, ready.State);
         Assert.Equal(2, ready.ProvisioningAttempts);
@@ -239,7 +239,7 @@ public class CompanyProvisioningTests : PostgresTestBase
         Assert.Equal(ProvisioningState.Ready, ready.State);
         Assert.Equal(2, ready.ProvisioningAttempts);
         Assert.Equal(c.Id, await InCompany<Guid>(c.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(7L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(8L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     // ---- consistency and safety ----------------------------------------------------------

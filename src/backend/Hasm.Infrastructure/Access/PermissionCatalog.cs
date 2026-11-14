@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -102,6 +102,22 @@ public sealed partial class PermissionCatalog
         // Chart of Accounts (Phase 3.2A, system migration 0010): company-wide only (the chart belongs to the whole company). Re-coding an account and moving it in the
         // tree are separate, controlled permissions; configuring the automatic code assignment is another.
         new("company.accounts", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure, PermissionAction.Configure]),
+        // General Ledger foundation (Phase 3.2B, system migration 0011), company-wide only. Numbering: view the rules, configure them.
+        new("company.numbering", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Exchange rates: manual company-wide master data; entering a rate is the only write (append-only history).
+        new("company.exchangerates", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create]),
+        // Cost centers: company-wide, like the chart of accounts; re-coding and restructuring are separate, controlled permissions.
+        new("company.costcenters", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate, PermissionAction.Recode, PermissionAction.Restructure]),
+        // Approval policies (configuration only). Approving a DOCUMENT is a separate journal permission (slice S5) that is never in the Company Administrator preset.
+        new("company.approvalpolicies", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        // Journal (slice S5): branch-scoped. Approve is NOT in the Company Administrator preset (separation of duties; it belongs to Journal Approver and custom roles).
+        // Posting into a Soft Closed period and overriding an exchange rate are separate company-wide permissions.
+        new("company.journal", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Post, PermissionAction.Reverse]),
+        new("company.journalsoftclosed", ScopeKind.Company, [PermissionAction.Post]),
+        new("company.journalrate", ScopeKind.Company, [PermissionAction.Override]),
+        new("company.ledgersettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Ledger reports (slice S6): branch-scoped (a branch grant sees only its own branches); export is separate.
+        new("company.ledgerreports", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export]),
     ]);
 
     public static class Codes
@@ -149,6 +165,33 @@ public sealed partial class PermissionCatalog
         public const string AccountsRecode = "company.accounts.recode";
         public const string AccountsRestructure = "company.accounts.restructure";
         public const string AccountsConfigure = "company.accounts.configure";
+        public const string NumberingView = "company.numbering.view";
+        public const string NumberingConfigure = "company.numbering.configure";
+        public const string ExchangeRatesView = "company.exchangerates.view";
+        public const string ExchangeRatesCreate = "company.exchangerates.create";
+        public const string CostCentersView = "company.costcenters.view";
+        public const string CostCentersCreate = "company.costcenters.create";
+        public const string CostCentersUpdate = "company.costcenters.update";
+        public const string CostCentersActivate = "company.costcenters.activate";
+        public const string CostCentersRecode = "company.costcenters.recode";
+        public const string CostCentersRestructure = "company.costcenters.restructure";
+        public const string ApprovalPoliciesView = "company.approvalpolicies.view";
+        public const string ApprovalPoliciesCreate = "company.approvalpolicies.create";
+        public const string ApprovalPoliciesUpdate = "company.approvalpolicies.update";
+        public const string ApprovalPoliciesActivate = "company.approvalpolicies.activate";
+        public const string JournalView = "company.journal.view";
+        public const string JournalCreate = "company.journal.create";
+        public const string JournalUpdate = "company.journal.update";
+        public const string JournalSubmit = "company.journal.submit";
+        public const string JournalApprove = "company.journal.approve";
+        public const string JournalPost = "company.journal.post";
+        public const string JournalReverse = "company.journal.reverse";
+        public const string JournalSoftClosedPost = "company.journalsoftclosed.post";
+        public const string JournalRateOverride = "company.journalrate.override";
+        public const string LedgerSettingsView = "company.ledgersettings.view";
+        public const string LedgerSettingsConfigure = "company.ledgersettings.configure";
+        public const string LedgerReportsView = "company.ledgerreports.view";
+        public const string LedgerReportsExport = "company.ledgerreports.export";
     }
 
     public Permission Get(string code) =>
@@ -162,6 +205,7 @@ public static class PresetRoles
     public static readonly Guid AccessManagerId = new("5c1b0f6e-0000-4a00-8000-000000000002");
     public static readonly Guid AccessAuditorId = new("5c1b0f6e-0000-4a00-8000-000000000003");
     public static readonly Guid FiscalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000004");
+    public static readonly Guid JournalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000005");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -169,7 +213,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -180,6 +224,7 @@ public static class PresetRoles
             {
                 PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.FiscalReopenView, PermissionCatalog.Codes.FiscalYearsView,
             }),
+            [JournalApproverId] = ("journal-approver", new HashSet<string> { PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,

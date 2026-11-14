@@ -41,7 +41,7 @@ var validUsage = command switch
     "grant-company-runtime" => (args.Length == 2 || (args.Length == 3 && (rotateCredential = args[2] == "--rotate-credential")))
         && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
-    "grant-fiscal-approver" or "revoke-fiscal-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
+    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
         && (args.Length == 2 || (args.Length == 4 && args[2] == "--checkpoint-dir" && !string.IsNullOrWhiteSpace(checkpointDirOverride = args[3]))),
@@ -50,7 +50,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
     return Usage;
 }
 
@@ -173,25 +173,31 @@ try
         }
         case "grant-fiscal-approver":
         case "revoke-fiscal-approver":
+        case "grant-journal-approver":
+        case "revoke-journal-approver":
         {
             // Offline delegation of the Fiscal Approver role (approval of exceptional fiscal reopenings). No HTTP endpoint exists for this: a company administrator
             // cannot grant a permission they do not hold, so this is the supported way to create the first approver and the recovery path. Audited without an actor user.
             await using var access = new AccessService(options.BuildSystemConnectionString(admin: true), TimeProvider.System, PermissionCatalog.Default, AuditTrail.FromOptions(auditOptions, TimeProvider.System));
-            var granting = command == "grant-fiscal-approver";
-            var status = granting ? await access.GrantFiscalApproverOfflineAsync(args[1], companyId) : await access.RevokeFiscalApproverOfflineAsync(args[1], companyId);
+            var journalRole = command.EndsWith("journal-approver", StringComparison.Ordinal);
+            var roleName = journalRole ? "Journal Approver" : "Fiscal Approver";
+            var granting = command.StartsWith("grant-", StringComparison.Ordinal);
+            var status = journalRole
+                ? (granting ? await access.GrantJournalApproverOfflineAsync(args[1], companyId) : await access.RevokeJournalApproverOfflineAsync(args[1], companyId))
+                : (granting ? await access.GrantFiscalApproverOfflineAsync(args[1], companyId) : await access.RevokeFiscalApproverOfflineAsync(args[1], companyId));
             switch (status)
             {
                 case AccessService.FiscalApproverStatus.Granted:
-                    Console.WriteLine("The Fiscal Approver role was granted (company-wide).");
+                    Console.WriteLine($"The {roleName} role was granted (company-wide).");
                     return Ok;
                 case AccessService.FiscalApproverStatus.AlreadyApprover:
-                    Console.WriteLine("The user is already a Fiscal Approver of this company; nothing changed.");
+                    Console.WriteLine($"The user is already a {roleName} of this company; nothing changed.");
                     return Ok;
                 case AccessService.FiscalApproverStatus.Revoked:
-                    Console.WriteLine("The Fiscal Approver role was removed.");
+                    Console.WriteLine($"The {roleName} role was removed.");
                     return Ok;
                 case AccessService.FiscalApproverStatus.NotApprover:
-                    Console.WriteLine("The user is not a Fiscal Approver of this company; nothing changed.");
+                    Console.WriteLine($"The user is not a {roleName} of this company; nothing changed.");
                     return Ok;
                 case AccessService.FiscalApproverStatus.CompanyUnavailable:
                     Console.Error.WriteLine("The company does not exist or is not Ready; nothing was changed.");

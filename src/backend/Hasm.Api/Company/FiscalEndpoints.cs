@@ -12,7 +12,7 @@ public static class FiscalSetup
 {
     public static IServiceCollection AddHasmFiscalCalendar(this IServiceCollection services)
     {
-        services.AddSingleton(new PeriodCloseGuard());   // placeholders only: the modules whose pending items must block a close do not exist yet
+        services.AddSingleton(new PeriodCloseGuard([new Hasm.Infrastructure.Ledger.PendingJournalPeriodCloseProbe()]));   // pending journal entries block a close; inventory and adjustment modules register theirs later
         services.AddSingleton(sp => new FiscalCalendarService(
             sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
             sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<FinancialHistoryGuard>(), sp.GetRequiredService<TimeProvider>()));

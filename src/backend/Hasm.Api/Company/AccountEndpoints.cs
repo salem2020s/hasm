@@ -12,7 +12,7 @@ public static class AccountSetup
 {
     public static IServiceCollection AddHasmChartOfAccounts(this IServiceCollection services)
     {
-        services.AddSingleton(new AccountUsageGuard());   // placeholder only: the General Ledger (Phase 3.2B) registers the real posting-usage probe
+        services.AddSingleton(new AccountUsageGuard([new Hasm.Infrastructure.Ledger.JournalAccountUsageProbe()]));   // the General Ledger probe replaces the placeholder
         services.AddSingleton(sp => new ChartOfAccountsService(
             sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
             sp.GetRequiredService<AccountUsageGuard>(), sp.GetRequiredService<FinancialHistoryGuard>(), sp.GetRequiredService<TimeProvider>()));

@@ -17,7 +17,7 @@ public static class CompanyConfigurationSetup
     {
         // The Trial policy is the only entitlement policy: there is deliberately no allow-all registration.
         services.AddSingleton<IEntitlementPolicy>(TrialEntitlementPolicy.Instance);
-        services.AddSingleton(_ => new FinancialHistoryGuard());   // accounting/inventory modules register real IFinancialHistoryProbe implementations later
+        services.AddSingleton(_ => new FinancialHistoryGuard([new Hasm.Infrastructure.Ledger.JournalFinancialHistoryProbe()]));   // inventory and opening-balance modules register their own probes
         services.AddSingleton(sp =>
         {
             var options = HasmDatabaseOptions.FromConfiguration(configuration);

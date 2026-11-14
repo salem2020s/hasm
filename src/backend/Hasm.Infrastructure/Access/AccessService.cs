@@ -750,7 +750,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     /// privileged database account (no HTTP endpoint); the target must already be an ACTIVE member of a Ready company (membership is never created here);
     /// audited with no actor user. Per-request separation of duties still applies: an approver can never approve their own request.
     /// </summary>
-    public async Task<FiscalApproverStatus> GrantFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default)
+    private async Task<FiscalApproverStatus> GrantPresetApproverOfflineAsync(string login, Guid companyId, Guid roleId, string label, CancellationToken ct)
     {
         if (!LoginName.TryNormalize(login, out var normalized)) return FiscalApproverStatus.UserNotFound;
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
@@ -761,15 +761,15 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         await using var ins = new NpgsqlCommand(
             $"INSERT INTO {A.Table} ({A.Id}, {A.UserId}, {A.CompanyId}, {A.RoleId}, {A.ScopeKind}, {A.ScopeId}, {A.GrantedAtUtc}, {A.GrantedBy}) VALUES (@i, @u, @c, @r, 0, NULL, @t, NULL) ON CONFLICT DO NOTHING", conn, tx);
         ins.Parameters.AddWithValue("i", Guid.NewGuid()); ins.Parameters.AddWithValue("u", userId.Value); ins.Parameters.AddWithValue("c", companyId);
-        ins.Parameters.AddWithValue("r", PresetRoles.FiscalApproverId); ins.Parameters.AddWithValue("t", clock.GetUtcNow());
+        ins.Parameters.AddWithValue("r", roleId); ins.Parameters.AddWithValue("t", clock.GetUtcNow());
         var inserted = await ins.ExecuteNonQueryAsync(ct) == 1;
-        if (inserted) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, PresetRoles.FiscalApproverId, AccessEvent.RoleAssigned, "scope: company; offline fiscal approver delegation", ct);
+        if (inserted) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, roleId, AccessEvent.RoleAssigned, $"scope: company; offline {label} delegation", ct);
         await CommitAuditedAsync(tx, ct);
         return inserted ? FiscalApproverStatus.Granted : FiscalApproverStatus.AlreadyApprover;
     }
 
     /// <summary>Offline removal of the Fiscal Approver role (revoked, never deleted; audited with no actor user). Safe to repeat.</summary>
-    public async Task<FiscalApproverStatus> RevokeFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default)
+    private async Task<FiscalApproverStatus> RevokePresetApproverOfflineAsync(string login, Guid companyId, Guid roleId, string label, CancellationToken ct)
     {
         if (!LoginName.TryNormalize(login, out var normalized)) return FiscalApproverStatus.UserNotFound;
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
@@ -785,12 +785,19 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         await using var rev = new NpgsqlCommand(
             $"UPDATE {A.Table} SET {A.RevokedAtUtc} = @t WHERE {A.UserId} = @u AND {A.CompanyId} = @c AND {A.RoleId} = @r AND {A.RevokedAtUtc} IS NULL", conn, tx);
         rev.Parameters.AddWithValue("t", clock.GetUtcNow()); rev.Parameters.AddWithValue("u", userId.Value);
-        rev.Parameters.AddWithValue("c", companyId); rev.Parameters.AddWithValue("r", PresetRoles.FiscalApproverId);
+        rev.Parameters.AddWithValue("c", companyId); rev.Parameters.AddWithValue("r", roleId);
         var revoked = await rev.ExecuteNonQueryAsync(ct) > 0;
-        if (revoked) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, PresetRoles.FiscalApproverId, AccessEvent.RoleAssignmentRevoked, "scope: company; offline fiscal approver removal", ct);
+        if (revoked) await WriteAuditAsync(conn, tx, null, companyId, userId.Value, roleId, AccessEvent.RoleAssignmentRevoked, $"scope: company; offline {label} removal", ct);
         await CommitAuditedAsync(tx, ct);
         return revoked ? FiscalApproverStatus.Revoked : FiscalApproverStatus.NotApprover;
     }
+
+    public Task<FiscalApproverStatus> GrantFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.FiscalApproverId, "fiscal approver", ct);
+    public Task<FiscalApproverStatus> RevokeFiscalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.FiscalApproverId, "fiscal approver", ct);
+
+    /// <summary>Offline delegation of the preset Journal Approver role (company-wide), exactly like the Fiscal Approver: no company user can grant journal approval (the administrator lacks it), so the first approver comes from the administrative tool. Per-entry separation of duties still applies.</summary>
+    public Task<FiscalApproverStatus> GrantJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
+    public Task<FiscalApproverStatus> RevokeJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
 
     private static async Task<(Guid? UserId, FiscalApproverStatus Status)> FindMemberForDelegationAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string login, Guid companyId, CancellationToken ct)
     {
