@@ -79,6 +79,19 @@ describe("inventory accounting configuration", () => {
     expect(screen.getByLabelText("الحساب المقابل للاستلام")).toHaveValue("a4");
   });
 
+  it("shows a server error on the right group row even when an earlier row was set back to inherit", async () => {
+    setup(configured, { putInventoryAccounting: vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "groups[0].accountId", code: "account_not_found" }] })) });
+    await go("#/inventory/accounting");
+    await screen.findByTestId("inventory-accounting");
+    await userEvent.click(tab("حسابات المجموعات"));
+    await userEvent.selectOptions(screen.getByLabelText("الحساب FOOD"), "");                                       // the first row is blanked, so it is not submitted
+    await userEvent.selectOptions(screen.getByLabelText("الحساب FRUIT"), "a1");                                    // the submitted list is therefore [FRUIT], index 0
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    const message = await screen.findByText("الحساب غير موجود.");
+    expect(message.closest("div")?.contains(screen.getByLabelText("الحساب FRUIT"))).toBe(true);
+    expect(message.closest("div")?.contains(screen.getByLabelText("الحساب FOOD"))).toBe(false);
+  });
+
   it("offers a reload when the configuration was changed elsewhere (412)", async () => {
     const client = setup(configured, { putInventoryAccounting: vi.fn().mockRejectedValue(apiError(412, "accounting_version_conflict")) });
     await go("#/inventory/accounting");

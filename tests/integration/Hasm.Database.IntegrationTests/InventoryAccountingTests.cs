@@ -56,6 +56,20 @@ public class InventoryAccountingTests : InventoryAccountingTestBase
     }
 
     [PostgresFact]
+    public async Task A_new_note_on_an_identical_mapping_is_recorded_while_a_missing_note_is_still_unchanged()
+    {
+        await PrepareAccounting();
+        var first = Ok(await Acc.SaveAsync(Admin.Id, Company.Id, 0, new InventoryAccountingInput(Stock.Id, Goods.Id, Cogs.Id, [], "first")));
+        Assert.Equal(1, first.Version!.VersionNo);
+        var noNote = Ok(await Acc.SaveAsync(Admin.Id, Company.Id, 1, new InventoryAccountingInput(Stock.Id, Goods.Id, Cogs.Id, [], null)));
+        Assert.Equal(1, noNote.Version!.VersionNo);                                                                                    // identical and no note: nothing new
+        var sameNote = Ok(await Acc.SaveAsync(Admin.Id, Company.Id, 1, new InventoryAccountingInput(Stock.Id, Goods.Id, Cogs.Id, [], "first")));
+        Assert.Equal(1, sameNote.Version!.VersionNo);                                                                                  // identical note: nothing new
+        var renoted = Ok(await Acc.SaveAsync(Admin.Id, Company.Id, 1, new InventoryAccountingInput(Stock.Id, Goods.Id, Cogs.Id, [], "reviewed by the controller")));
+        Assert.Equal((2, "reviewed by the controller"), (renoted.Version!.VersionNo, renoted.Version.Note));                           // a different note is a new, recorded version
+    }
+
+    [PostgresFact]
     public async Task Every_save_is_a_new_immutable_version_an_unchanged_save_creates_nothing_and_concurrency_is_fenced_by_the_version_number()
     {
         await PrepareAccounting();

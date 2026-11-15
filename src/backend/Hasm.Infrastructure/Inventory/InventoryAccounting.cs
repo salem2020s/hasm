@@ -191,7 +191,7 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
                 if (input.IssueCounterAccountId is { } ic && inventoryAccounts.Contains(ic)) fields.Add(new("issueCounterAccountId", "counter_equals_inventory_account"));
                 if (fields.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: fields);
                 var hash = Hash(input, groups);
-                if (current.Version is { } cv && cv.ContentHash == hash) throw new Unchanged(current);
+                if (current.Version is { } cv && cv.ContentHash == hash && (note is null || string.Equals(note, cv.Note, StringComparison.Ordinal))) throw new Unchanged(current);   // a new note on an identical mapping is still recorded as a version
                 var versionId = Guid.NewGuid(); var no = currentNo + 1; var now = clock.GetUtcNow().UtcDateTime;
                 await using (var ins = new NpgsqlCommand($"INSERT INTO {V.Table} ({V.Id}, {V.VersionNo}, {V.CreatedAtUtc}, {V.CreatedBy}, {V.Note}, {V.DefaultAccountId}, {V.ReceiptCounterAccountId}, {V.IssueCounterAccountId}, {V.GroupCount}, {V.ContentHash}) VALUES (@id, @no, @now, @by, @note, @d, @r, @i, @c, @h)", work.Connection, work.Transaction))
                 {
@@ -251,11 +251,14 @@ public sealed class InventoryAccountingManagementService(AccessService access, I
     private static ConfigResult<T> Denied<T>() => ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
     private Task<bool> Can(Guid user, Guid company, string code, CancellationToken ct) => access.IsAllowedAsync(user, company, code, ScopeTarget.Company, ct);
 
+    /// <summary>Whoever may configure may also read (the screen cannot be used otherwise).</summary>
+    private async Task<bool> CanView(Guid user, Guid company, CancellationToken ct) => await Can(user, company, PermissionCatalog.Codes.InventoryAccountingView, ct) || await Can(user, company, PermissionCatalog.Codes.InventoryAccountingConfigure, ct);
+
     public async Task<ConfigResult<InventoryAccountingView>> GetAsync(Guid user, Guid company, CancellationToken ct = default) =>
-        await Can(user, company, PermissionCatalog.Codes.InventoryAccountingView, ct) ? ConfigResult<InventoryAccountingView>.Ok(await accounting.GetAsync(company, null, ct)) : Denied<InventoryAccountingView>();
+        await CanView(user, company, ct) ? ConfigResult<InventoryAccountingView>.Ok(await accounting.GetAsync(company, null, ct)) : Denied<InventoryAccountingView>();
 
     public async Task<ConfigResult<IReadOnlyList<InventoryAccountingVersionView>>> VersionsAsync(Guid user, Guid company, CancellationToken ct = default) =>
-        await Can(user, company, PermissionCatalog.Codes.InventoryAccountingView, ct) ? ConfigResult<IReadOnlyList<InventoryAccountingVersionView>>.Ok(await accounting.ListVersionsAsync(company, ct)) : Denied<IReadOnlyList<InventoryAccountingVersionView>>();
+        await CanView(user, company, ct) ? ConfigResult<IReadOnlyList<InventoryAccountingVersionView>>.Ok(await accounting.ListVersionsAsync(company, ct)) : Denied<IReadOnlyList<InventoryAccountingVersionView>>();
 
     /// <summary>The accounts and groups to show or pick: every active postable account plus the ones the given configuration already uses (so an account deactivated later is still named). Viewers and configurers.</summary>
     public async Task<ConfigResult<InventoryAccountingLookups>> LookupsAsync(Guid user, Guid company, IReadOnlyCollection<Guid>? referenced = null, CancellationToken ct = default) =>

@@ -117,7 +117,7 @@ export function InventoryAccountingPage() {
                   <tr key={g.id} data-testid={`ia-group-${g.code}`}>
                     <td><bdi dir="ltr" style={{ paddingInlineStart: `${depth * 1.25}rem` }}>{g.code}</bdi></td><td><bdi>{invName(g, locale)}</bdi></td>
                     <td>
-                      <Field id={`ia-g-${i}`} label={`${t("invacc.account")} ${g.code}`} error={errors[`groups[${Object.keys(form.groups).indexOf(g.id)}].accountId`]}>
+                      <Field id={`ia-g-${i}`} label={`${t("invacc.account")} ${g.code}`} error={errors[`groups[${Object.entries(form.groups).filter(([, a]) => a).findIndex(([k]) => k === g.id)}].accountId`]}>
                         {(aria) => (
                           <select {...aria} value={form.groups[g.id] ?? ""} disabled={!canEdit} onChange={(e) => setForm((f) => ({ ...f, groups: { ...f.groups, [g.id]: e.target.value } }))}>
                             <option value="">{t("invacc.inherit")}</option>
