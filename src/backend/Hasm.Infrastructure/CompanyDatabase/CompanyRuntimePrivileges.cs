@@ -87,6 +87,10 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.Item.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.ItemUnit.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
         (CompanySchema.ItemBarcode.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Stock movement documents (Phase 3.5): documents are never deleted (PostgreSQL refuses it); lines are rewritten only while the document is a draft; the history is append-only.
+        (CompanySchema.StockDocument.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.StockDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.StockDocumentEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

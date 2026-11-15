@@ -52,8 +52,10 @@ public class NumberingTests : NumberingTestBase
     {
         await PrepareNumbering();
         foreach (var t in new[] { Nr.Table, Nc.Table, Ni.Table, Lh.Table }) Assert.Equal(0L, await Count(Company, t));
-        var rule = Assert.Single(Ok(await NMgmt.ListAsync(Admin.Id, Company.Id)));
-        Assert.Equal(new NumberingRuleView("journal_entry", "JV", "-", 6, false, true, 0, false, false), rule);
+        var rules = Ok(await NMgmt.ListAsync(Admin.Id, Company.Id));
+        Assert.Equal(["journal_entry", "stock_receipt", "stock_issue", "stock_transfer"], rules.Select(r => r.DocType));      // one default rule per registered document type (journal entries and the three stock documents)
+        Assert.Equal(["JV", "SR", "SI", "ST"], rules.Select(r => r.Prefix));
+        Assert.All(rules, r => Assert.Equal(("-", 6, false, true, 0L, false, false), (r.Separator, r.Width, r.PerBranch, r.PerFiscalYear, r.Revision, r.Exists, r.NumbersIssued)));
         Assert.Equal(0L, await Count(Company, Nr.Table));
         Assert.Equal(0L, await Count(Company, Audit_.Table) - Baseline);
     }
@@ -249,7 +251,7 @@ public class NumberingAccessTests : NumberingTestBase
         Assert.DoesNotContain(roles.Where(r => r.PresetKey != "company-administrator").SelectMany(r => r.Permissions), p => p.StartsWith("company.numbering"));
         var (viewer, _) = await Holder(PermissionCatalog.Codes.NumberingView);
         var (configurer, _) = await Holder(PermissionCatalog.Codes.NumberingConfigure);
-        Assert.Single(Ok(await NMgmt.ListAsync(viewer.Id, Company.Id)));
+        Assert.Equal(4, Ok(await NMgmt.ListAsync(viewer.Id, Company.Id)).Count);
         Assert.Equal(ConfigStatus.Forbidden, (await NMgmt.PutRuleAsync(viewer.Id, Company.Id, "journal_entry", 0, Rule())).Status);
         Assert.Equal(ConfigStatus.Forbidden, (await NMgmt.ListAsync(configurer.Id, Company.Id)).Status);
         Assert.Equal(1, Ok(await NMgmt.PutRuleAsync(configurer.Id, Company.Id, "journal_entry", 0, Rule("ZZ"))).Revision);
