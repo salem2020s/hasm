@@ -138,6 +138,8 @@ public sealed partial class PermissionCatalog
         new("company.inventorysettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         // Stock movement documents (3.5): warehouse-scoped like warehouses (a warehouse grant reaches only that warehouse, a company grant all of them; no inheritance from branches). A transfer needs the permission on BOTH warehouses.
         // Approve is held by the Company Administrator preset, but separation of duties (the approver is never the submitter) is enforced by the service AND by PostgreSQL.
+        // Inventory accounting configuration (3.7A): which ledger accounts hold inventory and take the other side of stock movements. Company-wide; configuring it is audited and versioned.
+        new("company.inventoryaccounting", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
     ]);
 
@@ -233,6 +235,8 @@ public sealed partial class PermissionCatalog
         public const string BarcodesActivate = "company.barcodes.activate";
         public const string InventorySettingsView = "company.inventorysettings.view";
         public const string InventorySettingsConfigure = "company.inventorysettings.configure";
+        public const string InventoryAccountingView = "company.inventoryaccounting.view";
+        public const string InventoryAccountingConfigure = "company.inventoryaccounting.configure";
         public const string StockDocsView = "company.stockdocs.view";
         public const string StockDocsCreate = "company.stockdocs.create";
         public const string StockDocsUpdate = "company.stockdocs.update";
