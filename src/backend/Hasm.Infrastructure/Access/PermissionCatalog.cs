@@ -136,6 +136,9 @@ public sealed partial class PermissionCatalog
         new("company.items", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
         new("company.barcodes", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate]),
         new("company.inventorysettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Stock movement documents (3.5): warehouse-scoped like warehouses (a warehouse grant reaches only that warehouse, a company grant all of them; no inheritance from branches). A transfer needs the permission on BOTH warehouses.
+        // Approve is held by the Company Administrator preset, but separation of duties (the approver is never the submitter) is enforced by the service AND by PostgreSQL.
+        new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
     ]);
 
     public static class Codes
@@ -230,6 +233,12 @@ public sealed partial class PermissionCatalog
         public const string BarcodesActivate = "company.barcodes.activate";
         public const string InventorySettingsView = "company.inventorysettings.view";
         public const string InventorySettingsConfigure = "company.inventorysettings.configure";
+        public const string StockDocsView = "company.stockdocs.view";
+        public const string StockDocsCreate = "company.stockdocs.create";
+        public const string StockDocsUpdate = "company.stockdocs.update";
+        public const string StockDocsSubmit = "company.stockdocs.submit";
+        public const string StockDocsApprove = "company.stockdocs.approve";
+        public const string StockDocsCancel = "company.stockdocs.cancel";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";

@@ -152,7 +152,7 @@ public static partial class ApprovalValidation
         var d = Clean(input.DocType)?.ToLowerInvariant();
         string docType = "";
         if (d is null) errors.Add(new("docType", "required"));
-        else if (!DocTypeShape().IsMatch(d) || !DocumentTypes.IsKnown(d)) errors.Add(new("docType", "unknown_document_type"));
+        else if (!DocTypeShape().IsMatch(d) || !DocumentTypes.UsesApprovalPolicies(d)) errors.Add(new("docType", "unknown_document_type"));
         else docType = d;
         Extras(input.JournalType, input.RateOverride, input.SoftClosed, input.Stages, out var jt, out var stages, errors);
         if (!TryParseClosingKind(input.ClosingKind, out var ck)) errors.Add(new("closingKind", "invalid_value"));
@@ -182,7 +182,7 @@ public static partial class ApprovalValidation
         if (input is null) { errors.Add(new("body", "required")); return false; }
         var d = Clean(input.DocType)?.ToLowerInvariant();
         if (d is null) errors.Add(new("docType", "required"));
-        else if (!DocTypeShape().IsMatch(d) || !DocumentTypes.IsKnown(d)) errors.Add(new("docType", "unknown_document_type"));
+        else if (!DocTypeShape().IsMatch(d) || !DocumentTypes.UsesApprovalPolicies(d)) errors.Add(new("docType", "unknown_document_type"));
         else docType = d;
         Common(input.Source, input.MinAmount, input.RequiredApprovals, input.NameAr, input.NameEn, out source, out minAmount, out required, out nameAr, out nameEn, errors);
         return errors.Count == 0;

@@ -8,6 +8,7 @@ using NpgsqlTypes;
 using W = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Warehouse;
 using B = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
 using R = Hasm.Infrastructure.CompanyDatabase.CompanySchema.WarehouseRevision;
+using SD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockDocument;
 
 namespace Hasm.Infrastructure.CompanyConfiguration;
 
@@ -147,6 +148,12 @@ public sealed class CompanyWarehouseService(
             await LockAsync(work, ct);
             var current = await RequireAsync(work, id, expectedRevision.Value, ct);
             if (!current.IsActive) throw new Abort(null, ConfigStatus.Conflict, "warehouse_already_inactive");
+            // A warehouse with open stock documents (draft, submitted or approved and not yet posted) cannot be deactivated: the documents would be left pointing at an unusable warehouse.
+            await using (var open = new NpgsqlCommand($"SELECT 1 FROM {SD.Table} WHERE ({SD.SourceWarehouseId} = @w OR {SD.TargetWarehouseId} = @w) AND {SD.Status} IN (1, 2, 3) LIMIT 1", work.Connection, work.Transaction))
+            {
+                open.Parameters.AddWithValue("w", id);
+                if (await open.ExecuteScalarAsync(ct) is not null) throw new Abort(null, ConfigStatus.Conflict, "warehouse_has_open_documents");
+            }
             return await ToggleAsync(work, actor, current, false, ConfigAuditEvents.WarehouseDeactivated, "warehouse deactivated", ct);
         }, ct);
     }

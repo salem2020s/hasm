@@ -7,8 +7,16 @@ namespace Hasm.Infrastructure.Ledger;
 public static class DocumentTypes
 {
     public const string JournalEntry = "journal_entry";
+    public const string StockReceipt = "stock_receipt";
+    public const string StockIssue = "stock_issue";
+    public const string StockTransfer = "stock_transfer";
 
-    public static IReadOnlyList<string> All { get; } = [JournalEntry];
+    public static IReadOnlyList<string> All { get; } = [JournalEntry, StockReceipt, StockIssue, StockTransfer];
+
+    /// <summary>Only journal entries run through the ordered approval-policy engine; stock documents use the independent-approver rule of their own service.</summary>
+    public static bool UsesApprovalPolicies(string? docType) => docType == JournalEntry;
+
+    public static string DefaultPrefix(string docType) => docType switch { JournalEntry => "JV", StockReceipt => "SR", StockIssue => "SI", StockTransfer => "ST", _ => "" };
 
     public static bool IsKnown(string? docType) => docType is not null && All.Contains(docType, StringComparer.Ordinal);
 }
@@ -16,7 +24,7 @@ public static class DocumentTypes
 /// <summary>A numbering rule. <c>Exists</c> false = documented defaults shown, nothing stored yet (a read never creates the row).</summary>
 public sealed record NumberingRuleView(string DocType, string Prefix, string Separator, int Width, bool PerBranch, bool PerFiscalYear, long Revision, bool Exists, bool NumbersIssued)
 {
-    public static NumberingRuleView Default(string docType) => new(docType, docType == DocumentTypes.JournalEntry ? "JV" : "", "-", 6, false, true, 0, false, false);
+    public static NumberingRuleView Default(string docType) => new(docType, DocumentTypes.DefaultPrefix(docType), "-", 6, false, true, 0, false, false);
 }
 
 public sealed record NumberingRuleInput(string? Prefix, string? Separator, int? Width, bool? PerBranch, bool? PerFiscalYear);
