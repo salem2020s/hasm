@@ -83,6 +83,7 @@ function run(root, base, env = process.env) {
   // 3. skipped tests (compare skip counts per changed test file)
   for (const f of new Set(changed)) {
     if (!/(\.cs|\.tsx?|\.js)$/.test(f) || !/(test|spec|Tests)/i.test(f)) continue;
+    if (f.startsWith("tools/verify/")) continue;   // the guard self-tests hold the skip patterns as sample text; those files are protected by the approval flag instead
     const p = path.join(root, f); if (!fs.existsSync(p)) continue;
     const now = fs.readFileSync(p, "utf8"); const old = showBase(root, base, f) || "";
     if (countMatches(now, SKIPS) > countMatches(old, SKIPS)) findings.push(`${f}: adds skipped or focused tests`);
