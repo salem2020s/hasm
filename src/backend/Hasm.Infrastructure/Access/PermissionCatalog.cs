@@ -130,6 +130,12 @@ public sealed partial class PermissionCatalog
         new("company.financialstatements", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export], AcceptsCostCenter: true),
         // The classification (statement mapping) that decides where each account appears in the statements. Company-wide; changing it is audited and creates a new version.
         new("company.statementmapping", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        // Inventory master data (3.4): company-wide (item data is not owned by a branch or warehouse). Stock movement permissions belong to the later stock phase.
+        new("company.units", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        new("company.itemgroups", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        new("company.items", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        new("company.barcodes", ScopeKind.Company, [PermissionAction.Create, PermissionAction.Activate]),
+        new("company.inventorysettings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -208,6 +214,22 @@ public sealed partial class PermissionCatalog
         public const string FinancialStatementsExport = "company.financialstatements.export";
         public const string StatementMappingView = "company.statementmapping.view";
         public const string StatementMappingConfigure = "company.statementmapping.configure";
+        public const string UnitsView = "company.units.view";
+        public const string UnitsCreate = "company.units.create";
+        public const string UnitsUpdate = "company.units.update";
+        public const string UnitsActivate = "company.units.activate";
+        public const string ItemGroupsView = "company.itemgroups.view";
+        public const string ItemGroupsCreate = "company.itemgroups.create";
+        public const string ItemGroupsUpdate = "company.itemgroups.update";
+        public const string ItemGroupsActivate = "company.itemgroups.activate";
+        public const string ItemsView = "company.items.view";
+        public const string ItemsCreate = "company.items.create";
+        public const string ItemsUpdate = "company.items.update";
+        public const string ItemsActivate = "company.items.activate";
+        public const string BarcodesCreate = "company.barcodes.create";
+        public const string BarcodesActivate = "company.barcodes.activate";
+        public const string InventorySettingsView = "company.inventorysettings.view";
+        public const string InventorySettingsConfigure = "company.inventorysettings.configure";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
