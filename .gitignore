@@ -42,3 +42,7 @@
 *.hkey
 *.hcp
 *.hcred
+
+# Playwright output
+test-results/
+playwright-report/

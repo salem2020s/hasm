@@ -24,14 +24,14 @@ Status words: *merged* = on `main` with CI green on the pull request head (check
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Built and **in review, not merged**: **3.7A** (inventory accounting configuration) on branch `feature/phase-3-7a-inventory-accounting`.
+Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit `1b27ad2`). In review: **4.0** verification infrastructure (PR #32).
 
 ## Remaining phases (summary)
 Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting and security risk of the phase.
 
 | Phase | Title | Risk | Prerequisites | Migration implications |
 |---|---|---|---|---|
-| 3.7A | Inventory accounting configuration (first slice of 3.7) | High | 3.6 | company 0015, system 0017 |
+| 3.7A | Inventory accounting configuration (first slice of 3.7) — **MERGED (PR #31, merge commit 1b27ad2)** | High | 3.6 | company 0015, system 0017 |
 | 3.7B | Atomic inventory posting (core) | Critical | 3.7A | company (posting links, state, receipt cost input), system (post permission) |
 | 3.7C | Reversal, cancellation and period-close protection | Critical | 3.7B | company (if state transitions need columns) |
 | 3.7D | Posting UI and capabilities | Medium | 3.7C | none |
@@ -61,7 +61,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 3.25 | Visual report designer | High | 3.23 | company |
 | 3.26 | Document and print designer | Medium | 3.15, 3.16, 3.12 | company |
 | 3.27 | Opening balances and legacy migration | Critical | 3.17, 3.8B, 3.9C | company |
-| 4.0 | Verification infrastructure | Medium | 3.7A | none |
+| 4.0 | Verification infrastructure — **IN REVIEW (PR #32)** | Medium | 3.7A | none |
 | 4.1 | Identity completion | High | 3.7D | system |
 | 4.2 | Licensing and Trial | Critical | 3.17 | system |
 | 4.3 | Backup and restore | Critical | 3.12, 3.9A | none |
@@ -398,7 +398,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 ### Phase 4.0 — Verification infrastructure
 * **Exact approved scope:** SRS 18.4, 18.5, 18.6; policy: CLAUDE.md autonomous CI repair
 * **Prerequisites:** 3.7A
-* **Deliverables:** NOTHING BELOW EXISTS YET; this phase builds it and each control is claimed only after its own test proves it. (1) Always-on documentation and traceability workflow: regenerates docs from tools/roadmap and fails on drift (node tools/roadmap/generate.js --check), validates links, required files and that every SRS requirement id is present exactly once. (2) Backend and PostgreSQL regression: the existing build-test and postgres-integration jobs stay and are covered by the required-check manifest. (3) Frontend and Desktop verification: existing typecheck, tests, production build and Tauri build stay; Web end-to-end tests (browser) and a Desktop smoke test are added. (4) Dependency vulnerability scanning and secret scanning on every PR. (5) Independent code-review support: a review-record template bound to the PR head SHA and a checklist script; it supports a separate reviewing context but cannot create one. (6) Protection against weakened CI: a guard that fails a PR which lowers the expected PostgreSQL test count, removes or skips tests, deletes or disables a required job, or edits the required-check manifest without an owner-labelled approval. (7) Head-SHA verification: a script that lists the required checks from the manifest and proves each is green on the exact PR head SHA before any merge, refusing when checks are pending, missing or stale. (8) Seeded reference-data generator skeleton and test-count registry.
+* **Deliverables:** STATUS (PR #32, in review): BUILT and covered by tools/verify self-tests: (1) always-on documentation/traceability check, (3 partly) Playwright browser smoke tests of the Web bundle, (4) dependency and secret scanning, (5) review-record validator, (6) CI-weakening guard (registry counts, weakening patterns by occurrence, paths filters, renames/deletions, test-inventory decreases, skipped tests, protected files), (7) head-SHA verifier (paginated, GitHub Actions app only). NOT BUILT: Desktop smoke test, full-stack E2E with a real API and PostgreSQL, the seeded reference-data generator skeleton, a GitHub ruleset that enforces these checks (needs a plan with that API), and any binding of the owner approval label to a commit. Original scope follows. (1) Always-on documentation and traceability workflow: regenerates docs from tools/roadmap and fails on drift (node tools/roadmap/generate.js --check), validates links, required files and that every SRS requirement id is present exactly once. (2) Backend and PostgreSQL regression: the existing build-test and postgres-integration jobs stay and are covered by the required-check manifest. (3) Frontend and Desktop verification: existing typecheck, tests, production build and Tauri build stay; Web end-to-end tests (browser) and a Desktop smoke test are added. (4) Dependency vulnerability scanning and secret scanning on every PR. (5) Independent code-review support: a review-record template bound to the PR head SHA and a checklist script; it supports a separate reviewing context but cannot create one. (6) Protection against weakened CI: a guard that fails a PR which lowers the expected PostgreSQL test count, removes or skips tests, deletes or disables a required job, or edits the required-check manifest without an owner-labelled approval. (7) Head-SHA verification: a script that lists the required checks from the manifest and proves each is green on the exact PR head SHA before any merge, refusing when checks are pending, missing or stale. (8) Seeded reference-data generator skeleton and test-count registry.
 * **Acceptance criteria:** Each control demonstrably fails on a deliberately broken sample (lowered count, skipped test, drifted doc, planted fake secret, red check on an older SHA) and passes on a clean PR; a docs-only PR is checked; no mandatory check is weakened.
 * **Mandatory tests:** Self-tests of every guard with negative cases; workflow dry runs on a throwaway branch; recorded evidence in the PR.
 * **Database migration implications:** none
