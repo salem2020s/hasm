@@ -74,7 +74,8 @@ public class InventoryAccountingTests : InventoryAccountingTestBase
         Fails(await Acc.SaveAsync(Admin.Id, Company.Id, 1, Cfg(Stock.Id)), ConfigStatus.PreconditionFailed, "accounting_version_conflict");
         Fails(await Acc.SaveAsync(Admin.Id, Company.Id, null, Cfg(Stock.Id)), ConfigStatus.PreconditionRequired, "precondition_required");
         // two simultaneous saves from the same version: exactly one wins
-        var race = await Task.WhenAll(new[] { Stock.Id, Stock2.Id }.Select(a => Acc.SaveAsync(Admin.Id, Company.Id, 2, Cfg(a, Goods.Id, Cogs.Id))));
+        // both candidates differ from the current version 2 (default Stock2), so neither can be absorbed as an "unchanged" save and the outcome never depends on arrival order
+        var race = await Task.WhenAll(new[] { Cfg(Stock.Id, Goods.Id, Cogs.Id), Cfg(Stock.Id, Goods.Id, Cogs.Id, (Parent, Stock2)) }.Select(c => Acc.SaveAsync(Admin.Id, Company.Id, 2, c)));
         Assert.Equal(1, race.Count(r => r.IsOk));
         Assert.Equal(3, (await Acc.GetAsync(Company.Id)).Version!.VersionNo);
         // PostgreSQL keeps versions immutable even against direct SQL
