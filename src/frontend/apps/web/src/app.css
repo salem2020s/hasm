@@ -105,19 +105,19 @@ button.link:hover:not(:disabled) { background: none; }
 .banner-success { background: var(--color-success-soft); border-color: var(--color-success); color: #065f46; }
 .banner-warning { background: var(--color-warning-soft); border-color: var(--color-warning); color: #78350f; }
 .banner-info { background: var(--color-info-soft); border-color: var(--color-info); color: #1e3a8a; }
-/* Tabs (Company Details & Settings) */
-.tabs { display: flex; gap: var(--space-1); border-block-end: 1px solid var(--color-border); margin-block-end: var(--space-3); }
-.tab { border: 0; border-block-end: 3px solid transparent; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: transparent; color: var(--color-text-muted); font-weight: var(--weight-medium); margin-block-end: -1px; }
-.tab:hover:not(:disabled) { background: var(--color-mint); border-color: transparent; border-block-end-color: var(--color-secondary); }
-.tab.is-active { color: var(--color-primary-strong); border-block-end-color: var(--color-primary); font-weight: var(--weight-bold); }
-.tabs { overflow-x: auto; scrollbar-width: thin; } /* narrow windows: scroll the tab strip, never wrap or widen the page */
-.tab { white-space: nowrap; flex: none; min-height: 2.5rem; padding-inline: var(--space-4); }
+/* Tabs (shared Tabs component). Brand tokens only: flat colours and a 3px underline, no images, gradients or shadows, so the strip costs nothing to paint; only colour changes animate. */
+.tabs { display: flex; gap: var(--space-1); border-block-end: 1px solid var(--color-border); margin-block-end: var(--space-3); overflow-x: auto; scrollbar-width: thin; } /* narrow windows: scroll the strip, never wrap or widen the page */
+.tab { flex: none; white-space: nowrap; min-height: 2.5rem; padding-inline: var(--space-4); margin-block-end: -1px; border: 0; border-block-end: 3px solid transparent; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: transparent; color: var(--color-text-muted); font-weight: var(--weight-medium); transition: background-color var(--transition), color var(--transition), border-color var(--transition); }
+.tab:hover:not(:disabled) { background: var(--color-mint); color: var(--color-primary-strong); border-block-end-color: var(--color-secondary); }
+.tab.is-active { background: var(--color-mint); color: var(--color-primary-strong); border-block-end-color: var(--color-primary); font-weight: var(--weight-bold); }
 .tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .tab:disabled { opacity: 0.5; cursor: not-allowed; }
-.tab.has-error { color: var(--color-danger, #b42318); }
-.tab-error { display: inline-flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; margin-inline-start: var(--space-2); border-radius: 50%; background: var(--color-danger, #b42318); color: #fff; font-size: 0.7rem; font-weight: var(--weight-bold); line-height: 1; }
+.tab.has-error { color: var(--color-danger); }
+.tab.has-error.is-active { border-block-end-color: var(--color-danger); background: var(--color-danger-soft); }
+.tab-error { display: inline-flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; margin-inline-start: var(--space-2); border-radius: 50%; background: var(--color-danger); color: var(--color-card); font-size: 0.7rem; font-weight: var(--weight-bold); line-height: 1; }
 .tab-panel[hidden] { display: none !important; } /* hidden sections are also inert: never reachable by keyboard or screen reader */
 .tab-dot { display: inline-block; width: 0.5rem; height: 0.5rem; margin-inline-start: var(--space-2); border-radius: 50%; background: var(--color-gold); }
+@media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
 .notices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: var(--space-2) var(--space-3); margin-block-end: var(--space-3); }
 .notices .banner { margin: 0; }
 .banner strong { font-weight: var(--weight-bold); }
