@@ -1,0 +1,84 @@
+name: Verification
+
+# Always-on controls (Phase 4.0): no path filter, so documentation-only and workflow-only changes are checked too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-traceability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node tools/verify/check-docs.js
+
+  ci-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Guard against weakened verification (the BASE copy of the guard judges the change when it exists)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          CI_CHANGE_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'ci-change-approved') && '1' || '0' }}
+        run: |
+          if git cat-file -e "${BASE_REF}:tools/verify/ci-guard.js" 2>/dev/null; then
+            git show "${BASE_REF}:tools/verify/ci-guard.js" > "$RUNNER_TEMP/ci-guard.js"
+            node "$RUNNER_TEMP/ci-guard.js" --base "${BASE_REF}"
+          else
+            echo "Base has no guard yet (introducing change); running the head copy"
+            node tools/verify/ci-guard.js --base "${BASE_REF}"
+          fi
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node tools/verify/scan-secrets.js
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: npm audit (frontend)
+        working-directory: src/frontend
+        run: npm ci && npm audit --audit-level=high
+      - name: npm audit (desktop)
+        working-directory: src/desktop
+        run: npm ci && npm audit --audit-level=high
+      - name: NuGet vulnerable packages
+        run: |
+          dotnet restore src/backend/Hasm.slnx
+          OUT="$(dotnet list src/backend/Hasm.slnx package --vulnerable --include-transitive 2>&1)"
+          echo "$OUT"
+          if echo "$OUT" | grep -q "has the following vulnerable packages"; then echo "::error::Vulnerable NuGet packages found"; exit 1; fi
+
+  guard-selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tools/verify/tests/

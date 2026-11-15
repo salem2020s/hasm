@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  build-test:
+  backend-build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

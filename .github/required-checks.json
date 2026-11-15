@@ -1,0 +1,86 @@
+{
+  "note": "Checks that must be green on the exact head SHA of a pull request before it may be merged. A check is required for a PR when the PR touches one of its paths (mirrors the workflow path filters). Editing this file or tools/verify/** needs the owner label ci-change-approved.",
+  "checks": [
+    {
+      "name": "backend-build-test",
+      "count": 1,
+      "paths": [
+        "src/backend/**",
+        "tests/**",
+        ".github/workflows/backend.yml"
+      ]
+    },
+    {
+      "name": "postgres-integration",
+      "count": 1,
+      "paths": [
+        "src/backend/**",
+        "tests/**",
+        ".github/workflows/backend.yml"
+      ]
+    },
+    {
+      "name": "frontend-build-test",
+      "count": 1,
+      "paths": [
+        "src/frontend/**",
+        "assets/branding/**",
+        ".github/workflows/frontend.yml"
+      ]
+    },
+    {
+      "name": "e2e-smoke",
+      "count": 1,
+      "paths": [
+        "src/frontend/**",
+        "assets/branding/**",
+        ".github/workflows/frontend.yml"
+      ]
+    },
+    {
+      "name": "desktop-build",
+      "count": 1,
+      "paths": [
+        "src/desktop/**",
+        "src/frontend/**",
+        "assets/branding/**",
+        ".github/workflows/desktop.yml"
+      ]
+    },
+    {
+      "name": "docs-traceability",
+      "count": 1,
+      "paths": [
+        "**"
+      ]
+    },
+    {
+      "name": "ci-guard",
+      "count": 1,
+      "paths": [
+        "**"
+      ]
+    },
+    {
+      "name": "secret-scan",
+      "count": 1,
+      "paths": [
+        "**"
+      ]
+    },
+    {
+      "name": "dependency-scan",
+      "count": 1,
+      "paths": [
+        "**"
+      ]
+    },
+    {
+      "name": "guard-selftest",
+      "count": 1,
+      "paths": [
+        "**"
+      ]
+    }
+  ]
+}
