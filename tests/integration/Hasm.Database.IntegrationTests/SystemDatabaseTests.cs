@@ -14,7 +14,7 @@ public class SystemDatabaseTests : PostgresTestBase
     {
         var result = await Init();
         Assert.True(result.DatabaseCreated);
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], result.AppliedMigrations);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], result.AppliedMigrations);
         Assert.Equal(15L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
