@@ -36,63 +36,63 @@ Generated from the phase definitions in `docs/ROADMAP.md`. The generator checked
 31. **3.26** — Document and print designer (needs: 3.15, 3.16, 3.12)
 32. **4.1** — Identity completion (needs: 3.7D)
 33. **4.2** — Licensing and Trial (needs: 3.17)
-34. **4.3** — Backup and restore (needs: 3.12)
+34. **4.3** — Backup and restore (needs: 3.12, 3.9A)
 35. **4.4** — Signed manual updates (needs: 4.3)
 36. **4.5** — Installer and deployment models (needs: 4.1, 4.4)
 37. **4.6** — Diagnostics, operations and audit retention (needs: 4.5)
 38. **4.7** — Desktop offline drafts (needs: 3.17)
 39. **4.8** — Localization and UX completion (needs: 3.26)
-40. **5.1** — Performance and load validation (needs: 4.8)
-41. **5.2** — Security review and hardening (needs: 4.6)
-42. **5.3** — Final validation and Release 1 acceptance (needs: 5.1, 5.2)
+40. **5.1** — Performance and load validation (needs: 4.8, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7)
+41. **5.2** — Security review and hardening (needs: 4.6, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.7, 4.8)
+42. **5.3** — Final validation and Release 1 acceptance (needs: 5.1, 5.2, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8)
 
 Notes on ordering choices: 4.0 (verification infrastructure) is placed right after 3.7A so that the large posting and commercial phases run with end-to-end and security scanning in place; cash and bank accounts (3.14) precede purchasing and sales because invoices may be cash or mixed (SRS 7.1); credit-limit **enforcement** is delivered in 3.17 (receivable balances exist there) while 3.16 only defines the hook, which removes a sales/receivables circularity; 3.27 (opening balances and legacy migration) follows receivables because opening receivables need their ledger; 4.2 (licensing) follows the business modules so that "posted business transaction" counting has real transactions to count, but its entitlement states (read/export-only, drafts kept) are designed against every module from 3.13 onward.
 
 ## Dependency table
 | Phase | Prerequisites | Unlocks |
 |---|---|---|
-| 3.7A | 3.6 | 3.7B, 4.0 |
-| 3.7B | 3.7A | 3.7C |
-| 3.7C | 3.7B | 3.7D, 3.8D, 3.13 |
-| 3.7D | 3.7C | 3.8A, 3.9A, 4.1 |
-| 3.8A | 3.7D, 4.0 | 3.8B, 3.8C, 3.8D, 3.8E |
-| 3.8B | 3.8A | 3.27 |
-| 3.8C | 3.8A | - |
-| 3.8D | 3.7C, 3.8A | 3.8E |
-| 3.8E | 3.8A, 3.8D | 3.23 |
-| 3.9A | 3.7D | 3.9B |
-| 3.9B | 3.9A | 3.9C, 3.11, 3.13 |
-| 3.9C | 3.9B | 3.20, 3.27 |
-| 3.10 | 3.2B | 3.13 |
-| 3.11 | 3.4, 3.9B | 3.13, 3.16 |
-| 3.12 | 3.2A | 3.26, 4.3 |
-| 3.13 | 3.7C, 3.9B, 3.10, 3.11 | 3.14, 3.15, 3.16 |
-| 3.14 | 3.13 | 3.15, 3.16, 3.19, 3.20, 3.23 |
-| 3.15 | 3.13, 3.14 | 3.17, 3.21, 3.26 |
-| 3.16 | 3.13, 3.14, 3.11 | 3.17, 3.21, 3.26 |
-| 3.17 | 3.15, 3.16 | 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.27, 4.2, 4.7 |
-| 3.18 | 3.17 | 3.24 |
-| 3.19 | 3.14, 3.17 | 3.20 |
-| 3.20 | 3.14, 3.17, 3.19, 3.9C | - |
-| 3.21 | 3.15, 3.16, 3.17 | - |
-| 3.22 | 3.17 | - |
-| 3.23 | 3.17, 3.14, 3.8E | 3.24, 3.25 |
-| 3.24 | 3.18, 3.23 | - |
-| 3.25 | 3.23 | - |
-| 3.26 | 3.15, 3.16, 3.12 | 4.8 |
-| 3.27 | 3.17, 3.8B, 3.9C | - |
-| 4.0 | 3.7A | 3.8A |
-| 4.1 | 3.7D | 4.5 |
-| 4.2 | 3.17 | - |
-| 4.3 | 3.12 | 4.4 |
-| 4.4 | 4.3 | 4.5 |
-| 4.5 | 4.1, 4.4 | 4.6 |
-| 4.6 | 4.5 | 5.2 |
-| 4.7 | 3.17 | - |
-| 4.8 | 3.26 | 5.1 |
-| 5.1 | 4.8 | 5.3 |
-| 5.2 | 4.6 | 5.3 |
-| 5.3 | 5.1, 5.2 | - |
+| 3.7A | 3.6 | 3.7B, 4.0, 5.1, 5.2, 5.3 |
+| 3.7B | 3.7A | 3.7C, 5.1, 5.2, 5.3 |
+| 3.7C | 3.7B | 3.7D, 3.8D, 3.13, 5.1, 5.2, 5.3 |
+| 3.7D | 3.7C | 3.8A, 3.9A, 4.1, 5.1, 5.2, 5.3 |
+| 3.8A | 3.7D, 4.0 | 3.8B, 3.8C, 3.8D, 3.8E, 5.1, 5.2, 5.3 |
+| 3.8B | 3.8A | 3.27, 5.1, 5.2, 5.3 |
+| 3.8C | 3.8A | 5.1, 5.2, 5.3 |
+| 3.8D | 3.7C, 3.8A | 3.8E, 5.1, 5.2, 5.3 |
+| 3.8E | 3.8A, 3.8D | 3.23, 5.1, 5.2, 5.3 |
+| 3.9A | 3.7D | 3.9B, 4.3, 5.1, 5.2, 5.3 |
+| 3.9B | 3.9A | 3.9C, 3.11, 3.13, 5.1, 5.2, 5.3 |
+| 3.9C | 3.9B | 3.20, 3.27, 5.1, 5.2, 5.3 |
+| 3.10 | 3.2B | 3.13, 5.1, 5.2, 5.3 |
+| 3.11 | 3.4, 3.9B | 3.13, 3.16, 5.1, 5.2, 5.3 |
+| 3.12 | 3.2A | 3.26, 4.3, 5.1, 5.2, 5.3 |
+| 3.13 | 3.7C, 3.9B, 3.10, 3.11 | 3.14, 3.15, 3.16, 5.1, 5.2, 5.3 |
+| 3.14 | 3.13 | 3.15, 3.16, 3.19, 3.20, 3.23, 5.1, 5.2, 5.3 |
+| 3.15 | 3.13, 3.14 | 3.17, 3.21, 3.26, 5.1, 5.2, 5.3 |
+| 3.16 | 3.13, 3.14, 3.11 | 3.17, 3.21, 3.26, 5.1, 5.2, 5.3 |
+| 3.17 | 3.15, 3.16 | 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.27, 4.2, 4.7, 5.1, 5.2, 5.3 |
+| 3.18 | 3.17 | 3.24, 5.1, 5.2, 5.3 |
+| 3.19 | 3.14, 3.17 | 3.20, 5.1, 5.2, 5.3 |
+| 3.20 | 3.14, 3.17, 3.19, 3.9C | 5.1, 5.2, 5.3 |
+| 3.21 | 3.15, 3.16, 3.17 | 5.1, 5.2, 5.3 |
+| 3.22 | 3.17 | 5.1, 5.2, 5.3 |
+| 3.23 | 3.17, 3.14, 3.8E | 3.24, 3.25, 5.1, 5.2, 5.3 |
+| 3.24 | 3.18, 3.23 | 5.1, 5.2, 5.3 |
+| 3.25 | 3.23 | 5.1, 5.2, 5.3 |
+| 3.26 | 3.15, 3.16, 3.12 | 4.8, 5.1, 5.2, 5.3 |
+| 3.27 | 3.17, 3.8B, 3.9C | 5.1, 5.2, 5.3 |
+| 4.0 | 3.7A | 3.8A, 5.1, 5.2, 5.3 |
+| 4.1 | 3.7D | 4.5, 5.1, 5.2, 5.3 |
+| 4.2 | 3.17 | 5.1, 5.2, 5.3 |
+| 4.3 | 3.12, 3.9A | 4.4, 5.1, 5.2, 5.3 |
+| 4.4 | 4.3 | 4.5, 5.1, 5.2, 5.3 |
+| 4.5 | 4.1, 4.4 | 4.6, 5.1, 5.2, 5.3 |
+| 4.6 | 4.5 | 5.1, 5.2, 5.3 |
+| 4.7 | 3.17 | 5.1, 5.2, 5.3 |
+| 4.8 | 3.26 | 5.1, 5.2, 5.3 |
+| 5.1 | 4.8, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7 | 5.3 |
+| 5.2 | 4.6, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.7, 4.8 | 5.3 |
+| 5.3 | 5.1, 5.2, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8 | - |
 
 ## Slice rule
 Large phases are already split into independently mergeable slices (3.7A-D, 3.8A-E, 3.9A-C). Any other phase whose implementation plan exceeds a reviewable size is split into slices before work starts, each slice with its own acceptance criteria; slices never reorder the prerequisites above.
@@ -113,7 +113,7 @@ Workflow: Implement → Test → Review → Commit → Push → PR → CI → Fi
 | G-8 | Manual visual review and Windows installer/clean-machine tests cannot run in Actions. | Some acceptance items are manual. | Listed in `docs/RELEASE1-ACCEPTANCE.md` as manual drills with a recorded owner sign-off, deferred to 5.3 only for visual review. |
 | G-9 | CI expected-test-count registry is edited by hand per phase. | Silent test loss or drift. | Count registry kept in the backend workflow and updated in the same PR; never reduced. |
 | G-10 | Cross-database operations (Party, licensing sync) have no failure-injection harness. | Outbox and reconciliation could be untested. | Built with 3.9A. |
-| G-11 | OPEN decisions (OD-1, OD-2, OD-12, T-1) can stop a slice. | Autonomous work can stall. | Slices ordered so unaffected work continues; blockers reported with preserved work. |
+| G-11 | OPEN decisions (OD-1, OD-2, OD-11, OD-12, T-1, T-2) can stop a slice. | Autonomous work can stall. | Slices ordered so unaffected work continues; blockers reported with preserved work. |
 
 ### Added verification milestones (must pass before the next phase starts)
 | ID | After | Check |
@@ -128,4 +128,4 @@ Workflow: Implement → Test → Review → Commit → Push → PR → CI → Fi
 | VM-8 | 4.5 | Clean install and upgrade on each deployment model. |
 
 ### Risks that could prevent fully autonomous development
-OPEN decisions (OD-1, OD-2, OD-12, T-1); gate G-5; the lack of a reference performance environment (G-7); Windows-only checks (installer, Tauri signing) that Actions cannot fully cover; credentials or signing keys that must never be committed (licence signing keys and code-signing certificates need an owner-provided secure store before 4.2 and 4.5); GitHub plan limits (G-4).
+OPEN decisions (OD-1, OD-2, OD-11, OD-12, T-1, T-2); gate G-5; the lack of a reference performance environment (G-7); Windows-only checks (installer, Tauri signing) that Actions cannot fully cover; credentials or signing keys that must never be committed (licence signing keys and code-signing certificates need an owner-provided secure store before 4.2 and 4.5); GitHub plan limits (G-4).
