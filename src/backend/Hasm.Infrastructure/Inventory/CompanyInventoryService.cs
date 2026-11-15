@@ -48,6 +48,22 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
         await lk.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>The valuation method that applies to an item right now: its group chain, then the company default (null while nobody decided; null for services). Used by the costing engine inside its own transaction.</summary>
+    public async Task<ValuationMethod?> ResolveValuationInWorkAsync(CompanyAuditedWork work, Guid itemId, CancellationToken ct)
+    {
+        Guid group; int type;
+        await using (var q = new NpgsqlCommand($"SELECT {I.GroupId}, {I.ItemType} FROM {I.Table} WHERE {I.Id} = @i", work.Connection, work.Transaction))
+        {
+            q.Parameters.AddWithValue("i", itemId);
+            await using var r = await q.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return null;
+            group = r.GetGuid(0); type = r.GetInt16(1);
+        }
+        if (type != (int)ItemType.Goods) return null;
+        var groups = (await LoadGroups(work.Connection, work.Transaction, ct)).ToDictionary(g => g.Id);
+        return (ValuationMethod?)Effective(groups, group, (await ReadSettings(work.Connection, work.Transaction, ct)).DefaultValuation);
+    }
+
     // ---- lookups for the import adapters (inside their application transaction)
     public async Task<Dictionary<string, Guid>> LoadUnitIdsInWorkAsync(CompanyAuditedWork work, CancellationToken ct)
     {
