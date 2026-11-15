@@ -13,6 +13,7 @@ import { WarehousesPage } from "./pages/Warehouses";
 import { ImportsPage } from "./pages/Imports";
 import { FinancialStatementsPage } from "./pages/FinancialStatements";
 import { StatementMappingPage } from "./pages/StatementMapping";
+import { ReportCenterPage } from "./pages/ReportCenter";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
@@ -71,6 +72,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
+  { path: "/accounting/report-center", anyScope: "company.ledgerreports.view", element: <ReportCenterPage /> },
   { path: "/accounting/statements", anyScope: "company.financialstatements.view", element: <FinancialStatementsPage /> },
   { path: "/accounting/statement-mapping", permission: "company.statementmapping.view", element: <StatementMappingPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
@@ -118,6 +120,7 @@ function Shell() {
     const accounting: MenuItem[] = [
       { id: "/accounting/journal", label: t("nav.journal"), permission: "company.journal.view" },
       { id: "/accounting/reports", label: t("nav.gl_reports"), permission: "company.ledgerreports.view" },
+      { id: "/accounting/report-center", label: t("nav.report_center"), permission: "company.ledgerreports.view", anyScope: true },
       { id: "/accounting/statements", label: t("nav.statements"), permission: "company.financialstatements.view", anyScope: true },
       { id: "/accounting/statement-mapping", label: t("nav.statement_mapping"), permission: "company.statementmapping.view" },
     ].filter((i) => auth.can(i.permission) || auth.canAny(i.permission)).map(({ id, label }) => ({ id, label }));

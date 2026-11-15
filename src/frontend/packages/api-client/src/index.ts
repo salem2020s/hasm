@@ -477,7 +477,7 @@ export interface GeneralLedgerResponse {
 export type ReportComparison = "none" | "previous_period" | "previous_year";
 export interface ReportQuery {
   from?: string; to?: string; fiscalYearId?: string; fiscalPeriodId?: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean;
-  comparison?: ReportComparison; maxLevel?: number; sort?: string; columns?: string[]; grouping?: "none" | "month";
+  comparison?: ReportComparison; maxLevel?: number; sort?: string; columns?: string[]; grouping?: "none" | "month"; /** The language of an exported file (titles and, for spreadsheets, the reading direction). */ lang?: "ar" | "en";
 }
 export type ReportFormat = "csv" | "xlsx" | "pdf";
 
@@ -563,7 +563,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     q.fiscalPeriodId ? `fiscalPeriodId=${enc(q.fiscalPeriodId)}` : q.fiscalYearId ? `fiscalYearId=${enc(q.fiscalYearId)}` : `from=${enc(q.from ?? "")}&to=${enc(q.to ?? "")}`,
     q.branchId ? `branchId=${enc(q.branchId)}` : "", q.costCenterId ? `costCenterId=${enc(q.costCenterId)}` : "", q.excludeClosing ? "excludeClosing=true" : "",
     q.comparison && q.comparison !== "none" ? `comparison=${q.comparison}` : "", q.maxLevel !== undefined ? `maxLevel=${q.maxLevel}` : "", q.sort ? `sort=${enc(q.sort)}` : "",
-    q.columns && q.columns.length > 0 ? `columns=${enc(q.columns.join(","))}` : "", q.grouping && q.grouping !== "none" ? `grouping=${q.grouping}` : "",
+    q.columns && q.columns.length > 0 ? `columns=${enc(q.columns.join(","))}` : "", q.grouping && q.grouping !== "none" ? `grouping=${q.grouping}` : "", q.lang ? `lang=${q.lang}` : "",
   ].filter(Boolean).join("&");
 
   return {

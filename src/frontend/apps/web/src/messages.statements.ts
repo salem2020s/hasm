@@ -3,7 +3,10 @@
  * languages and a definition for every literal key the screens use. Statement line titles are keyed by the server's stable line keys.
  */
 export const statementsAr: Record<string, string> = {
-  "nav.statements": "القوائم المالية", "nav.statement_mapping": "تصنيف القوائم المالية",
+  "nav.statements": "القوائم المالية", "nav.statement_mapping": "تصنيف القوائم المالية", "nav.report_center": "مركز التقارير",
+  "rc.title": "مركز التقارير", "rc.subtitle": "التقارير المتاحة لك حسب صلاحياتك، مع معاملاتها وصيغ التصدير.", "rc.none": "لا توجد تقارير متاحة لحسابك.",
+  "rc.formats": "صيغ التصدير", "rc.can_export": "التصدير مسموح", "rc.cannot_export": "العرض فقط (لا صلاحية تصدير)", "rc.parameters": "المعاملات", "rc.comparison": "يدعم المقارنة", "rc.grouping": "يدعم التجميع", "rc.open": "فتح التقرير",
+  "rc.designer_note": "مصمم التقارير المرئي من متطلبات الإصدار الأول ولم يُنجز بعد؛ تعريفات التقارير هنا هي الأساس الذي سيبني عليه.",
   "st.title": "القوائم المالية", "st.subtitle": "قائمة الأرباح والخسائر والميزانية العمومية وحساب المتاجرة، من القيود المرحّلة الفعلية وبحسب تصنيف الشركة المُعتمد.",
   "st.tab.profit-and-loss": "الأرباح والخسائر", "st.tab.balance-sheet": "الميزانية العمومية", "st.tab.trading-account": "حساب المتاجرة وتكلفة المبيعات",
   "st.as_of": "كما في", "st.period": "الفترة", "st.mapping_version": "إصدار التصنيف", "st.mapping_current": "الإصدار الحالي", "st.mapping_version_n": "الإصدار {n}", "st.mapping_none": "لا يوجد تصنيف",
@@ -46,7 +49,10 @@ export const statementsAr: Record<string, string> = {
 };
 
 export const statementsEn: Record<string, string> = {
-  "nav.statements": "Financial statements", "nav.statement_mapping": "Statement classification",
+  "nav.statements": "Financial statements", "nav.statement_mapping": "Statement classification", "nav.report_center": "Report center",
+  "rc.title": "Report center", "rc.subtitle": "The reports available to you by your permissions, with their parameters and export formats.", "rc.none": "No reports are available to your account.",
+  "rc.formats": "Export formats", "rc.can_export": "Export allowed", "rc.cannot_export": "View only (no export permission)", "rc.parameters": "Parameters", "rc.comparison": "Supports comparison", "rc.grouping": "Supports grouping", "rc.open": "Open the report",
+  "rc.designer_note": "The visual Report Designer is a Release 1 requirement that is not delivered yet; the report definitions listed here are the foundation it will build on.",
   "st.title": "Financial statements", "st.subtitle": "Profit and loss, balance sheet and trading account, from the actual posted entries and the company's approved classification.",
   "st.tab.profit-and-loss": "Profit and loss", "st.tab.balance-sheet": "Balance sheet", "st.tab.trading-account": "Trading account / cost of sales",
   "st.as_of": "As of", "st.period": "Period", "st.mapping_version": "Classification version", "st.mapping_current": "Current version", "st.mapping_version_n": "Version {n}", "st.mapping_none": "No classification",

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Xml.Linq;
+using UglyToad.PdfPig;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
@@ -111,5 +112,48 @@ public class ExcelExportTests : LedgerReportTestBase
         Assert.Equal(HttpStatusCode.Forbidden, (await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}&format=xlsx", viewCookie)).Status);
         Assert.Equal(HttpStatusCode.OK, (await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}", viewCookie)).Status);
         Assert.Equal(HttpStatusCode.BadRequest, (await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}&format=ods", cookie)).Status);
+    }
+
+    [PostgresFact]
+    public async Task Pdf_exports_are_real_documents_in_both_languages_with_the_same_authorization_row_limit_and_audit()
+    {
+        await StartApi(configure: b => b.UseSetting("Hasm:Reports:MaxPdfRows", "40"));
+        BuildChartFacade(); BuildJournalFacade();
+        Ok(await Svc.PutSettingsAsync(Admin.Id, Company.Id, 0, new SettingsInput("en", "yyyy-MM-dd", "latin", "UTC")));
+        await InCompany(Company.PhysicalDatabaseName, $"INSERT INTO {CompanySchema.CompanyCurrency.Table} ({CompanySchema.CompanyCurrency.Code}, {CompanySchema.CompanyCurrency.IsBase}, {CompanySchema.CompanyCurrency.Enabled}, {CompanySchema.CompanyCurrency.Revision}, {CompanySchema.CompanyCurrency.UpdatedAtUtc}) VALUES ('JOD', true, true, 1, now())");
+        Year = Ok(await Cal.CreateYearAsync(Admin.Id, Company.Id, new FiscalYearInput("FY2026", new DateOnly(2026, 1, 1), "monthly")));
+        Cash = await NewAccount("1101", "asset"); Sales = await NewAccount("4101", "revenue"); Main = await MainBranch();
+        await Posted(Entry("2026-03-10", Dr(Cash.Id, 1234.5m), Cr(Sales.Id, 1234.5m)));
+        const string Base = "/api/v1/company/reports";
+        var cookie = await SignIn(Admin);
+        async Task<(HttpStatusCode Status, byte[] Body, string? Type)> Fetch(string path, string c)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, path); req.Headers.Add("Cookie", $"{CookieName}={c}");
+            using var resp = await client.SendAsync(req);
+            return (resp.StatusCode, await resp.Content.ReadAsByteArrayAsync(), resp.Content.Headers.ContentType?.MediaType);
+        }
+        var events = await Events(ReportAuditEvents.Exported);
+        var en = await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}&format=pdf&lang=en", cookie);
+        Assert.Equal((HttpStatusCode.OK, "application/pdf"), (en.Status, en.Type));
+        using (var pdf = PdfDocument.Open(en.Body))
+        {
+            var text = pdf.GetPage(1).Text;
+            Assert.Contains("Trial balance", text);
+            Assert.Contains("1101", text);
+            Assert.Contains("1,234.5000", text);
+        }
+        var ar = await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}&format=pdf&lang=ar", cookie);
+        Assert.Equal(HttpStatusCode.OK, ar.Status);
+        using (var pdf = PdfDocument.Open(ar.Body)) Assert.Contains("1,234.5000", pdf.GetPage(1).Text);
+        Assert.Equal(events + 2, await Events(ReportAuditEvents.Exported));
+        // a PDF has its own, separate limit: a general ledger with more rows than the configured 40 is refused for PDF but exported as XLSX
+        await SeedCashLines(1, 60, "2026-04-01");
+        var tooBig = await Fetch($"{Base}/general-ledger?accountId={Cash.Id}&fiscalYearId={Year.Id}&format=pdf", cookie);
+        Assert.Equal(HttpStatusCode.Conflict, tooBig.Status);
+        Assert.Contains("export_too_large", Encoding.UTF8.GetString(tooBig.Body));
+        Assert.Equal(HttpStatusCode.OK, (await Fetch($"{Base}/general-ledger?accountId={Cash.Id}&fiscalYearId={Year.Id}&format=xlsx", cookie)).Status);
+        // viewing is not exporting
+        var (viewer, _) = await Member([PermissionCatalog.Codes.LedgerReportsView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Fetch($"{Base}/trial-balance?fiscalYearId={Year.Id}&format=pdf", await SignIn(viewer))).Status);
     }
 }

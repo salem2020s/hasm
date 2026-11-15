@@ -7,6 +7,7 @@ using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Ledger;
 using Hasm.Infrastructure.Reporting;
 using Audit_ = Hasm.Infrastructure.CompanyDatabase.CompanySchema.BusinessAudit;
+using UglyToad.PdfPig;
 using Mv = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StatementMappingVersion;
 using Me = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StatementMappingEntry;
 using Br = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
@@ -351,6 +352,28 @@ public class FinancialStatementTests : FiscalClosingTestBase
         Assert.Contains(rows, r => r.Contains("Profit or loss for the period") && r.Contains("630"));
         Assert.Contains(rows, r => r.Count > 0 && r[0].StartsWith("Warning: this statement is INCOMPLETE"));
         Assert.Contains(rows, r => r.Contains("Comparative") && r.Any(c => c.Contains("n/a: no_previous_year")));
+    }
+
+    [PostgresFact]
+    public async Task A_statement_exports_to_pdf_in_both_languages_with_the_amounts_the_version_and_the_incomplete_warning()
+    {
+        await Prepare();
+        await Seed2026();
+        var export = new ReportExportService(Tx, new ReportOptions(), [new PdfReportRenderer()]);
+        await using var doc = Ok(await Fin.StatementDocumentAsync(Admin.Id, Company.Id, StatementKind.ProfitAndLoss, Y26(), null, null, null));
+        foreach (var lang in new[] { "en", "ar" })
+        {
+            await using var file = Ok(await export.ExportAsync(new ReportExportRequest(Company.Id, Admin.Id, doc, "pdf", null, "pl", lang)));
+            Assert.Equal("pl.pdf", file.FileName);
+            var bytes = new MemoryStream(); await file.Content.CopyToAsync(bytes);
+            using var pdf = PdfDocument.Open(bytes.ToArray());
+            var text = string.Join(" ", Enumerable.Range(1, pdf.NumberOfPages).Select(p => pdf.GetPage(p).Text));
+            Assert.Contains("630.0000", text);                                                                                 // the result, exact
+            Assert.Contains("1,500.0000", text);
+            Assert.Contains("v1", text);                                                                                       // the classification version used
+            Assert.Contains("4101", text);
+        }
+        Assert.Equal(2L, await Events(ReportAuditEvents.Exported));
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------------ authorization

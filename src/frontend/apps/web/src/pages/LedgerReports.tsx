@@ -120,7 +120,7 @@ export function LedgerReportsPage() {
   async function download(format: ReportFormat) {
     await run(async () => {
       const keys = tab === "tb" ? [...TB_COLUMNS, ...(f.comparison !== "none" ? TB_CMP_COLUMNS : [])] : GL_COLUMNS;
-      const q = { ...query(true), columns: exportColumns(keys) };
+      const q = { ...query(true), columns: exportColumns(keys), lang: (locale === "ar" ? "ar" : "en") as "ar" | "en" };
       let blob: Blob;
       if (tab === "tb") blob = format === "csv" ? await auth.api.downloadTrialBalanceCsv({ ...q, includeZero: f.includeZero }) : await auth.api.exportTrialBalance({ ...q, includeZero: f.includeZero }, format);
       else blob = format === "csv" ? await auth.api.downloadGeneralLedgerCsv(f.accountId, q) : await auth.api.exportGeneralLedger(f.accountId, q, format);

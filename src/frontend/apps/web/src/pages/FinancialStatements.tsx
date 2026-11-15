@@ -85,7 +85,7 @@ export function FinancialStatementsPage() {
     try { await action(); } catch (err) { if (!auth.handleError(err)) setError(statementError(tRef.current, err)); } finally { setBusy(false); }
   };
   const show = async (e?: FormEvent) => { e?.preventDefault(); if (periodValid) await run(async () => setData(await auth.api.getStatement(kind, query()))); };
-  const download = async (format: ReportFormat) => run(async () => saveBlob(await auth.api.exportStatement(kind, query(), format), `${kind}-${f.mode === "custom" ? `${f.from}-${f.to}` : f.mode}.${format}`));
+  const download = async (format: ReportFormat) => run(async () => saveBlob(await auth.api.exportStatement(kind, { ...query(), lang: locale === "ar" ? "ar" : "en" }, format), `${kind}-${f.mode === "custom" ? `${f.from}-${f.to}` : f.mode}.${format}`));
 
   const lineTitle = (key: string) => {
     const k = `st.line.${key}`;

@@ -1,0 +1,4 @@
+Embedded fonts (SIL Open Font License 1.1, see OFL.txt):
+- Noto Sans (Regular, Bold): Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)
+- Noto Naskh Arabic (Regular, Bold): Copyright 2022 The Noto Project Authors (https://github.com/notofonts/arabic)
+The fonts are embedded unmodified; the OFL permits embedding in documents and redistribution with the software.
