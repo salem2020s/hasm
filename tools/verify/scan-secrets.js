@@ -1,29 +1,36 @@
 #!/usr/bin/env node
-// Secret scan (Phase 4.0): scans tracked files for private keys, access tokens and connection-string passwords.
+// Secret scan (Phase 4.0): scans tracked files for private keys, access tokens and literal passwords in configuration files.
 // Findings that are deliberate (documented throwaway CI values) must be listed with a reason in .github/secret-scan-allow.json
-// ({"allow":[{"file":"path","rule":"rule-id","reason":"why"}]}). An allow entry that no longer matches anything is itself reported, so the list cannot rot.
+// ({"allow":[{"file":"path","rule":"rule-id","reason":"why"}]}); the file is a protected verification file. An allow entry that no longer matches anything is itself reported.
+// Known limits: tracked files only (git history is not scanned); files over 2 MB are listed as skipped; source files (.cs/.ts) are not scanned for password literals because test fixtures use them.
 // Usage: node tools/verify/scan-secrets.js [root]
 "use strict";
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
+const CONFIG = /(^|\/)\.env[^/]*$|\.(ya?ml|json|config|ps1|sh|toml|ini|properties|xml|sql|conf)$/i;
 const RULES = [
   ["private-key", /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/],
   ["github-token", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/],
   ["aws-access-key", /\bAKIA[0-9A-Z]{16}\b/],
   ["slack-token", /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/],
-  ["connection-password", /(?:Password|Pwd|PGPASSWORD)\s*=\s*(?!\$|\{|<|%|"|'|;|\s|@)[^;\s"']{6,}/i, /\.(ya?ml|json|env|config|ps1|sh|toml|ini)$/i],
+  ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+  ["stripe-key", /\bsk_live_[0-9a-zA-Z]{20,}\b/],
+  ["google-api-key", /\bAIza[0-9A-Za-z_-]{35}\b/],
+  ["azure-storage-key", /AccountKey\s*=\s*[A-Za-z0-9+/=]{40,}/],
   ["bearer-literal", /Authorization\s*[:=]\s*["']?Bearer\s+[A-Za-z0-9._-]{20,}/i],
+  ["connection-password", /(?:Password|Pwd|PGPASSWORD|POSTGRES_PASSWORD)"?\s*[=:]\s*["']?(?!\$|\{|<|%|;|\s|@)[^;\s"',]{6,}/i, CONFIG],
+  ["generic-secret", /(?:api[_-]?key|client[_-]?secret|access[_-]?token|secret[_-]?key)"?\s*[=:]\s*["'][A-Za-z0-9/+_=-]{20,}["']/i, CONFIG],
 ];
-const SKIP = /(^|\/)(node_modules|target|bin|obj|dist|package-lock\.json)(\/|$)|\.(png|jpg|jpeg|ico|woff2?|ttf|pdf|xlsx|zip|snap)$/i;
+const SKIP = /(^|\/)(node_modules|package-lock\.json)(\/|$)|\.(png|jpg|jpeg|ico|woff2?|ttf|pdf|xlsx|zip|snap)$/i;
 
-function scan(root, files) {
+function scan(root, files, skippedLarge = []) {
   const hits = [];
   for (const f of files) {
     if (SKIP.test(f)) continue;
     const p = path.join(root, f); let text;
-    try { if (fs.statSync(p).size > 2_000_000) continue; text = fs.readFileSync(p, "utf8"); } catch { continue; }
+    try { if (fs.statSync(p).size > 2_000_000) { skippedLarge.push(f); continue; } text = fs.readFileSync(p, "utf8"); } catch { continue; }
     text.split(/\r?\n/).forEach((line, i) => { for (const [id, re, ext] of RULES) if ((!ext || ext.test(f)) && re.test(line)) hits.push({ file: f, line: i + 1, rule: id }); });
   }
   return hits;
@@ -41,7 +48,9 @@ if (require.main === module) {
   const files = execFileSync("git", ["-C", root, "ls-files"], { encoding: "utf8", maxBuffer: 1 << 28 }).split("\n").filter(Boolean);
   const allowFile = path.join(root, ".github/secret-scan-allow.json");
   const allow = fs.existsSync(allowFile) ? JSON.parse(fs.readFileSync(allowFile, "utf8")).allow : [];
-  const { left, stale } = filterAllowed(scan(root, files), allow);
+  const large = [];
+  const { left, stale } = filterAllowed(scan(root, files, large), allow);
+  large.forEach(f => console.log(`notice: ${f} skipped (over 2 MB)`));
   if (left.length || stale.length) {
     console.error("SECRET SCAN FAILED");
     left.forEach(h => console.error(` - ${h.file}:${h.line} [${h.rule}] (values are never printed)`));

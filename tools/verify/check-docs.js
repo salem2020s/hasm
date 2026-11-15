@@ -26,6 +26,17 @@ function check(root) {
       if (!fs.existsSync(target)) problems.push(`${f}: broken link ${m[1]}`);
     }
   }
+  // the required-check manifest must mirror the path filters of the workflows that produce each check (a drift would silently drop or invent required checks)
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, ".github/required-checks.json"), "utf8"));
+    const wfOf = { "backend-build-test": "backend.yml", "postgres-integration": "backend.yml", "frontend-build-test": "frontend.yml", "e2e-smoke": "frontend.yml", "desktop-build": "desktop.yml" };
+    const filters = f => [...fs.readFileSync(path.join(root, ".github/workflows", f), "utf8").matchAll(/paths\s*:\s*\[([^\]]*)\]/g)].flatMap(m => m[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean));
+    for (const c of manifest.checks) {
+      const f = wfOf[c.name];
+      if (f) { const want = [...filters(f)].sort().join("|"), have = [...c.paths].sort().join("|"); if (want !== have) problems.push(`required-checks.json: paths of ${c.name} differ from the pull_request paths filter of ${f}`); }
+      else if (!fs.readFileSync(path.join(root, ".github/workflows/verification.yml"), "utf8").includes(`  ${c.name}:`)) problems.push(`required-checks.json: no workflow job produces the check ${c.name}`);
+    }
+  } catch (e) { problems.push("required-checks.json could not be verified against the workflows: " + e.message); }
   // requirement coverage straight from the SRS and the committed matrix
   const srs = fs.readFileSync(path.join(root, "docs/SRS.md"), "utf8").split(/\r?\n/);
   const ids = []; let sec = "", n = 0;

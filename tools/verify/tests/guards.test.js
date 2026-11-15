@@ -63,7 +63,7 @@ test("guard: removing a test class from the registry is refused", () => {
   assert.ok(f.some(x => /BetaTests.*removed/.test(x)), f.join("\n"));
 });
 test("guard: commented registry lines are not counted", () => {
-  assert.deepStrictEqual(guard.parseRegistry(BACKEND), { AlphaTests: 10, BetaTests: 5 });
+  assert.deepStrictEqual(guard.parseRegistry(BACKEND), { map: { AlphaTests: 10, BetaTests: 5 }, errors: [] });
 });
 test("guard: continue-on-error, if: false, || true and --filter are refused", () => {
   for (const [needle, re] of [["    steps:\n      - run: dotnet test", /continue-on-error/], ["      - run: dotnet test", /if: false/], ["      - run: dotnet test", /\|\| true/], ["      - run: dotnet test", /--filter/]]) {
@@ -84,9 +84,9 @@ test("guard: removing a required job or deleting a workflow is refused", () => {
 });
 test("guard: added skipped tests are refused", () => {
   const f = guard.run(repo({ "tests/AlphaTests.cs": "public class AlphaTests { [Fact(Skip = \"later\")] public void A() {} }\n" }), "main", {});
-  assert.ok(f.some(x => /skipped or focused tests/.test(x)), f.join("\n"));
+  assert.ok(f.some(x => /skipped, ignored or focused tests/.test(x)), f.join("\n"));
   const g = guard.run(repo({ "src/a.test.tsx": "it.skip('x', () => {});\n" }), "main", {});
-  assert.ok(g.some(x => /skipped or focused tests/.test(x)), g.join("\n"));
+  assert.ok(g.some(x => /skipped, ignored or focused tests/.test(x)), g.join("\n"));
 });
 test("guard: protected verification files need the approval flag once the guard exists on the base", () => {
   const r = repo({ ".github/required-checks.json": JSON.stringify({ checks: [] }) });

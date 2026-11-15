@@ -7,6 +7,7 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   retries: 0,
+  forbidOnly: !!process.env.CI,
   reporter: [["list"]],
   use: { baseURL: "http://127.0.0.1:4173", ...devices["Desktop Chrome"], channel: process.env.E2E_CHANNEL ?? "chromium" },
   webServer: {

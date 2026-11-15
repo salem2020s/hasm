@@ -16,7 +16,8 @@ function validate(text, headSha) {
     if (!re.test(text)) p.push(`section "${k}" is missing or empty`);
   }
   if (/<(sha|number|separate|only|files|list)[^>\n]*>/i.test(text)) p.push("template placeholders were not replaced");
-  if (/Verdict:\*\*\s*approve/i.test(text) && !/Blocker or High findings open:\*\*\s*none/i.test(text)) p.push("an approval cannot carry open Blocker/High findings");
+  if (!/Verdict:\*\*[ \t]*(approve|request changes)[ \t]*$/im.test(text)) p.push("the verdict must be exactly 'approve' or 'request changes'");
+  if (/Verdict:\*\*[ \t]*approve[ \t]*$/im.test(text) && !/Blocker or High findings open:\*\*\s*none/i.test(text)) p.push("an approval cannot carry open Blocker/High findings");
   return p;
 }
 module.exports = { validate };
