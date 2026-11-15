@@ -64,15 +64,15 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 4.0 | Verification infrastructure | Medium | 3.7A | none |
 | 4.1 | Identity completion | High | 3.7D | system |
 | 4.2 | Licensing and Trial | Critical | 3.17 | system |
-| 4.3 | Backup and restore | Critical | 3.12 | none |
+| 4.3 | Backup and restore | Critical | 3.12, 3.9A | none |
 | 4.4 | Signed manual updates | High | 4.3 | none |
 | 4.5 | Installer and deployment models | High | 4.1, 4.4 | none |
 | 4.6 | Diagnostics, operations and audit retention | Medium | 4.5 | none |
 | 4.7 | Desktop offline drafts | Medium | 3.17 | none |
 | 4.8 | Localization and UX completion | Low | 3.26 | none |
-| 5.1 | Performance and load validation | Medium | 4.8 | none |
-| 5.2 | Security review and hardening | High | 4.6 | none |
-| 5.3 | Final validation and Release 1 acceptance | Critical | 5.1, 5.2 | none |
+| 5.1 | Performance and load validation | Medium | 4.8, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7 | none |
+| 5.2 | Security review and hardening | High | 4.6, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.7, 4.8 | none |
+| 5.3 | Final validation and Release 1 acceptance | Critical | 5.1, 5.2, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8 | none |
 
 ## Definition of Done (applies to every phase)
 1. Scope exactly as listed; nothing outside the approved SRS; OPEN decisions (OD-n) that block it decided or explicitly deferred before the slice that needs them.
@@ -244,7 +244,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 ### Phase 3.13 — Commercial document framework
 * **Exact approved scope:** SRS 4.3, 4.4, 7.2, 7.3, 7.6, 19.2, 19.3, 19.7, 21.1
 * **Prerequisites:** 3.7C, 3.9B, 3.10, 3.11
-* **Deliverables:** Shared life cycle with three independent tracks (commercial status, physical delivery/receipt, accounting posting), links between documents, partial fulfilment, numbering per type/branch/year, approval and re-approval, snapshot storage, idempotency keys, reuse of the 3.7 accounting-pending mechanism.
+* **Deliverables:** Shared life cycle with three independent tracks (commercial status, physical delivery/receipt, accounting posting), links between documents, partial fulfilment, numbering per type/branch/year, approval and re-approval, snapshot storage, idempotency keys, reuse of the 3.7 accounting-pending mechanism; a shared posted-business-transaction counting hook (a no-op until Phase 4.2 gives it the Trial definition of OD-12) that every later posting phase calls; document-level foreign-currency rule: documents may be created and posted at their dated document rate, while settling or allocating them across currencies or rates is refused (fail closed) until Phase 3.18.
 * **Acceptance criteria:** A business event creates exactly one stock and one ledger effect; separate and direct modes both supported.
 * **Mandatory tests:** PostgreSQL: duplicate prevention under concurrency, state-machine, numbering, approval.
 * **Database migration implications:** company
@@ -265,7 +265,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Exact approved scope:** SRS 7.1, 7.2, 7.5, 6.3, 8.4
 * **Prerequisites:** 3.13, 3.14
 * **Deliverables:** Purchase orders, goods receipts (posting through 3.7), supplier invoices (direct and separate modes), purchase returns, GRNI, tax and price snapshots.
-* **Acceptance criteria:** Scenario 21.1 for purchases; receipts cost from the invoice or receipt input; GRNI clears exactly.
+* **Acceptance criteria:** Scenario 21.1 for purchases; receipts cost from the invoice or receipt input; GRNI clears exactly; foreign-currency settlement refused (fail closed) until 3.18; counting hook called on posting.
 * **Mandatory tests:** PostgreSQL end-to-end scenarios and concurrency; web tests.
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Critical
@@ -276,7 +276,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Exact approved scope:** SRS 7.1, 7.2, 8.3, 8.4, 6.3
 * **Prerequisites:** 3.13, 3.14, 3.11
 * **Deliverables:** Quotations, sales orders, delivery documents, invoices, returns, cash/credit/mixed payment, discounts, taxes, currencies, sales representatives, price snapshots, cost of goods sold through posted costing, credit-limit hook.
-* **Acceptance criteria:** Scenario 21.1; no duplicate stock/ledger effect; historic prices never recomputed.
+* **Acceptance criteria:** Scenario 21.1; no duplicate stock/ledger effect; historic prices never recomputed; foreign-currency settlement refused (fail closed) until 3.18; counting hook called on posting.
 * **Mandatory tests:** PostgreSQL end-to-end scenarios and concurrency; web tests.
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Critical
@@ -286,7 +286,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Exact approved scope:** SRS 10.1-10.4, 5.5, 7.1; Scenario 21.6
 * **Prerequisites:** 3.15, 3.16
 * **Deliverables:** Customer and supplier ledgers, allocation of vouchers to invoices (manual and suggested), advances, unallocated amounts, un-allocation with audit, credit/debit notes, ageing, statements, credit-limit enforcement, reconciliation of control accounts to subledgers, close probes.
-* **Acceptance criteria:** Linking never creates a second entry; subledger equals control account; ageing correct.
+* **Acceptance criteria:** Linking never creates a second entry; subledger equals control account; ageing correct; allocation across different currencies or rates refused (fail closed) until 3.18; counting hook called on posting.
 * **Mandatory tests:** PostgreSQL: allocation, duplicate prevention, retry, reconciliation, authorization.
 * **Database migration implications:** company
 * **Security and accounting risk:** Critical
@@ -419,8 +419,8 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 ### Phase 4.2 — Licensing and Trial
 * **Exact approved scope:** SRS 15.1-15.7, 19.6
 * **Prerequisites:** 3.17
-* **Deliverables:** Signed licences, named/concurrent seats with heartbeat and lease, annual/perpetual entitlement, read-only on expiry, Trial limits, support-window metadata, activation online/offline.
-* **Acceptance criteria:** Trial limits cannot be bypassed from either client; drafts are kept after expiry.
+* **Deliverables:** Signed licences, named/concurrent seats with heartbeat and lease, annual/perpetual entitlement, read-only on expiry, Trial limits, support-window metadata, activation online/offline; Trial restrictions of SRS 15.6 (basic modules only: no designers, multi-currency, cheques or company aggregation; read and export after the limit; upgrade preserves data); one count per session regardless of browser tabs (SRS 15.2); the Trial transaction counter wired to the hook of 3.13 and the counted-document contract of OD-12 for every later posting phase (3.19, 3.20, 3.21, 3.22, 3.27 integrate with it in their own PRs).
+* **Acceptance criteria:** Trial limits and module restrictions cannot be bypassed from either client; drafts are kept after expiry; tabs of one session are not double counted; upgrading a Trial company keeps its data.
 * **Mandatory tests:** PostgreSQL concurrency and security tests.
 * **Database migration implications:** system
 * **Security and accounting risk:** Critical
@@ -429,7 +429,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 
 ### Phase 4.3 — Backup and restore
 * **Exact approved scope:** SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10
-* **Prerequisites:** 3.12
+* **Prerequisites:** 3.12, 3.9A
 * **Deliverables:** Manual and scheduled backups, retention, destinations, encryption, monitoring, single-company and full restore with attachments, trial restore, measured RPO/RTO.
 * **Acceptance criteria:** Restore drill passes on a disposable cluster; other companies and the system database are untouched.
 * **Mandatory tests:** Restore drills in CI where feasible; recorded manual drills otherwise.
@@ -489,7 +489,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 
 ### Phase 5.1 — Performance and load validation
 * **Exact approved scope:** SRS 18.1-18.3, 16.4
-* **Prerequisites:** 4.8
+* **Prerequisites:** 4.8, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 * **Deliverables:** Reference environment, reference data, 60-minute load, P95 measurement.
 * **Acceptance criteria:** Measured against SRS targets; anything not run is recorded as NOT VERIFIED.
 * **Mandatory tests:** Load scripts and recorded results.
@@ -499,7 +499,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 
 ### Phase 5.2 — Security review and hardening
 * **Exact approved scope:** SRS 17, 4.5
-* **Prerequisites:** 4.6
+* **Prerequisites:** 4.6, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.7, 4.8
 * **Deliverables:** Security review of authentication, authorization, isolation, uploads, reports, designers, licence and updates; fixes.
 * **Acceptance criteria:** No open Critical/High finding.
 * **Mandatory tests:** Security test suite and review record.
@@ -509,7 +509,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 
 ### Phase 5.3 — Final validation and Release 1 acceptance
 * **Exact approved scope:** SRS 18.4, 18.5; docs/RELEASE1-ACCEPTANCE.md
-* **Prerequisites:** 5.1, 5.2
+* **Prerequisites:** 5.1, 5.2, 3.7A, 3.7B, 3.7C, 3.7D, 3.8A, 3.8B, 3.8C, 3.8D, 3.8E, 3.9A, 3.9B, 3.9C, 3.10, 3.11, 3.12, 3.13, 3.14, 3.15, 3.16, 3.17, 3.18, 3.19, 3.20, 3.21, 3.22, 3.23, 3.24, 3.25, 3.26, 3.27, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8
 * **Deliverables:** Full regression, scenario suite 21.1-21.10, traceability closure, visual review, recorded open items.
 * **Acceptance criteria:** docs/RELEASE1-ACCEPTANCE.md satisfied; unverified items marked NOT VERIFIED.
 * **Mandatory tests:** Everything above.
@@ -527,15 +527,15 @@ Every ambiguity found by the audit was checked against the approved SRS, DECISIO
 | OD-3 | DEFAULT | Sales representative model | Is a sales representative a user, an employee or a party? | SRS 7.1 names representatives; payroll/HR are out of scope (SRS 1); nothing defines the entity. | Default: a company-local representative record (code, Arabic/English name, active flag, optional link to a user); no commission calculation. Documents reference it; reports filter by it. | none (3.9B builds it; 3.16 and 3.23 consume it) |
 | OD-4 | DEFAULT | Historical selling price and last purchase price | Definitions for 'consumer selling price' and 'last purchase price' as of a past date. | REPORTING-REQUIREMENTS 5.1 leaves them to implementation; both are informational (acceptance criterion 2). | Default: selling price = the default price list price in force on the as-of date for the item base unit in base currency (3.11); last purchase price = unit cost of the latest posted purchase line dated on or before the as-of date, company-wide, in base currency. Every displayed value is labelled with its date and basis; neither changes any stored cost. | none (3.8E) |
 | OD-5 | APPROVED | Trading / cost-of-sales statement | Layout and classification of the Trading account for service companies. | Phase 3.3 (merged, PR #21) already built the Trading Account/Profit and Loss with a company-level versioned statement classification (company migration 0011); REPORTING-REQUIREMENTS 1 row 10 says it is 'not applicable' without inventory, never zero. | No new decision: the existing classification decides; 3.8E only activates the cost-of-sales figures from posted inventory data and keeps 'not applicable' for companies without inventory. | none |
-| OD-6 | APPROVED | Comparison basis and presentation | Comparison basis (previous year, period, budget) and rounding of statements. | docs/PHASE-3.3.md: comparatives are the previous fiscal period and previous fiscal year, actual values only, in the company's own calendar. SRS contains no budget requirement. | Already decided and built; budgets are not part of Release 1. New operational reports reuse the same period resolution. | none |
-| OD-7 | APPROVED | Export limits and background export | Export size limits and background jobs. | docs/PHASE-3.3.md: XLSX/CSV default maximum 500,000 rows (Hasm:Reports:MaxExportRows), PDF 50,000 (MaxPdfRows), refused before a file is produced; the export is synchronous. | Already decided and built; no background export in Release 1. New reports use the same service and limits. | none |
-| OD-8 | APPROVED | Net sales excluding tax | Treatment of tax-inclusive prices in 'net sales excluding tax components'. | SRS 6.1 (inclusive/exclusive) and 6.3 (immutable snapshot of base, rates and results on the final document). | Net sales = the net (pre-tax) amount stored in each document's tax snapshot, after discounts and returns; no recomputation from today's rules. | none (3.10 defines the snapshot, 3.23 reads it) |
-| OD-9 | APPROVED | Scope of import mapping templates | Are reusable mapping templates per company or per user? | REPORTING-REQUIREMENTS 3 item 11: 'saved per company and adapter, versioned, never bypassing validation, dry run or approval'. | Already approved: per company and adapter, versioned, audited. | none |
+| OD-6 | DEFAULT | Comparison basis and presentation | Comparison basis (previous year, period, budget) and rounding of statements. | docs/PHASE-3.3.md: comparatives are the previous fiscal period and previous fiscal year, actual values only, in the company's own calendar. SRS contains no budget requirement. | Default: the built comparatives (previous period, previous year) are kept; no budget comparison is scheduled because the SRS contains no budget requirement (REPORTING-REQUIREMENTS section 5 item 3 leaves the basis open). New operational reports reuse the same period resolution. | none |
+| OD-7 | DEFAULT | Export limits and background export | Export size limits and background jobs. | docs/PHASE-3.3.md: XLSX/CSV default maximum 500,000 rows (Hasm:Reports:MaxExportRows), PDF 50,000 (MaxPdfRows), refused before a file is produced; the export is synchronous. | The limits are decided and built (3.3). Default for the rest: exports stay synchronous because 3.3 built them that way and nothing in the SRS asks for background jobs; if a reference-data export exceeds the limit it fails with a clear message. Revisit after the 5.1 measurements. | none |
+| OD-8 | DEFAULT | Net sales excluding tax | Treatment of tax-inclusive prices in 'net sales excluding tax components'. | SRS 6.1 (inclusive/exclusive) and 6.3 (immutable snapshot of base, rates and results on the final document). | Default: net sales = the net (pre-tax) amount stored in each document's tax snapshot (SRS 6.3), after discounts and returns; no recomputation from today's rules. REPORTING-REQUIREMENTS section 5 item 6 keeps the tax-setup detail open until 3.10 defines the snapshot. | none (3.10 defines the snapshot, 3.23 reads it) |
+| OD-9 | DEFAULT | Scope of import mapping templates | Are reusable mapping templates per company or per user? | REPORTING-REQUIREMENTS 3 item 11 requires reusable mapping templates that never bypass validation, dry run or approval; section 5 item 8 lists company-versus-user storage as undecided. | Default: templates are saved per company and per import adapter, versioned and audited, and applying one never skips validation, dry run or approval; per-user templates are not built. Changeable by a normal decision record. | none |
 | OD-10 | APPROVED | Trial attachment quota | Numeric Trial attachment quota. | SRS 15.7 and 20, DECISIONS 'configurable details': a licence-policy value whose default the implementation chooses and publishes; it does not block approval. | Not a decision: 4.2 picks, documents and tests a default; it stays configurable. | none |
-| OD-11 | APPROVED | Lot/serial tracking versus item x warehouse costing | How lots and serial numbers coexist with the approved costing scope. | D-017 approves only FIFO and weighted moving average; D-018 fixes the scope at item x warehouse; D-019 forbids negative stock for lot/serial items; SRS 9.1 requires lots, serials and expiry. | Cost keeps being computed per item x warehouse by the company/group method; a lot or serial is a quantity-tracking dimension whose balances must reconcile to that position. Specific-identification costing is NOT approved, so choosing a lot never changes the cost drawn. Consequence: a FIFO item issued from a newer lot still consumes the oldest cost layer. 3.8C still starts with a written design proposal reviewed against these rules. | none (3.8C design record) |
+| OD-11 | OPEN | Lot/serial tracking versus item x warehouse costing | How lots and serial numbers coexist with the approved costing scope. | D-017 approves only FIFO and weighted moving average; D-018 fixes the scope at item x warehouse; D-019 forbids negative stock for lot/serial items; SRS 9.1 requires lots, serials and expiry. | Proposal (consequential accounting rule, owner confirmation requested before 3.8C design approval): cost keeps being computed per item x warehouse by the company/group method; a lot or serial is a quantity-tracking dimension whose balances must reconcile to that position. Specific-identification costing is NOT approved, so choosing a lot never changes the cost drawn. Consequence: a FIFO item issued from a newer lot still consumes the oldest cost layer. 3.8C still starts with a written design proposal reviewed against these rules. | 3.8C (design record only; 3.8A, 3.8B and 3.8D do not need it) |
 | OD-12 | OPEN | Definition of a posted business transaction for the Trial limit | What counts toward the 100 posted business transactions? | SRS 15.6: 100 posted business transactions; automatic entries are not counted as additional transactions. The unit is not defined; importing opening balances and reversals are not mentioned. | Proposal: one count per posted business document (manual journal entry, stock document, sales or purchase document, voucher, cheque event, bank adjustment); automatic journals generated for a counted document, reversals of a counted document, imports of opening data and recurring-run drafts are not counted until they post as their own business document. Consequence: the Trial cannot be exhausted by internal side effects, and the counter lives server-side in the company database. | 4.2 |
 | OD-13 | APPROVED | Cheque intermediate entries and legislation | Which intermediate entries and returned-cheque settlements apply? | SRS 11.2: 'according to company policy and applicable legislation'. | The rule is a per-company configurable policy (intermediate accounts, return handling) validated against the chart, with a default set of accounts; no legislation-specific rule is hard-coded. Chart templates already reserve cheque accounts for the Cheques module. | none (3.19 designs the policy settings) |
-| OD-14 | APPROVED | Risk classes for approval policies | Which risk classifications may conditions use? | SRS 4.3 (type, value, branch, risk); the conditions already built in 3.2C (type, amount, branch, manual rate override, soft-closed period, year-end class); risk events named elsewhere in the SRS: price/discount override (8.2), margin below minimum (8.3), negative-stock exception (9.4), back-dated posting (9.5), credit limit exceeded (7.1). | Each module adds exactly the risk conditions its SRS clauses name, using the existing ordered-stage policy engine; no other classes are invented. | none |
+| OD-14 | DEFAULT | Risk classes for approval policies | Which risk classifications may conditions use? | SRS 4.3 (type, value, branch, risk); the conditions already built in 3.2C (type, amount, branch, manual rate override, soft-closed period, year-end class); risk events named elsewhere in the SRS: price/discount override (8.2), margin below minimum (8.3), negative-stock exception (9.4), back-dated posting (9.5), credit limit exceeded (7.1). | Default (an interpretation of SRS 4.3): each module adds the risk conditions its SRS clauses name, using the existing ordered-stage policy engine; other classes are added only by a decision record. | none |
 | T-1 | OPEN | State naming when stock is done but the journal is a pending draft | ARCHITECTURE 7 forbids writing 'Posted' on an entry that is not posted, while SRS 7.4 allows an explicit accounting-pending state. | SRS 7.4, 19.7; ARCHITECTURE 7 (document state, stock effect and accounting effect are separate states). | Proposal for the 3.7B design record: document status Approved -> Executed (stock and cost effect committed), with a separate accounting state pending -> posted -> reversed (or failed); the word 'posted' belongs to the journal and the accounting state only. Consequence: no state ever claims a ledger posting that has not happened; reports and period close read the accounting state. | 3.7B (naming only; the mechanism is unchanged) |
 | T-2 | OPEN | Counted unit of the Trial limit | Same question as OD-12 seen from SRS 15.6 versus the separated state tracks. | See OD-12. | Resolved together with OD-12. | 4.2 |
 | T-3 | APPROVED | Production key provisioning for import files | Open item recorded after Phase 3.2D. | docs/ROADMAP.md (previous) and docs/PHASE-3.2D.md. | Scheduled in Phase 3.12 (shared key management with attachments) and must be complete before production use of imports. | 3.12 |

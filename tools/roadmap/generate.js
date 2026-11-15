@@ -219,7 +219,7 @@ Workflow: Implement → Test → Review → Commit → Push → PR → CI → Fi
 | G-8 | Manual visual review and Windows installer/clean-machine tests cannot run in Actions. | Some acceptance items are manual. | Listed in \`docs/RELEASE1-ACCEPTANCE.md\` as manual drills with a recorded owner sign-off, deferred to 5.3 only for visual review. |
 | G-9 | CI expected-test-count registry is edited by hand per phase. | Silent test loss or drift. | Count registry kept in the backend workflow and updated in the same PR; never reduced. |
 | G-10 | Cross-database operations (Party, licensing sync) have no failure-injection harness. | Outbox and reconciliation could be untested. | Built with 3.9A. |
-| G-11 | OPEN decisions (OD-1, OD-2, OD-12, T-1) can stop a slice. | Autonomous work can stall. | Slices ordered so unaffected work continues; blockers reported with preserved work. |
+| G-11 | OPEN decisions (OD-1, OD-2, OD-11, OD-12, T-1, T-2) can stop a slice. | Autonomous work can stall. | Slices ordered so unaffected work continues; blockers reported with preserved work. |
 
 ### Added verification milestones (must pass before the next phase starts)
 | ID | After | Check |
@@ -234,7 +234,7 @@ Workflow: Implement → Test → Review → Commit → Push → PR → CI → Fi
 | VM-8 | 4.5 | Clean install and upgrade on each deployment model. |
 
 ### Risks that could prevent fully autonomous development
-OPEN decisions (OD-1, OD-2, OD-12, T-1); gate G-5; the lack of a reference performance environment (G-7); Windows-only checks (installer, Tauri signing) that Actions cannot fully cover; credentials or signing keys that must never be committed (licence signing keys and code-signing certificates need an owner-provided secure store before 4.2 and 4.5); GitHub plan limits (G-4).
+OPEN decisions (OD-1, OD-2, OD-11, OD-12, T-1, T-2); gate G-5; the lack of a reference performance environment (G-7); Windows-only checks (installer, Tauri signing) that Actions cannot fully cover; credentials or signing keys that must never be committed (licence signing keys and code-signing certificates need an owner-provided secure store before 4.2 and 4.5); GitHub plan limits (G-4).
 `;
 emit("RELEASE1-DEPENDENCIES.md", d);
 

@@ -1,7 +1,7 @@
 // Remaining Release 1 phases. risk: C critical, H high, M medium, L low (accounting/security risk)
 // mig: company = company migration, system = system migration, none
 const P = (id, title, srs, pre, deliver, accept, tests, mig, risk, notes) => ({ id, title, srs, pre, deliver, accept, tests, mig, risk, notes: notes || "" });
-module.exports = [
+const PH = [
 P("3.7A","Inventory accounting configuration (first slice of 3.7)","SRS 7.5, 9.3, 17.4; ARCHITECTURE 7",["3.6"],
  "Versioned immutable mapping of inventory accounts per item group and receipt/issue counter accounts; permissions; API; shared UI. Posts nothing.",
  "Accounts validated against the chart (active, postable, asset, no foreign-currency-only); history immutable; unconfigured company cannot post later; unchanged save creates no version.",
@@ -63,7 +63,7 @@ P("3.12","Attachments and key management","SRS 14.3, 14.4, 17.1, 17.2",["3.2A"],
  "No path traversal; company isolation; encrypted files unreadable without keys; key rotation and recovery proven.",
  "Security tests (traversal, isolation, tampering), PostgreSQL metadata tests, key rotation drill.","company","H",""),
 P("3.13","Commercial document framework","SRS 4.3, 4.4, 7.2, 7.3, 7.6, 19.2, 19.3, 19.7, 21.1",["3.7C","3.9B","3.10","3.11"],
- "Shared life cycle with three independent tracks (commercial status, physical delivery/receipt, accounting posting), links between documents, partial fulfilment, numbering per type/branch/year, approval and re-approval, snapshot storage, idempotency keys, reuse of the 3.7 accounting-pending mechanism.",
+ "Shared life cycle with three independent tracks (commercial status, physical delivery/receipt, accounting posting), links between documents, partial fulfilment, numbering per type/branch/year, approval and re-approval, snapshot storage, idempotency keys, reuse of the 3.7 accounting-pending mechanism; a shared posted-business-transaction counting hook (a no-op until Phase 4.2 gives it the Trial definition of OD-12) that every later posting phase calls; document-level foreign-currency rule: documents may be created and posted at their dated document rate, while settling or allocating them across currencies or rates is refused (fail closed) until Phase 3.18.",
  "A business event creates exactly one stock and one ledger effect; separate and direct modes both supported.",
  "PostgreSQL: duplicate prevention under concurrency, state-machine, numbering, approval.","company","C",""),
 P("3.14","Cash and bank accounts, vouchers and transfers","SRS 3.5, 10.1; RR-4 source",["3.13"],
@@ -72,15 +72,15 @@ P("3.14","Cash and bank accounts, vouchers and transfers","SRS 3.5, 10.1; RR-4 s
  "PostgreSQL and web tests.","company, system","H",""),
 P("3.15","Purchasing","SRS 7.1, 7.2, 7.5, 6.3, 8.4",["3.13","3.14"],
  "Purchase orders, goods receipts (posting through 3.7), supplier invoices (direct and separate modes), purchase returns, GRNI, tax and price snapshots.",
- "Scenario 21.1 for purchases; receipts cost from the invoice or receipt input; GRNI clears exactly.",
+ "Scenario 21.1 for purchases; receipts cost from the invoice or receipt input; GRNI clears exactly; foreign-currency settlement refused (fail closed) until 3.18; counting hook called on posting.",
  "PostgreSQL end-to-end scenarios and concurrency; web tests.","company, system","C","Purchase-cost composition is OPEN decision OD-2 (proposal recorded)."),
 P("3.16","Sales","SRS 7.1, 7.2, 8.3, 8.4, 6.3",["3.13","3.14","3.11"],
  "Quotations, sales orders, delivery documents, invoices, returns, cash/credit/mixed payment, discounts, taxes, currencies, sales representatives, price snapshots, cost of goods sold through posted costing, credit-limit hook.",
- "Scenario 21.1; no duplicate stock/ledger effect; historic prices never recomputed.",
+ "Scenario 21.1; no duplicate stock/ledger effect; historic prices never recomputed; foreign-currency settlement refused (fail closed) until 3.18; counting hook called on posting.",
  "PostgreSQL end-to-end scenarios and concurrency; web tests.","company, system","C",""),
 P("3.17","Receivables and payables","SRS 10.1-10.4, 5.5, 7.1; Scenario 21.6",["3.15","3.16"],
  "Customer and supplier ledgers, allocation of vouchers to invoices (manual and suggested), advances, unallocated amounts, un-allocation with audit, credit/debit notes, ageing, statements, credit-limit enforcement, reconciliation of control accounts to subledgers, close probes.",
- "Linking never creates a second entry; subledger equals control account; ageing correct.",
+ "Linking never creates a second entry; subledger equals control account; ageing correct; allocation across different currencies or rates refused (fail closed) until 3.18; counting hook called on posting.",
  "PostgreSQL: allocation, duplicate prevention, retry, reconciliation, authorization.","company","C",""),
 P("3.18","Foreign-exchange differences","SRS 5.7, 10.3, 5.6, 19.8",["3.17"],
  "Realized and unrealized difference accounting, revaluation, rate source recorded, year-end close and opening balances for companies holding foreign-currency balances.",
@@ -131,10 +131,10 @@ P("4.1","Identity completion","SRS 4.1, 4.5",["3.7D"],
  "MFA enforced where configured; emergency account audited.",
  "PostgreSQL, security and web tests.","system","H",""),
 P("4.2","Licensing and Trial","SRS 15.1-15.7, 19.6",["3.17"],
- "Signed licences, named/concurrent seats with heartbeat and lease, annual/perpetual entitlement, read-only on expiry, Trial limits, support-window metadata, activation online/offline.",
- "Trial limits cannot be bypassed from either client; drafts are kept after expiry.",
+ "Signed licences, named/concurrent seats with heartbeat and lease, annual/perpetual entitlement, read-only on expiry, Trial limits, support-window metadata, activation online/offline; Trial restrictions of SRS 15.6 (basic modules only: no designers, multi-currency, cheques or company aggregation; read and export after the limit; upgrade preserves data); one count per session regardless of browser tabs (SRS 15.2); the Trial transaction counter wired to the hook of 3.13 and the counted-document contract of OD-12 for every later posting phase (3.19, 3.20, 3.21, 3.22, 3.27 integrate with it in their own PRs).",
+ "Trial limits and module restrictions cannot be bypassed from either client; drafts are kept after expiry; tabs of one session are not double counted; upgrading a Trial company keeps its data.",
  "PostgreSQL concurrency and security tests.","system","C","Counted unit is OPEN decision OD-12 (proposal recorded)."),
-P("4.3","Backup and restore","SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10",["3.12"],
+P("4.3","Backup and restore","SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10",["3.12","3.9A"],
  "Manual and scheduled backups, retention, destinations, encryption, monitoring, single-company and full restore with attachments, trial restore, measured RPO/RTO.",
  "Restore drill passes on a disposable cluster; other companies and the system database are untouched.",
  "Restore drills in CI where feasible; recorded manual drills otherwise.","none","C",""),
@@ -171,3 +171,8 @@ P("5.3","Final validation and Release 1 acceptance","SRS 18.4, 18.5; docs/RELEAS
  "docs/RELEASE1-ACCEPTANCE.md satisfied; unverified items marked NOT VERIFIED.",
  "Everything above.","none","C",""),
 ];
+// 5.1 and 5.2 follow every functional and platform phase, and 5.3 follows all of them
+const allBefore = PH.filter(x => /^(3|4)\./.test(x.id)).map(x => x.id);
+for (const x of PH) if (x.id === "5.1" || x.id === "5.2") x.pre = [...new Set([...x.pre, ...allBefore])];
+for (const x of PH) if (x.id === "5.3") x.pre = ["5.1", "5.2", ...allBefore];
+module.exports = PH;
