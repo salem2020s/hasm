@@ -2,7 +2,10 @@
 
 **Status: PROPOSAL for owner confirmation. Nothing is implemented.** Sources: SRS §9 (items, units, barcodes, valuation policy), ARCHITECTURE §8 (costing engine), DECISIONS D-017/D-018/D-019, `docs/REPORTING-REQUIREMENTS.md` (item and item-group attributes needed by later reports), `docs/ROADMAP.md`, completed phases 3.1C (warehouses), 3.2A (chart), 3.2D (import framework).
 
-## 0. Phase identity (needs the owner)
+## 0. Phase identity
+**Update:** the owner has since referred to this work as **Phase 3.4 (Inventory Master Data)** and asked for the item editor to follow the new tabs standard (`docs/PHASE-UI-1.md`: General Information, Units and Conversions, Barcodes, Tracking Settings, adjusted to what is implemented; Save/Cancel and the edited item always visible). The proposed defaults in section 4 are used for the build unless the owner objects.
+
+### Original note
 `docs/ROADMAP.md` lists "inventory and costing" only as *not started* and assigns it **no phase number**. This document does not invent one: the working label is **Inventory Foundation (INV-1)** until the owner assigns the number. The roadmap names no prerequisite for it: warehouses (3.1C), the chart of accounts (3.2A/3.2A-2), the import framework (3.2D) and the reporting foundation (3.3) are all merged. Reusable mapping templates and the opening-balance adapter (open 3.2D items) are not prerequisites; the item import in S5 reuses the delivered 3.2D framework.
 
 ## 1. Scope: master data only
