@@ -308,18 +308,20 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         }, ct);
     }
 
+    internal async Task<JournalEntryView> CancelInWorkAsync(CompanyAuditedWork work, Guid actor, Guid id, long expectedRevision, CancellationToken ct)
+    {
+        var cur = await RequireAsync(work, id, expectedRevision, ct);
+        if (cur.Status is not (JournalStatus.Draft or JournalStatus.PendingApproval or JournalStatus.Approved)) throw new Abort(ConfigStatus.Conflict, "entry_not_cancellable");
+        await SetStatusAsync(work, id, JournalStatus.Cancelled, "", _ => { }, ct);
+        await RecordAsync(work, LedgerAuditEvents.JournalCancelled, actor, id, JournalEventKind.Cancelled, cur.Revision, null, ct);
+        return (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
+    }
+
     /// <summary>Cancels a Draft, Pending or Approved entry. Nothing is deleted; a cancelled entry keeps its history and frees its source key.</summary>
     public async Task<ConfigResult<JournalEntryView>> CancelAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default)
     {
         if (expectedRevision is null) return ConfigResult<JournalEntryView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
-        return await MutateAsync(companyId, async work =>
-        {
-            var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
-            if (cur.Status is not (JournalStatus.Draft or JournalStatus.PendingApproval or JournalStatus.Approved)) throw new Abort(ConfigStatus.Conflict, "entry_not_cancellable");
-            await SetStatusAsync(work, id, JournalStatus.Cancelled, "", _ => { }, ct);
-            await RecordAsync(work, LedgerAuditEvents.JournalCancelled, actor, id, JournalEventKind.Cancelled, cur.Revision, null, ct);
-            return (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
-        }, ct);
+        return await MutateAsync(companyId, work => CancelInWorkAsync(work, actor, id, expectedRevision.Value, ct), ct);
     }
 
     /// <summary>
@@ -417,6 +419,54 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         }, ct, onUnchanged: async () => await GetAsync(companyId, id, ct));
     }
 
+    internal async Task<JournalEntryView> ReverseInWorkAsync(CompanyAuditedWork work, Guid actor, Guid id, long expectedRevision, ReversalInput input, string? description, CancellationToken ct)
+    {
+        var cur = await RequireAsync(work, id, expectedRevision, ct);
+        if (cur.Status != JournalStatus.Posted || cur.Type == JournalType.Reversal) throw new Abort(ConfigStatus.Conflict, "entry_not_reversible");
+        await using (var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {JE.Table} WHERE {JE.Reverses} = @id AND {JE.Status} <> 6)", work.Connection, work.Transaction))
+        {
+            q.Parameters.AddWithValue("id", id);
+            if ((bool)(await q.ExecuteScalarAsync(ct))!) throw new Abort(ConfigStatus.Conflict, "already_reversed");
+        }
+        var original = (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
+        var rid = Guid.NewGuid();
+        var now = clock.GetUtcNow().UtcDateTime;
+        await using (var ins = new NpgsqlCommand(
+            $"INSERT INTO {JE.Table} ({JE.Id}, {JE.Status}, {JE.Type}, {JE.Source}, {JE.Date}, {JE.Desc}, {JE.Branch}, {JE.BaseCur}, {JE.BaseTotal}, {JE.Rev}, {JE.CreatedBy}, {JE.CreatedAt}, {JE.UpdatedAt}, {JE.Reverses}) " +
+            "VALUES (@id, 1, 2, 1, @date, @desc, @branch, @cur, @total, 1, @actor, @now, @now, @orig)", work.Connection, work.Transaction))
+        {
+            ins.Parameters.AddWithValue("id", rid);
+            ins.Parameters.Add(new NpgsqlParameter("date", NpgsqlDbType.Date) { Value = input.EntryDate.Value.ToDateTime(TimeOnly.MinValue) });
+            ins.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)description ?? $"Reversal of {original.Header.Number}" });
+            ins.Parameters.AddWithValue("branch", original.Header.BranchId); ins.Parameters.AddWithValue("cur", original.Header.BaseCurrency);
+            ins.Parameters.AddWithValue("total", original.Header.BaseTotal); ins.Parameters.AddWithValue("actor", actor); ins.Parameters.AddWithValue("now", now); ins.Parameters.AddWithValue("orig", id);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        var no = 0;
+        foreach (var l in original.Lines)
+        {
+            var lid = Guid.NewGuid();
+            await using var li = new NpgsqlCommand(
+                $"INSERT INTO {JL.Table} ({JL.Id}, {JL.Entry}, {JL.No}, {JL.Account}, {JL.Desc}, {JL.Cur}, {JL.Debit}, {JL.Credit}, {JL.Rate}, {JL.RateId}, {JL.RateReason}, {JL.BaseDebit}, {JL.BaseCredit}, {JL.Branch}, {JL.IsRounding}, {JL.ReversesLine}) " +
+                "VALUES (@id, @e, @no, @acc, @desc, @cur, @deb, @cre, @rate, @rid, @rr, @bd, @bc, @br, @rnd, @rl)", work.Connection, work.Transaction);
+            li.Parameters.AddWithValue("id", lid); li.Parameters.AddWithValue("e", rid); li.Parameters.AddWithValue("no", ++no); li.Parameters.AddWithValue("acc", l.AccountId);
+            li.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)l.Description ?? DBNull.Value });
+            li.Parameters.AddWithValue("cur", l.Currency); li.Parameters.AddWithValue("deb", l.Credit); li.Parameters.AddWithValue("cre", l.Debit); li.Parameters.AddWithValue("rate", l.Rate);
+            li.Parameters.Add(new NpgsqlParameter("rid", NpgsqlDbType.Bigint) { Value = (object?)l.RateId ?? DBNull.Value });
+            li.Parameters.Add(new NpgsqlParameter("rr", NpgsqlDbType.Varchar) { Value = (object?)l.RateOverrideReason ?? DBNull.Value });
+            li.Parameters.AddWithValue("bd", l.BaseCredit); li.Parameters.AddWithValue("bc", l.BaseDebit); li.Parameters.AddWithValue("br", l.BranchId); li.Parameters.AddWithValue("rnd", l.IsRounding); li.Parameters.AddWithValue("rl", l.Id);
+            await li.ExecuteNonQueryAsync(ct);
+            foreach (var a in l.Allocations)
+            {
+                await using var ai = new NpgsqlCommand($"INSERT INTO {JA.Table} ({JA.Line}, {JA.CC}, {JA.Amount}, {JA.Base}) VALUES (@l, @c, @a, @b)", work.Connection, work.Transaction);
+                ai.Parameters.AddWithValue("l", lid); ai.Parameters.AddWithValue("c", a.CostCenterId); ai.Parameters.AddWithValue("a", a.Amount); ai.Parameters.AddWithValue("b", a.BaseAmount);
+                await ai.ExecuteNonQueryAsync(ct);
+            }
+        }
+        await RecordAsync(work, LedgerAuditEvents.JournalReversalDrafted, actor, rid, JournalEventKind.ReversalDrafted, 1, $"reverses {original.Header.Number}", ct);
+        return (await LoadViewAsync(work.Connection, work.Transaction, rid, false, ct))!;
+    }
+
     /// <summary>Drafts the reversal of a posted entry: a new entry with the sides swapped, the same accounts, currencies, rates and allocations, referencing the original. It then follows the normal workflow.</summary>
     public async Task<ConfigResult<JournalEntryView>> ReverseAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, ReversalInput? input, CancellationToken ct = default)
     {
@@ -425,53 +475,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         var errors = new List<FieldError>();
         var description = JournalValidation.CleanText(input.Description, 500, "description", errors);
         if (errors.Count > 0) return ConfigResult<JournalEntryView>.Invalid(errors);
-        return await MutateAsync(companyId, async work =>
-        {
-            var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
-            if (cur.Status != JournalStatus.Posted || cur.Type == JournalType.Reversal) throw new Abort(ConfigStatus.Conflict, "entry_not_reversible");
-            await using (var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {JE.Table} WHERE {JE.Reverses} = @id AND {JE.Status} <> 6)", work.Connection, work.Transaction))
-            {
-                q.Parameters.AddWithValue("id", id);
-                if ((bool)(await q.ExecuteScalarAsync(ct))!) throw new Abort(ConfigStatus.Conflict, "already_reversed");
-            }
-            var original = (await LoadViewAsync(work.Connection, work.Transaction, id, false, ct))!;
-            var rid = Guid.NewGuid();
-            var now = clock.GetUtcNow().UtcDateTime;
-            await using (var ins = new NpgsqlCommand(
-                $"INSERT INTO {JE.Table} ({JE.Id}, {JE.Status}, {JE.Type}, {JE.Source}, {JE.Date}, {JE.Desc}, {JE.Branch}, {JE.BaseCur}, {JE.BaseTotal}, {JE.Rev}, {JE.CreatedBy}, {JE.CreatedAt}, {JE.UpdatedAt}, {JE.Reverses}) " +
-                "VALUES (@id, 1, 2, 1, @date, @desc, @branch, @cur, @total, 1, @actor, @now, @now, @orig)", work.Connection, work.Transaction))
-            {
-                ins.Parameters.AddWithValue("id", rid);
-                ins.Parameters.Add(new NpgsqlParameter("date", NpgsqlDbType.Date) { Value = input.EntryDate.Value.ToDateTime(TimeOnly.MinValue) });
-                ins.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)description ?? $"Reversal of {original.Header.Number}" });
-                ins.Parameters.AddWithValue("branch", original.Header.BranchId); ins.Parameters.AddWithValue("cur", original.Header.BaseCurrency);
-                ins.Parameters.AddWithValue("total", original.Header.BaseTotal); ins.Parameters.AddWithValue("actor", actor); ins.Parameters.AddWithValue("now", now); ins.Parameters.AddWithValue("orig", id);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            var no = 0;
-            foreach (var l in original.Lines)
-            {
-                var lid = Guid.NewGuid();
-                await using var li = new NpgsqlCommand(
-                    $"INSERT INTO {JL.Table} ({JL.Id}, {JL.Entry}, {JL.No}, {JL.Account}, {JL.Desc}, {JL.Cur}, {JL.Debit}, {JL.Credit}, {JL.Rate}, {JL.RateId}, {JL.RateReason}, {JL.BaseDebit}, {JL.BaseCredit}, {JL.Branch}, {JL.IsRounding}, {JL.ReversesLine}) " +
-                    "VALUES (@id, @e, @no, @acc, @desc, @cur, @deb, @cre, @rate, @rid, @rr, @bd, @bc, @br, @rnd, @rl)", work.Connection, work.Transaction);
-                li.Parameters.AddWithValue("id", lid); li.Parameters.AddWithValue("e", rid); li.Parameters.AddWithValue("no", ++no); li.Parameters.AddWithValue("acc", l.AccountId);
-                li.Parameters.Add(new NpgsqlParameter("desc", NpgsqlDbType.Varchar) { Value = (object?)l.Description ?? DBNull.Value });
-                li.Parameters.AddWithValue("cur", l.Currency); li.Parameters.AddWithValue("deb", l.Credit); li.Parameters.AddWithValue("cre", l.Debit); li.Parameters.AddWithValue("rate", l.Rate);
-                li.Parameters.Add(new NpgsqlParameter("rid", NpgsqlDbType.Bigint) { Value = (object?)l.RateId ?? DBNull.Value });
-                li.Parameters.Add(new NpgsqlParameter("rr", NpgsqlDbType.Varchar) { Value = (object?)l.RateOverrideReason ?? DBNull.Value });
-                li.Parameters.AddWithValue("bd", l.BaseCredit); li.Parameters.AddWithValue("bc", l.BaseDebit); li.Parameters.AddWithValue("br", l.BranchId); li.Parameters.AddWithValue("rnd", l.IsRounding); li.Parameters.AddWithValue("rl", l.Id);
-                await li.ExecuteNonQueryAsync(ct);
-                foreach (var a in l.Allocations)
-                {
-                    await using var ai = new NpgsqlCommand($"INSERT INTO {JA.Table} ({JA.Line}, {JA.CC}, {JA.Amount}, {JA.Base}) VALUES (@l, @c, @a, @b)", work.Connection, work.Transaction);
-                    ai.Parameters.AddWithValue("l", lid); ai.Parameters.AddWithValue("c", a.CostCenterId); ai.Parameters.AddWithValue("a", a.Amount); ai.Parameters.AddWithValue("b", a.BaseAmount);
-                    await ai.ExecuteNonQueryAsync(ct);
-                }
-            }
-            await RecordAsync(work, LedgerAuditEvents.JournalReversalDrafted, actor, rid, JournalEventKind.ReversalDrafted, 1, $"reverses {original.Header.Number}", ct);
-            return (await LoadViewAsync(work.Connection, work.Transaction, rid, false, ct))!;
-        }, ct);
+        return await MutateAsync(companyId, work => ReverseInWorkAsync(work, actor, id, expectedRevision.Value, input, description, ct), ct);
     }
 
     // ------------------------------------------------------------------------------------------------------------- preparation and computation

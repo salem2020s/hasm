@@ -4,7 +4,7 @@ using Hasm.Infrastructure.CompanyConfiguration;
 namespace Hasm.Infrastructure.Inventory;
 
 /// <summary>What a caller may do with stock documents: per action, the warehouses on which the permission is held (a company-wide grant covers every warehouse of the company).</summary>
-public sealed record StockDocumentCapabilities(IReadOnlyList<Guid> View, IReadOnlyList<Guid> Create, IReadOnlyList<Guid> Update, IReadOnlyList<Guid> Submit, IReadOnlyList<Guid> Approve, IReadOnlyList<Guid> Cancel, IReadOnlyList<Guid> Post);
+public sealed record StockDocumentCapabilities(IReadOnlyList<Guid> View, IReadOnlyList<Guid> Create, IReadOnlyList<Guid> Update, IReadOnlyList<Guid> Submit, IReadOnlyList<Guid> Approve, IReadOnlyList<Guid> Cancel, IReadOnlyList<Guid> Post, IReadOnlyList<Guid> Reverse);
 
 /// <summary>
 /// Authorized entry point for stock documents (the only thing the API calls). Permissions are re-read on every call (no cache) and are WAREHOUSE-scoped: a document needs the permission on EVERY warehouse it involves
@@ -40,7 +40,7 @@ public sealed class StockDocumentManagementService(AccessService access, StockDo
         var all = (await documents.ListWarehousesAsync(company, ct)).Select(w => w.Id).ToList();
         IReadOnlyList<Guid> Of(string code) => [.. all.Where(w => eff.Has(code, ScopeTarget.Warehouse(w)))];
         return new StockDocumentCapabilities(Of(PermissionCatalog.Codes.StockDocsView), Of(PermissionCatalog.Codes.StockDocsCreate), Of(PermissionCatalog.Codes.StockDocsUpdate),
-            Of(PermissionCatalog.Codes.StockDocsSubmit), Of(PermissionCatalog.Codes.StockDocsApprove), Of(PermissionCatalog.Codes.StockDocsCancel), Of(PermissionCatalog.Codes.StockDocsPost));
+            Of(PermissionCatalog.Codes.StockDocsSubmit), Of(PermissionCatalog.Codes.StockDocsApprove), Of(PermissionCatalog.Codes.StockDocsCancel), Of(PermissionCatalog.Codes.StockDocsPost), Of(PermissionCatalog.Codes.StockDocsReverse));
     }
 
     /// <summary>The warehouses the caller may see or use in documents (view, create or update on that warehouse).</summary>

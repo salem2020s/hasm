@@ -11,6 +11,8 @@ using I = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Item;
 using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 using PL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingLine;
 using PE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingEvent;
+using RV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingReversal;
+using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
 
 namespace Hasm.Infrastructure.Inventory;
 
@@ -18,24 +20,29 @@ namespace Hasm.Infrastructure.Inventory;
 public static class StockPostingAuditEvents
 {
     public const short Posted = 1161;
+    public const short Reversed = 1162;
 }
 
 /// <summary>
-/// 1 = the accounting side exists as a draft journal entry that still has to follow the normal approval and posting workflow (accounting pending);
-/// 2 = no journal is required (zero value, or a transfer that stays inside the same inventory accounts).
-/// The physical stock effect and the financial journal status are separate facts: the stock effect is always complete once a posting exists.
+/// The accounting side of an executed document, DERIVED from facts (never stored as a flag that could drift): 1 = a draft journal entry exists that still has to follow the normal approval and posting workflow (accounting pending);
+/// 2 = no journal is required (zero value, or a transfer that stays inside the same inventory accounts); 3 = the journal entry is posted; 4 = the journal entry was cancelled or reversed outside the stock reversal, so the stock effect has
+/// no valid accounting side and needs attention (blocks the period close); 5 = the document was reversed. The physical stock effect and the financial journal status are separate facts: the stock effect is complete once a posting exists.
 /// </summary>
-public enum StockAccountingState : short { Pending = 1, NotRequired = 2 }
+public enum StockAccountingState : short { Pending = 1, NotRequired = 2, Posted = 3, Failed = 4, Reversed = 5 }
 
 /// <summary>The cost of one document line of a RECEIPT, entered at posting time in the base currency (zero is allowed for free goods). Issues and transfers take their cost from the costing engine and accept no amounts.</summary>
 public sealed record StockPostLineInput(int? LineNo, decimal? Amount);
 public sealed record StockPostInput(IReadOnlyList<StockPostLineInput>? Lines);
 
+/// <summary>0 = no journal existed, 1 = the journal had not been posted and was cancelled, 2 = the journal had been posted and a draft reversal entry (following the ordinary workflow) was created.</summary>
+public sealed record StockReversalView(Guid Id, Guid CostOperationId, int JournalAction, Guid? JournalEntryId, string EffectiveDate, DateTimeOffset ReversedAtUtc, Guid ReversedBy, string Reason);
+public sealed record StockReverseInput(string? EffectiveDate, string? Reason);
+
 public sealed record StockPostingLineView(int LineNo, Guid ItemId, Guid WarehouseId, decimal BaseQuantity, decimal Amount);
 
 /// <summary>An executed document: the costing operation that moved the stock, the accounting configuration version and the journal entry used (null when none is required), and the current accounting state.</summary>
 public sealed record StockPostingView(Guid Id, Guid DocumentId, int DocType, string EffectiveDate, DateTimeOffset PostedAtUtc, Guid PostedBy, Guid CostOperationId, Guid? AccountingVersionId, Guid? JournalEntryId,
-    decimal TotalValue, int AccountingState, bool Replayed, IReadOnlyList<StockPostingLineView> Lines);
+    decimal TotalValue, int AccountingState, bool Replayed, IReadOnlyList<StockPostingLineView> Lines, int? JournalStatus = null, StockReversalView? Reversal = null);
 
 /// <summary>
 /// Atomic posting of an APPROVED stock document (Phase 3.7B). <b>No authorization here by design:</b> <see cref="StockPostingManagementService"/> wraps it.
@@ -47,7 +54,7 @@ public sealed record StockPostingView(Guid Id, Guid DocumentId, int DocType, str
 /// A document posts at most once (unique per document and per costing operation); repeating the same request returns the original posting unchanged. The document itself stays <i>approved</i>; an executed document can no
 /// longer be cancelled (enforced by PostgreSQL).
 /// </summary>
-public sealed class StockPostingService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, InventoryCostingService costing, JournalService journal, TimeProvider clock)
+public sealed partial class StockPostingService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, InventoryCostingService costing, JournalService journal, TimeProvider clock)
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     public static string KeyOf(Guid documentId) => $"stock_document:{documentId}";
@@ -57,16 +64,20 @@ public sealed class StockPostingService(CompanyDatabaseResolver resolver, Compan
     internal static async Task<StockPostingView?> LoadByDocumentAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid documentId, bool replayed, CancellationToken ct)
     {
         await using var q = new NpgsqlCommand(
-            $"SELECT p.{P.Id}, p.{P.DocType}, p.{P.EffectiveDate}, p.{P.PostedAtUtc}, p.{P.PostedBy}, p.{P.CostOperationId}, p.{P.AccountingVersionId}, p.{P.JournalEntryId}, p.{P.TotalValue}, " +
-            $"(SELECT e.{PE.Kind} FROM {PE.Table} e WHERE e.{PE.PostingId} = p.{P.Id} ORDER BY e.{PE.Id} DESC LIMIT 1) FROM {P.Table} p WHERE p.{P.DocumentId} = @d", conn, tx);
+            $"SELECT p.{P.Id}, p.{P.DocType}, p.{P.EffectiveDate}, p.{P.PostedAtUtc}, p.{P.PostedBy}, p.{P.CostOperationId}, p.{P.AccountingVersionId}, p.{P.JournalEntryId}, p.{P.TotalValue}, j.{JE.Status}, " +
+            $"rv.{RV.Id}, rv.{RV.CostOperationId}, rv.{RV.JournalAction}, rv.{RV.JournalEntryId}, rv.{RV.EffectiveDate}, rv.{RV.ReversedAtUtc}, rv.{RV.ReversedBy}, rv.{RV.Reason} " +
+            $"FROM {P.Table} p LEFT JOIN {JE.Table} j ON j.{JE.Id} = p.{P.JournalEntryId} LEFT JOIN {RV.Table} rv ON rv.{RV.PostingId} = p.{P.Id} WHERE p.{P.DocumentId} = @d", conn, tx);
         q.Parameters.AddWithValue("d", documentId);
-        Guid id, op, by; Guid? ver, jr; short type, state; DateOnly date; DateTimeOffset at; decimal total;
+        Guid id, op, by; Guid? ver, jr; short type; short? jstatus; DateOnly date; DateTimeOffset at; decimal total; StockReversalView? reversal = null;
         await using (var r = await q.ExecuteReaderAsync(ct))
         {
             if (!await r.ReadAsync(ct)) return null;
             id = r.GetGuid(0); type = r.GetInt16(1); date = r.GetFieldValue<DateOnly>(2); at = r.GetFieldValue<DateTimeOffset>(3); by = r.GetGuid(4); op = r.GetGuid(5);
-            ver = r.IsDBNull(6) ? null : r.GetGuid(6); jr = r.IsDBNull(7) ? null : r.GetGuid(7); total = r.GetDecimal(8); state = r.GetInt16(9);
+            ver = r.IsDBNull(6) ? null : r.GetGuid(6); jr = r.IsDBNull(7) ? null : r.GetGuid(7); total = r.GetDecimal(8); jstatus = r.IsDBNull(9) ? null : r.GetInt16(9);
+            if (!r.IsDBNull(10))
+                reversal = new StockReversalView(r.GetGuid(10), r.GetGuid(11), r.GetInt16(12), r.IsDBNull(13) ? null : r.GetGuid(13), r.GetFieldValue<DateOnly>(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), r.GetFieldValue<DateTimeOffset>(15), r.GetGuid(16), r.GetString(17));
         }
+        var state = DeriveState(jr is not null, jstatus, reversal is not null);
         var lines = new List<StockPostingLineView>();
         await using (var lq = new NpgsqlCommand($"SELECT {PL.LineNo}, {PL.ItemId}, {PL.WarehouseId}, {PL.BaseQuantity}, {PL.Amount} FROM {PL.Table} WHERE {PL.PostingId} = @p ORDER BY {PL.LineNo}", conn, tx))
         {
@@ -74,8 +85,14 @@ public sealed class StockPostingService(CompanyDatabaseResolver resolver, Compan
             await using var lr = await lq.ExecuteReaderAsync(ct);
             while (await lr.ReadAsync(ct)) lines.Add(new StockPostingLineView(lr.GetInt32(0), lr.GetGuid(1), lr.GetGuid(2), lr.GetDecimal(3), lr.GetDecimal(4)));
         }
-        return new StockPostingView(id, documentId, type, date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), at, by, op, ver, jr, total, state, replayed, lines);
+        return new StockPostingView(id, documentId, type, date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), at, by, op, ver, jr, total, (int)state, replayed, lines, jstatus, reversal);
     }
+
+    /// <summary>The accounting state from the facts: reversal first, then no journal, then the journal's own status (1 draft, 2 pending approval, 3 approved, 4 posted, 5 reversed, 6 cancelled).</summary>
+    public static StockAccountingState DeriveState(bool hasJournal, short? journalStatus, bool reversed) =>
+        reversed ? StockAccountingState.Reversed
+        : !hasJournal ? StockAccountingState.NotRequired
+        : journalStatus switch { 4 => StockAccountingState.Posted, 5 or 6 => StockAccountingState.Failed, _ => StockAccountingState.Pending };
 
     public async Task<StockPostingView?> GetAsync(Guid companyId, Guid documentId, CancellationToken ct = default)
     {
@@ -311,6 +328,16 @@ public sealed class StockPostingManagementService(Hasm.Infrastructure.Access.Acc
         if (!await AnyAsync(user, company, Hasm.Infrastructure.Access.PermissionCatalog.Codes.StockDocsView, Involved(doc), ct)) return Denied<StockPostingView>();
         if (!await AllAsync(user, company, Hasm.Infrastructure.Access.PermissionCatalog.Codes.StockDocsPost, Involved(doc), ct)) return Denied<StockPostingView>();
         return await posting.PostAsync(user, company, documentId, expectedRevision, input, ct);
+    }
+
+    /// <summary>Reversal of an executed document: <c>company.stockdocs.reverse</c> on EVERY involved warehouse plus the right to see the document.</summary>
+    public async Task<ConfigResult<StockPostingView>> ReverseAsync(Guid user, Guid company, Guid documentId, StockReverseInput? input, CancellationToken ct = default)
+    {
+        var doc = await documents.GetAsync(company, documentId, ct);
+        if (doc is null) return Denied<StockPostingView>();
+        if (!await AnyAsync(user, company, Hasm.Infrastructure.Access.PermissionCatalog.Codes.StockDocsView, Involved(doc), ct)) return Denied<StockPostingView>();
+        if (!await AllAsync(user, company, Hasm.Infrastructure.Access.PermissionCatalog.Codes.StockDocsReverse, Involved(doc), ct)) return Denied<StockPostingView>();
+        return await posting.ReverseAsync(user, company, documentId, input, ct);
     }
 
     /// <summary>The posting of a document (null when it has not been executed); needs the right to see the document.</summary>

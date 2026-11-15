@@ -103,6 +103,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.StockPosting.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockPostingLine.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockPostingEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockPostingReversal.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
