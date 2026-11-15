@@ -243,6 +243,34 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
         var account = InventoryAccountResolver.Resolve(cfg.GroupAccounts, chain, cfg.DefaultInventoryAccountId) ?? throw new InvalidOperationException("inventory_account_not_configured");
         return new ResolvedInventoryAccounts(cfg.Version.VersionNo, cfg.Version.Id, account, cfg.ReceiptCounterAccountId, cfg.IssueCounterAccountId);
     }
+
+    /// <summary>
+    /// Re-validates, at POSTING time and inside the caller's transaction, the accounts a posting is about to use against the live chart (the chart may have changed since the configuration was saved): inventory accounts must
+    /// exist, be postable and active ASSET accounts, the counter account must exist, be postable and active, and none may be limited to a foreign currency. Returns the first refusal code, or null when all are usable.
+    /// </summary>
+    public static async Task<string?> ValidateForPostingAsync(CompanyAuditedWork work, IReadOnlyCollection<Guid> inventoryAccounts, Guid? counterAccount, CancellationToken ct)
+    {
+        string? baseCurrency;
+        await using (var bq = new NpgsqlCommand($"SELECT {CC.Code} FROM {CC.Table} WHERE {CC.IsBase}", work.Connection, work.Transaction)) baseCurrency = (await bq.ExecuteScalarAsync(ct))?.ToString()?.Trim();
+        var ids = inventoryAccounts.Concat(counterAccount is { } c ? [c] : []).ToList();
+        var accounts = await AccountsAsync(work.Connection, work.Transaction, ids, ct);
+        string? Check(Guid id, bool inventory)
+        {
+            if (!accounts.TryGetValue(id, out var a)) return "inventory_account_not_found";
+            if (a.IsGroup) return "inventory_account_not_postable";
+            if (!a.IsActive) return "inventory_account_inactive";
+            if (inventory && a.Type != (int)AccountType.Asset) return "inventory_account_must_be_asset";
+            if (a.Policy == (int)AccountCurrencyPolicy.Specific && !string.Equals(a.Currency, baseCurrency, StringComparison.Ordinal)) return "inventory_account_currency_not_base";
+            return null;
+        }
+        foreach (var id in inventoryAccounts) if (Check(id, true) is { } e) return e;
+        if (counterAccount is { } ca)
+        {
+            if (inventoryAccounts.Contains(ca)) return "counter_equals_inventory_account";
+            if (Check(ca, false) is { } e) return e.Replace("inventory_account", "counter_account");
+        }
+        return null;
+    }
 }
 
 /// <summary>Authorized entry point: view needs <c>company.inventoryaccounting.view</c>, saving <c>company.inventoryaccounting.configure</c> (company-wide), re-read on every call.</summary>

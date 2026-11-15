@@ -27,12 +27,12 @@ namespace Hasm.Infrastructure.Inventory;
 /// </summary>
 public sealed class StockDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
 {
-    private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
+    internal sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
         public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields) : ConfigResult<T>.Fail(status, code, currentRevision);
     }
 
-    private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, "validation_failed", [new FieldError(field, code)]);
+    internal static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, "validation_failed", [new FieldError(field, code)]);
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static object Db<T>(T? v) where T : class => (object?)v ?? DBNull.Value;
@@ -71,7 +71,7 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
         r.GetGuid(0), r.GetInt16(1), r.GetInt16(2), r.GetGuid(3), G(r, 4), G(r, 5), r.GetFieldValue<DateOnly>(6).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), S(r, 7), S(r, 8), S(r, 9), G(r, 10),
         r.GetGuid(11), r.GetFieldValue<DateTimeOffset>(12), G(r, 13), T(r, 14), G(r, 15), T(r, 16), S(r, 17), G(r, 18), T(r, 19), S(r, 20), r.GetInt64(21), r.GetFieldValue<DateTimeOffset>(22), lines, events);
 
-    private static async Task<StockDocumentView?> Load(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, CancellationToken ct)
+    internal static async Task<StockDocumentView?> Load(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand($"SELECT {DocCols} FROM {D.Table} d WHERE d.{D.Id} = @id{(forUpdate ? " FOR UPDATE" : "")}", conn, tx);
         cmd.Parameters.AddWithValue("id", id);
@@ -143,10 +143,10 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
 
     // ================================================================================================================ validation against the real data
 
-    private sealed record WarehouseRow(Guid Id, Guid BranchId, bool IsActive, string Code);
-    private sealed record ItemRow(Guid Id, string Code, int Type, Guid BaseUnitId, bool Tracked, bool IsActive);
+    internal sealed record WarehouseRow(Guid Id, Guid BranchId, bool IsActive, string Code);
+    internal sealed record ItemRow(Guid Id, string Code, int Type, Guid BaseUnitId, bool Tracked, bool IsActive);
 
-    private static async Task<(Guid BranchId, string BranchCode)> ResolveWarehouses(CompanyAuditedWork work, StockDocumentValidation.Header h, CancellationToken ct)
+    internal static async Task<(Guid BranchId, string BranchCode)> ResolveWarehouses(CompanyAuditedWork work, StockDocumentValidation.Header h, CancellationToken ct)
     {
         var rows = new Dictionary<Guid, WarehouseRow>();
         var ids = new[] { h.Source, h.Target }.Where(x => x is not null).Select(x => x!.Value).Distinct().ToArray();
@@ -174,9 +174,9 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
         return (branch, br.GetString(0));
     }
 
-    private sealed record Resolved(Guid ItemId, Guid UnitId, decimal Quantity, decimal Factor, decimal Base, string? Notes);
+    internal sealed record Resolved(Guid ItemId, Guid UnitId, decimal Quantity, decimal Factor, decimal Base, string? Notes);
 
-    private static async Task<List<Resolved>> ResolveLines(CompanyAuditedWork work, IReadOnlyList<StockDocumentValidation.Line> lines, CancellationToken ct)
+    internal static async Task<List<Resolved>> ResolveLines(CompanyAuditedWork work, IReadOnlyList<StockDocumentValidation.Line> lines, CancellationToken ct)
     {
         var itemIds = lines.Select(l => l.ItemId).Distinct().ToArray();
         var items = new Dictionary<Guid, ItemRow>();
@@ -392,6 +392,12 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
         return Transition(companyId, id, expectedRevision, null, async (work, cur) =>
         {
             if (cur.Status is not (1 or 2 or 3)) throw new Abort(ConfigStatus.Conflict, "invalid_status");
+            // an executed document has moved stock and carries its valuation and accounting state: it is undone only by a reversal, never by cancelling (PostgreSQL enforces this too)
+            await using (var ex = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {CompanySchema.StockPosting.Table} WHERE {CompanySchema.StockPosting.DocumentId} = @d)", work.Connection, work.Transaction))
+            {
+                ex.Parameters.AddWithValue("d", id);
+                if ((bool)(await ex.ExecuteScalarAsync(ct))!) throw new Abort(ConfigStatus.Conflict, "document_executed");
+            }
             if (cur.Status == 3 && cur.Number is { } number)
                 await NumberingService.VoidAsync(work.Connection, work.Transaction, DocTypeOf((StockDocType)cur.DocType), number, actor, r.Length > 200 ? r[..200] : r, Now, ct);
             await SetStatus(work, id, StockDocStatus.Cancelled, Now, $"{D.CancelledBy} = @who, {D.CancelledAtUtc} = @now, {D.CancelReason} = @why", c => { c.Parameters.AddWithValue("who", actor); c.Parameters.AddWithValue("why", r); }, ct);
