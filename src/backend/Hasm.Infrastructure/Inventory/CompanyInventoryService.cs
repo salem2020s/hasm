@@ -12,6 +12,14 @@ using S = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventorySettings;
 
 namespace Hasm.Infrastructure.Inventory;
 
+/// <summary>A refused inventory operation inside someone else's unit of work (import application). The code is a stable machine-readable reason; fields carry validation details.</summary>
+public sealed class InventoryOperationException(string code, ConfigStatus status, IReadOnlyList<FieldError>? fields = null) : Exception(code)
+{
+    public string Code { get; } = code;
+    public ConfigStatus Status { get; } = status;
+    public IReadOnlyList<FieldError>? Fields { get; } = fields;
+}
+
 /// <summary>
 /// Inventory master-data operations (Phase 3.4). <b>No authorization here by design:</b> <see cref="InventoryManagementService"/> wraps it. Every mutation runs in
 /// <see cref="CompanyAuditedTransactions"/> (the change and its authenticated audit event commit or roll back together) after one transaction-level advisory lock that
@@ -25,10 +33,41 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
 
     private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
+        public InventoryOperationException ToException() => new(code, status, fields);
         public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields) : ConfigResult<T>.Fail(status, code, currentRevision);
     }
 
     private sealed class Unchanged(object value) : Exception("unchanged") { public object Value { get; } = value; }
+
+    /// <summary>Takes the inventory structure lock inside an application transaction owned by someone else (the import framework), exactly like every mutation here does first.</summary>
+    public async Task LockForImportAsync(CompanyAuditedWork work, CancellationToken ct)
+    {
+        await using var lk = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@a, @b)", work.Connection, work.Transaction);
+        lk.Parameters.AddWithValue("a", LockKey1);
+        lk.Parameters.AddWithValue("b", LockKey2);
+        await lk.ExecuteNonQueryAsync(ct);
+    }
+
+    // ---- lookups for the import adapters (inside their application transaction)
+    public async Task<Dictionary<string, Guid>> LoadUnitIdsInWorkAsync(CompanyAuditedWork work, CancellationToken ct)
+    {
+        var map = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        await using var q = new NpgsqlCommand($"SELECT {U.Code}, {U.Id} FROM {U.Table}", work.Connection, work.Transaction);
+        await using var r = await q.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) map[r.GetString(0)] = r.GetGuid(1);
+        return map;
+    }
+
+    public async Task<Dictionary<string, Guid>> LoadGroupIdsInWorkAsync(CompanyAuditedWork work, CancellationToken ct)
+    {
+        var map = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        await using var q = new NpgsqlCommand($"SELECT {G.Code}, {G.Id} FROM {G.Table}", work.Connection, work.Transaction);
+        await using var r = await q.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) map[r.GetString(0)] = r.GetGuid(1);
+        return map;
+    }
+
+    public async Task<Guid?> FindGroupIdInWorkAsync(CompanyAuditedWork work, string code, CancellationToken ct) => (await LoadGroupIdsInWorkAsync(work, ct)).TryGetValue(code, out var id) ? id : null;
 
     private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, "validation_failed", [new FieldError(field, code)]);
 
@@ -138,24 +177,34 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
     public async Task<ConfigResult<UnitView>> CreateUnitAsync(Guid actor, Guid companyId, UnitInput? input, CancellationToken ct = default)
     {
         if (!InventoryValidation.TryNormalizeUnit(input, null, out var d, out var errors)) return ConfigResult<UnitView>.Invalid(errors);
-        return await Mutate(companyId, async work =>
+        return await Mutate(companyId, work => CreateUnitCore(work, actor, d, ct), ct);
+    }
+
+    /// <summary>Creates inside a unit of work that already exists (the import framework's application transaction): same rules, same audit event. Throws <see cref="InventoryOperationException"/>.</summary>
+    public async Task<UnitView> CreateUnitInWorkAsync(CompanyAuditedWork work, Guid actor, UnitInput? input, CancellationToken ct = default)
+    {
+        if (!InventoryValidation.TryNormalizeUnit(input, null, out var d, out var errors)) throw new InventoryOperationException("validation_failed", ConfigStatus.Invalid, errors);
+        try { return await CreateUnitCore(work, actor, d, ct); }
+        catch (Abort a) { throw a.ToException(); }
+    }
+
+    private async Task<UnitView> CreateUnitCore(CompanyAuditedWork work, Guid actor, (string Code, string? NameAr, string? NameEn, int Decimals) d, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        try
         {
-            var id = Guid.NewGuid();
-            try
-            {
-                await using var ins = new NpgsqlCommand($"INSERT INTO {U.Table} ({U.Id}, {U.Code}, {U.NameAr}, {U.NameEn}, {U.Decimals}, {U.IsActive}, {U.Revision}, {U.CreatedAtUtc}, {U.UpdatedAtUtc}) VALUES (@id, @c, @ar, @en, @d, true, 1, @now, @now)", work.Connection, work.Transaction);
-                ins.Parameters.AddWithValue("id", id);
-                ins.Parameters.AddWithValue("c", d.Code);
-                ins.Parameters.AddWithValue("ar", Db(d.NameAr));
-                ins.Parameters.AddWithValue("en", Db(d.NameEn));
-                ins.Parameters.AddWithValue("d", (short)d.Decimals);
-                ins.Parameters.AddWithValue("now", Now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "unit_code_taken"); }
-            await Audit(work, InventoryAuditEvents.UnitCreated, actor, id, $"unit {d.Code} created decimals={d.Decimals}", ct);
-            return (await LoadUnit(work.Connection, work.Transaction, id, false, ct))!;
-        }, ct);
+            await using var ins = new NpgsqlCommand($"INSERT INTO {U.Table} ({U.Id}, {U.Code}, {U.NameAr}, {U.NameEn}, {U.Decimals}, {U.IsActive}, {U.Revision}, {U.CreatedAtUtc}, {U.UpdatedAtUtc}) VALUES (@id, @c, @ar, @en, @d, true, 1, @now, @now)", work.Connection, work.Transaction);
+            ins.Parameters.AddWithValue("id", id);
+            ins.Parameters.AddWithValue("c", d.Code);
+            ins.Parameters.AddWithValue("ar", Db(d.NameAr));
+            ins.Parameters.AddWithValue("en", Db(d.NameEn));
+            ins.Parameters.AddWithValue("d", (short)d.Decimals);
+            ins.Parameters.AddWithValue("now", Now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "unit_code_taken"); }
+        await Audit(work, InventoryAuditEvents.UnitCreated, actor, id, $"unit {d.Code} created decimals={d.Decimals}", ct);
+        return (await LoadUnit(work.Connection, work.Transaction, id, false, ct))!;
     }
 
     public async Task<ConfigResult<UnitView>> UpdateUnitAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, UnitInput? input, CancellationToken ct = default)
@@ -259,27 +308,37 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
     public async Task<ConfigResult<ItemGroupView>> CreateGroupAsync(Guid actor, Guid companyId, ItemGroupInput? input, CancellationToken ct = default)
     {
         if (!InventoryValidation.TryNormalizeGroup(input, null, out var d, out var errors)) return ConfigResult<ItemGroupView>.Invalid(errors);
-        return await Mutate(companyId, async work =>
+        return await Mutate(companyId, work => CreateGroupCore(work, actor, d, ct), ct);
+    }
+
+    /// <summary>Creates inside a unit of work that already exists (the import framework's application transaction): same rules, same audit event. Throws <see cref="InventoryOperationException"/>.</summary>
+    public async Task<ItemGroupView> CreateGroupInWorkAsync(CompanyAuditedWork work, Guid actor, ItemGroupInput? input, CancellationToken ct = default)
+    {
+        if (!InventoryValidation.TryNormalizeGroup(input, null, out var d, out var errors)) throw new InventoryOperationException("validation_failed", ConfigStatus.Invalid, errors);
+        try { return await CreateGroupCore(work, actor, d, ct); }
+        catch (Abort a) { throw a.ToException(); }
+    }
+
+    private async Task<ItemGroupView> CreateGroupCore(CompanyAuditedWork work, Guid actor, (string Code, string? NameAr, string? NameEn, Guid? ParentId, ValuationMethod? Valuation) d, CancellationToken ct)
+    {
+        RequireActiveParent((await LoadGroups(work.Connection, work.Transaction, ct)).ToDictionary(g => g.Id), d.ParentId);
+        var id = Guid.NewGuid();
+        try
         {
-            RequireActiveParent((await LoadGroups(work.Connection, work.Transaction, ct)).ToDictionary(g => g.Id), d.ParentId);
-            var id = Guid.NewGuid();
-            try
-            {
-                await using var ins = new NpgsqlCommand($"INSERT INTO {G.Table} ({G.Id}, {G.Code}, {G.NameAr}, {G.NameEn}, {G.ParentId}, {G.Valuation}, {G.IsActive}, {G.Revision}, {G.CreatedAtUtc}, {G.UpdatedAtUtc}) VALUES (@id, @c, @ar, @en, @p, @v, true, 1, @now, @now)", work.Connection, work.Transaction);
-                ins.Parameters.AddWithValue("id", id);
-                ins.Parameters.AddWithValue("c", d.Code);
-                ins.Parameters.AddWithValue("ar", Db(d.NameAr));
-                ins.Parameters.AddWithValue("en", Db(d.NameEn));
-                ins.Parameters.AddWithValue("p", DbN(d.ParentId));
-                ins.Parameters.AddWithValue("v", DbN(d.Valuation is { } v ? (short)v : (short?)null));
-                ins.Parameters.AddWithValue("now", Now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "group_code_taken"); }
-            catch (PostgresException ex) when (ex.MessageText.Contains("8 levels", StringComparison.Ordinal)) { throw Invalid("parentId", "tree_too_deep"); }
-            await Audit(work, InventoryAuditEvents.ItemGroupCreated, actor, id, $"item group {d.Code} created valuation={(d.Valuation is { } m ? (int)m : 0)}", ct);
-            return await ViewGroup(work, id, ct);
-        }, ct);
+            await using var ins = new NpgsqlCommand($"INSERT INTO {G.Table} ({G.Id}, {G.Code}, {G.NameAr}, {G.NameEn}, {G.ParentId}, {G.Valuation}, {G.IsActive}, {G.Revision}, {G.CreatedAtUtc}, {G.UpdatedAtUtc}) VALUES (@id, @c, @ar, @en, @p, @v, true, 1, @now, @now)", work.Connection, work.Transaction);
+            ins.Parameters.AddWithValue("id", id);
+            ins.Parameters.AddWithValue("c", d.Code);
+            ins.Parameters.AddWithValue("ar", Db(d.NameAr));
+            ins.Parameters.AddWithValue("en", Db(d.NameEn));
+            ins.Parameters.AddWithValue("p", DbN(d.ParentId));
+            ins.Parameters.AddWithValue("v", DbN(d.Valuation is { } v ? (short)v : (short?)null));
+            ins.Parameters.AddWithValue("now", Now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "group_code_taken"); }
+        catch (PostgresException ex) when (ex.MessageText.Contains("8 levels", StringComparison.Ordinal)) { throw Invalid("parentId", "tree_too_deep"); }
+        await Audit(work, InventoryAuditEvents.ItemGroupCreated, actor, id, $"item group {d.Code} created valuation={(d.Valuation is { } m ? (int)m : 0)}", ct);
+        return await ViewGroup(work, id, ct);
     }
 
     public async Task<ConfigResult<ItemGroupView>> UpdateGroupAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, ItemGroupInput? input, CancellationToken ct = default)
@@ -480,36 +539,46 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
     public async Task<ConfigResult<ItemView>> CreateItemAsync(Guid actor, Guid companyId, ItemInput? input, CancellationToken ct = default)
     {
         if (!InventoryValidation.TryNormalizeItem(input, null, out var d, out var errors)) return ConfigResult<ItemView>.Invalid(errors);
-        return await Mutate(companyId, async work =>
+        return await Mutate(companyId, work => CreateItemCore(work, actor, d, ct), ct);
+    }
+
+    /// <summary>Creates inside a unit of work that already exists (the import framework's application transaction): same rules, same audit event. Throws <see cref="InventoryOperationException"/>.</summary>
+    public async Task<ItemView> CreateItemInWorkAsync(CompanyAuditedWork work, Guid actor, ItemInput? input, CancellationToken ct = default)
+    {
+        if (!InventoryValidation.TryNormalizeItem(input, null, out var d, out var errors)) throw new InventoryOperationException("validation_failed", ConfigStatus.Invalid, errors);
+        try { return await CreateItemCore(work, actor, d, ct); }
+        catch (Abort a) { throw a.ToException(); }
+    }
+
+    private async Task<ItemView> CreateItemCore(CompanyAuditedWork work, Guid actor, InventoryValidation.ItemData d, CancellationToken ct)
+    {
+        var (units, groups, def) = await Refs(work, ct);
+        ValidateItemRefs(d, units, groups, def, null);
+        var code = d.Code ?? await NextGeneratedCode(work, ct);
+        var id = Guid.NewGuid();
+        try
         {
-            var (units, groups, def) = await Refs(work, ct);
-            ValidateItemRefs(d, units, groups, def, null);
-            var code = d.Code ?? await NextGeneratedCode(work, ct);
-            var id = Guid.NewGuid();
-            try
-            {
-                await using var ins = new NpgsqlCommand($"INSERT INTO {I.Table} ({ItemCols}) VALUES (@id, @c, @ar, @en, @t, @g, @bu, @pu, @su, @lot, @ser, @exp, @notes, true, 1, @now, @now)", work.Connection, work.Transaction);
-                ins.Parameters.AddWithValue("id", id);
-                ins.Parameters.AddWithValue("c", code);
-                ins.Parameters.AddWithValue("ar", Db(d.NameAr));
-                ins.Parameters.AddWithValue("en", Db(d.NameEn));
-                ins.Parameters.AddWithValue("t", (short)d.Type);
-                ins.Parameters.AddWithValue("g", d.GroupId);
-                ins.Parameters.AddWithValue("bu", d.BaseUnitId);
-                ins.Parameters.AddWithValue("pu", DbN(d.PurchaseUnitId));
-                ins.Parameters.AddWithValue("su", DbN(d.SalesUnitId));
-                ins.Parameters.AddWithValue("lot", d.IsLot);
-                ins.Parameters.AddWithValue("ser", d.IsSerial);
-                ins.Parameters.AddWithValue("exp", d.HasExpiry);
-                ins.Parameters.AddWithValue("notes", Db(d.Notes));
-                ins.Parameters.AddWithValue("now", Now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "item_code_taken"); }
-            await WriteAlternates(work, id, d.Alternates, ct);
-            await Audit(work, InventoryAuditEvents.ItemCreated, actor, id, $"item {code} created type={(int)d.Type} alternates={d.Alternates.Count}", ct);
-            return (await LoadItem(work.Connection, work.Transaction, id, false, ct))!;
-        }, ct);
+            await using var ins = new NpgsqlCommand($"INSERT INTO {I.Table} ({ItemCols}) VALUES (@id, @c, @ar, @en, @t, @g, @bu, @pu, @su, @lot, @ser, @exp, @notes, true, 1, @now, @now)", work.Connection, work.Transaction);
+            ins.Parameters.AddWithValue("id", id);
+            ins.Parameters.AddWithValue("c", code);
+            ins.Parameters.AddWithValue("ar", Db(d.NameAr));
+            ins.Parameters.AddWithValue("en", Db(d.NameEn));
+            ins.Parameters.AddWithValue("t", (short)d.Type);
+            ins.Parameters.AddWithValue("g", d.GroupId);
+            ins.Parameters.AddWithValue("bu", d.BaseUnitId);
+            ins.Parameters.AddWithValue("pu", DbN(d.PurchaseUnitId));
+            ins.Parameters.AddWithValue("su", DbN(d.SalesUnitId));
+            ins.Parameters.AddWithValue("lot", d.IsLot);
+            ins.Parameters.AddWithValue("ser", d.IsSerial);
+            ins.Parameters.AddWithValue("exp", d.HasExpiry);
+            ins.Parameters.AddWithValue("notes", Db(d.Notes));
+            ins.Parameters.AddWithValue("now", Now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "item_code_taken"); }
+        await WriteAlternates(work, id, d.Alternates, ct);
+        await Audit(work, InventoryAuditEvents.ItemCreated, actor, id, $"item {code} created type={(int)d.Type} alternates={d.Alternates.Count}", ct);
+        return (await LoadItem(work.Connection, work.Transaction, id, false, ct))!;
     }
 
     /// <summary>The next free automatic code (ITM-000001, ...): the counter is advanced inside the transaction and skips any code a user already took manually.</summary>
@@ -631,28 +700,38 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
     {
         if (input is null) return ConfigResult<BarcodeView>.Invalid([new("body", "required")]);
         if (!InventoryValidation.TryNormalizeBarcode(input.Barcode, input.Kind, out var barcode, out var kind, out var errors)) return ConfigResult<BarcodeView>.Invalid(errors);
-        return await Mutate(companyId, async work =>
+        return await Mutate(companyId, work => AddBarcodeCore(work, actor, itemId, input, barcode, kind, ct), ct);
+    }
+
+    public async Task<BarcodeView> AddBarcodeInWorkAsync(CompanyAuditedWork work, Guid actor, Guid itemId, BarcodeInput? input, CancellationToken ct = default)
+    {
+        if (input is null) throw new InventoryOperationException("validation_failed", ConfigStatus.Invalid, [new FieldError("body", "required")]);
+        if (!InventoryValidation.TryNormalizeBarcode(input.Barcode, input.Kind, out var barcode, out var kind, out var errors)) throw new InventoryOperationException("validation_failed", ConfigStatus.Invalid, errors);
+        try { return await AddBarcodeCore(work, actor, itemId, input, barcode, kind, ct); }
+        catch (Abort a) { throw a.ToException(); }
+    }
+
+    private async Task<BarcodeView> AddBarcodeCore(CompanyAuditedWork work, Guid actor, Guid itemId, BarcodeInput input, string barcode, BarcodeKind kind, CancellationToken ct)
+    {
+        var item = await LoadItem(work.Connection, work.Transaction, itemId, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "item_not_found");
+        if (!item.IsActive) throw new Abort(ConfigStatus.Conflict, "item_inactive");
+        var unitId = input.UnitId ?? item.BaseUnitId;
+        if (unitId != item.BaseUnitId && item.AlternateUnits.All(a => a.UnitId != unitId)) throw Invalid("unitId", "unit_not_defined_for_item");
+        var id = Guid.NewGuid();
+        try
         {
-            var item = await LoadItem(work.Connection, work.Transaction, itemId, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "item_not_found");
-            if (!item.IsActive) throw new Abort(ConfigStatus.Conflict, "item_inactive");
-            var unitId = input.UnitId ?? item.BaseUnitId;
-            if (unitId != item.BaseUnitId && item.AlternateUnits.All(a => a.UnitId != unitId)) throw Invalid("unitId", "unit_not_defined_for_item");
-            var id = Guid.NewGuid();
-            try
-            {
-                await using var ins = new NpgsqlCommand($"INSERT INTO {BC.Table} ({BarcodeCols}) VALUES (@id, @i, @u, @b, @k, true, @now, @now)", work.Connection, work.Transaction);
-                ins.Parameters.AddWithValue("id", id);
-                ins.Parameters.AddWithValue("i", itemId);
-                ins.Parameters.AddWithValue("u", unitId);
-                ins.Parameters.AddWithValue("b", barcode);
-                ins.Parameters.AddWithValue("k", (short)kind);
-                ins.Parameters.AddWithValue("now", Now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "barcode_taken"); }
-            await Audit(work, InventoryAuditEvents.BarcodeAdded, actor, id, $"barcode added to item {item.Code} kind={(int)kind}", ct);
-            return await LoadBarcode(work, id, ct);
-        }, ct);
+            await using var ins = new NpgsqlCommand($"INSERT INTO {BC.Table} ({BarcodeCols}) VALUES (@id, @i, @u, @b, @k, true, @now, @now)", work.Connection, work.Transaction);
+            ins.Parameters.AddWithValue("id", id);
+            ins.Parameters.AddWithValue("i", itemId);
+            ins.Parameters.AddWithValue("u", unitId);
+            ins.Parameters.AddWithValue("b", barcode);
+            ins.Parameters.AddWithValue("k", (short)kind);
+            ins.Parameters.AddWithValue("now", Now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "barcode_taken"); }
+        await Audit(work, InventoryAuditEvents.BarcodeAdded, actor, id, $"barcode added to item {item.Code} kind={(int)kind}", ct);
+        return await LoadBarcode(work, id, ct);
     }
 
     private static async Task<BarcodeView> LoadBarcode(CompanyAuditedWork work, Guid id, CancellationToken ct)

@@ -3,6 +3,7 @@ import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
+import { navigate } from "../router";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 import { blankToNull, invFieldErrors, invName } from "./inventoryCommon";
 
@@ -61,7 +62,7 @@ export function InventoryUnitsPage() {
   return (
     <section aria-labelledby="page-title">
       <PageHeader title={t("inv.units.title")} description={t("inv.units.subtitle")}
-        actions={caps.unitsCreate && <button type="button" className="primary" disabled={busy} onClick={() => guard(() => { setNotice(null); setEditor({ mode: "new" }); })}>{t("inv.units.new")}</button>} />
+        actions={<>{auth.can("company.imports.upload") && auth.can("company.units.create") && <button type="button" disabled={busy} onClick={() => guard(() => navigate("/company/imports"))}>{t("inv.import")}</button>}{caps.unitsCreate && <button type="button" className="primary" disabled={busy} onClick={() => guard(() => { setNotice(null); setEditor({ mode: "new" }); })}>{t("inv.units.new")}</button>}</>} />
       {!caps.unitsCreate && !caps.unitsUpdate && <Banner kind="info" testId="read-only">{t("form.read_only")}</Banner>}
       {conflict && <Banner kind="error" testId="conflict">{t("inv.error.revision_conflict")} <button type="button" onClick={() => { setConflict(false); void load(); }}>{t("form.reload_latest")}</button></Banner>}
       {error && <Banner kind="error">{error}</Banner>}
