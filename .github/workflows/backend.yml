@@ -99,7 +99,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 833 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 861 PostgreSQL tests executed and passed (none skipped)
         run: |
           python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
           import re, sys, xml.etree.ElementTree as ET
@@ -161,8 +161,10 @@ jobs:
               "InventoryMasterDataTests": 14, "InventoryApiTests": 3, "InventoryImportTests": 13,
               # Phase 3.5 stock movement documents (company migration 0013, system migration 0016).
               "StockDocumentTests": 17, "StockDocumentApiTests": 5,
+              # Phase 3.6 inventory costing engine (company migration 0014).
+              "InventoryCostingTests": 28,
           }
-          TOTAL = sum(EXPECTED.values())  # 833
+          TOTAL = sum(EXPECTED.values())  # 861
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           counts, outcomes, unknown = {}, {}, []
           for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):

@@ -98,6 +98,13 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
 
     private async Task<CostingResult?> FindReplayAsync(Context cx, string key, CostOperationKind kind, string hash, CancellationToken ct)
     {
+        // two requests with the same key serialise here, so the second one finds the committed operation and replays it (never a unique-key failure, never a double application)
+        await using (var lk = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@a, hashtext(@k))", cx.Work.Connection, cx.Work.Transaction))
+        {
+            lk.Parameters.AddWithValue("a", 0x48435354);
+            lk.Parameters.AddWithValue("k", key);
+            await lk.ExecuteNonQueryAsync(ct);
+        }
         Guid id; short k; string h; DateOnly date;
         await using (var q = new NpgsqlCommand($"SELECT {OP.Id}, {OP.Kind}, {OP.RequestHash}, {OP.EffectiveDate} FROM {OP.Table} WHERE {OP.Key} = @k", cx.Work.Connection, cx.Work.Transaction))
         {
@@ -473,7 +480,13 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
                     while (await r.ReadAsync(ct)) layers.Add((r.GetGuid(0), CostingMath.ToUnits(r.GetDecimal(1), 10), CostingMath.ToUnits(r.GetDecimal(2), 6), CostingMath.ToUnits(r.GetDecimal(3), 10), CostingMath.ToUnits(r.GetDecimal(4), 6)));
                     if (layers.Any(l => l.RemQty != l.OrigQty || l.RemAmount != l.OrigAmount)) throw new CostingException("reversal_not_possible_goods_consumed", e.Id.ToString(CultureInfo.InvariantCulture));
                 }
-                else if (pos.LastSeq != e.Seq) throw new CostingException("reversal_not_possible_later_movements", e.Id.ToString(CultureInfo.InvariantCulture));
+                else
+                {
+                    // the entry is still intact in the average only if every later entry of the position has been taken back again (a movement and its reversal cancel out exactly)
+                    await using var later = new NpgsqlCommand($"SELECT count(*) FROM {EN.Table} x WHERE x.{EN.PositionId} = @p AND x.{EN.Seq} > @s AND x.{EN.ReversesEntryId} IS NULL AND NOT EXISTS (SELECT 1 FROM {EN.Table} y WHERE y.{EN.ReversesEntryId} = x.{EN.Id})", work.Connection, work.Transaction);
+                    later.Parameters.AddWithValue("p", pos.Id); later.Parameters.AddWithValue("s", e.Seq);
+                    if ((long)(await later.ExecuteScalarAsync(ct))! > 0) throw new CostingException("reversal_not_possible_later_movements", e.Id.ToString(CultureInfo.InvariantCulture));
+                }
                 var entry = await AppendEntryAsync(cx, opId, pos, e.Kind, -1, request.EffectiveDate, e.Quantity, e.Amount, e.Id, ct);
                 var cons = new List<CostConsumptionView>();
                 foreach (var l in layers)
