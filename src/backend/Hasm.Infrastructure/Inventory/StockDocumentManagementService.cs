@@ -43,6 +43,23 @@ public sealed class StockDocumentManagementService(AccessService access, StockDo
             Of(PermissionCatalog.Codes.StockDocsSubmit), Of(PermissionCatalog.Codes.StockDocsApprove), Of(PermissionCatalog.Codes.StockDocsCancel));
     }
 
+    /// <summary>The warehouses the caller may see or use in documents (view, create or update on that warehouse).</summary>
+    public async Task<ConfigResult<IReadOnlyList<StockWarehouseRef>>> WarehousesAsync(Guid user, Guid company, CancellationToken ct = default)
+    {
+        var caps = await CapabilitiesAsync(user, company, ct);
+        var allowed = caps.View.Concat(caps.Create).Concat(caps.Update).ToHashSet();
+        if (allowed.Count == 0) return Denied<IReadOnlyList<StockWarehouseRef>>();
+        return ConfigResult<IReadOnlyList<StockWarehouseRef>>.Ok([.. (await documents.ListWarehousesAsync(company, ct)).Where(w => allowed.Contains(w.Id))]);
+    }
+
+    /// <summary>Items a line may use; only for callers who can create or edit documents somewhere.</summary>
+    public async Task<ConfigResult<IReadOnlyList<StockItemRef>>> SearchItemsAsync(Guid user, Guid company, string? search, CancellationToken ct = default)
+    {
+        var caps = await CapabilitiesAsync(user, company, ct);
+        if (caps.Create.Count == 0 && caps.Update.Count == 0) return Denied<IReadOnlyList<StockItemRef>>();
+        return ConfigResult<IReadOnlyList<StockItemRef>>.Ok(await documents.SearchItemsAsync(company, search, ct));
+    }
+
     public async Task<ConfigResult<StockDocumentPage>> ListAsync(Guid user, Guid company, StockDocumentFilter filter, CancellationToken ct = default)
     {
         var caps = await CapabilitiesAsync(user, company, ct);

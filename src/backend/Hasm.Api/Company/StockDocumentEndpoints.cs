@@ -32,6 +32,8 @@ public static class StockDocumentEndpoints
     {
         var g = app.MapGroup("/api/v1/company/stock-documents").RequireAuthorization();
         g.MapGet("/capabilities", Capabilities);
+        g.MapGet("/warehouses", Warehouses);
+        g.MapGet("/items", Items);
         g.MapGet("", List);
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
@@ -70,6 +72,24 @@ public static class StockDocumentEndpoints
         if (failure is not null) return failure;
         var c = await svc.CapabilitiesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
         return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, approve = c.Approve, cancel = c.Cancel });
+    }
+
+    private static async Task<IResult> Warehouses(HttpContext http, AccessService access, StockDocumentManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        var r = await svc.WarehousesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
+        return r.IsOk ? Results.Json(new { warehouses = r.Value!.Select(w => new { id = w.Id, branchId = w.BranchId, code = w.Code, nameAr = w.NameAr, nameEn = w.NameEn, isActive = w.IsActive }) }) : CompanyConfigurationEndpoints.Map(r, _ => new { });
+    }
+
+    private static async Task<IResult> Items(HttpContext http, AccessService access, StockDocumentManagementService svc, string? search)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        var r = await svc.SearchItemsAsync(actor!.UserId, actor.CompanyId, search, http.RequestAborted);
+        return r.IsOk
+            ? Results.Json(new { items = r.Value!.Select(i => new { id = i.Id, code = i.Code, nameAr = i.NameAr, nameEn = i.NameEn, units = i.Units.Select(u => new { id = u.Id, code = u.Code, nameAr = u.NameAr, nameEn = u.NameEn, decimals = u.Decimals, factor = u.Factor, isBase = u.IsBase }) }) })
+            : CompanyConfigurationEndpoints.Map(r, _ => new { });
     }
 
     private static async Task<IResult> List(HttpContext http, AccessService access, StockDocumentManagementService svc, int? type, int? status, Guid? warehouseId, string? from, string? to, string? search, int? offset, int? limit)

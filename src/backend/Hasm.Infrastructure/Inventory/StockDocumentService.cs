@@ -412,14 +412,54 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
 
     public static string DocTypeOf(StockDocType t) => t switch { StockDocType.Receipt => DocumentTypes.StockReceipt, StockDocType.Issue => DocumentTypes.StockIssue, _ => DocumentTypes.StockTransfer };
 
-    /// <summary>Warehouses of the company (id, branch, code, active) for the capability map of the caller.</summary>
-    public async Task<IReadOnlyList<(Guid Id, Guid BranchId, string Code, bool IsActive)>> ListWarehousesAsync(Guid companyId, CancellationToken ct = default)
+    /// <summary>Warehouses of the company for the capability map and the editor's pickers.</summary>
+    public async Task<IReadOnlyList<StockWarehouseRef>> ListWarehousesAsync(Guid companyId, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
-        await using var q = new NpgsqlCommand($"SELECT {W.Id}, {W.BranchId}, {W.Code}, {W.IsActive} FROM {W.Table} ORDER BY {W.Code}", conn);
+        await using var q = new NpgsqlCommand($"SELECT {W.Id}, {W.BranchId}, {W.Code}, {W.NameAr}, {W.NameEn}, {W.IsActive} FROM {W.Table} ORDER BY {W.Code}", conn);
         await using var r = await q.ExecuteReaderAsync(ct);
-        var list = new List<(Guid, Guid, string, bool)>();
-        while (await r.ReadAsync(ct)) list.Add((r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetBoolean(3)));
+        var list = new List<StockWarehouseRef>();
+        while (await r.ReadAsync(ct)) list.Add(new StockWarehouseRef(r.GetGuid(0), r.GetGuid(1), r.GetString(2), S(r, 3), S(r, 4), r.GetBoolean(5)));
         return list;
+    }
+
+    /// <summary>Items a document line may use (see <see cref="StockItemRef"/>), found by code, name or exact barcode; at most 25.</summary>
+    public async Task<IReadOnlyList<StockItemRef>> SearchItemsAsync(Guid companyId, string? search, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        var items = new List<(Guid Id, string Code, string? Ar, string? En, Guid BaseUnit)>();
+        await using (var q = new NpgsqlCommand(
+            $"SELECT i.{I.Id}, i.{I.Code}, i.{I.NameAr}, i.{I.NameEn}, i.{I.BaseUnitId} FROM {I.Table} i WHERE i.{I.IsActive} AND i.{I.ItemType} = 1 AND NOT (i.{I.IsLot} OR i.{I.IsSerial} OR i.{I.HasExpiry}) " +
+            $"AND (@s = '' OR upper(i.{I.Code}) LIKE @like OR upper(coalesce(i.{I.NameAr}, '')) LIKE @like OR upper(coalesce(i.{I.NameEn}, '')) LIKE @like OR EXISTS (SELECT 1 FROM {CompanySchema.ItemBarcode.Table} b WHERE b.{CompanySchema.ItemBarcode.ItemId} = i.{I.Id} AND upper(b.{CompanySchema.ItemBarcode.Barcode}) = @exact)) " +
+            $"ORDER BY i.{I.Code} LIMIT 25", conn))
+        {
+            var term = (search ?? "").Trim().ToUpperInvariant();
+            q.Parameters.AddWithValue("s", term);
+            q.Parameters.AddWithValue("like", "%" + term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+            q.Parameters.AddWithValue("exact", term);
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) items.Add((r.GetGuid(0), r.GetString(1), S(r, 2), S(r, 3), r.GetGuid(4)));
+        }
+        if (items.Count == 0) return [];
+        var units = new Dictionary<Guid, (string Code, string? Ar, string? En, int Decimals)>();
+        await using (var q = new NpgsqlCommand($"SELECT {U.Id}, {U.Code}, {U.NameAr}, {U.NameEn}, {U.Decimals} FROM {U.Table} WHERE {U.IsActive}", conn))
+        await using (var r = await q.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct)) units[r.GetGuid(0)] = (r.GetString(1), S(r, 2), S(r, 3), r.GetInt16(4));
+        var alt = new Dictionary<Guid, List<(Guid Unit, decimal Factor)>>();
+        await using (var q = new NpgsqlCommand($"SELECT {IU.ItemId}, {IU.UnitId}, {IU.Factor} FROM {IU.Table} WHERE {IU.ItemId} = ANY(@ids)", conn))
+        {
+            q.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = items.Select(x => x.Id).ToArray() });
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) { if (!alt.TryGetValue(r.GetGuid(0), out var l)) alt[r.GetGuid(0)] = l = []; l.Add((r.GetGuid(1), r.GetDecimal(2))); }
+        }
+        var result = new List<StockItemRef>();
+        foreach (var it in items)
+        {
+            var list = new List<StockUnitRef>();
+            if (units.TryGetValue(it.BaseUnit, out var bu)) list.Add(new StockUnitRef(it.BaseUnit, bu.Code, bu.Ar, bu.En, bu.Decimals, 1m, true));
+            foreach (var (uid, f) in alt.GetValueOrDefault(it.Id) ?? []) if (units.TryGetValue(uid, out var au)) list.Add(new StockUnitRef(uid, au.Code, au.Ar, au.En, au.Decimals, f, false));
+            if (list.Count > 0) result.Add(new StockItemRef(it.Id, it.Code, it.Ar, it.En, list));
+        }
+        return result;
     }
 }

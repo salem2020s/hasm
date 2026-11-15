@@ -37,6 +37,11 @@ public sealed record StockDocumentView(
 public sealed record StockDocumentSummary(Guid Id, int DocType, int Status, string? Number, string DocumentDate, Guid BranchId, Guid? SourceWarehouseId, Guid? TargetWarehouseId, string? Reference, int LineCount, long Revision,
     DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
 
+public sealed record StockWarehouseRef(Guid Id, Guid BranchId, string Code, string? NameAr, string? NameEn, bool IsActive);
+public sealed record StockUnitRef(Guid Id, string Code, string? NameAr, string? NameEn, int Decimals, decimal Factor, bool IsBase);
+/// <summary>An item the document editor may pick: active, a stock item (not a service) and not tracked by lot, serial or expiry, with its base and alternate units and their exact factors to the base unit.</summary>
+public sealed record StockItemRef(Guid Id, string Code, string? NameAr, string? NameEn, IReadOnlyList<StockUnitRef> Units);
+
 public sealed record StockDocumentFilter(int? DocType, int? Status, Guid? WarehouseId, string? From, string? To, string? Search, IReadOnlyCollection<Guid>? VisibleWarehouses, int Offset, int Limit);
 public sealed record StockDocumentPage(IReadOnlyList<StockDocumentSummary> Items, long Total);
 

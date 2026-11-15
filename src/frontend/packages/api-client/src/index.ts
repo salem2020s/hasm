@@ -522,6 +522,34 @@ export interface InventoryCapabilities {
   itemsView: boolean; itemsCreate: boolean; itemsUpdate: boolean; itemsActivate: boolean; barcodesCreate: boolean; barcodesActivate: boolean; settingsView: boolean; settingsConfigure: boolean;
 }
 
+// ---- Stock movement documents (Phase 3.5): receipt, issue, transfer up to approval. No stock quantity, movement ledger, cost or accounting exists in this API.
+/** 1 receipt, 2 issue, 3 transfer. */
+export type StockDocType = 1 | 2 | 3;
+/** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
+export type StockDocStatus = 1 | 2 | 3 | 4 | 5;
+export interface StockDocumentLine {
+  lineNo: number; itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; unitId: string; unitCode: string; quantity: number; factor: number; baseQuantity: number; baseUnitCode: string; notes: string | null;
+}
+/** kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 approved, 6 rejected, 7 cancelled. */
+export interface StockDocumentEvent { id: number; kind: number; fromStatus: number | null; toStatus: number; actorUserId: string; atUtc: string; note: string | null }
+export interface StockDocument {
+  id: string; docType: StockDocType; status: StockDocStatus; branchId: string; sourceWarehouseId: string | null; targetWarehouseId: string | null; documentDate: string; reference: string | null; notes: string | null;
+  number: string | null; fiscalYearId: string | null; createdBy: string; createdAtUtc: string; submittedBy: string | null; submittedAtUtc: string | null; decidedBy: string | null; decidedAtUtc: string | null; decisionNote: string | null;
+  cancelledBy: string | null; cancelledAtUtc: string | null; cancelReason: string | null; revision: number; updatedAtUtc: string; lines: StockDocumentLine[]; events: StockDocumentEvent[];
+}
+export interface StockDocumentSummary {
+  id: string; docType: StockDocType; status: StockDocStatus; number: string | null; documentDate: string; branchId: string; sourceWarehouseId: string | null; targetWarehouseId: string | null; reference: string | null;
+  lineCount: number; revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface StockDocumentLineInput { itemId: string; unitId: string; quantity: number; notes?: string | null }
+export interface StockDocumentInput { docType?: StockDocType; sourceWarehouseId: string | null; targetWarehouseId: string | null; documentDate: string; reference: string | null; notes: string | null; lines: StockDocumentLineInput[] }
+export interface StockDocumentQuery { type?: StockDocType; status?: StockDocStatus; warehouseId?: string; from?: string; to?: string; search?: string; offset?: number; limit?: number }
+/** For each action, the ids of the warehouses on which the caller holds the permission. */
+export interface StockDocumentCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[] }
+export interface StockWarehouseRef { id: string; branchId: string; code: string; nameAr: string | null; nameEn: string | null; isActive: boolean }
+export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
+export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
+
 export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
 export interface StatementResponse {
   kind: StatementKind; applicable: boolean; notApplicableReason: string | null; complete: boolean; asOf: boolean; baseCurrency: string; hasComparative: boolean; mapping: StatementMappingVersionInfo | null; period: ReportPeriodInfo;
@@ -699,6 +727,31 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     deactivateItemBarcode: (itemId: string, barcodeId: string) => request<InventoryBarcode>("POST", `/api/v1/company/inventory/items/${enc(itemId)}/barcodes/${enc(barcodeId)}/deactivate`),
     activateItemBarcode: (itemId: string, barcodeId: string) => request<InventoryBarcode>("POST", `/api/v1/company/inventory/items/${enc(itemId)}/barcodes/${enc(barcodeId)}/activate`),
     lookupBarcode: (barcode: string) => get<InventoryBarcodeLookup>(`/api/v1/company/inventory/barcode-lookup?barcode=${enc(barcode)}`),
+    // Stock movement documents (Phase 3.5). Every change carries the document revision as If-Match; the server enforces every rule and every warehouse-scoped permission.
+    getStockDocumentCapabilities: () => get<StockDocumentCapabilities>("/api/v1/company/stock-documents/capabilities"),
+    listStockWarehouses: () => get<{ warehouses: StockWarehouseRef[] }>("/api/v1/company/stock-documents/warehouses"),
+    searchStockItems: (search: string) => get<{ items: StockItemRef[] }>(`/api/v1/company/stock-documents/items?search=${enc(search)}`),
+    listStockDocuments: (q: StockDocumentQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.type !== undefined) p.set("type", String(q.type));
+      if (q.status !== undefined) p.set("status", String(q.status));
+      if (q.warehouseId) p.set("warehouseId", q.warehouseId);
+      if (q.from) p.set("from", q.from);
+      if (q.to) p.set("to", q.to);
+      if (q.search) p.set("search", q.search);
+      if (q.offset) p.set("offset", String(q.offset));
+      if (q.limit) p.set("limit", String(q.limit));
+      const qs = p.toString();
+      return get<{ documents: StockDocumentSummary[]; total: number }>(`/api/v1/company/stock-documents${qs ? "?" + qs : ""}`);
+    },
+    getStockDocument: (id: string) => get<StockDocument>(`/api/v1/company/stock-documents/${enc(id)}`),
+    createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
+    updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
+    submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/approve`, { ifMatch: revision }),
+    rejectStockDocument: (id: string, note: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
+    cancelStockDocument: (id: string, reason: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
     listFiscalYears: () => get<FiscalYearsResponse>("/api/v1/company/fiscal-years"),
     getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),
