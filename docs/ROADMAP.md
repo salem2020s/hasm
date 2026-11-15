@@ -75,7 +75,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 5.3 | Final validation and Release 1 acceptance | Critical | 5.1, 5.2 | none |
 
 ## Definition of Done (applies to every phase)
-1. Scope exactly as listed; nothing outside the approved SRS; open owner decisions (OD-n) resolved or explicitly deferred before the slice that needs them.
+1. Scope exactly as listed; nothing outside the approved SRS; OPEN decisions (OD-n) that block it decided or explicitly deferred before the slice that needs them.
 2. One shared React frontend delivered to Web and Tauri (no platform gap); Arabic RTL and English LTR; tabs standard where applicable.
 3. Server-side authorization, company/branch/warehouse scoping, audit, optimistic concurrency, validation; no frontend-only security.
 4. Migrations: fresh creation and upgrade tested; opaque physical names; append-only/immutability where the data is historical; nothing destructive on non-test databases; destructive tests only on the disposable cluster.
@@ -94,7 +94,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company 0015, system 0017
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** BUILT on branch feature/phase-3-7a-inventory-accounting; full PostgreSQL regression running; not merged, not in a PR.
+* **Notes:** BUILT on branch feature/phase-3-7a-inventory-accounting (commits a12c4e5 and a follow-up test fix); not merged, no pull request yet. Local regression on the disposable cluster (2026-11-15, filter all tests of the integration assembly): 912 run, 910 passed, 2 failed. (1) InventoryAccountingTests concurrent-save test: a test-order flaw (a candidate equal to the current version is absorbed as an unchanged save), fixed in the test, 5/5 isolated runs passed afterwards; product behaviour was correct. (2) JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied failed once in the long run and passed in repeated isolated runs afterwards; not explained, to be checked on CI and, if it recurs, treated as a pre-existing flaky test to fix at root cause (Phase 4.0 test-stability item). The local total (912) differs from the CI registry sum (868); the CI count is the arbiter and is reconciled when the PR runs. Unit 867, frontend 345, build and Tauri debug build passed.
 
 ### Phase 3.7B — Atomic inventory posting (core)
 * **Exact approved scope:** SRS 4.4, 7.4, 9.3, 9.6, 9.7, 17.4, 19.2, 19.5; ARCHITECTURE 5, 7, 8
@@ -156,7 +156,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Needs a design proposal first: the approved costing scope is item x warehouse (D-018); lot/serial dimensions must not break it (OD-11).
+* **Notes:** Needs a design proposal first: the approved costing scope is item x warehouse (D-018); lot/serial dimensions must not break it (OD-11: costing rule already approved).
 
 ### Phase 3.8D — Back-dated movements, impact preview, recalculation, method change and revaluation
 * **Exact approved scope:** SRS 9.2, 9.5, 9.7; Scenario 21.5
@@ -177,7 +177,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** none
 * **Security and accounting risk:** Medium
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Price definitions need OD-4.
+* **Notes:** Price definitions: default in OD-4.
 
 ### Phase 3.9A — Party registry (shared identity and company-local record)
 * **Exact approved scope:** SRS 3.3, 3.4, 17.4, 19.4; Scenario 21.3
@@ -198,7 +198,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Medium
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Representative model needs OD-3.
+* **Notes:** Representative model: default in OD-3.
 
 ### Phase 3.9C — Party import adapter and reusable mapping templates
 * **Exact approved scope:** SRS 14.1; RR-11
@@ -209,7 +209,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company
 * **Security and accounting risk:** Medium
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Template scope needs OD-9.
+* **Notes:** Template scope: approved in OD-9.
 
 ### Phase 3.10 — Tax engine
 * **Exact approved scope:** SRS 6.1-6.4, 19.8
@@ -270,7 +270,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Capitalization of freight-in, rebates and discounts needs OD-2.
+* **Notes:** Purchase-cost composition is OPEN decision OD-2 (proposal recorded).
 
 ### Phase 3.16 — Sales
 * **Exact approved scope:** SRS 7.1, 7.2, 8.3, 8.4, 6.3
@@ -311,7 +311,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Local policy/legislation needs OD-13.
+* **Notes:** Per-company policy settings (OD-13).
 
 ### Phase 3.20 — Bank reconciliation
 * **Exact approved scope:** SRS 11.3, 11.4; Scenario 21.6
@@ -352,7 +352,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** none
 * **Security and accounting risk:** Medium
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Needs OD-3, OD-4, OD-8.
+* **Notes:** Uses the defaults of OD-3, OD-4 and OD-8.
 
 ### Phase 3.24 — Multi-company aggregation reports
 * **Exact approved scope:** SRS 3.7, 3.8
@@ -363,7 +363,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** none
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** OD-1.
+* **Notes:** OPEN decision OD-1 limits only the consolidation part.
 
 ### Phase 3.25 — Visual report designer
 * **Exact approved scope:** SRS 13.3
@@ -396,15 +396,15 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
 
 ### Phase 4.0 — Verification infrastructure
-* **Exact approved scope:** SRS 18.4, 18.6
+* **Exact approved scope:** SRS 18.4, 18.5, 18.6; policy: CLAUDE.md autonomous CI repair
 * **Prerequisites:** 3.7A
-* **Deliverables:** Automated end-to-end browser tests of Web and Desktop smoke, dependency and secret scanning, documentation checks, aggregate required-check list, seeded reference-data generator, test-count registry maintained per phase.
-* **Acceptance criteria:** A pull request touching documents only is still checked; E2E runs in CI.
-* **Mandatory tests:** The infrastructure tests itself; no mandatory test is weakened.
+* **Deliverables:** NOTHING BELOW EXISTS YET; this phase builds it and each control is claimed only after its own test proves it. (1) Always-on documentation and traceability workflow: regenerates docs from tools/roadmap and fails on drift (node tools/roadmap/generate.js --check), validates links, required files and that every SRS requirement id is present exactly once. (2) Backend and PostgreSQL regression: the existing build-test and postgres-integration jobs stay and are covered by the required-check manifest. (3) Frontend and Desktop verification: existing typecheck, tests, production build and Tauri build stay; Web end-to-end tests (browser) and a Desktop smoke test are added. (4) Dependency vulnerability scanning and secret scanning on every PR. (5) Independent code-review support: a review-record template bound to the PR head SHA and a checklist script; it supports a separate reviewing context but cannot create one. (6) Protection against weakened CI: a guard that fails a PR which lowers the expected PostgreSQL test count, removes or skips tests, deletes or disables a required job, or edits the required-check manifest without an owner-labelled approval. (7) Head-SHA verification: a script that lists the required checks from the manifest and proves each is green on the exact PR head SHA before any merge, refusing when checks are pending, missing or stale. (8) Seeded reference-data generator skeleton and test-count registry.
+* **Acceptance criteria:** Each control demonstrably fails on a deliberately broken sample (lowered count, skipped test, drifted doc, planted fake secret, red check on an older SHA) and passes on a clean PR; a docs-only PR is checked; no mandatory check is weakened.
+* **Mandatory tests:** Self-tests of every guard with negative cases; workflow dry runs on a throwaway branch; recorded evidence in the PR.
 * **Database migration implications:** none
 * **Security and accounting risk:** Medium
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Must precede 3.8.
+* **Notes:** Must precede 3.8; the independent-review control remains a process gate that the tooling can only support (G-4, G-5).
 
 ### Phase 4.1 — Identity completion
 * **Exact approved scope:** SRS 4.1, 4.5
@@ -425,7 +425,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** system
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Transaction definition OD-12.
+* **Notes:** Counted unit is OPEN decision OD-12 (proposal recorded).
 
 ### Phase 4.3 — Backup and restore
 * **Exact approved scope:** SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10
@@ -517,33 +517,31 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
 
-## Owner decisions needed before the slice that needs them (not conflicts; ambiguities in the approved documents)
-| ID | Question | Needed by |
-|---|---|---|
-| OD-1 | SRS 3.8 distinguishes simple aggregation from formal consolidation: is formal consolidation (account maps, intercompany, eliminations) part of Release 1 or only the aggregation reports? | 3.24 |
-| OD-2 | Capitalization of freight-in, purchase returns, rebates and discounts into inventory cost (recorded as decided by the inventory module in the earlier roadmap). | 3.15 |
-| OD-3 | Sales-representative model (user, employee or party). | 3.9B, 3.23 |
-| OD-4 | Definitions of "consumer selling price" and "last purchase price" for historical dates. | 3.8E |
-| OD-5 | Trading/Cost-of-Sales statement layout for service companies and its account classification. | 3.8E |
-| OD-6 | Comparison basis for statements (previous year, period, budget) and rounding/presentation rules. | 3.23 |
-| OD-7 | Export size limits and background export jobs. | 3.23 |
-| OD-8 | Treatment of tax-inclusive prices in "net sales excluding tax". | 3.23 |
-| OD-9 | Storage and sharing of reusable import mapping templates (company or user). | 3.9C |
-| OD-10 | Trial attachment quota default (the SRS leaves the number to the implementation). | 4.2 |
-| OD-11 | Lot/serial tracking versus the approved costing scope of item x warehouse (design proposal). | 3.8C |
-| OD-12 | Exact definition of a "posted business transaction" for the Trial limit (automatic entries excluded by the SRS). | 4.2 |
-| OD-13 | Company policy and legislation for cheque intermediate entries and returns. | 3.19 |
-| OD-14 | Risk classes for approval policies beyond those built in 3.2C. | 3.13 |
+## Roadmap ambiguities: resolutions and open decisions
+Every ambiguity found by the audit was checked against the approved SRS, DECISIONS, ARCHITECTURE, REPORTING-REQUIREMENTS and the merged phase documents. **APPROVED** = an approved document already answers it (nothing is reopened). **DEFAULT** = minor implementation ambiguity, documented default adopted. **OPEN** = material accounting, inventory, security or licensing question: a proposal and its consequences are recorded, the owner decides, and the blocked phases are named. No requirement is changed by this section.
 
-Where an OD is not answered in time the owner-approved default is: do not implement the affected slice; implement unaffected slices; report the blocker.
+| ID | Status | Topic | Question | Basis in approved documents | Resolution / proposal and consequence | Blocks |
+|---|---|---|---|---|---|---|
+| OD-1 | OPEN | Formal consolidation | SRS 3.8 separates simple aggregation of companies from formal consolidation (account maps, intercompany, eliminations, FX adjustments). Is formal consolidation a Release 1 deliverable? | SRS 3.7 (aggregation in the backend) is mandatory. SRS 3.8 describes what formal consolidation would require but no SRS section, decision (D-001..D-043) or acceptance scenario lists it as a deliverable. ARCHITECTURE 5 mentions account maps only 'where needed'. | Proposal: Release 1 delivers aggregation (with an optional account map when companies use different charts) and does NOT schedule eliminations or intercompany processing. Consequence: no consolidated statements with eliminations in Release 1; adding them later does not change posted data because aggregation reads posted ledgers only. | 3.24 (consolidation part only; aggregation reports proceed) |
+| OD-2 | OPEN | Composition of purchase cost | Are freight-in, rebates and purchase discounts capitalized into inventory cost? | The SRS never mentions landed cost or cost allocation of charges; SRS 7.1 lists discounts and taxes on documents; D-017/D-018 approve only the two valuation methods at item x warehouse. The engine (3.6) takes an exact receipt amount per line. | Proposal: the receipt cost of a line is its net document amount (after line discounts, excluding recoverable tax) in base currency; no landed-cost allocation of separate charges in Release 1 (they are expensed through their own accounts); a purchase return reverses at the original receipt cost; late rebates are a separate adjustment document. Consequence: simpler, fully traceable cost; landed cost would be a scope addition needing a decision record. | 3.15 (purchase-cost slice); 3.7B is not blocked because receipt cost input is explicit per line |
+| OD-3 | DEFAULT | Sales representative model | Is a sales representative a user, an employee or a party? | SRS 7.1 names representatives; payroll/HR are out of scope (SRS 1); nothing defines the entity. | Default: a company-local representative record (code, Arabic/English name, active flag, optional link to a user); no commission calculation. Documents reference it; reports filter by it. | none (3.9B builds it; 3.16 and 3.23 consume it) |
+| OD-4 | DEFAULT | Historical selling price and last purchase price | Definitions for 'consumer selling price' and 'last purchase price' as of a past date. | REPORTING-REQUIREMENTS 5.1 leaves them to implementation; both are informational (acceptance criterion 2). | Default: selling price = the default price list price in force on the as-of date for the item base unit in base currency (3.11); last purchase price = unit cost of the latest posted purchase line dated on or before the as-of date, company-wide, in base currency. Every displayed value is labelled with its date and basis; neither changes any stored cost. | none (3.8E) |
+| OD-5 | APPROVED | Trading / cost-of-sales statement | Layout and classification of the Trading account for service companies. | Phase 3.3 (merged, PR #21) already built the Trading Account/Profit and Loss with a company-level versioned statement classification (company migration 0011); REPORTING-REQUIREMENTS 1 row 10 says it is 'not applicable' without inventory, never zero. | No new decision: the existing classification decides; 3.8E only activates the cost-of-sales figures from posted inventory data and keeps 'not applicable' for companies without inventory. | none |
+| OD-6 | APPROVED | Comparison basis and presentation | Comparison basis (previous year, period, budget) and rounding of statements. | docs/PHASE-3.3.md: comparatives are the previous fiscal period and previous fiscal year, actual values only, in the company's own calendar. SRS contains no budget requirement. | Already decided and built; budgets are not part of Release 1. New operational reports reuse the same period resolution. | none |
+| OD-7 | APPROVED | Export limits and background export | Export size limits and background jobs. | docs/PHASE-3.3.md: XLSX/CSV default maximum 500,000 rows (Hasm:Reports:MaxExportRows), PDF 50,000 (MaxPdfRows), refused before a file is produced; the export is synchronous. | Already decided and built; no background export in Release 1. New reports use the same service and limits. | none |
+| OD-8 | APPROVED | Net sales excluding tax | Treatment of tax-inclusive prices in 'net sales excluding tax components'. | SRS 6.1 (inclusive/exclusive) and 6.3 (immutable snapshot of base, rates and results on the final document). | Net sales = the net (pre-tax) amount stored in each document's tax snapshot, after discounts and returns; no recomputation from today's rules. | none (3.10 defines the snapshot, 3.23 reads it) |
+| OD-9 | APPROVED | Scope of import mapping templates | Are reusable mapping templates per company or per user? | REPORTING-REQUIREMENTS 3 item 11: 'saved per company and adapter, versioned, never bypassing validation, dry run or approval'. | Already approved: per company and adapter, versioned, audited. | none |
+| OD-10 | APPROVED | Trial attachment quota | Numeric Trial attachment quota. | SRS 15.7 and 20, DECISIONS 'configurable details': a licence-policy value whose default the implementation chooses and publishes; it does not block approval. | Not a decision: 4.2 picks, documents and tests a default; it stays configurable. | none |
+| OD-11 | APPROVED | Lot/serial tracking versus item x warehouse costing | How lots and serial numbers coexist with the approved costing scope. | D-017 approves only FIFO and weighted moving average; D-018 fixes the scope at item x warehouse; D-019 forbids negative stock for lot/serial items; SRS 9.1 requires lots, serials and expiry. | Cost keeps being computed per item x warehouse by the company/group method; a lot or serial is a quantity-tracking dimension whose balances must reconcile to that position. Specific-identification costing is NOT approved, so choosing a lot never changes the cost drawn. Consequence: a FIFO item issued from a newer lot still consumes the oldest cost layer. 3.8C still starts with a written design proposal reviewed against these rules. | none (3.8C design record) |
+| OD-12 | OPEN | Definition of a posted business transaction for the Trial limit | What counts toward the 100 posted business transactions? | SRS 15.6: 100 posted business transactions; automatic entries are not counted as additional transactions. The unit is not defined; importing opening balances and reversals are not mentioned. | Proposal: one count per posted business document (manual journal entry, stock document, sales or purchase document, voucher, cheque event, bank adjustment); automatic journals generated for a counted document, reversals of a counted document, imports of opening data and recurring-run drafts are not counted until they post as their own business document. Consequence: the Trial cannot be exhausted by internal side effects, and the counter lives server-side in the company database. | 4.2 |
+| OD-13 | APPROVED | Cheque intermediate entries and legislation | Which intermediate entries and returned-cheque settlements apply? | SRS 11.2: 'according to company policy and applicable legislation'. | The rule is a per-company configurable policy (intermediate accounts, return handling) validated against the chart, with a default set of accounts; no legislation-specific rule is hard-coded. Chart templates already reserve cheque accounts for the Cheques module. | none (3.19 designs the policy settings) |
+| OD-14 | APPROVED | Risk classes for approval policies | Which risk classifications may conditions use? | SRS 4.3 (type, value, branch, risk); the conditions already built in 3.2C (type, amount, branch, manual rate override, soft-closed period, year-end class); risk events named elsewhere in the SRS: price/discount override (8.2), margin below minimum (8.3), negative-stock exception (9.4), back-dated posting (9.5), credit limit exceeded (7.1). | Each module adds exactly the risk conditions its SRS clauses name, using the existing ordered-stage policy engine; no other classes are invented. | none |
+| T-1 | OPEN | State naming when stock is done but the journal is a pending draft | ARCHITECTURE 7 forbids writing 'Posted' on an entry that is not posted, while SRS 7.4 allows an explicit accounting-pending state. | SRS 7.4, 19.7; ARCHITECTURE 7 (document state, stock effect and accounting effect are separate states). | Proposal for the 3.7B design record: document status Approved -> Executed (stock and cost effect committed), with a separate accounting state pending -> posted -> reversed (or failed); the word 'posted' belongs to the journal and the accounting state only. Consequence: no state ever claims a ledger posting that has not happened; reports and period close read the accounting state. | 3.7B (naming only; the mechanism is unchanged) |
+| T-2 | OPEN | Counted unit of the Trial limit | Same question as OD-12 seen from SRS 15.6 versus the separated state tracks. | See OD-12. | Resolved together with OD-12. | 4.2 |
+| T-3 | APPROVED | Production key provisioning for import files | Open item recorded after Phase 3.2D. | docs/ROADMAP.md (previous) and docs/PHASE-3.2D.md. | Scheduled in Phase 3.12 (shared key management with attachments) and must be complete before production use of imports. | 3.12 |
+| T-4 | APPROVED | Cost-of-sales statement before inventory data | Statement availability. | REPORTING-REQUIREMENTS 1 row 10. | Reported as 'not applicable', never zero, until inventory data exists; activated in 3.8E. | none |
 
-## Tensions to resolve in the phase that meets them (documents agree in substance but their wording can mislead)
-* **T-1** ARCHITECTURE section 7 forbids writing "Posted" on an entry that is not actually posted, while Phase 3.7B plans a stock event completed with a balanced **draft** journal in an explicit accounting-pending state (SRS 7.4 allows this). The document state names in 3.7B must say what happened (stock effect done, accounting pending) and never use a state that claims the ledger is posted.
-* **T-2** SRS 15.6 counts "posted business transactions" for the Trial while the same document separates stock events from accounting posting; the counted unit is fixed in OD-12 before 4.2.
-* **T-3** The earlier roadmap listed production key provisioning for import files as open; it is scheduled in 3.12 with attachments (shared key management), before any production use of imports.
-* **T-4** The cost-of-sales statement is "not applicable" until inventory data exists (REPORTING-REQUIREMENTS); it activates in 3.8E.
-
-No two approved requirements were found that contradict each other.
+Until an OPEN item is decided, only the blocked slice waits; unaffected work continues and the blocker is reported with the work preserved. No two approved requirements were found that contradict each other.
 
 ## Autonomous-development readiness
 See `docs/RELEASE1-DEPENDENCIES.md` ("Autonomous workflow readiness") for the gaps found, the added verification milestones (VM-1 to VM-8) and Phase 4.0.
@@ -576,4 +574,3 @@ Twelve mandatory Release 1 reporting requirements (inventory movement, stocktaki
 Inventory close check: `inventory_valuation_differences` is "not applicable" only while no inventory posting capability or data exists; the inventory phase MUST replace it with a real probe before inventory history can be closed. Posting limitation to respect (3.2C): year-end closing and opening balances refuse any foreign-currency balance-sheet position or foreign-currency-tied account (no FX revaluation or realized/unrealized difference exists yet); a company holding such balances cannot close the year in the application until the FX policy of the receivables, payables and banking phases exists. Cost centers and other analytic dimensions are not carried into opening balances. Business-type templates, Excel imports and Excel/PDF exports are not available.
 
 Rules: one phase at a time; no Warehouse or Fiscal-Period work inside 3.1B; no inter-branch accounting entries or branch financial reports before their accounting modules exist (the branch model must leave room for them).
-
