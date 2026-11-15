@@ -28,6 +28,8 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
         public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields) : ConfigResult<T>.Fail(status, code, currentRevision);
     }
 
+    private sealed class Unchanged(object value) : Exception("unchanged") { public object Value { get; } = value; }
+
     private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, "validation_failed", [new FieldError(field, code)]);
 
     private async Task<ConfigResult<T>> Mutate<T>(Guid companyId, Func<CompanyAuditedWork, Task<T>> work, CancellationToken ct)
@@ -46,6 +48,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
             }, ct));
         }
         catch (Abort a) { return a.To<T>(); }
+        catch (Unchanged u) { return ConfigResult<T>.Ok((T)u.Value); }
     }
 
     private static object Db<T>(T? value) where T : class => (object?)value ?? DBNull.Value;
@@ -90,7 +93,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
             }
             else
             {
-                if (current.DefaultValuation == input.DefaultValuation) return current;            // nothing to change, nothing audited
+                if (current.DefaultValuation == input.DefaultValuation) throw new Unchanged(current);   // nothing to change, nothing audited
                 await using var upd = new NpgsqlCommand($"UPDATE {S.Table} SET {S.DefaultValuation} = @v, {S.Revision} = {S.Revision} + 1, {S.UpdatedAtUtc} = @now WHERE {S.Id} = 1", work.Connection, work.Transaction);
                 upd.Parameters.AddWithValue("v", DbN((short?)input.DefaultValuation));
                 upd.Parameters.AddWithValue("now", Now);
@@ -163,7 +166,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
             var cur = await LoadUnit(work.Connection, work.Transaction, id, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "unit_not_found");
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
             if (!InventoryValidation.TryNormalizeUnit(input, cur, out var d, out var errors)) throw new Abort(ConfigStatus.Invalid, "validation_failed", errors);
-            if (d.NameAr == cur.NameAr && d.NameEn == cur.NameEn) return cur;
+            if (d.NameAr == cur.NameAr && d.NameEn == cur.NameEn) throw new Unchanged(cur);
             await using (var upd = new NpgsqlCommand($"UPDATE {U.Table} SET {U.NameAr} = @ar, {U.NameEn} = @en, {U.Revision} = {U.Revision} + 1, {U.UpdatedAtUtc} = @now WHERE {U.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id);
@@ -273,6 +276,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
                 await ins.ExecuteNonQueryAsync(ct);
             }
             catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new Abort(ConfigStatus.Conflict, "group_code_taken"); }
+            catch (PostgresException ex) when (ex.MessageText.Contains("8 levels", StringComparison.Ordinal)) { throw Invalid("parentId", "tree_too_deep"); }
             await Audit(work, InventoryAuditEvents.ItemGroupCreated, actor, id, $"item group {d.Code} created valuation={(d.Valuation is { } m ? (int)m : 0)}", ct);
             return await ViewGroup(work, id, ct);
         }, ct);
@@ -290,7 +294,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
             if (!InventoryValidation.TryNormalizeGroup(input, cur.Code, out var d, out var errors)) throw new Abort(ConfigStatus.Invalid, "validation_failed", errors);
             if (d.ParentId != cur.ParentId) RequireActiveParent(byId, d.ParentId);
             var newValuation = d.Valuation is { } v ? (int)v : (int?)null;
-            if (d.NameAr == cur.NameAr && d.NameEn == cur.NameEn && d.ParentId == cur.ParentId && newValuation == cur.Valuation) return ToView(cur, byId, (await ReadSettings(work.Connection, work.Transaction, ct)).DefaultValuation);
+            if (d.NameAr == cur.NameAr && d.NameEn == cur.NameEn && d.ParentId == cur.ParentId && newValuation == cur.Valuation) throw new Unchanged(ToView(cur, byId, (await ReadSettings(work.Connection, work.Transaction, ct)).DefaultValuation));
             try
             {
                 await using var upd = new NpgsqlCommand($"UPDATE {G.Table} SET {G.NameAr} = @ar, {G.NameEn} = @en, {G.ParentId} = @p, {G.Valuation} = @v, {G.Revision} = {G.Revision} + 1, {G.UpdatedAtUtc} = @now WHERE {G.Id} = @id", work.Connection, work.Transaction);
@@ -544,7 +548,7 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
             ValidateItemRefs(d, units, groups, def, cur);
             var sameAlt = cur.AlternateUnits.Count == d.Alternates.Count && cur.AlternateUnits.All(a => d.Alternates.Any(b => b.UnitId == a.UnitId && b.Factor == a.Factor));
             if (d.NameAr == cur.NameAr && d.NameEn == cur.NameEn && d.GroupId == cur.GroupId && d.PurchaseUnitId == cur.PurchaseUnitId && d.SalesUnitId == cur.SalesUnitId && d.IsLot == cur.IsLot
-                && d.IsSerial == cur.IsSerial && d.HasExpiry == cur.HasExpiry && d.Notes == cur.Notes && sameAlt) return cur;   // nothing to change, nothing audited
+                && d.IsSerial == cur.IsSerial && d.HasExpiry == cur.HasExpiry && d.Notes == cur.Notes && sameAlt) throw new Unchanged(cur);   // nothing to change, nothing audited
             await using (var upd = new NpgsqlCommand($"UPDATE {I.Table} SET {I.NameAr} = @ar, {I.NameEn} = @en, {I.GroupId} = @g, {I.PurchaseUnitId} = @pu, {I.SalesUnitId} = @su, {I.IsLot} = @lot, {I.IsSerial} = @ser, {I.HasExpiry} = @exp, {I.Notes} = @notes, {I.Revision} = {I.Revision} + 1, {I.UpdatedAtUtc} = @now WHERE {I.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id);
