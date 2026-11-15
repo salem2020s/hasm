@@ -175,4 +175,7 @@ P("5.3","Final validation and Release 1 acceptance","SRS 18.4, 18.5; docs/RELEAS
 const allBefore = PH.filter(x => /^(3|4)\./.test(x.id)).map(x => x.id);
 for (const x of PH) if (x.id === "5.1" || x.id === "5.2") x.pre = [...new Set([...x.pre, ...allBefore])];
 for (const x of PH) if (x.id === "5.3") x.pre = ["5.1", "5.2", ...allBefore];
+const S = (id, s) => { PH.find(x => x.id === id).state = s; };
+S("3.7A", "MERGED (PR #31, merge commit 1b27ad2)");
+S("4.0", "IN REVIEW (PR #32)");
 module.exports = PH;
