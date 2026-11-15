@@ -91,6 +91,12 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.StockDocument.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.StockDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
         (CompanySchema.StockDocumentEvent.Table, ["SELECT", "INSERT"]),
+        // Inventory costing engine (Phase 3.6): the ledger, consumptions and operations are append-only (an operation can only be marked reversed); positions and layers change only through the engine's own figures. Never deleted.
+        (CompanySchema.CostOperation.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CostPosition.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CostEntry.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CostLayer.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CostConsumption.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
