@@ -186,6 +186,29 @@ describe("api client: warehouses (same endpoints for Web and Desktop)", () => {
     expect(call(fetchMock, 0).init.method).toBe("PUT");
   });
 
+  it("calls the inventory master-data endpoints with the revision as If-Match, encoded ids and query filters (Web)", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({})));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const B = "https://x/api/v1/company/inventory";
+    await client.getInventoryCapabilities();
+    await client.putInventorySettings(2, 0);
+    await client.updateInventoryUnit("u 1", { nameAr: null, nameEn: "Piece", decimals: 0 }, 3);
+    await client.deactivateInventoryGroup("g1", 4);
+    await client.listInventoryItems({ search: "a&b", groupId: "g1", active: true, type: 2, offset: 25, limit: 25 });
+    await client.updateInventoryItem("i1", { code: null, nameAr: "x", nameEn: null, itemType: 1, groupId: "g", baseUnitId: "u", purchaseUnitId: null, salesUnitId: null, isLot: false, isSerial: false, hasExpiry: false, notes: null, alternateUnits: [] }, 7);
+    await client.addItemBarcode("i1", { barcode: "123" });
+    await client.deactivateItemBarcode("i1", "b1");
+    await client.lookupBarcode("A B");
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8].map((n) => call(fetchMock, n).url)).toEqual([
+      B + "/capabilities", B + "/settings", B + "/units/u%201", B + "/groups/g1/deactivate", B + "/items?search=a%26b&groupId=g1&active=true&type=2&offset=25&limit=25", B + "/items/i1",
+      B + "/items/i1/barcodes", B + "/items/i1/barcodes/b1/deactivate", B + "/barcode-lookup?barcode=A%20B",
+    ]);
+    expect([1, 2, 3, 5].map((n) => headersOf(fetchMock, n)["If-Match"])).toEqual(['"0"', '"3"', '"4"', '"7"']);
+    expect([0, 4, 8].map((n) => headersOf(fetchMock, n)["X-Hasm-Request"])).toEqual([undefined, undefined, undefined]);              // reads carry no anti-CSRF header
+    expect([1, 2, 3, 5, 6, 7].every((n) => headersOf(fetchMock, n)["X-Hasm-Request"] === "1")).toBe(true);                         // every change does
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ defaultValuation: 2 });
+  });
+
   it("uses the bearer token and no cookies on Desktop for the same warehouse endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/auth/login") ? { user: { id: "u" }, token: "tok" } : { warehouses: [] })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });

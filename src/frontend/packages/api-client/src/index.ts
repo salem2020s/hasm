@@ -484,6 +484,44 @@ export type ReportFormat = "csv" | "xlsx" | "pdf";
 /** Financial statements and their classification (Phase 3.3 S3). Amounts are exact decimal text in the base currency, in the natural presentation sign of each section. */
 export type StatementKind = "profit-and-loss" | "balance-sheet" | "trading-account";
 export interface StatementLineInfo { kind: "header" | "account" | "subtotal" | "total" | "note"; key: string; accountId: string | null; code: string | null; nameAr: string | null; nameEn: string | null; level: number; current: string; comparative: string | null; change: string | null }
+// ---- Inventory master data (Phase 3.4): units, item groups, items, barcodes, settings. No stock, quantities or costs exist in this API.
+/** 1 FIFO, 2 moving weighted average (D-017). */
+export type ValuationMethodCode = 1 | 2;
+export interface InventoryUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; isActive: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string }
+export interface InventoryUnitInput { code?: string; nameAr: string | null; nameEn: string | null; decimals: number }
+export interface InventoryGroup {
+  id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null;
+  /** The group's own setting; null = inherit. */
+  valuation: ValuationMethodCode | null;
+  /** The resolved method (own, else the nearest ancestor's, else the company default); null while nobody decided. */
+  effectiveValuation: ValuationMethodCode | null;
+  isActive: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface InventoryGroupInput { code?: string; nameAr: string | null; nameEn: string | null; parentId: string | null; valuation: ValuationMethodCode | null }
+export interface InventoryItemUnit { unitId: string; unitCode: string; factor: number }
+/** 1 goods, 2 service. */
+export type ItemTypeCode = 1 | 2;
+export interface InventoryItem {
+  id: string; code: string; nameAr: string | null; nameEn: string | null; itemType: ItemTypeCode; groupId: string; baseUnitId: string; purchaseUnitId: string | null; salesUnitId: string | null;
+  isLot: boolean; isSerial: boolean; hasExpiry: boolean; notes: string | null; isActive: boolean; revision: number; effectiveValuation: ValuationMethodCode | null;
+  alternateUnits: InventoryItemUnit[]; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface InventoryItemInput {
+  /** Omit (or blank) on creation to get an automatic code; it can never change afterwards. */
+  code?: string | null; nameAr: string | null; nameEn: string | null; itemType: ItemTypeCode; groupId: string; baseUnitId: string; purchaseUnitId: string | null; salesUnitId: string | null;
+  isLot: boolean; isSerial: boolean; hasExpiry: boolean; notes: string | null; alternateUnits: { unitId: string; factor: number }[];
+}
+export interface InventoryItemQuery { search?: string; groupId?: string; active?: boolean; type?: ItemTypeCode; offset?: number; limit?: number }
+export interface InventoryItemPage { items: InventoryItem[]; total: number }
+/** 1 EAN-13, 2 EAN-8, 3 UPC-A, 4 internal. */
+export interface InventoryBarcode { id: string; itemId: string; unitId: string; barcode: string; kind: 1 | 2 | 3 | 4; isActive: boolean; createdAtUtc: string; updatedAtUtc: string }
+export interface InventoryBarcodeLookup { barcode: InventoryBarcode; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; unitCode: string; unitFactor: number }
+export interface InventorySettings { defaultValuation: ValuationMethodCode | null; revision: number }
+export interface InventoryCapabilities {
+  unitsView: boolean; unitsCreate: boolean; unitsUpdate: boolean; unitsActivate: boolean; groupsView: boolean; groupsCreate: boolean; groupsUpdate: boolean; groupsActivate: boolean;
+  itemsView: boolean; itemsCreate: boolean; itemsUpdate: boolean; itemsActivate: boolean; barcodesCreate: boolean; barcodesActivate: boolean; settingsView: boolean; settingsConfigure: boolean;
+}
+
 export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
 export interface StatementResponse {
   kind: StatementKind; applicable: boolean; notApplicableReason: string | null; complete: boolean; asOf: boolean; baseCurrency: string; hasComparative: boolean; mapping: StatementMappingVersionInfo | null; period: ReportPeriodInfo;
@@ -626,6 +664,41 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       request<Warehouse>("PUT", `/api/v1/company/warehouses/${enc(id)}`, { body: warehouse, ifMatch: revision }),
     deactivateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/deactivate`, { ifMatch: revision }),
     activateWarehouse: (id: string, revision: number) => request<Warehouse>("POST", `/api/v1/company/warehouses/${enc(id)}/activate`, { ifMatch: revision }),
+    // Inventory master data (Phase 3.4). Changes carry the revision as If-Match; the server enforces every rule and every permission.
+    getInventoryCapabilities: () => get<InventoryCapabilities>("/api/v1/company/inventory/capabilities"),
+    getInventorySettings: () => get<InventorySettings>("/api/v1/company/inventory/settings"),
+    putInventorySettings: (defaultValuation: ValuationMethodCode | null, revision: number) => request<InventorySettings>("PUT", "/api/v1/company/inventory/settings", { body: { defaultValuation }, ifMatch: revision }),
+    listInventoryUnits: () => get<{ units: InventoryUnit[] }>("/api/v1/company/inventory/units"),
+    createInventoryUnit: (unit: InventoryUnitInput) => request<InventoryUnit>("POST", "/api/v1/company/inventory/units", { body: unit }),
+    updateInventoryUnit: (id: string, unit: InventoryUnitInput, revision: number) => request<InventoryUnit>("PUT", `/api/v1/company/inventory/units/${enc(id)}`, { body: unit, ifMatch: revision }),
+    deactivateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/activate`, { ifMatch: revision }),
+    listInventoryGroups: () => get<{ groups: InventoryGroup[] }>("/api/v1/company/inventory/groups"),
+    createInventoryGroup: (group: InventoryGroupInput) => request<InventoryGroup>("POST", "/api/v1/company/inventory/groups", { body: group }),
+    updateInventoryGroup: (id: string, group: InventoryGroupInput, revision: number) => request<InventoryGroup>("PUT", `/api/v1/company/inventory/groups/${enc(id)}`, { body: group, ifMatch: revision }),
+    deactivateInventoryGroup: (id: string, revision: number) => request<InventoryGroup>("POST", `/api/v1/company/inventory/groups/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateInventoryGroup: (id: string, revision: number) => request<InventoryGroup>("POST", `/api/v1/company/inventory/groups/${enc(id)}/activate`, { ifMatch: revision }),
+    listInventoryItems: (q: InventoryItemQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.search) p.set("search", q.search);
+      if (q.groupId) p.set("groupId", q.groupId);
+      if (q.active !== undefined) p.set("active", String(q.active));
+      if (q.type !== undefined) p.set("type", String(q.type));
+      if (q.offset) p.set("offset", String(q.offset));
+      if (q.limit) p.set("limit", String(q.limit));
+      const qs = p.toString();
+      return get<InventoryItemPage>(`/api/v1/company/inventory/items${qs ? "?" + qs : ""}`);
+    },
+    getInventoryItem: (id: string) => get<InventoryItem>(`/api/v1/company/inventory/items/${enc(id)}`),
+    createInventoryItem: (item: InventoryItemInput) => request<InventoryItem>("POST", "/api/v1/company/inventory/items", { body: item }),
+    updateInventoryItem: (id: string, item: InventoryItemInput, revision: number) => request<InventoryItem>("PUT", `/api/v1/company/inventory/items/${enc(id)}`, { body: item, ifMatch: revision }),
+    deactivateInventoryItem: (id: string, revision: number) => request<InventoryItem>("POST", `/api/v1/company/inventory/items/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateInventoryItem: (id: string, revision: number) => request<InventoryItem>("POST", `/api/v1/company/inventory/items/${enc(id)}/activate`, { ifMatch: revision }),
+    listItemBarcodes: (itemId: string) => get<{ barcodes: InventoryBarcode[] }>(`/api/v1/company/inventory/items/${enc(itemId)}/barcodes`),
+    addItemBarcode: (itemId: string, barcode: { barcode: string; unitId?: string | null; kind?: 1 | 2 | 3 | 4 | null }) => request<InventoryBarcode>("POST", `/api/v1/company/inventory/items/${enc(itemId)}/barcodes`, { body: barcode }),
+    deactivateItemBarcode: (itemId: string, barcodeId: string) => request<InventoryBarcode>("POST", `/api/v1/company/inventory/items/${enc(itemId)}/barcodes/${enc(barcodeId)}/deactivate`),
+    activateItemBarcode: (itemId: string, barcodeId: string) => request<InventoryBarcode>("POST", `/api/v1/company/inventory/items/${enc(itemId)}/barcodes/${enc(barcodeId)}/activate`),
+    lookupBarcode: (barcode: string) => get<InventoryBarcodeLookup>(`/api/v1/company/inventory/barcode-lookup?barcode=${enc(barcode)}`),
     // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
     listFiscalYears: () => get<FiscalYearsResponse>("/api/v1/company/fiscal-years"),
     getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),
