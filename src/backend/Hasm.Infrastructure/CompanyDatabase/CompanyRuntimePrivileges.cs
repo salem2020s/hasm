@@ -77,6 +77,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.ImportRow.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
         (CompanySchema.ImportEvent.Table, ["SELECT", "INSERT"]),
         (CompanySchema.ImportSettings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Financial statement classification (Phase 3.3 S3): immutable versions, never updated or deleted.
+        (CompanySchema.StatementMappingVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StatementMappingEntry.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

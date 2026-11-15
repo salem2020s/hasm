@@ -70,6 +70,9 @@ public sealed class LedgerReportService(CompanyDatabaseResolver resolver)
     /// Viewer restriction (applied INSIDE the query): a line whose branch the viewer may see counts in full (company-wide viewers: every line); every other line counts only through
     /// its allocation shares inside the viewer's cost-center grants (@vcc = granted cost centers and descendants, base AND original-currency shares), so nothing outside the grant is ever exposed or summed.
     /// </summary>
+    internal static string LinesSql => LinesCte;
+    internal static void Bind(NpgsqlParameterCollection p, ReportScope s) => BindScope(p, s);
+
     private static string LinesCte => $@"
 WITH RECURSIVE cc_tree(id) AS (
     SELECT c.{CO.Id} FROM {CO.Table} c WHERE @cc::uuid IS NULL OR c.{CO.Id} = @cc
@@ -102,6 +105,14 @@ scoped AS (
     {
         var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
         await using var _c = conn; await using var _t = tx;
+        var view = await TrialBalanceCoreAsync(conn, tx, baseCurrency, scope, includeZero, ct);
+        await tx.CommitAsync(ct);
+        return view;
+    }
+
+    /// <summary>The trial balance on an already open snapshot (so several figures of one report come from the same moment).</summary>
+    private async Task<TrialBalanceView> TrialBalanceCoreAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string baseCurrency, ReportScope scope, bool includeZero, CancellationToken ct)
+    {
         var sums = new Dictionary<Guid, (decimal Opening, decimal Debit, decimal Credit)>();
         await using (var cmd = new NpgsqlCommand(
             LinesCte + $@"
@@ -116,7 +127,6 @@ SELECT account, COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM
         await using (var r = await cmd.ExecuteReaderAsync(ct))
             while (await r.ReadAsync(ct))
                 accounts.Add((r.GetGuid(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetBoolean(5), r.GetInt16(6), r.GetInt16(7)));
-        await tx.CommitAsync(ct);
 
         // Roll the leaf figures up the tree (groups never hold postings, so nothing is counted twice).
         var byId = accounts.ToDictionary(a => a.Id);
@@ -144,35 +154,43 @@ SELECT account, COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM
         return new TrialBalanceView(scope.From, scope.To, baseCurrency, rows, o, d, c2, o + d - c2, o + d - c2 == 0);
     }
 
+    /// <summary>
+    /// Reconciles the trial balance with the general ledger for the same scope on ONE consistent snapshot: the grouped trial-balance sums against the ledger's own line-by-line running balances, group roll-ups, the
+    /// balanced total and the continuity from the day before the period. Reads only; a failing check lists the differing accounts and amounts.
+    /// </summary>
+    public async Task<ReconciliationView> ReconcileAsync(Guid companyId, ReportScope scope, CancellationToken ct = default)
+    {
+        var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
+        await using var _c = conn; await using var _t = tx;
+        var current = await TrialBalanceCoreAsync(conn, tx, baseCurrency, scope, true, ct);
+        TrialBalanceView? before = null;
+        if (scope.From > DateOnly.MinValue) before = await TrialBalanceCoreAsync(conn, tx, baseCurrency, scope with { From = scope.From.AddDays(-1), To = scope.From.AddDays(-1) }, true, ct);
+        var ledger = new Dictionary<Guid, LedgerAccountFigures>();
+        await using (var cmd = new NpgsqlCommand(
+            LinesCte + @",
+per AS (
+    SELECT account, d, number, line_no, bd, bc, SUM(bd - bc) OVER (PARTITION BY account ORDER BY d, number, line_no ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum FROM scoped),
+last_line AS (SELECT DISTINCT ON (account) account, cum FROM per WHERE d <= @to ORDER BY account, d DESC, number DESC, line_no DESC),
+before_line AS (SELECT DISTINCT ON (account) account, cum FROM per WHERE d < @from ORDER BY account, d DESC, number DESC, line_no DESC),
+rng AS (SELECT account, SUM(bd) AS dr, SUM(bc) AS cr FROM scoped WHERE d >= @from GROUP BY account)
+SELECT l.account, COALESCE(b.cum, 0), COALESCE(r.dr, 0), COALESCE(r.cr, 0), l.cum FROM last_line l LEFT JOIN before_line b ON b.account = l.account LEFT JOIN rng r ON r.account = l.account", conn, tx))
+        {
+            BindScope(cmd.Parameters, scope);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) ledger[r.GetGuid(0)] = new LedgerAccountFigures(r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3), r.GetDecimal(4));
+        }
+        await tx.CommitAsync(ct);
+        var restricted = scope.BranchId is not null || scope.Branches is not null || scope.CostCenterId is not null || scope.CostCenters is not null;
+        return new ReconciliationView(scope.From, scope.To, baseCurrency, ReconciliationChecks.Evaluate(current, before, ledger, restricted));
+    }
+
     /// <summary>Account activity with a running base balance (opening balance before <c>From</c>, then every line in date, number, line order). A group account includes all its descendants.</summary>
     public async Task<GeneralLedgerView?> GeneralLedgerAsync(Guid companyId, Guid accountId, ReportScope scope, int limit, int offset, CancellationToken ct = default)
     {
         var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
         await using var _c = conn; await using var _t = tx;
-        Guid[] accounts;
-        bool group;
-        await using (var q = new NpgsqlCommand(
-            $"WITH RECURSIVE t(id) AS (SELECT {AC.Id} FROM {AC.Table} WHERE {AC.Id} = @a UNION SELECT c.{AC.Id} FROM {AC.Table} c JOIN t ON c.{AC.ParentId} = t.id) SELECT t.id, (SELECT {AC.IsGroup} FROM {AC.Table} WHERE {AC.Id} = @a) FROM t", conn, tx))
-        {
-            q.Parameters.AddWithValue("a", accountId);
-            var ids = new List<Guid>(); group = false;
-            await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) { ids.Add(r.GetGuid(0)); group = r.GetBoolean(1); }
-            if (ids.Count == 0) return null;
-            accounts = [.. ids];
-        }
-        decimal opening, debit, credit; int count;
-        await using (var cmd = new NpgsqlCommand(
-            LinesCte + @"
-SELECT COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM(bd) FILTER (WHERE d >= @from), 0), COALESCE(SUM(bc) FILTER (WHERE d >= @from), 0), count(*) FILTER (WHERE d >= @from)
-FROM scoped WHERE account = ANY(@accounts)", conn, tx))
-        {
-            BindScope(cmd.Parameters, scope);
-            cmd.Parameters.Add(new NpgsqlParameter("accounts", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = accounts });
-            await using var r = await cmd.ExecuteReaderAsync(ct);
-            await r.ReadAsync(ct);
-            opening = r.GetDecimal(0); debit = r.GetDecimal(1); credit = r.GetDecimal(2); count = (int)r.GetInt64(3);
-        }
+        var (accounts, group, opening, debit, credit, count) = await GlHeaderAsync(conn, tx, accountId, scope, ct) ?? default;
+        if (accounts is null) return null;
         var lines = new List<GeneralLedgerLine>();
         await using (var cmd = new NpgsqlCommand(
             $@"{LinesCte},
@@ -196,30 +214,91 @@ ORDER BY r.d, r.number, r.line_no LIMIT @l OFFSET @o", conn, tx))
         return new GeneralLedgerView(scope.From, scope.To, baseCurrency, accountId, group, opening, debit, credit, opening + debit - credit, count, Math.Max(0, offset), lines);
     }
 
-    // ---------------------------------------------------------------------------------------------------------------- CSV export
-
-    private static string Csv(string? v) => v is null ? "" : v.Length > 0 && "=+-@\t\r".Contains(v[0]) ? "\"'" + v.Replace("\"", "\"\"") + "\"" : v.Contains(',') || v.Contains('"') || v.Contains('\n') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
-    private static string N(decimal v) => v.ToString("0.0000", CultureInfo.InvariantCulture);
-
-    /// <summary>UTF-8 CSV (with BOM, so Arabic opens correctly) of the trial balance with exact decimals. Cells that could start a spreadsheet formula are neutralised.</summary>
-    public static byte[] TrialBalanceCsv(TrialBalanceView v)
+private async Task<(Guid[]? Accounts, bool Group, decimal Opening, decimal Debit, decimal Credit, int Count)?> GlHeaderAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid accountId, ReportScope scope, CancellationToken ct)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("Code,Name (ar),Name (en),Level,Group,Opening,Debit,Credit,Closing," + v.BaseCurrency);
-        foreach (var r in v.Rows) sb.AppendLine(string.Join(',', Csv(r.Code), Csv(r.NameAr), Csv(r.NameEn), r.Level, r.IsGroup ? "yes" : "no", N(r.OpeningBalance), N(r.PeriodDebit), N(r.PeriodCredit), N(r.ClosingBalance)));
-        sb.AppendLine(string.Join(',', "TOTAL", "", "", "", "", N(v.TotalOpening), N(v.TotalDebit), N(v.TotalCredit), N(v.TotalClosing)));
-        return [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(sb.ToString())];
+        Guid[] accounts;
+        bool group;
+        await using (var q = new NpgsqlCommand(
+            $"WITH RECURSIVE t(id) AS (SELECT {AC.Id} FROM {AC.Table} WHERE {AC.Id} = @a UNION SELECT c.{AC.Id} FROM {AC.Table} c JOIN t ON c.{AC.ParentId} = t.id) SELECT t.id, (SELECT {AC.IsGroup} FROM {AC.Table} WHERE {AC.Id} = @a) FROM t", conn, tx))
+        {
+            q.Parameters.AddWithValue("a", accountId);
+            var ids = new List<Guid>(); group = false;
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) { ids.Add(r.GetGuid(0)); group = r.GetBoolean(1); }
+            if (ids.Count == 0) return (null, false, 0, 0, 0, 0);
+            accounts = [.. ids];
+        }
+        decimal opening, debit, credit; int count;
+        await using (var cmd = new NpgsqlCommand(
+            LinesCte + @"
+SELECT COALESCE(SUM(bd - bc) FILTER (WHERE d < @from), 0), COALESCE(SUM(bd) FILTER (WHERE d >= @from), 0), COALESCE(SUM(bc) FILTER (WHERE d >= @from), 0), count(*) FILTER (WHERE d >= @from)
+FROM scoped WHERE account = ANY(@accounts)", conn, tx))
+        {
+            BindScope(cmd.Parameters, scope);
+            cmd.Parameters.Add(new NpgsqlParameter("accounts", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = accounts });
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            await r.ReadAsync(ct);
+            opening = r.GetDecimal(0); debit = r.GetDecimal(1); credit = r.GetDecimal(2); count = (int)r.GetInt64(3);
+        }
+        return (accounts, group, opening, debit, credit, count);
     }
 
-    public static byte[] GeneralLedgerCsv(GeneralLedgerView v)
+    /// <summary>
+    /// The COMPLETE authorized line set of an account for an export, streamed from one consistent snapshot (no page limit, no row cap: the caller applies the documented export limit to <see cref="GeneralLedgerExport.Header"/>.TotalLines BEFORE reading).
+    /// Dispose it to release the snapshot.
+    /// </summary>
+    public async Task<GeneralLedgerExport?> OpenGeneralLedgerExportAsync(Guid companyId, Guid accountId, ReportScope scope, CancellationToken ct = default)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Date,Number,Type,Description,Line description,Currency,Debit,Credit,Rate,Base debit,Base credit,Running balance ({v.BaseCurrency})");
-        sb.AppendLine(string.Join(',', "", "", "", "Opening balance", "", "", "", "", "", "", "", N(v.OpeningBalance)));
-        foreach (var l in v.Lines) sb.AppendLine(string.Join(',', l.EntryDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), Csv(l.Number), l.EntryType, Csv(l.EntryDescription), Csv(l.LineDescription), l.Currency,
-            N(l.Debit), N(l.Credit), l.Rate.ToString("0.0000000000", CultureInfo.InvariantCulture), N(l.BaseDebit), N(l.BaseCredit), N(l.RunningBalance)));
-        sb.AppendLine(string.Join(',', "", "", "", "Closing balance", "", "", "", "", "", N(v.TotalDebit), N(v.TotalCredit), N(v.ClosingBalance)));
-        return [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(sb.ToString())];
+        var (conn, tx, baseCurrency) = await BeginAsync(companyId, ct);
+        try
+        {
+            var h = await GlHeaderAsync(conn, tx, accountId, scope, ct);
+            if (h is null || h.Value.Accounts is null) { await tx.DisposeAsync(); await conn.DisposeAsync(); return null; }
+            var (accounts, group, opening, debit, credit, count) = h.Value;
+            var header = new GeneralLedgerView(scope.From, scope.To, baseCurrency, accountId, group, opening, debit, credit, opening + debit - credit, count, 0, []);
+            return new GeneralLedgerExport(conn, tx, header, accounts, scope);
+        }
+        catch { await tx.DisposeAsync(); await conn.DisposeAsync(); throw; }
+    }
+
+    /// <summary>CSV of an in-memory trial balance through the shared renderer (the same code path as an export).</summary>
+    public static byte[] TrialBalanceCsv(TrialBalanceView v) => LedgerReportDocuments.ToCsv(LedgerReportDocuments.FromTrialBalance(v, new ReportScope(v.From, v.To, null, null, null), true));
+
+    /// <summary>CSV of an in-memory general-ledger page through the shared renderer.</summary>
+    public static byte[] GeneralLedgerCsv(GeneralLedgerView v) => LedgerReportDocuments.ToCsv(LedgerReportDocuments.FromGeneralLedgerView(v));
+
+    // CSV (and XLSX/PDF) are produced by the shared export service from a ReportDocument (see Hasm.Infrastructure.Reporting); nothing here truncates or buffers an export.
+}
+
+/// <summary>An open consistent snapshot streaming every line of one account (see <see cref="LedgerReportService.OpenGeneralLedgerExportAsync"/>).</summary>
+public sealed class GeneralLedgerExport(NpgsqlConnection conn, NpgsqlTransaction tx, GeneralLedgerView header, Guid[] accounts, ReportScope scope) : IAsyncDisposable
+{
+    public GeneralLedgerView Header { get; } = header;
+
+    public async IAsyncEnumerable<GeneralLedgerLine> Lines([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            LedgerReportService.LinesSql + $@",
+ranked AS (
+    SELECT s.lid, s.d, s.number, s.line_no, s.bd, s.bc, s.dr, s.cr, SUM(s.bd - s.bc) OVER (ORDER BY s.d, s.number, s.line_no ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
+    FROM scoped s WHERE s.account = ANY(@accounts) AND s.d >= @from)
+SELECT e.{JE.Id}, e.{JE.Number}, e.{JE.Date}, e.{JE.Desc}, l.{JL.Desc}, l.{JL.Account}, l.{JL.Cur}, r.dr, r.cr, l.{JL.Rate}, l.{JL.RateId}, r.bd, r.bc, l.{JL.Branch}, l.{JL.IsRounding}, e.{JE.Type}, @opening + r.running
+FROM ranked r JOIN {JL.Table} l ON l.{JL.Id} = r.lid JOIN {JE.Table} e ON e.{JE.Id} = l.{JL.Entry}
+ORDER BY r.d, r.number, r.line_no", conn, tx);
+        LedgerReportService.Bind(cmd.Parameters, scope);
+        cmd.Parameters.Add(new NpgsqlParameter("accounts", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = accounts });
+        cmd.Parameters.AddWithValue("opening", Header.OpeningBalance);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            yield return new GeneralLedgerLine(r.GetGuid(0), r.GetString(1), DateOnly.FromDateTime(r.GetDateTime(2)), r.IsDBNull(3) ? null : r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetGuid(5),
+                r.GetString(6).Trim(), r.GetDecimal(7), r.GetDecimal(8), r.GetDecimal(9), r.IsDBNull(10) ? null : r.GetInt64(10), r.GetDecimal(11), r.GetDecimal(12), r.GetGuid(13), r.GetBoolean(14),
+                ((JournalType)r.GetInt16(15)).ToString().ToLowerInvariant(), r.GetDecimal(16));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await tx.CommitAsync(); } catch { /* read-only snapshot */ }
+        await tx.DisposeAsync(); await conn.DisposeAsync();
     }
 }
 
@@ -227,15 +306,17 @@ ORDER BY r.d, r.number, r.line_no LIMIT @l OFFSET @o", conn, tx))
 /// Authorized entry point for the ledger reports. <c>company.ledgerreports.view</c> and <c>.export</c> are branch-scoped: a company-wide grant sees every branch, a branch grant only
 /// its own branches (the restriction is applied INSIDE the queries, so a figure never includes a branch the caller may not see). Permissions are re-read on every call.
 /// </summary>
-public sealed class LedgerReportManagementService(AccessService access, LedgerReportService reports, JournalService journal)
+public sealed class LedgerReportManagementService(AccessService access, LedgerReportService reports, JournalService journal, Hasm.Infrastructure.Reporting.ReportOptions? reportOptions = null, FiscalCalendarService? fiscal = null)
 {
+    private readonly int maxRangeYears = (reportOptions ?? new Hasm.Infrastructure.Reporting.ReportOptions()).MaxRangeYears;
+
     private static ConfigResult<T> Denied<T>() => ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
 
     /// <summary>
     /// Null branches = every branch (company-wide grant); otherwise the branches the caller holds the permission for (possibly none) plus, when cost-center-scoped grants exist,
     /// the granted cost centers with their descendants. Fails (Denied) when the caller holds the permission nowhere.
     /// </summary>
-    private async Task<(bool Allowed, IReadOnlyList<Guid>? Branches, IReadOnlyList<Guid>? CostCenters)> ScopeAsync(Guid userId, Guid companyId, string code, CancellationToken ct)
+    internal async Task<(bool Allowed, IReadOnlyList<Guid>? Branches, IReadOnlyList<Guid>? CostCenters)> ScopeAsync(Guid userId, Guid companyId, string code, CancellationToken ct)
     {
         var eff = await access.GetEffectivePermissionsAsync(userId, companyId, ct);
         if (eff.Has(code, ScopeTarget.Company)) return (true, null, null);
@@ -245,9 +326,14 @@ public sealed class LedgerReportManagementService(AccessService access, LedgerRe
         return (true, branches, roots.Count == 0 ? null : await journal.CostCenterClosureAsync(companyId, roots, ct));
     }
 
-    private static ConfigResult<T>? Validate<T>(DateOnly from, DateOnly to, Guid? branchId, IReadOnlyList<Guid>? allowed, IReadOnlyList<Guid>? costCenters)
+    /// <summary>Range and branch validation shared by the statements.</summary>
+    internal ConfigResult<T>? ValidateScope<T>(DateOnly from, DateOnly to, Guid? branchId, IReadOnlyList<Guid>? allowed, IReadOnlyList<Guid>? costCenters) => Validate<T>(from, to, branchId, allowed, costCenters);
+
+    internal Task<ConfigResult<Hasm.Infrastructure.Reporting.ResolvedPeriod>> ResolvePeriodUncheckedAsync(Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest request, CancellationToken ct) => ResolveCoreAsync(companyId, request, ct);
+
+    private ConfigResult<T>? Validate<T>(DateOnly from, DateOnly to, Guid? branchId, IReadOnlyList<Guid>? allowed, IReadOnlyList<Guid>? costCenters)
     {
-        if (to < from || to.DayNumber - from.DayNumber > 366 * 5) return ConfigResult<T>.Invalid([new("to", "invalid_range")]);
+        if (to < from || to.DayNumber - from.DayNumber > 366 * maxRangeYears) return ConfigResult<T>.Invalid([new("to", "invalid_range")]);
         // A branch filter outside the caller's branches is refused for pure branch viewers; with cost-center grants the figures are limited by the grant inside the query anyway.
         if (branchId is { } b && allowed is not null && costCenters is null && !allowed.Contains(b)) return Denied<T>();
         return null;
@@ -268,5 +354,84 @@ public sealed class LedgerReportManagementService(AccessService access, LedgerRe
         if (Validate<GeneralLedgerView>(from, to, branchId, allowed, ccs) is { } bad) return bad;
         var v = await reports.GeneralLedgerAsync(companyId, accountId, new ReportScope(from, to, branchId, costCenterId, allowed, ccs, excludeClosing), export ? 5000 : limit, offset, ct);
         return v is null ? ConfigResult<GeneralLedgerView>.Fail(ConfigStatus.NotFound, "account_not_found") : ConfigResult<GeneralLedgerView>.Ok(v);
+    }
+
+    /// <summary>The trial balance as an export document. Needs the EXPORT permission; the authorization and branch/cost-center restriction are applied inside the query, before anything is produced.</summary>
+    public Task<ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>> TrialBalanceDocumentAsync(Guid userId, Guid companyId, DateOnly from, DateOnly to, Guid? branchId, Guid? costCenterId, bool includeZero, bool excludeClosing, CancellationToken ct = default) =>
+        TrialBalanceDocumentAsync(userId, companyId, new Hasm.Infrastructure.Reporting.ReportPeriodRequest(null, null, from, to), branchId, costCenterId, includeZero, excludeClosing, null, null, ct);
+
+    /// <summary>The COMPLETE general ledger of an account as a streamed export document (no page limit). The caller disposes the document.</summary>
+    public async Task<ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>> GeneralLedgerDocumentAsync(Guid userId, Guid companyId, Guid accountId, DateOnly from, DateOnly to, Guid? branchId, Guid? costCenterId, bool excludeClosing, CancellationToken ct = default, bool groupByMonth = false)
+    {
+        var (ok, allowed, ccs) = await ScopeAsync(userId, companyId, PermissionCatalog.Codes.LedgerReportsExport, ct);
+        if (!ok) return Denied<Hasm.Infrastructure.Reporting.ReportDocument>();
+        if (Validate<Hasm.Infrastructure.Reporting.ReportDocument>(from, to, branchId, allowed, ccs) is { } bad) return bad;
+        var scope = new ReportScope(from, to, branchId, costCenterId, allowed, ccs, excludeClosing);
+        var export = await reports.OpenGeneralLedgerExportAsync(companyId, accountId, scope, ct);
+        return export is null
+            ? ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>.Fail(ConfigStatus.NotFound, "account_not_found")
+            : ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>.Ok(LedgerReportDocuments.FromGeneralLedger(export, scope, groupByMonth));
+    }
+
+    /// <summary>The report definitions the caller may view, with whether they may also export. A definition is listed when its view permission is held anywhere (company, branch or cost-center scope).</summary>
+    public async Task<IReadOnlyList<(Hasm.Infrastructure.Reporting.ReportDefinition Definition, bool CanExport)>> DefinitionsAsync(Guid userId, Guid companyId, CancellationToken ct = default)
+    {
+        var list = new List<(Hasm.Infrastructure.Reporting.ReportDefinition, bool)>();
+        foreach (var d in Hasm.Infrastructure.Reporting.ReportDefinitions.All)
+            if ((await ScopeAsync(userId, companyId, d.ViewPermission, ct)).Allowed) list.Add((d, (await ScopeAsync(userId, companyId, d.ExportPermission, ct)).Allowed));
+        return list;
+    }
+
+    private async Task<ConfigResult<Hasm.Infrastructure.Reporting.ResolvedPeriod>> ResolveCoreAsync(Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest request, CancellationToken ct)
+    {
+        var years = request.FiscalYearId is null && request.FiscalPeriodId is null && request.Comparison == Hasm.Infrastructure.Reporting.ComparisonMode.None || fiscal is null
+            ? (IReadOnlyList<FiscalYearView>)[] : await fiscal.ListAsync(companyId, ct);
+        return Hasm.Infrastructure.Reporting.ReportPeriods.Resolve(years, request, maxRangeYears);
+    }
+
+    /// <summary>
+    /// The trial balance for a fiscal year / fiscal period / custom range with an optional previous-period or previous-year comparison, a depth limit and a deterministic sort. The comparative figures come from the same engine
+    /// and the same authorization scope (a caller never sees more in the comparison column than in the main one). Needs the view permission, or the export permission when <paramref name="export"/> is set.
+    /// </summary>
+    public async Task<ConfigResult<ComparativeTrialBalanceView>> TrialBalanceReportAsync(Guid userId, Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest period, Guid? branchId, Guid? costCenterId, bool includeZero, bool excludeClosing, int? maxLevel, string? sort, bool export, CancellationToken ct = default)
+    {
+        var (ok, allowed, ccs) = await ScopeAsync(userId, companyId, export ? PermissionCatalog.Codes.LedgerReportsExport : PermissionCatalog.Codes.LedgerReportsView, ct);
+        if (!ok) return Denied<ComparativeTrialBalanceView>();
+        if (!TrialBalanceSorts.IsValid(sort)) return ConfigResult<ComparativeTrialBalanceView>.Invalid([new("sort", "invalid_sort")]);
+        if (maxLevel is < 0 or > 50) return ConfigResult<ComparativeTrialBalanceView>.Invalid([new("maxLevel", "invalid_level")]);
+        var resolved = await ResolveCoreAsync(companyId, period, ct);
+        if (!resolved.IsOk) return ConfigResult<ComparativeTrialBalanceView>.Fail(resolved.Status, resolved.Code!);
+        var p = resolved.Value!;
+        if (Validate<ComparativeTrialBalanceView>(p.Current.From, p.Current.To, branchId, allowed, ccs) is { } bad) return bad;
+        var current = await reports.TrialBalanceAsync(companyId, new ReportScope(p.Current.From, p.Current.To, branchId, costCenterId, allowed, ccs, excludeClosing), true, ct);
+        TrialBalanceView? comparative = null;
+        if (p.Comparative is { } c) comparative = await reports.TrialBalanceAsync(companyId, new ReportScope(c.From, c.To, branchId, costCenterId, allowed, ccs, excludeClosing), true, ct);
+        var rows = ComparativeTrialBalance.Merge(current, comparative, includeZero, maxLevel, sort);
+        return ConfigResult<ComparativeTrialBalanceView>.Ok(new ComparativeTrialBalanceView(current, comparative, rows, p, string.IsNullOrEmpty(sort) ? TrialBalanceSorts.Code : sort, maxLevel));
+    }
+
+    /// <summary>The trial balance document for an export (needs the EXPORT permission), with the same period, comparison, depth and sort options as the screen.</summary>
+    public async Task<ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>> TrialBalanceDocumentAsync(Guid userId, Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest period, Guid? branchId, Guid? costCenterId, bool includeZero, bool excludeClosing, int? maxLevel, string? sort, CancellationToken ct = default)
+    {
+        var r = await TrialBalanceReportAsync(userId, companyId, period, branchId, costCenterId, includeZero, excludeClosing, maxLevel, sort, true, ct);
+        if (!r.IsOk) return ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>.Fail(r.Status, r.Code!);
+        var scope = new ReportScope(r.Value!.Period.Current.From, r.Value.Period.Current.To, branchId, costCenterId, null, null, excludeClosing);
+        return ConfigResult<Hasm.Infrastructure.Reporting.ReportDocument>.Ok(LedgerReportDocuments.FromComparativeTrialBalance(r.Value, scope, includeZero));
+    }
+
+    /// <summary>The reconciliation of the trial balance with the general ledger for the scope (needs the view permission; restricted viewers are reconciled over exactly what they may see).</summary>
+    public async Task<ConfigResult<ReconciliationView>> ReconciliationAsync(Guid userId, Guid companyId, DateOnly from, DateOnly to, Guid? branchId, Guid? costCenterId, bool excludeClosing, CancellationToken ct = default)
+    {
+        var (ok, allowed, ccs) = await ScopeAsync(userId, companyId, PermissionCatalog.Codes.LedgerReportsView, ct);
+        if (!ok) return Denied<ReconciliationView>();
+        if (Validate<ReconciliationView>(from, to, branchId, allowed, ccs) is { } bad) return bad;
+        return ConfigResult<ReconciliationView>.Ok(await reports.ReconcileAsync(companyId, new ReportScope(from, to, branchId, costCenterId, allowed, ccs, excludeClosing), ct));
+    }
+
+    /// <summary>Resolves a fiscal year / fiscal period / custom range and its comparison (see <see cref="Hasm.Infrastructure.Reporting.ReportPeriods"/>). Needs a report view permission; nothing here reads financial data.</summary>
+    public async Task<ConfigResult<Hasm.Infrastructure.Reporting.ResolvedPeriod>> ResolvePeriodAsync(Guid userId, Guid companyId, Hasm.Infrastructure.Reporting.ReportPeriodRequest request, CancellationToken ct = default)
+    {
+        if ((await DefinitionsAsync(userId, companyId, ct)).Count == 0) return Denied<Hasm.Infrastructure.Reporting.ResolvedPeriod>();
+        return await ResolveCoreAsync(companyId, request, ct);
     }
 }

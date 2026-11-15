@@ -1,6 +1,7 @@
 import type { Catalog } from "@hasm/ui";
 import { ledgerAr, ledgerEn } from "./messages.ledger";
 import { importsAr, importsEn } from "./messages.imports";
+import { statementsAr, statementsEn } from "./messages.statements";
 
 export const catalog: Catalog = {
   ar: {
@@ -1216,3 +1217,5 @@ Object.assign(catalog.ar, ledgerAr);
 Object.assign(catalog.en, ledgerEn);
 Object.assign(catalog.ar, importsAr);
 Object.assign(catalog.en, importsEn);
+Object.assign(catalog.ar, statementsAr);
+Object.assign(catalog.en, statementsEn);

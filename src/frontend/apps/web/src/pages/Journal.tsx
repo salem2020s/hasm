@@ -3,7 +3,7 @@ import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
-import { addDecimal, isDecimal, localName, toLatinDigits, useRunner } from "../ledgerCommon";
+import { addDecimal, isDecimal, localName, toLatinDigits, useRunner, OPEN_JOURNAL_KEY } from "../ledgerCommon";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 
 /**
@@ -295,7 +295,11 @@ export function JournalPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState<{ status: "" | JournalStatus; from: string; to: string; text: string }>({ status: "", from: "", to: "", text: "" });
   const [applied, setApplied] = useState(filters);
-  const [screen, setScreen] = useState<{ kind: "list" } | { kind: "entry"; id: string | null; adjustsId: string | null }>({ kind: "list" });
+  const [screen, setScreen] = useState<{ kind: "list" } | { kind: "entry"; id: string | null; adjustsId: string | null }>(() => {
+    // a drill-down from a report opens its entry straight away (the server still decides whether the caller may see it)
+    try { const id = sessionStorage.getItem(OPEN_JOURNAL_KEY); if (id) { sessionStorage.removeItem(OPEN_JOURNAL_KEY); return { kind: "entry", id, adjustsId: null }; } } catch { /* list */ }
+    return { kind: "list" };
+  });
 
   const load = useCallback(async () => {
     try {

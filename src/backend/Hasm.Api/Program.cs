@@ -34,6 +34,7 @@ builder.Services.AddHasmFiscalCalendar();
 builder.Services.AddHasmChartOfAccounts();
 builder.Services.AddHasmLedger();
 builder.Services.AddHasmImports(builder.Configuration);
+builder.Services.AddHasmFinancialStatements();
 // Decimal amounts and rates may be sent as exact JSON strings ("100.1250"): the shared frontend never routes money through floating point.
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString);
 
@@ -76,6 +77,7 @@ app.MapJournalEndpoints();
 app.MapCostCenterPolicyEndpoints();
 app.MapFiscalClosingEndpoints();
 app.MapLedgerReportEndpoints();
+app.MapFinancialStatementEndpoints();
 app.MapImportEndpoints();
 
 app.Run();

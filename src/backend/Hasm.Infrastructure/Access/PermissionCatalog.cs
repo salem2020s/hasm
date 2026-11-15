@@ -126,6 +126,10 @@ public sealed partial class PermissionCatalog
         new("company.fiscalclosing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Create, PermissionAction.Reverse]),
         // Generic import framework (3.2D): staging, validation, dry run, independent approval and application of imported data. Company-wide; each adapter additionally requires its own business permission.
         new("company.imports", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Configure, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Apply, PermissionAction.Cancel]),
+        // Financial statements (3.3): profit and loss, balance sheet, trading account. Branch-scoped like the ledger reports (a branch grant sees only its own branches); export is separate. Distinct from the ledger-report permissions.
+        new("company.financialstatements", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Export], AcceptsCostCenter: true),
+        // The classification (statement mapping) that decides where each account appears in the statements. Company-wide; changing it is audited and creates a new version.
+        new("company.statementmapping", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -200,6 +204,10 @@ public sealed partial class PermissionCatalog
         public const string LedgerSettingsConfigure = "company.ledgersettings.configure";
         public const string LedgerReportsView = "company.ledgerreports.view";
         public const string LedgerReportsExport = "company.ledgerreports.export";
+        public const string FinancialStatementsView = "company.financialstatements.view";
+        public const string FinancialStatementsExport = "company.financialstatements.export";
+        public const string StatementMappingView = "company.statementmapping.view";
+        public const string StatementMappingConfigure = "company.statementmapping.configure";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";

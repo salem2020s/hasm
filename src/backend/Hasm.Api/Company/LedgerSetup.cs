@@ -23,7 +23,12 @@ public static class LedgerSetup
         services.AddSingleton(sp => new LedgerSettingsService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new LedgerSettingsManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerSettingsService>()));
         services.AddSingleton(sp => new LedgerReportService(sp.GetRequiredService<CompanyDatabaseResolver>()));
-        services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>(), sp.GetRequiredService<JournalService>()));
+        services.AddSingleton(sp => new LedgerReportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<LedgerReportService>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<Hasm.Infrastructure.Reporting.ReportOptions>(), sp.GetRequiredService<FiscalCalendarService>()));
+        services.AddSingleton(sp => Hasm.Infrastructure.Reporting.ReportOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<Hasm.Infrastructure.Reporting.IReportRenderer, Hasm.Infrastructure.Reporting.CsvReportRenderer>();
+        services.AddSingleton<Hasm.Infrastructure.Reporting.IReportRenderer, Hasm.Infrastructure.Reporting.XlsxReportRenderer>();
+        services.AddSingleton<Hasm.Infrastructure.Reporting.IReportRenderer, Hasm.Infrastructure.Reporting.PdfReportRenderer>();
+        services.AddSingleton(sp => new Hasm.Infrastructure.Reporting.ReportExportService(sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<Hasm.Infrastructure.Reporting.ReportOptions>(), sp.GetServices<Hasm.Infrastructure.Reporting.IReportRenderer>()));
         services.AddSingleton(sp => new CostCenterPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new CostCenterPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterPolicyService>()));
         services.AddSingleton(sp => new FiscalYearClosingService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<TimeProvider>()));

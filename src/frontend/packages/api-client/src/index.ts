@@ -451,8 +451,20 @@ export interface JournalLineInput {
 export interface JournalInput { entryDate: string; description?: string | null; branchId: string; lines: JournalLineInput[]; adjustsId?: string | null }
 export interface LedgerSettings { roundingAccountId: string | null; revision: number; configured: boolean }
 
-export interface TrialBalanceRowInfo { accountId: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; level: number; isGroup: boolean; opening: string; debit: string; credit: string; closing: string }
-export interface TrialBalanceResponse { from: string; to: string; baseCurrency: string; balanced: boolean; totals: { opening: string; debit: string; credit: string; closing: string }; rows: TrialBalanceRowInfo[] }
+export interface ReportFigures { opening: string; debit: string; credit: string; closing: string }
+export interface TrialBalanceRowInfo { accountId: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; level: number; isGroup: boolean; opening: string; debit: string; credit: string; closing: string; comparative?: ReportFigures | null; change?: string | null }
+export interface ResolvedRangeInfo { from: string; to: string; fiscalYearId: string | null; fiscalPeriodId: string | null; label: string }
+export interface ReportPeriodInfo { current: ResolvedRangeInfo; comparative: ResolvedRangeInfo | null; comparativeUnavailable: string | null }
+export interface TrialBalanceResponse {
+  from: string; to: string; baseCurrency: string; balanced: boolean; sort?: string; maxLevel?: number | null; period?: ReportPeriodInfo; totals: { opening: string; debit: string; credit: string; closing: string };
+  comparativeTotals?: ReportFigures | null; rows: TrialBalanceRowInfo[];
+}
+export interface ReportColumnInfo { key: string; titleAr: string; titleEn: string; type: string; default: boolean }
+export interface ReportParameterInfo { name: string; kind: string; required: boolean; titleAr: string | null; titleEn: string | null }
+export interface ReportDefinitionInfo { id: string; titleAr: string; titleEn: string; canExport: boolean; formats: string[]; supportsComparison: boolean; supportsGrouping: boolean; parameters: ReportParameterInfo[]; columns: ReportColumnInfo[] }
+export type ReconciliationStatusInfo = "passed" | "failed" | "not_applicable";
+export interface ReconciliationCheckInfo { code: string; status: ReconciliationStatusInfo; differences: number; samples: { accountId: string; code: string; item: string; expected: string; actual: string }[] }
+export interface ReconciliationResponse { from: string; to: string; baseCurrency: string; allPassed: boolean; checks: ReconciliationCheckInfo[] }
 export interface GeneralLedgerLineInfo {
   entryId: string; number: string; entryDate: string; entryType: string; entryDescription: string | null; lineDescription: string | null; accountId: string; currency: string;
   debit: string; credit: string; rate: string; rateId: number | null; baseDebit: string; baseCredit: string; branchId: string; isRounding: boolean; runningBalance: string;
@@ -461,7 +473,26 @@ export interface GeneralLedgerResponse {
   from: string; to: string; baseCurrency: string; accountId: string; includesDescendants: boolean; opening: string; totalDebit: string; totalCredit: string; closing: string;
   totalLines: number; offset: number; lines: GeneralLedgerLineInfo[];
 }
-export interface ReportQuery { from: string; to: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean }
+/** What the caller selected: a fiscal period, a fiscal year, or a date range (the server accepts exactly one), plus the optional comparison and presentation options. */
+export type ReportComparison = "none" | "previous_period" | "previous_year";
+export interface ReportQuery {
+  from?: string; to?: string; fiscalYearId?: string; fiscalPeriodId?: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean;
+  comparison?: ReportComparison; maxLevel?: number; sort?: string; columns?: string[]; grouping?: "none" | "month"; /** The language of an exported file (titles and, for spreadsheets, the reading direction). */ lang?: "ar" | "en";
+}
+export type ReportFormat = "csv" | "xlsx" | "pdf";
+
+/** Financial statements and their classification (Phase 3.3 S3). Amounts are exact decimal text in the base currency, in the natural presentation sign of each section. */
+export type StatementKind = "profit-and-loss" | "balance-sheet" | "trading-account";
+export interface StatementLineInfo { kind: "header" | "account" | "subtotal" | "total" | "note"; key: string; accountId: string | null; code: string | null; nameAr: string | null; nameEn: string | null; level: number; current: string; comparative: string | null; change: string | null }
+export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
+export interface StatementResponse {
+  kind: StatementKind; applicable: boolean; notApplicableReason: string | null; complete: boolean; asOf: boolean; baseCurrency: string; hasComparative: boolean; mapping: StatementMappingVersionInfo | null; period: ReportPeriodInfo;
+  issues: { code: string; count: number; amount: string }[]; checks: { code: string; status: "passed" | "failed" | "not_applicable"; difference: string }[]; lines: StatementLineInfo[];
+}
+export interface StatementQuery extends ReportQuery { mappingVersion?: number }
+export interface StatementSectionInfo { key: string; statement: "balance_sheet" | "profit_and_loss"; types: string[] }
+export interface StatementMappingAccount { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null; type: string; nature: string; isGroup: boolean; templateKey: string | null; effectiveSection: string | null }
+export interface StatementMappingResponse { version: StatementMappingVersionInfo | null; sections: StatementSectionInfo[]; entries: { accountId: string; section: string }[]; accounts: StatementMappingAccount[] }
 export type ClientKind = "web" | "desktop";
 
 export interface ApiClientOptions {
@@ -528,8 +559,12 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     }
     return await response.blob();
   }
-  const reportQuery = (q: { from: string; to: string; branchId?: string; costCenterId?: string; excludeClosing?: boolean }) =>
-    `from=${enc(q.from)}&to=${enc(q.to)}${q.branchId ? `&branchId=${enc(q.branchId)}` : ""}${q.costCenterId ? `&costCenterId=${enc(q.costCenterId)}` : ""}${q.excludeClosing ? "&excludeClosing=true" : ""}`;
+  const reportQuery = (q: ReportQuery) => [
+    q.fiscalPeriodId ? `fiscalPeriodId=${enc(q.fiscalPeriodId)}` : q.fiscalYearId ? `fiscalYearId=${enc(q.fiscalYearId)}` : `from=${enc(q.from ?? "")}&to=${enc(q.to ?? "")}`,
+    q.branchId ? `branchId=${enc(q.branchId)}` : "", q.costCenterId ? `costCenterId=${enc(q.costCenterId)}` : "", q.excludeClosing ? "excludeClosing=true" : "",
+    q.comparison && q.comparison !== "none" ? `comparison=${q.comparison}` : "", q.maxLevel !== undefined ? `maxLevel=${q.maxLevel}` : "", q.sort ? `sort=${enc(q.sort)}` : "",
+    q.columns && q.columns.length > 0 ? `columns=${enc(q.columns.join(","))}` : "", q.grouping && q.grouping !== "none" ? `grouping=${q.grouping}` : "", q.lang ? `lang=${q.lang}` : "",
+  ].filter(Boolean).join("&");
 
   return {
     getHealth: () => get<HealthResponse>("/api/v1/health"),
@@ -739,6 +774,20 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getGeneralLedger: (accountId: string, q: ReportQuery, offset = 0) => get<GeneralLedgerResponse>(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&limit=200&offset=${offset}`),
     downloadTrialBalanceCsv: (q: ReportQuery & { includeZero?: boolean }) => download(`/api/v1/company/reports/trial-balance?${reportQuery(q)}${q.includeZero ? "&includeZero=true" : ""}&format=csv`),
     downloadGeneralLedgerCsv: (accountId: string, q: ReportQuery) => download(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&format=csv`),
+    /** Any export format (xlsx, pdf, csv) of the trial balance: the COMPLETE authorized result with the same filters, comparison, depth, sort and column selection as the screen. */
+    exportTrialBalance: (q: ReportQuery & { includeZero?: boolean }, format: ReportFormat) => download(`/api/v1/company/reports/trial-balance?${reportQuery(q)}${q.includeZero ? "&includeZero=true" : ""}&format=${format}`),
+    exportGeneralLedger: (accountId: string, q: ReportQuery, format: ReportFormat) => download(`/api/v1/company/reports/general-ledger?accountId=${enc(accountId)}&${reportQuery(q)}&format=${format}`),
+    getStatement: (kind: StatementKind, q: StatementQuery) => get<StatementResponse>(`/api/v1/company/statements/${kind}?${reportQuery(q)}${q.mappingVersion ? `&mappingVersion=${q.mappingVersion}` : ""}`),
+    exportStatement: (kind: StatementKind, q: StatementQuery, format: ReportFormat) => download(`/api/v1/company/statements/${kind}?${reportQuery(q)}${q.mappingVersion ? `&mappingVersion=${q.mappingVersion}` : ""}&format=${format}`),
+    getStatementMapping: (version?: number) => get<StatementMappingResponse>(`/api/v1/company/statements/mapping${version ? `?version=${version}` : ""}`),
+    listStatementMappingVersions: () => get<{ versions: StatementMappingVersionInfo[] }>("/api/v1/company/statements/mapping/versions"),
+    getStatementMappingSuggestion: () => get<{ entries: { accountId: string; section: string }[] }>("/api/v1/company/statements/mapping/suggestion"),
+    saveStatementMapping: (entries: { accountId: string; section: string }[], expectedVersion: number, note: string | null, source: "manual" | "template" = "manual") =>
+      request<{ version: StatementMappingVersionInfo | null; entries: { accountId: string; section: string }[] }>("PUT", "/api/v1/company/statements/mapping", { body: { entries, note, source }, ifMatch: expectedVersion }),
+    getReportDefinitions: () => get<{ reports: ReportDefinitionInfo[] }>("/api/v1/company/reports/definitions"),
+    getReportPeriod: (q: { fiscalYearId?: string; fiscalPeriodId?: string; from?: string; to?: string; comparison?: ReportComparison }) =>
+      get<ReportPeriodInfo>(`/api/v1/company/reports/period?${[q.fiscalPeriodId ? `fiscalPeriodId=${enc(q.fiscalPeriodId)}` : "", q.fiscalYearId ? `fiscalYearId=${enc(q.fiscalYearId)}` : "", q.from ? `from=${enc(q.from)}` : "", q.to ? `to=${enc(q.to)}` : "", q.comparison && q.comparison !== "none" ? `comparison=${q.comparison}` : ""].filter(Boolean).join("&")}`),
+    getReconciliation: (q: ReportQuery) => get<ReconciliationResponse>(`/api/v1/company/reports/reconciliation?${reportQuery(q)}`),
   };
 }
 

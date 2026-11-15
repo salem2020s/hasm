@@ -54,9 +54,9 @@ public class CostCenterPolicyUnitTests
     }
 
     [Fact]
-    public void Only_journal_entries_and_ledger_reports_accept_cost_center_scoped_grants()
+    public void Only_journal_entries_ledger_reports_and_statements_accept_cost_center_scoped_grants()
     {
-        foreach (var r in PermissionCatalog.Default.Resources) Assert.Equal(r.Key is "company.journal" or "company.ledgerreports", r.AcceptsCostCenter);
+        foreach (var r in PermissionCatalog.Default.Resources) Assert.Equal(r.Key is "company.journal" or "company.ledgerreports" or "company.financialstatements", r.AcceptsCostCenter);
         string[] held = [PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalPost, PermissionCatalog.Codes.CostCentersView, PermissionCatalog.Codes.LedgerReportsView];
         var eff = new EffectivePermissions(PermissionCatalog.Default, [new GrantedRole(Guid.NewGuid(), Guid.NewGuid(), ScopeKind.CostCenter, A, new HashSet<string>(held))]);
         Assert.True(eff.Has(PermissionCatalog.Codes.JournalView, ScopeTarget.CostCenter(A)));
