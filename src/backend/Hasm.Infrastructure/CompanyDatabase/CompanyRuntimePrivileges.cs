@@ -80,6 +80,13 @@ public static class CompanyRuntimePrivileges
         // Financial statement classification (Phase 3.3 S3): immutable versions, never updated or deleted.
         (CompanySchema.StatementMappingVersion.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StatementMappingEntry.Table, ["SELECT", "INSERT"]),
+        // Inventory master data (Phase 3.4): masters are never deleted (PostgreSQL refuses it); alternate units may be replaced while an item is edited (no stock history exists yet).
+        (CompanySchema.InventorySettings.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Unit.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ItemGroup.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Item.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ItemUnit.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.ItemBarcode.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

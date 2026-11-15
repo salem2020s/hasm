@@ -14,6 +14,9 @@ import { ImportsPage } from "./pages/Imports";
 import { FinancialStatementsPage } from "./pages/FinancialStatements";
 import { StatementMappingPage } from "./pages/StatementMapping";
 import { ReportCenterPage } from "./pages/ReportCenter";
+import { InventoryItemsPage } from "./pages/InventoryItems";
+import { InventoryGroupsPage } from "./pages/InventoryGroups";
+import { InventoryUnitsPage } from "./pages/InventoryUnits";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
@@ -73,6 +76,9 @@ const ROUTES: RouteDef[] = [
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
   { path: "/accounting/report-center", anyScope: "company.ledgerreports.view", element: <ReportCenterPage /> },
+  { path: "/inventory/items", permission: "company.items.view", element: <InventoryItemsPage /> },
+  { path: "/inventory/groups", anyOf: ["company.itemgroups.view", "company.items.view"], element: <InventoryGroupsPage /> },
+  { path: "/inventory/units", anyOf: ["company.units.view", "company.items.view"], element: <InventoryUnitsPage /> },
   { path: "/accounting/statements", anyScope: "company.financialstatements.view", element: <FinancialStatementsPage /> },
   { path: "/accounting/statement-mapping", permission: "company.statementmapping.view", element: <StatementMappingPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
@@ -124,12 +130,17 @@ function Shell() {
       { id: "/accounting/statements", label: t("nav.statements"), permission: "company.financialstatements.view", anyScope: true },
       { id: "/accounting/statement-mapping", label: t("nav.statement_mapping"), permission: "company.statementmapping.view" },
     ].filter((i) => auth.can(i.permission) || auth.canAny(i.permission)).map(({ id, label }) => ({ id, label }));
+    const inventory: MenuItem[] = [
+      { id: "/inventory/items", label: t("nav.inventory_items"), permission: "company.items.view" },
+      { id: "/inventory/groups", label: t("nav.inventory_groups"), permission: "company.itemgroups.view|company.items.view" },
+      { id: "/inventory/units", label: t("nav.inventory_units"), permission: "company.units.view|company.items.view" },
+    ].filter((i) => i.permission.split("|").some((p) => auth.can(p))).map(({ id, label }) => ({ id, label }));
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
       { id: "/", label: t("nav.home"), icon: <HomeIcon /> },
       ...(accounting.length ? [{ id: "accounting", label: t("nav.accounting"), icon: <AccountingIcon />, children: accounting } as MenuItem] : [soon("accounting", t("nav.accounting"), <AccountingIcon />)]),
-      soon("warehouses", t("nav.warehouses"), <WarehouseIcon />),
+      ...(inventory.length ? [{ id: "inventory", label: t("nav.inventory"), icon: <WarehouseIcon />, children: inventory } as MenuItem] : [soon("warehouses", t("nav.warehouses"), <WarehouseIcon />)]),
       soon("sales", t("nav.sales"), <SalesIcon />),
       soon("purchases", t("nav.purchases"), <PurchasesIcon />),
       soon("reports", t("nav.reports"), <ReportsIcon />),

@@ -2,6 +2,7 @@ import type { Catalog } from "@hasm/ui";
 import { ledgerAr, ledgerEn } from "./messages.ledger";
 import { importsAr, importsEn } from "./messages.imports";
 import { statementsAr, statementsEn } from "./messages.statements";
+import { inventoryAr, inventoryEn } from "./messages.inventory";
 
 export const catalog: Catalog = {
   ar: {
@@ -156,6 +157,7 @@ export const catalog: Catalog = {
     "details.tab_details": "بيانات الشركة",
     "details.tab_settings": "الإعدادات العامة",
     "details.unsaved": "تغييرات غير محفوظة",
+    "tabs.unsaved": "تغييرات غير محفوظة", "tabs.has_errors": "يحتوي على أخطاء",
     "unsaved.title": "تغييرات غير محفوظة",
     "unsaved.message": "لديك تغييرات غير محفوظة في: {sections}. إذا غادرت الآن فستُفقد هذه التغييرات.",
     "unsaved.joiner": " و",
@@ -759,6 +761,7 @@ export const catalog: Catalog = {
     "details.tab_details": "Company Details",
     "details.tab_settings": "General Settings",
     "details.unsaved": "unsaved changes",
+    "tabs.unsaved": "unsaved changes", "tabs.has_errors": "contains errors",
     "unsaved.title": "Unsaved changes",
     "unsaved.message": "You have unsaved changes in: {sections}. If you leave now, these changes will be lost.",
     "unsaved.joiner": " and ",
@@ -1219,3 +1222,5 @@ Object.assign(catalog.ar, importsAr);
 Object.assign(catalog.en, importsEn);
 Object.assign(catalog.ar, statementsAr);
 Object.assign(catalog.en, statementsEn);
+Object.assign(catalog.ar, inventoryAr);
+Object.assign(catalog.en, inventoryEn);
