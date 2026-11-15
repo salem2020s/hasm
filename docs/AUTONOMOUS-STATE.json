@@ -1,88 +1,26 @@
 {
-  "schema": 1,
+  "schema": 2,
   "updatedAt": "2026-11-15",
-  "main": {
-    "verifiedHead": "2d2f187",
-    "note": "verify against GitHub at session start; a checkpoint never proves a merge"
-  },
-  "phases": [
-    {
-      "id": "3.3",
-      "title": "Financial reporting and exports",
-      "state": "merged",
-      "pr": [
-        21,
-        22
-      ]
-    },
-    {
-      "id": "3.4",
-      "title": "Inventory master data",
-      "state": "merged",
-      "pr": [
-        24
-      ]
-    },
-    {
-      "id": "3.4B",
-      "title": "Inventory master-data import",
-      "state": "merged",
-      "pr": [
-        25
-      ]
-    },
-    {
-      "id": "3.5",
-      "title": "Stock movement documents up to approval (non-posting)",
-      "state": "merged",
-      "pr": [
-        26
-      ]
-    },
-    {
-      "id": "3.6",
-      "title": "Inventory costing engine",
-      "state": "merged",
-      "pr": [
-        27
-      ],
-      "mergeCommit": "2d2f187",
-      "headTested": "e212a49"
-    },
-    {
-      "id": "3.7A",
-      "title": "Inventory accounting configuration (account mappings)",
-      "state": "in-review",
-      "dependsOn": [
-        "3.6"
-      ],
-      "branch": "feature/phase-3-7a-inventory-accounting"
-    },
-    {
-      "id": "3.7B",
-      "title": "Atomic inventory posting (state, cost input, costing, draft journal with pending accounting state, reversal)",
-      "state": "planned",
-      "dependsOn": [
-        "3.7A"
-      ]
-    },
-    {
-      "id": "3.7C",
-      "title": "Posting UI and capabilities",
-      "state": "planned",
-      "dependsOn": [
-        "3.7B"
-      ]
-    }
+  "main": { "verifiedHead": "f1a751d", "note": "verify against GitHub at session start; a checkpoint never proves a merge" },
+  "baseline": { "roadmap": "docs/ROADMAP.md", "traceability": "docs/RELEASE1-TRACEABILITY.md", "dependencies": "docs/RELEASE1-DEPENDENCIES.md", "acceptance": "docs/RELEASE1-ACCEPTANCE.md", "generator": "tools/roadmap (node tools/roadmap/generate.js --check)" },
+  "mergedRecently": [
+    { "pr": 27, "phase": "3.6", "mergeCommit": "2d2f187" },
+    { "pr": 28, "phase": "autonomous tracker", "mergeCommit": "80eea1f" },
+    { "pr": 29, "phase": "roadmap audit", "mergeCommit": "99c99f7" },
+    { "pr": 30, "phase": "roadmap review fixes", "mergeCommit": "f1a751d" }
   ],
-  "environment": {
-    "branchProtectionApi": "unavailable (403, private repository on a plan without it)",
-    "ciWorkflows": [
-      "backend",
-      "frontend",
-      "desktop"
-    ],
-    "ciPathFiltered": true
+  "active": {
+    "phase": "3.7A",
+    "branch": "feature/phase-3-7a-inventory-accounting",
+    "pr": 31,
+    "state": "in review: CI running on the PR head; independent review pending",
+    "knownIssues": [
+      "JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied failed once in a 30-minute local full run (not reproduced in 12 isolated runs); a second full run with captured output is in progress; NOT resolved",
+      "local integration total 912 = 868 counted by CI + 44 SafetyGateTests excluded by the registry (reconciled)"
+    ]
   },
-  "next": "3.7A"
+  "next": ["4.0 verification infrastructure", "3.7B", "3.7C", "3.7D", "3.8A"],
+  "openDecisions": ["OD-1", "OD-2", "OD-11", "OD-12", "T-1", "T-2"],
+  "environment": { "branchProtectionApi": "unavailable (403, private repository on a plan without it)", "ciWorkflows": ["backend", "frontend", "desktop"], "ciPathFiltered": true, "documentationOnlyPrsRunNoChecks": true },
+  "policyNote": "CLAUDE.md still says phases STOP before merging and the owner merges manually; the owner's later conversation directive authorizes autonomous merging when every gate holds. The two are not yet reconciled in CLAUDE.md (owner action)."
 }
