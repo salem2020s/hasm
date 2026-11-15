@@ -1,17 +1,88 @@
 {
   "schema": 1,
   "updatedAt": "2026-11-15",
-  "main": { "verifiedHead": "2d2f187", "note": "verify against GitHub at session start; a checkpoint never proves a merge" },
+  "main": {
+    "verifiedHead": "2d2f187",
+    "note": "verify against GitHub at session start; a checkpoint never proves a merge"
+  },
   "phases": [
-    { "id": "3.3", "title": "Financial reporting and exports", "state": "merged", "pr": [21, 22] },
-    { "id": "3.4", "title": "Inventory master data", "state": "merged", "pr": [24] },
-    { "id": "3.4B", "title": "Inventory master-data import", "state": "merged", "pr": [25] },
-    { "id": "3.5", "title": "Stock movement documents up to approval (non-posting)", "state": "merged", "pr": [26] },
-    { "id": "3.6", "title": "Inventory costing engine", "state": "merged", "pr": [27], "mergeCommit": "2d2f187", "headTested": "e212a49" },
-    { "id": "3.7A", "title": "Inventory accounting configuration (account mappings)", "state": "planned", "dependsOn": ["3.6"] },
-    { "id": "3.7B", "title": "Atomic inventory posting (state, cost input, costing, draft journal with pending accounting state, reversal)", "state": "planned", "dependsOn": ["3.7A"] },
-    { "id": "3.7C", "title": "Posting UI and capabilities", "state": "planned", "dependsOn": ["3.7B"] }
+    {
+      "id": "3.3",
+      "title": "Financial reporting and exports",
+      "state": "merged",
+      "pr": [
+        21,
+        22
+      ]
+    },
+    {
+      "id": "3.4",
+      "title": "Inventory master data",
+      "state": "merged",
+      "pr": [
+        24
+      ]
+    },
+    {
+      "id": "3.4B",
+      "title": "Inventory master-data import",
+      "state": "merged",
+      "pr": [
+        25
+      ]
+    },
+    {
+      "id": "3.5",
+      "title": "Stock movement documents up to approval (non-posting)",
+      "state": "merged",
+      "pr": [
+        26
+      ]
+    },
+    {
+      "id": "3.6",
+      "title": "Inventory costing engine",
+      "state": "merged",
+      "pr": [
+        27
+      ],
+      "mergeCommit": "2d2f187",
+      "headTested": "e212a49"
+    },
+    {
+      "id": "3.7A",
+      "title": "Inventory accounting configuration (account mappings)",
+      "state": "in-review",
+      "dependsOn": [
+        "3.6"
+      ],
+      "branch": "feature/phase-3-7a-inventory-accounting"
+    },
+    {
+      "id": "3.7B",
+      "title": "Atomic inventory posting (state, cost input, costing, draft journal with pending accounting state, reversal)",
+      "state": "planned",
+      "dependsOn": [
+        "3.7A"
+      ]
+    },
+    {
+      "id": "3.7C",
+      "title": "Posting UI and capabilities",
+      "state": "planned",
+      "dependsOn": [
+        "3.7B"
+      ]
+    }
   ],
-  "environment": { "branchProtectionApi": "unavailable (403, private repository on a plan without it)", "ciWorkflows": ["backend", "frontend", "desktop"], "ciPathFiltered": true },
+  "environment": {
+    "branchProtectionApi": "unavailable (403, private repository on a plan without it)",
+    "ciWorkflows": [
+      "backend",
+      "frontend",
+      "desktop"
+    ],
+    "ciPathFiltered": true
+  },
   "next": "3.7A"
 }
