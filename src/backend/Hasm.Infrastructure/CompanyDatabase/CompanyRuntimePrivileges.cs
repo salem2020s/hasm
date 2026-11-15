@@ -97,6 +97,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.CostEntry.Table, ["SELECT", "INSERT"]),
         (CompanySchema.CostLayer.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CostConsumption.Table, ["SELECT", "INSERT"]),
+        // Inventory accounting configuration (Phase 3.7A): immutable versions, never updated or deleted.
+        (CompanySchema.InventoryAccountingVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.InventoryAccountingGroup.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

@@ -550,6 +550,16 @@ export interface StockWarehouseRef { id: string; branchId: string; code: string;
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
 
+// ---- Inventory accounting configuration (Phase 3.7A): which ledger accounts hold inventory and take the other side of stock movements. Versioned and immutable; nothing is posted by it.
+export interface InventoryAccountingVersion { id: string; versionNo: number; createdAtUtc: string; createdBy: string; note: string | null; groupCount: number; contentHash: string }
+export interface InventoryAccountingConfig {
+  version: InventoryAccountingVersion | null; versionNo: number; defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; groups: { groupId: string; accountId: string }[];
+}
+export interface InventoryAccountingAccountRef { id: string; code: string; nameAr: string | null; nameEn: string | null; type: number }
+export interface InventoryAccountingGroupRef { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null }
+export interface InventoryAccountingResponse { configuration: InventoryAccountingConfig; canConfigure: boolean; accounts: InventoryAccountingAccountRef[]; groups: InventoryAccountingGroupRef[] }
+export interface InventoryAccountingInput { defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; groups: { groupId: string; accountId: string }[]; note: string | null }
+
 export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
 export interface StatementResponse {
   kind: StatementKind; applicable: boolean; notApplicableReason: string | null; complete: boolean; asOf: boolean; baseCurrency: string; hasComparative: boolean; mapping: StatementMappingVersionInfo | null; period: ReportPeriodInfo;
@@ -752,6 +762,10 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/approve`, { ifMatch: revision }),
     rejectStockDocument: (id: string, note: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
     cancelStockDocument: (id: string, reason: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    // Inventory accounting configuration (Phase 3.7A). The version number is the If-Match value (0 while nothing is configured).
+    getInventoryAccounting: () => get<InventoryAccountingResponse>("/api/v1/company/inventory/accounting"),
+    listInventoryAccountingVersions: () => get<{ versions: InventoryAccountingVersion[] }>("/api/v1/company/inventory/accounting/versions"),
+    putInventoryAccounting: (config: InventoryAccountingInput, versionNo: number) => request<InventoryAccountingConfig>("PUT", "/api/v1/company/inventory/accounting", { body: config, ifMatch: versionNo }),
     // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
     listFiscalYears: () => get<FiscalYearsResponse>("/api/v1/company/fiscal-years"),
     getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),

@@ -125,7 +125,7 @@ Status words: *merged* = on \`main\` with CI green on the pull request head (che
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Built but **not merged**: **3.7A** (inventory accounting configuration) on branch \`feature/phase-3-7a-inventory-accounting\`; no pull request yet.
+Built and **in review, not merged**: **3.7A** (inventory accounting configuration) on branch \`feature/phase-3-7a-inventory-accounting\`.
 
 ## Remaining phases (summary)
 Execution order is in \`docs/RELEASE1-DEPENDENCIES.md\`. Risk is the accounting and security risk of the phase.

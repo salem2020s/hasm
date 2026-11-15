@@ -4,6 +4,7 @@ import { importsAr, importsEn } from "./messages.imports";
 import { statementsAr, statementsEn } from "./messages.statements";
 import { inventoryAr, inventoryEn } from "./messages.inventory";
 import { stockAr, stockEn } from "./messages.stock";
+import { invaccAr, invaccEn } from "./messages.invacc";
 
 export const catalog: Catalog = {
   ar: {
@@ -1227,3 +1228,5 @@ Object.assign(catalog.ar, inventoryAr);
 Object.assign(catalog.en, inventoryEn);
 Object.assign(catalog.ar, stockAr);
 Object.assign(catalog.en, stockEn);
+Object.assign(catalog.ar, invaccAr);
+Object.assign(catalog.en, invaccEn);

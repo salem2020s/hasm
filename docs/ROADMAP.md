@@ -24,7 +24,7 @@ Status words: *merged* = on `main` with CI green on the pull request head (check
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Built but **not merged**: **3.7A** (inventory accounting configuration) on branch `feature/phase-3-7a-inventory-accounting`; no pull request yet.
+Built and **in review, not merged**: **3.7A** (inventory accounting configuration) on branch `feature/phase-3-7a-inventory-accounting`.
 
 ## Remaining phases (summary)
 Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting and security risk of the phase.
@@ -94,7 +94,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company 0015, system 0017
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** BUILT on branch feature/phase-3-7a-inventory-accounting (commits a12c4e5 and a follow-up test fix); not merged, no pull request yet. Local regression on the disposable cluster (2026-11-15, filter all tests of the integration assembly): 912 run, 910 passed, 2 failed. (1) InventoryAccountingTests concurrent-save test: a test-order flaw (a candidate equal to the current version is absorbed as an unchanged save), fixed in the test, 5/5 isolated runs passed afterwards; product behaviour was correct. (2) JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied failed once in the long run and passed in repeated isolated runs afterwards; not explained, to be checked on CI and, if it recurs, treated as a pre-existing flaky test to fix at root cause (Phase 4.0 test-stability item). The local total (912) differs from the CI registry sum (868); the CI count is the arbiter and is reconciled when the PR runs. Unit 867, frontend 345, build and Tauri debug build passed.
+* **Notes:** BUILT; in review as PR #31 on branch feature/phase-3-7a-inventory-accounting. Evidence: CI on head 1df50aa passed (Backend 868 PostgreSQL tests all passed, Frontend, Desktop); two local full runs on the disposable cluster: the first had 2 failures (a test-order flaw in the new concurrent-save test, fixed, and one failure of JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied that was NOT reproduced in 12 isolated runs, nor in the second full run (912 of 912 passed), nor in CI; cause still unknown and the test stays under observation, not declared fixed). Local total 912 = 868 counted by CI + 44 SafetyGateTests excluded by the registry. Independent review (separate agent) found no Blocker/High; Medium/Low findings fixed (group error row index, note-only change recorded, configure implies view); CI count now 869.
 
 ### Phase 3.7B — Atomic inventory posting (core)
 * **Exact approved scope:** SRS 4.4, 7.4, 9.3, 9.6, 9.7, 17.4, 19.2, 19.5; ARCHITECTURE 5, 7, 8
