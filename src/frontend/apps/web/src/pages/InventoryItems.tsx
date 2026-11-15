@@ -5,6 +5,7 @@ import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
+import { navigate } from "../router";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 import { blankToNull, groupTree, invFieldErrors, invName, unitLabel } from "./inventoryCommon";
 
@@ -104,7 +105,7 @@ export function InventoryItemsPage() {
   return (
     <section aria-labelledby="page-title">
       <PageHeader title={t("inv.items.title")} description={t("inv.items.subtitle")}
-        actions={caps.itemsCreate && <button type="button" className="primary" disabled={busy} onClick={() => guard(() => { setNotice(null); setEditor({ mode: "new" }); })}>{t("inv.items.new")}</button>} />
+        actions={<>{auth.can("company.imports.upload") && auth.can("company.items.create") && <button type="button" disabled={busy} onClick={() => guard(() => navigate("/company/imports"))}>{t("inv.import")}</button>}{caps.itemsCreate && <button type="button" className="primary" disabled={busy} onClick={() => guard(() => { setNotice(null); setEditor({ mode: "new" }); })}>{t("inv.items.new")}</button>}</>} />
       <Banner kind="info" testId="no-stock-note">{t("inv.items.no_stock_note")}</Banner>
       {!caps.itemsCreate && !caps.itemsUpdate && <Banner kind="info" testId="read-only">{t("form.read_only")}</Banner>}
       {conflict && <Banner kind="error" testId="conflict">{t("inv.error.revision_conflict")} <button type="button" onClick={() => { setConflict(false); void loadItems(); }}>{t("form.reload_latest")}</button></Banner>}

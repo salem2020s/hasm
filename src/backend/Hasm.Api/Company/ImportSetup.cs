@@ -4,6 +4,7 @@ using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Imports;
+using Hasm.Infrastructure.Inventory;
 using Hasm.Infrastructure.Security;
 
 namespace Hasm.Api.Company;
@@ -19,6 +20,9 @@ public static class ImportSetup
         services.AddSingleton(ImportOptions.FromConfiguration(configuration));
         services.AddSingleton(sp => new EncryptedFileStore(sp.GetRequiredService<ImportOptions>(), sp.GetRequiredService<EncryptionOptions>()));
         services.AddSingleton<IImportAdapter>(sp => new ChartOfAccountsImportAdapter(sp.GetRequiredService<ChartOfAccountsService>()));
+        services.AddSingleton<IImportAdapter>(sp => new InventoryUnitsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
+        services.AddSingleton<IImportAdapter>(sp => new InventoryGroupsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
+        services.AddSingleton<IImportAdapter>(sp => new InventoryItemsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
         services.AddSingleton(sp => new ImportAdapterRegistry(sp.GetServices<IImportAdapter>()));
         services.AddSingleton(sp => new ImportService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<EnvelopeEncryptor>(),
             sp.GetRequiredService<EncryptedFileStore>(), sp.GetRequiredService<ImportOptions>(), sp.GetRequiredService<ImportAdapterRegistry>(), sp.GetRequiredService<TimeProvider>()));
