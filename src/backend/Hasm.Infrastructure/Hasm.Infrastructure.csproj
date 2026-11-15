@@ -25,6 +25,7 @@
     <PackageReference Include="SkiaSharp" Version="4.156.1" />
     <PackageReference Include="SkiaSharp.HarfBuzz" Version="4.156.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.156.1" />
+    <PackageReference Include="HarfBuzzSharp.NativeAssets.Linux" Version="14.4.0.101" />
   </ItemGroup>
 
 </Project>
