@@ -9,7 +9,7 @@ export default defineConfig({
   retries: 0,
   forbidOnly: !!process.env.CI,
   reporter: [["list"]],
-  use: { baseURL: "http://127.0.0.1:4173", ...devices["Desktop Chrome"], channel: process.env.E2E_CHANNEL ?? "chromium" },
+  use: { baseURL: "http://127.0.0.1:4173", ...devices["Desktop Chrome"], channel: process.env.E2E_CHANNEL ?? "chromium", trace: "retain-on-failure", screenshot: "only-on-failure" },
   webServer: {
     command: "npm run build && npm run preview -w @hasm/web -- --host 127.0.0.1 --port 4173 --strictPort",
     url: "http://127.0.0.1:4173",

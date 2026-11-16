@@ -63,7 +63,33 @@ jobs:
           if (-not (Test-Path 'C:\Program Files\Google\Chrome\Application\chrome.exe')) { throw 'Google Chrome is not installed on the runner' }
       - run: npm ci
       - name: Browser smoke tests (Playwright, installed Chrome)
-        timeout-minutes: 8
+        # The test runner is started detached from the runner's console (no inherited standard input) with its output redirected to a file: attached to the job's pipes it never started under the
+        # Windows service account (no output at all, zero CPU, no child process) although the same command passes there when run detached. A hang is detected here, the process tree is printed and the
+        # step fails; the log, traces and screenshots are uploaded as an artifact.
+        timeout-minutes: 12
         env:
           DEBUG: pw:webserver
-        run: npx playwright test --reporter=list
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'playwright.log'
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $p = Start-Process -FilePath cmd.exe -ArgumentList '/d', '/s', '/c', "npx playwright test --reporter=list > $log 2>&1" -PassThru -WindowStyle Hidden
+          $finished = $p.WaitForExit(540000)
+          if (-not $finished) {
+            Write-Host '::error::Playwright did not finish within 9 minutes; process tree follows'
+            Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'playwright|vite|chrome|npm' -and $_.ProcessId -ne $PID } | ForEach-Object { Write-Host ("{0} <- {1} {2} {3}" -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine.Substring(0, [Math]::Min(200, $_.CommandLine.Length))) }
+            & taskkill /T /F /PID $p.Id | Out-Null
+          }
+          if (Test-Path $log) { Get-Content $log }
+          if (-not $finished) { exit 1 }
+          exit $p.ExitCode
+
+      - name: Keep the Playwright diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            ${{ runner.temp }}/playwright.log
+            src/frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore
