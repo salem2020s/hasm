@@ -1,0 +1,11 @@
+# Independent review record
+
+* **Pull request:** #37 (Phase 3.7D, posting and reversal screens for stock documents; frontend only)
+* **Head SHA reviewed (full 40 characters):** 2aea743d46f587514392ff07cc24e09673a7e87d
+* **Reviewer context:** a separate agent in its own context, read-only, family Sonnet 5.5 (the author is the same model family in another context). Prompt: adversarial review of the FULL diff against origin/main: request contract against the real backend endpoints, capabilities and warehouse scope, error and field-error display, money and date handling, tab and input behaviour, RTL/LTR and accessibility, test quality, misleading states for accountants.
+* **Scope read:** the full diff against origin/main and the backend endpoint and service code of 3.7B and 3.7C
+* **Checks run (commands and results):** none by the reviewer (read-only); by the author after the fixes: `stockDocuments.test.tsx` 25 of 25, frontend typecheck clean.
+* **Findings:** no Critical. High H1 (field errors of a refused reversal, for example a date outside the posting period, were never shown): fixed in the head commit (the Posting tab shows every server field error in words; new translation `must_stay_in_posting_period`; regression test). Medium M1 (missing translations for `journal_state_not_reversible` and `journal_not_found`): fixed. M2 (posted lines matched by item id instead of line number): fixed. M3 (amounts shown without decimals): fixed (at least two decimals, exact). M4 (reversal date defaulted to the UTC date): fixed (local date). Not fixed, listed for follow-up: M5 (buttons depend on the capabilities loaded with the list; the server re-checks and a stale permission yields the generic forbidden message), the base-currency scale is enforced by the server only, Low L1 to L4 (error indicator only while the tab is active, no support for Arabic-Indic digits or a comma separator, no live region on the state chip, test 4 title broader than its assertion).
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the fixes after the review were not re-reviewed by a second reviewer; the screens were not exercised against the real API in a browser (component tests mock the client; the request contract was checked by reading the backend); visual review is deferred to the final validation milestone.
+* **Verdict:** approve
