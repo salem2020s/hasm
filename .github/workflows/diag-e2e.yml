@@ -1,0 +1,52 @@
+name: Diag e2e
+on:
+  push:
+    branches: [ci/diag-e2e]
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+        working-directory: src/frontend
+    env:
+      E2E_CHANNEL: chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Environment names and sizes
+        run: |
+          Get-ChildItem env: | Where-Object { $_.Name -notmatch 'TOKEN|SECRET|KEY|PASSWORD' } | Sort-Object Name | ForEach-Object { "{0}={1}" -f $_.Name, $(if ($_.Value.Length -gt 120) { $_.Value.Substring(0,120) + '...' } else { $_.Value }) }
+          whoami; (Get-Process -Id $PID).SessionId
+      - name: Bisect
+        run: |
+          $node = (Get-Command node).Source
+          function Run($label, $argList, $secs, $newEnv) {
+            Write-Host "--- $label"
+            $o = Join-Path $env:RUNNER_TEMP "$label.out"; $e = Join-Path $env:RUNNER_TEMP "$label.err"
+            Remove-Item $o, $e -ErrorAction SilentlyContinue
+            $sp = @{ FilePath = $node; ArgumentList = $argList; PassThru = $true; WindowStyle = 'Hidden'; RedirectStandardOutput = $o; RedirectStandardError = $e }
+            $p = Start-Process @sp
+            if ($p.WaitForExit($secs * 1000)) { Write-Host "exit $($p.ExitCode)" } else { Write-Host "TIMEOUT after $secs s"; Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $p.Id } | ForEach-Object { Write-Host "child $($_.ProcessId) $($_.Name)" }; Stop-Process -Id $p.Id -Force }
+            Get-Content $o -ErrorAction SilentlyContinue | Select-Object -First 15
+            Get-Content $e -ErrorAction SilentlyContinue | Select-Object -First 15
+          }
+          $cli = Join-Path (Get-Location) 'node_modules\@playwright\test\cli.js'
+          Run 'hello' @('-e', 'console.log(1)') 20
+          Run 'version' @($cli, '--version') 40
+          Run 'list' @($cli, 'test', '--list') 60
+          $env:DEBUG = 'pw:*'
+          Run 'testdebug' @($cli, 'test', '--reporter=list') 90
+          Remove-Item env:DEBUG
+          Write-Host '--- list with stdin closed and a clean environment'
+          $env:PW_TEST_DEBUG_NOTHING = '1'
+          cmd /d /c "`"$node`" `"$cli`" test --list < NUL > $env:RUNNER_TEMP\nul.out 2>&1"
+          Get-Content $env:RUNNER_TEMP\nul.out | Select-Object -First 8
