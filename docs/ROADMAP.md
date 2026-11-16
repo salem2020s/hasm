@@ -24,7 +24,7 @@ Status words: *merged* = on `main` with CI green on the pull request head (check
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit `1b27ad2`). In review: **4.0** verification infrastructure (PR #32).
+Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit `1b27ad2`). Merged: **4.0** verification infrastructure (PR #32, merge commit `7e05052`). In review: **3.7B** (PR #33).
 
 ## Remaining phases (summary)
 Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting and security risk of the phase.
@@ -32,8 +32,8 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | Phase | Title | Risk | Prerequisites | Migration implications |
 |---|---|---|---|---|
 | 3.7A | Inventory accounting configuration (first slice of 3.7) — **MERGED (PR #31, merge commit 1b27ad2)** | High | 3.6 | company 0015, system 0017 |
-| 3.7B | Atomic inventory posting (core) | Critical | 3.7A | company (posting links, state, receipt cost input), system (post permission) |
-| 3.7C | Reversal, cancellation and period-close protection | Critical | 3.7B | company (if state transitions need columns) |
+| 3.7B | Atomic inventory posting (core) — **IN REVIEW (PR #33)** | Critical | 3.7A | company (posting links, state, receipt cost input), system (post permission) |
+| 3.7C | Reversal, cancellation and period-close protection — **WORK IN PROGRESS on branch feature/phase-3-7c-stock-reversal (untested)** | Critical | 3.7B | company (if state transitions need columns) |
 | 3.7D | Posting UI and capabilities | Medium | 3.7C | none |
 | 3.8A | Stock balances and item ledger | High | 3.7D, 4.0 | none or read models only |
 | 3.8B | Stocktaking, adjustments and the negative-stock exception | Critical | 3.8A | company, system |
@@ -61,7 +61,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 3.25 | Visual report designer | High | 3.23 | company |
 | 3.26 | Document and print designer | Medium | 3.15, 3.16, 3.12 | company |
 | 3.27 | Opening balances and legacy migration | Critical | 3.17, 3.8B, 3.9C | company |
-| 4.0 | Verification infrastructure — **IN REVIEW (PR #32)** | Medium | 3.7A | none |
+| 4.0 | Verification infrastructure — **MERGED (PR #32, merge commit 7e05052; full-stack E2E, Desktop smoke test and a GitHub ruleset are NOT built)** | Medium | 3.7A | none |
 | 4.1 | Identity completion | High | 3.7D | system |
 | 4.2 | Licensing and Trial | Critical | 3.17 | system |
 | 4.3 | Backup and restore | Critical | 3.12, 3.9A | none |

@@ -142,13 +142,17 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
                     await lk.ExecuteNonQueryAsync(ct);
                 }
                 var doc = await StockDocumentService.Load(work.Connection, work.Transaction, documentId, true, ct) ?? throw new StockDocumentService.Abort(ConfigStatus.NotFound, "document_not_found");
-                var amounts = ReadAmounts(doc, input);
-                // a repeated request returns the original posting (idempotent retry after a lost response); different amounts are a conflict, never a second posting
+                // a repeated request returns the original posting (idempotent retry after a lost response, also without resending the amounts); amounts that differ from the original are a conflict, never a second posting
                 if (await LoadByDocumentAsync(work.Connection, work.Transaction, documentId, true, ct) is { } existing)
                 {
-                    if (doc.DocType == (int)StockDocType.Receipt && existing.Lines.Any(l => !amounts.TryGetValue(l.LineNo, out var a) || a != l.Amount)) throw Conflict("already_posted");
+                    if (doc.DocType == (int)StockDocType.Receipt && input?.Lines is { Count: > 0 })
+                    {
+                        var again = ReadAmounts(doc, input);
+                        if (existing.Lines.Any(l => !again.TryGetValue(l.LineNo, out var a) || a != l.Amount)) throw Conflict("already_posted");
+                    }
                     throw new Replay(existing);                              // nothing was written: the transaction ends without a mutation
                 }
+                var amounts = ReadAmounts(doc, input);
                 if (doc.Status != (int)StockDocStatus.Approved) throw Conflict("document_not_approved");
                 if (expectedRevision != doc.Revision) throw new StockDocumentService.Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, doc.Revision);
                 return await ExecuteAsync(work, actor, doc, amounts, ct);
@@ -156,6 +160,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         }
         catch (Replay r) { return ConfigResult<StockPostingView>.Ok(r.View); }
         catch (StockDocumentService.Abort a) { return a.To<StockPostingView>(); }
+        catch (CostingException c) when (c.Code is "amount_precision_exceeded" or "invalid_amount") { return ConfigResult<StockPostingView>.Invalid([new FieldError("lines", c.Code)]); }
         catch (CostingException c) { return ConfigResult<StockPostingView>.Fail(ConfigStatus.Conflict, c.Code); }
         catch (JournalService.Abort j) { return j.To<StockPostingView>(); }
         catch (InvalidOperationException e) when (e.Message is "inventory_accounting_not_configured" or "inventory_account_not_configured") { return ConfigResult<StockPostingView>.Fail(ConfigStatus.Conflict, e.Message); }
@@ -178,6 +183,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         var warehouse = (type == StockDocType.Receipt ? doc.TargetWarehouseId : doc.SourceWarehouseId)!.Value;
         // 2. accounts first (cheap and decisive): a receipt or issue with value needs the configuration; a transfer inside one inventory account and zero-value movements need none
         var groups = await ItemGroupsAsync(work, doc.Lines.Select(l => l.ItemId), ct);
+        IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>? config = null;
         // 3. the stock and its valuation
         CostingResult result;
         var postingLines = new List<StockPostingLineView>();
@@ -185,7 +191,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         {
             var request = new CostingReceiptRequest(key, date, source, [.. doc.Lines.Select(l => new CostingReceiptLine(l.ItemId, warehouse, l.BaseQuantity, amounts[l.LineNo]))]);
             // accounting configuration is needed before the stock moves only when there is value to book
-            if (doc.Lines.Sum(l => amounts[l.LineNo]) > 0) await EnsureConfiguredAsync(work, groups.Values.Distinct(), true, ct);
+            if (doc.Lines.Sum(l => amounts[l.LineNo]) > 0) config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), true, ct);
             result = await costing.ReceiveAsync(work, actor, request, ct);
             for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, result.Lines[i].Amount));
         }
@@ -193,7 +199,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         {
             result = await costing.IssueAsync(work, actor, new CostingIssueRequest(key, date, source, [.. doc.Lines.Select(l => new CostingIssueLine(l.ItemId, warehouse, l.BaseQuantity))]), ct);
             for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, result.Lines[i].Amount));
-            if (result.Lines.Sum(l => l.Amount) > 0) await EnsureConfiguredAsync(work, groups.Values.Distinct(), false, ct);
+            if (result.Lines.Sum(l => l.Amount) > 0) config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), false, ct);
         }
         else
         {
@@ -209,7 +215,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         var state = StockAccountingState.NotRequired;
         if (type != StockDocType.Transfer && total > 0)
         {
-            var plan = await PlanJournalAsync(work, doc, type, groups, postingLines, ct);
+            var plan = PlanJournal(doc, type, groups, config!, postingLines);
             versionId = plan.VersionId;
             var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(date, $"Stock {(type == StockDocType.Receipt ? "receipt" : "issue")} {doc.Number}", doc.BranchId, plan.Lines, null), false, DocumentSource.Automatic, key, ct);
             journalId = entry.Header.Id;
@@ -254,28 +260,33 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         return map;
     }
 
-    /// <summary>Refuses with a stable code unless every item group resolves to a usable inventory account and the counter account of the document kind is configured and usable (checked against the live chart).</summary>
-    private static async Task EnsureConfiguredAsync(CompanyAuditedWork work, IEnumerable<Guid> groupIds, bool receipt, CancellationToken ct)
+    /// <summary>
+    /// Resolves the accounting configuration ONCE for the posting and refuses with a stable code unless every item group resolves to a usable inventory account, the counter account of the document kind is configured and usable
+    /// (checked against the live chart) and all groups were resolved under the SAME configuration version (a configuration saved in between is refused with <c>accounting_configuration_changed</c> and the posting can simply be repeated).
+    /// The result is used for the journal, so the validated accounts are exactly the accounts booked.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>> EnsureConfiguredAsync(CompanyAuditedWork work, IEnumerable<Guid> groupIds, bool receipt, CancellationToken ct)
     {
-        var accounts = new List<ResolvedInventoryAccounts>();
-        foreach (var g in groupIds) accounts.Add(await InventoryAccountingService.ResolveAsync(work, g, ct));
+        var resolved = new Dictionary<Guid, ResolvedInventoryAccounts>();
+        foreach (var g in groupIds) resolved[g] = await InventoryAccountingService.ResolveAsync(work, g, ct);
+        var accounts = resolved.Values.ToList();
+        if (accounts.Select(a => a.VersionId).Distinct().Count() > 1) throw Conflict("accounting_configuration_changed");
         var counter = receipt ? accounts[0].ReceiptCounterAccountId : accounts[0].IssueCounterAccountId;
         if (counter is null) throw Conflict(receipt ? "receipt_counter_account_not_configured" : "issue_counter_account_not_configured");
         if (await InventoryAccountingService.ValidateForPostingAsync(work, [.. accounts.Select(a => a.InventoryAccountId).Distinct()], counter, ct) is { } bad) throw Conflict(bad);
+        return resolved;
     }
 
     private sealed record JournalPlan(Guid VersionId, IReadOnlyList<JournalLineInput> Lines);
 
-    /// <summary>Receipt: debit the inventory account of each item group by the entered value, credit the receipt counter account by the total. Issue: debit the issue counter account by the costed total, credit each inventory account.</summary>
-    private static async Task<JournalPlan> PlanJournalAsync(CompanyAuditedWork work, StockDocumentView doc, StockDocType type, IReadOnlyDictionary<Guid, Guid> groupOfItem, IReadOnlyList<StockPostingLineView> lines, CancellationToken ct)
+    /// <summary>Receipt: debit the inventory account of each item group by the entered value, credit the receipt counter account by the total. Issue: debit the issue counter account by the costed total, credit each inventory account. Pure: uses the configuration resolved once for the posting.</summary>
+    private static JournalPlan PlanJournal(StockDocumentView doc, StockDocType type, IReadOnlyDictionary<Guid, Guid> groupOfItem, IReadOnlyDictionary<Guid, ResolvedInventoryAccounts> config, IReadOnlyList<StockPostingLineView> lines)
     {
         var perAccount = new SortedDictionary<Guid, decimal>();
-        var cache = new Dictionary<Guid, ResolvedInventoryAccounts>();
         ResolvedInventoryAccounts? any = null;
         foreach (var l in lines.Where(x => x.Amount > 0))
         {
-            var g = groupOfItem[l.ItemId];
-            if (!cache.TryGetValue(g, out var r)) cache[g] = r = await InventoryAccountingService.ResolveAsync(work, g, ct);
+            var r = config[groupOfItem[l.ItemId]];
             any ??= r;
             perAccount[r.InventoryAccountId] = perAccount.GetValueOrDefault(r.InventoryAccountId) + l.Amount;
         }
