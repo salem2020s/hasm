@@ -101,6 +101,9 @@ public class StockBalanceTests : StockBalanceTestBase
         Fails(await BalMgmt.LedgerAsync(onlyW1.Id, Company.Id, Fifo.Id, W2.Id, null, null, 0, 50), ConfigStatus.Forbidden, "forbidden");
         Fails(await BalMgmt.ReconcileAsync(onlyW1.Id, Company.Id, new DateOnly(2026, 3, 31)), ConfigStatus.Forbidden, "forbidden");   // company-wide: needs every warehouse
         Fails(await BalMgmt.BalancesAsync(nobody.Id, Company.Id, F([])), ConfigStatus.Forbidden, "forbidden");
+        // the item picker lists only items that have entries in a warehouse the caller may see
+        var heldInW1 = Ok(await BalMgmt.BalancesAsync(onlyW1.Id, Company.Id, F([], zero: true))).Items.Select(b => b.ItemId).ToHashSet();
+        Assert.All(Ok(await BalMgmt.ItemsAsync(onlyW1.Id, Company.Id, "")), i => Assert.Contains(i.Id, heldInW1));
         Ok(await BalMgmt.ReconcileAsync(everywhere.Id, Company.Id, new DateOnly(2026, 3, 31)));
         Assert.Equal(2L, Ok(await BalMgmt.BalancesAsync(everywhere.Id, Company.Id, F([]))).Total);
         var admin = (await Rbac.ListRolesAsync(Admin.Id, Company.Id)).Value!.Single(r => r.PresetKey == "company-administrator");
@@ -146,6 +149,7 @@ public class StockBalanceApiTests : StockBalanceTestBase
         var all = await Send(HttpMethod.Get, Base, cookie: cookie);
         Assert.Equal((2, 140m), (all.Json.GetProperty("balances").GetArrayLength(), all.Json.GetProperty("totalValue").GetDecimal()));
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, Base + "?asOf=garbage", cookie: cookie)).Status);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, Base + "?warehouseId=garbage", cookie: cookie)).Status);   // a mistyped filter is refused, not dropped
         Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, Base + "/ledger", cookie: cookie)).Status);
         var ledger = await Send(HttpMethod.Get, $"{Base}/ledger?itemId={Fifo.Id}&warehouseId={W1.Id}", cookie: cookie);
         Assert.Equal(1, ledger.Json.GetProperty("rows").GetArrayLength());

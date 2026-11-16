@@ -57,6 +57,7 @@ public static class StockBalanceEndpoints
         if (failure is not null) return failure;
         var q = http.Request.Query;
         if (!string.IsNullOrEmpty(q["asOf"]) && Date(q["asOf"]) is null) return Bad("asOf", "invalid_date");
+        foreach (var name in new[] { "itemId", "groupId", "warehouseId" }) if (!string.IsNullOrEmpty(q[name]) && Id(q[name]) is null) return Bad(name, "invalid_guid");   // a mistyped filter is refused, never silently dropped
         _ = int.TryParse(q["offset"], out var offset); var limit = int.TryParse(q["limit"], out var l) ? l : 50;
         var filter = new StockBalanceFilter(Id(q["itemId"]), Id(q["groupId"]), Id(q["warehouseId"]), q["search"], Date(q["asOf"]), q["includeZero"] == "true", [], offset, limit);
         return CompanyConfigurationEndpoints.Map(await svc.BalancesAsync(actor!.UserId, actor.CompanyId, filter, http.RequestAborted),

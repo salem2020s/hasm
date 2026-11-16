@@ -133,10 +133,12 @@ public sealed class StockBalanceService(CompanyDatabaseResolver resolver)
     }
 
     /// <summary>Stockable items by code or name, for the pickers of the balance screens (the authorization is by the screens' own permission).</summary>
-    public async Task<IReadOnlyList<StockItemChoice>> SearchItemsAsync(Guid companyId, string? search, CancellationToken ct = default)
+    public async Task<IReadOnlyList<StockItemChoice>> SearchItemsAsync(Guid companyId, string? search, IReadOnlyCollection<Guid> visibleWarehouses, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
-        await using var q = new NpgsqlCommand($"SELECT {I.Id}, {I.Code}, {I.NameAr}, {I.NameEn} FROM {I.Table} WHERE {I.ItemType} = 1 AND (@q = '' OR {I.Code} ILIKE @q2 OR {I.NameAr} ILIKE @q2 OR {I.NameEn} ILIKE @q2) ORDER BY {I.Code} LIMIT 30", conn);
+        // only items that have costing entries in a warehouse the caller may see: the picker never lists the rest of the item catalog
+        await using var q = new NpgsqlCommand($"SELECT {I.Id}, {I.Code}, {I.NameAr}, {I.NameEn} FROM {I.Table} WHERE {I.ItemType} = 1 AND EXISTS (SELECT 1 FROM {CE.Table} e WHERE e.{CE.ItemId} = {I.Table}.{I.Id} AND e.{CE.WarehouseId} = ANY(@vis)) AND (@q = '' OR {I.Code} ILIKE @q2 OR {I.NameAr} ILIKE @q2 OR {I.NameEn} ILIKE @q2) ORDER BY {I.Code} LIMIT 30", conn);
+        q.Parameters.Add(Ids("vis", visibleWarehouses));
         var term = (search ?? "").Trim();
         q.Parameters.AddWithValue("q", term); q.Parameters.AddWithValue("q2", "%" + term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
         var list = new List<StockItemChoice>();
@@ -203,7 +205,7 @@ public sealed class StockBalanceManagementService(AccessService access, StockDoc
     public async Task<ConfigResult<IReadOnlyList<StockItemChoice>>> ItemsAsync(Guid user, Guid company, string? search, CancellationToken ct = default)
     {
         var (visible, _) = await VisibleAsync(user, company, ct);
-        return visible.Count == 0 ? Denied<IReadOnlyList<StockItemChoice>>() : ConfigResult<IReadOnlyList<StockItemChoice>>.Ok(await balances.SearchItemsAsync(company, search, ct));
+        return visible.Count == 0 ? Denied<IReadOnlyList<StockItemChoice>>() : ConfigResult<IReadOnlyList<StockItemChoice>>.Ok(await balances.SearchItemsAsync(company, search, visible.Select(w => w.Id).ToList(), ct));
     }
 
     public async Task<ConfigResult<StockReconciliation>> ReconcileAsync(Guid user, Guid company, DateOnly asOf, CancellationToken ct = default)

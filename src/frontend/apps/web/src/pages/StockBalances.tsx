@@ -11,7 +11,8 @@ import { invName } from "./inventoryCommon";
  * never today's stock. Tabs: balances, item ledger, reconciliation; the filters of a tab survive switching tabs.
  */
 const PAGE = 25;
-const todayIso = () => new Date().toISOString().slice(0, 10);
+/** The user's LOCAL calendar date (the UTC date is another day for part of the day). */
+const todayIso = () => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 const num = (n: number) => String(Number(n.toFixed(10)));
 const wh = (w: { warehouseCode: string; warehouseNameAr: string | null; warehouseNameEn: string | null }, locale: string) => `${w.warehouseCode} — ${(locale === "en" ? w.warehouseNameEn ?? w.warehouseNameAr : w.warehouseNameAr ?? w.warehouseNameEn) ?? ""}`;
 
@@ -150,6 +151,7 @@ export function StockBalancesPage() {
           </div>
           {item && <p data-testid="ledger-item"><bdi dir="ltr">{item.code}</bdi> — <bdi>{invName(item, locale)}</bdi></p>}
           {ledgerError && <Banner kind="error">{ledgerError}</Banner>}
+          {ledger && ledger.total > ledger.rows.length && <Banner kind="error" testId="ledger-truncated">{t("stockbal.ledger_truncated", { shown: String(ledger.rows.length), total: String(ledger.total) })}</Banner>}
           {ledger && (
             <div className="table-wrap">
               <table className="data-table" data-testid="ledger-table">
