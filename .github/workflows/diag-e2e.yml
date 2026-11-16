@@ -7,7 +7,7 @@ permissions:
 jobs:
   diag:
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 25
+    timeout-minutes: 30
     defaults:
       run:
         shell: powershell
@@ -21,32 +21,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
       - run: npm ci
-      - name: Environment names and sizes
-        run: |
-          Get-ChildItem env: | Where-Object { $_.Name -notmatch 'TOKEN|SECRET|KEY|PASSWORD' } | Sort-Object Name | ForEach-Object { "{0}={1}" -f $_.Name, $(if ($_.Value.Length -gt 120) { $_.Value.Substring(0,120) + '...' } else { $_.Value }) }
-          whoami; (Get-Process -Id $PID).SessionId
-      - name: Bisect
+      - name: Variants of the Playwright start (each with its own timeout)
         run: |
           $node = (Get-Command node).Source
-          function Run($label, $argList, $secs, $newEnv) {
-            Write-Host "--- $label"
+          $cli = Join-Path (Get-Location) 'node_modules\@playwright\test\cli.js'
+          function Run($label, $argList, $secs, $dbg) {
+            Write-Host "=== $label (DEBUG=$dbg)"
+            if ($dbg) { $env:DEBUG = $dbg } else { Remove-Item env:DEBUG -ErrorAction SilentlyContinue }
             $o = Join-Path $env:RUNNER_TEMP "$label.out"; $e = Join-Path $env:RUNNER_TEMP "$label.err"
             Remove-Item $o, $e -ErrorAction SilentlyContinue
-            $sp = @{ FilePath = $node; ArgumentList = $argList; PassThru = $true; WindowStyle = 'Hidden'; RedirectStandardOutput = $o; RedirectStandardError = $e }
-            $p = Start-Process @sp
-            if ($p.WaitForExit($secs * 1000)) { Write-Host "exit $($p.ExitCode)" } else { Write-Host "TIMEOUT after $secs s"; Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $p.Id } | ForEach-Object { Write-Host "child $($_.ProcessId) $($_.Name)" }; Stop-Process -Id $p.Id -Force }
-            Get-Content $o -ErrorAction SilentlyContinue | Select-Object -First 15
-            Get-Content $e -ErrorAction SilentlyContinue | Select-Object -First 15
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $node -ArgumentList $argList -PassThru -WindowStyle Hidden -RedirectStandardOutput $o -RedirectStandardError $e
+            $fin = $p.WaitForExit($secs * 1000)
+            if (-not $fin) { Write-Host "TIMEOUT after $secs s"; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'playwright|vite|chrome' } | ForEach-Object { Write-Host ("  proc {0} <- {1} {2} {3}" -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length))) }; taskkill /T /F /PID $p.Id | Out-Null }
+            $p.WaitForExit()
+            Write-Host ("finished={0} exit={1} after {2:n1}s" -f $fin, $p.ExitCode, $sw.Elapsed.TotalSeconds)
+            Write-Host '--- stdout (last 25)'; Get-Content $o -ErrorAction SilentlyContinue | Select-Object -Last 25
+            Write-Host '--- stderr (last 10)'; Get-Content $e -ErrorAction SilentlyContinue | Select-Object -Last 10
           }
-          $cli = Join-Path (Get-Location) 'node_modules\@playwright\test\cli.js'
-          Run 'hello' @('-e', 'console.log(1)') 20
-          Run 'version' @($cli, '--version') 40
-          Run 'list' @($cli, 'test', '--list') 60
-          $env:DEBUG = 'pw:*'
-          Run 'testdebug' @($cli, 'test', '--reporter=list') 90
-          Remove-Item env:DEBUG
-          Write-Host '--- list with stdin closed and a clean environment'
-          $env:PW_TEST_DEBUG_NOTHING = '1'
-          cmd /d /c "`"$node`" `"$cli`" test --list < NUL > $env:RUNNER_TEMP\nul.out 2>&1"
-          Get-Content $env:RUNNER_TEMP\nul.out | Select-Object -First 8
+          Run 'A-exact-step' @($cli, 'test', '--reporter=list') 110 'pw:webserver'
+          Run 'B-no-debug' @($cli, 'test', '--reporter=list') 110 $null
+          Run 'C-debug-all' @($cli, 'test', '--reporter=list') 110 'pw:*'
+          Run 'D-one-test' @($cli, 'test', '--reporter=list', '-g', 'static bundle') 110 'pw:webserver'
