@@ -545,7 +545,16 @@ export interface StockDocumentLineInput { itemId: string; unitId: string; quanti
 export interface StockDocumentInput { docType?: StockDocType; sourceWarehouseId: string | null; targetWarehouseId: string | null; documentDate: string; reference: string | null; notes: string | null; lines: StockDocumentLineInput[] }
 export interface StockDocumentQuery { type?: StockDocType; status?: StockDocStatus; warehouseId?: string; from?: string; to?: string; search?: string; offset?: number; limit?: number }
 /** For each action, the ids of the warehouses on which the caller holds the permission. */
-export interface StockDocumentCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[] }
+export interface StockDocumentCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[]; post: string[]; reverse: string[] }
+
+/** Execution of an approved stock document (Phase 3.7B/3.7C). accountingState: 1 pending (draft journal awaiting approval/posting), 2 no journal required, 3 journal posted, 4 failed (journal cancelled outside the reversal), 5 reversed. */
+export interface StockPostingLine { lineNo: number; itemId: string; warehouseId: string; baseQuantity: number; amount: number }
+export interface StockReversal { id: string; costOperationId: string; journalAction: number; journalEntryId: string | null; effectiveDate: string; reversedAtUtc: string; reversedBy: string; reason: string }
+export interface StockPosting {
+  id: string; documentId: string; docType: number; effectiveDate: string; postedAtUtc: string; postedBy: string; costOperationId: string; accountingVersionId: string | null; journalEntryId: string | null;
+  totalValue: number; accountingState: number; replayed: boolean; journalStatus: number | null; reversal: StockReversal | null; lines: StockPostingLine[];
+}
+export interface StockPostLineInput { lineNo: number; amount: number }
 
 /** Stock balances, item ledger and the reconciliation with the General Ledger (Phase 3.8A, read-only). Quantities are in the item's base unit; values in the company base currency. */
 export interface StockBalanceRow {
@@ -794,6 +803,14 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     },
     getStockReconciliation: (asOf: string) => get<StockReconciliation>(`/api/v1/company/stock-balances/reconciliation?asOf=${enc(asOf)}`),
     getStockDocument: (id: string) => get<StockDocument>(`/api/v1/company/stock-documents/${enc(id)}`),
+    /** The execution of a document, or null while it has not been executed. */
+    getStockPosting: async (id: string): Promise<StockPosting | null> => {
+      try { return await get<StockPosting>(`/api/v1/company/stock-documents/${enc(id)}/posting`); }
+      catch (e) { if (e instanceof ApiError && e.status === 404) return null; throw e; }
+    },
+    /** Posts an approved document: moves the stock, values it and creates the draft journal entry, atomically. A receipt needs the cost amount of every line. Idempotent. */
+    postStockDocument: (id: string, revision: number, lines?: StockPostLineInput[]) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/posting`, { ifMatch: revision, body: { lines: lines ?? [] } }),
+    reverseStockDocument: (id: string, effectiveDate: string, reason: string) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),

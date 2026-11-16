@@ -1,5 +1,5 @@
 import {
-  ApiError, type StockDocType, type StockDocument, type StockDocumentCapabilities, type StockDocumentInput, type StockDocumentSummary, type StockItemRef, type StockWarehouseRef,
+  ApiError, type StockDocType, type StockDocument, type StockPosting, type StockDocumentCapabilities, type StockDocumentInput, type StockDocumentSummary, type StockItemRef, type StockWarehouseRef,
 } from "@hasm/api-client";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -16,7 +16,10 @@ import { blankToNull, invName } from "./inventoryCommon";
  */
 const PAGE = 25;
 const TYPES: StockDocType[] = [1, 2, 3];
-const todayIso = () => new Date().toISOString().slice(0, 10);
+/** The user's LOCAL calendar date (not the UTC date: near midnight the UTC date is another day and could pick the wrong fiscal period). */
+const todayIso = () => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+/** Amounts are shown with at least two decimals (exact, no floating point artefacts); the server enforces the scale of the base currency. */
+const money = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6, useGrouping: false });
 
 interface LineRow { key: number; item: StockItemRef | null; unitId: string; quantity: string; notes: string }
 interface Form { docType: StockDocType; source: string; target: string; date: string; reference: string; notes: string; lines: LineRow[] }
@@ -152,7 +155,10 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("general");
-  const [dialog, setDialog] = useState<null | "reject" | "cancel">(null);
+  const [dialog, setDialog] = useState<null | "reject" | "cancel" | "post" | "reverse">(null);
+  const [posting, setPosting] = useState<StockPosting | null>(null);
+  const [amounts, setAmounts] = useState<Record<number, string>>({});
+  const [reverseDate, setReverseDate] = useState(todayIso());
   const [reason, setReason] = useState("");
   const [confirmSubmit, setConfirmSubmit] = useState(false);
 
@@ -163,6 +169,9 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
       const refs = new Map<string, StockItemRef>();
       for (const code of new Set(d.lines.map((l) => l.itemCode))) for (const it of (await auth.api.searchStockItems(code).catch(() => ({ items: [] as StockItemRef[] }))).items) refs.set(it.id, it);
       const f = fromDoc(d, refs);
+      let p: StockPosting | null = null;
+      if (d.status === 3) { try { p = await auth.api.getStockPosting(d.id); } catch (err) { if (auth.handleError(err)) return; p = null; } }
+      setPosting(p);
       setDoc(d); setForm(f); setBase(snapshot(f)); setErrors({}); setConflict(false); setLoading(false);
     } catch (e) { if (!auth.handleError(e)) { setError(errorText(t, e, "stock.error.")); setLoading(false); } }
   }, [auth.api, auth.handleError, editor, t]);
@@ -199,13 +208,14 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
     lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: Number(l.quantity), notes: blankToNull(l.notes) })),
   });
 
-  function showServerError(err: unknown) {
+  function showServerError(err: unknown, onPosting = false) {
     if (auth.handleError(err)) return;
     if (err instanceof ApiError && err.status === 412) { setConflict(true); return; }
     if (err instanceof ApiError && err.status === 400) {
       const out: Record<string, string> = {};
       for (const f of err.details.fields ?? []) out[f.field] = t(`stock.field.${f.code}`) === `stock.field.${f.code}` ? (t(`field.${f.code}`) === `field.${f.code}` ? t("field.invalid") : t(`field.${f.code}`)) : t(`stock.field.${f.code}`);
       setErrors(out); setError(t("form.fix_errors"));
+      if (onPosting) { setTab("posting"); return; }
       const first = (["general", "lines"] as const).find((id) => tabsWithErrors(out).has(id));
       if (first) setTab(first);
       return;
@@ -226,11 +236,28 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
     } catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
-  async function act(run: () => Promise<StockDocument>, message: string) {
+  async function act(run: () => Promise<unknown>, message: string, onPosting = false) {
     setBusy(true); setError(null); setConflict(false); setDialog(null); setConfirmSubmit(false);
     try { await run(); onChanged(message); await load(); setReason(""); }
-    catch (err) { showServerError(err); } finally { setBusy(false); }
+    catch (err) { showServerError(err, onPosting); } finally { setBusy(false); }
   }
+
+  const isReceipt = doc?.docType === 1;
+  const AMOUNT = /^\d+(\.\d{1,6})?$/;
+  /** The receipt amounts are validated here for a fast answer; the server validates them again (scale of the base currency, range). */
+  function openPost() {
+    if (!doc) return;
+    if (isReceipt) {
+      const v: Record<string, string> = {};
+      if (doc.lines.some((l) => !AMOUNT.test((amounts[l.lineNo] ?? "").trim()))) v.lines = t("stock.field.amount_required_for_every_line");
+      if (v.lines) { setErrors(v); setTab("posting"); return; }
+    }
+    setErrors({}); setError(null); setDialog("post");
+  }
+  const postLines = () => (isReceipt && doc ? doc.lines.map((l) => ({ lineNo: l.lineNo, amount: Number(amounts[l.lineNo]) })) : undefined);
+  const previewTotal = isReceipt && doc ? doc.lines.reduce((sum, l) => sum + (AMOUNT.test((amounts[l.lineNo] ?? "").trim()) ? Number(amounts[l.lineNo]) : 0), 0) : 0;
+  const canPost = !!doc && status === 3 && !posting && allDoc(caps.post);
+  const canReverse = !!doc && !!posting && !posting.reversal && allDoc(caps.reverse);
 
   if (loading) return <Loading />;
   const invalid = tabsWithErrors(errors);
@@ -303,6 +330,71 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
         </div>
       ),
     },
+    ...(doc && status === 3 ? [{
+      id: "posting", label: t("stock.tab.posting"), invalid: Object.keys(errors).length > 0,
+      content: (
+        <div data-testid="posting-panel">
+          {Object.keys(errors).length > 0 && <Banner kind="error" testId="posting-error">{[...new Set(Object.values(errors))].join(" ")}</Banner>}
+          {!posting ? (
+            <div>
+              <Banner kind="info" testId="not-executed">{t("stock.posting.not_executed")}</Banner>
+              {isReceipt ? (
+                <div>
+                  <p className="hint">{t("stock.posting.amount_hint")}</p>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <caption className="visually-hidden">{t("stock.posting.lines")}</caption>
+                      <thead><tr><th scope="col">#</th><th scope="col">{t("stock.item")}</th><th scope="col">{t("stock.base_quantity")}</th><th scope="col">{t("stock.posting.amount")}</th></tr></thead>
+                      <tbody>
+                        {doc.lines.map((l) => (
+                          <tr key={l.lineNo} data-testid={`post-line-${l.lineNo}`}>
+                            <td>{l.lineNo}</td><td><bdi dir="ltr">{l.itemCode}</bdi> — <bdi>{invName({ code: l.itemCode, nameAr: l.itemNameAr, nameEn: l.itemNameEn }, locale)}</bdi></td><td><bdi dir="ltr">{l.baseQuantity} {l.baseUnitCode}</bdi></td>
+                            <td>
+                              <Field id={`sd-amount-${l.lineNo}`} label={t("stock.posting.amount")}>
+                                {(aria) => <input {...aria} value={amounts[l.lineNo] ?? ""} inputMode="decimal" dir="ltr" readOnly={!canPost} onChange={(e) => setAmounts((a) => ({ ...a, [l.lineNo]: e.target.value }))} />}
+                              </Field>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p data-testid="amount-total">{t("stock.posting.total_preview")}: <bdi dir="ltr">{money(Number(previewTotal.toFixed(6)))}</bdi></p>
+                </div>
+              ) : <p className="hint">{t("stock.posting.cost_computed")}</p>}
+            </div>
+          ) : (
+            <div data-testid="posting-summary">
+              <p><span className={`chip ${posting.accountingState === 3 || posting.accountingState === 2 ? "chip-ok" : posting.accountingState === 4 ? "chip-off" : ""}`} data-testid="accounting-state">{t(`stock.posting.state.${posting.accountingState}`)}</span></p>
+              <dl className="details">
+                <dt>{t("stock.posting.total")}</dt><dd><bdi dir="ltr" data-testid="posting-total">{money(posting.totalValue)}</bdi></dd>
+                <dt>{t("stock.posting.effective")}</dt><dd><bdi dir="ltr">{posting.effectiveDate}</bdi></dd>
+                <dt>{t("stock.posting.at")}</dt><dd><bdi dir="ltr">{posting.postedAtUtc.slice(0, 19).replace("T", " ")}</bdi></dd>
+                <dt>{t("stock.posting.journal")}</dt>
+                <dd data-testid="posting-journal">{posting.journalEntryId ? <><a href="#/accounting/journal"><bdi dir="ltr">{posting.journalEntryId}</bdi></a> — {posting.journalStatus ? t(`stock.posting.journal_status.${posting.journalStatus}`) : ""}</> : t("stock.posting.no_journal")}</dd>
+              </dl>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <caption className="visually-hidden">{t("stock.posting.lines")}</caption>
+                  <thead><tr><th scope="col">#</th><th scope="col">{t("stock.item")}</th><th scope="col">{t("stock.base_quantity")}</th><th scope="col">{t("stock.posting.amount")}</th></tr></thead>
+                  <tbody>
+                    {posting.lines.map((l) => {
+                      const line = doc.lines.find((x) => x.lineNo === l.lineNo);
+                      return <tr key={l.lineNo}><td>{l.lineNo}</td><td><bdi dir="ltr">{line?.itemCode ?? l.itemId}</bdi></td><td><bdi dir="ltr">{l.baseQuantity}</bdi></td><td><bdi dir="ltr">{money(l.amount)}</bdi></td></tr>;
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {posting.reversal && (
+                <Banner kind="info" testId="reversal-info">
+                  {t("stock.reversal")}: <bdi dir="ltr">{posting.reversal.effectiveDate}</bdi> — {t(`stock.reversal.action.${posting.reversal.journalAction}`)} — <bdi>{posting.reversal.reason}</bdi>
+                </Banner>
+              )}
+            </div>
+          )}
+        </div>
+      ),
+    } as TabItem] : []),
     ...(doc ? [{
       id: "history", label: t("stock.tab.history"),
       content: (
@@ -336,12 +428,22 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
           {doc && status === 2 && allDoc(caps.update) && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawStockDocument(doc.id, rev), t("stock.withdrawn"))}>{t("stock.withdraw")}</button>}
           {doc && status === 2 && allDoc(caps.approve) && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("stock.self_approval") : undefined} onClick={() => void act(() => auth.api.approveStockDocument(doc.id, rev), t("stock.approved"))}>{t("stock.approve")}</button>}
           {doc && status === 2 && allDoc(caps.approve) && <button type="button" disabled={busy || mine} onClick={() => { setReason(""); setDialog("reject"); }}>{t("stock.reject")}</button>}
-          {doc && (status === 1 || status === 2 || status === 3) && allDoc(caps.cancel) && <button type="button" className="danger" disabled={busy} onClick={() => { setReason(""); setDialog("cancel"); }}>{t("stock.cancel_document")}</button>}
+          {canPost && <button type="button" className="primary" data-testid="post" disabled={busy || dirty} onClick={openPost}>{t("stock.post")}</button>}
+          {canReverse && <button type="button" className="danger" data-testid="reverse" disabled={busy} onClick={() => { setReason(""); setReverseDate(todayIso()); setDialog("reverse"); }}>{t("stock.reverse")}</button>}
+          {doc && (status === 1 || status === 2 || status === 3) && !posting && allDoc(caps.cancel) && <button type="button" className="danger" disabled={busy} onClick={() => { setReason(""); setDialog("cancel"); }}>{t("stock.cancel_document")}</button>}
         </div>
         {doc && status === 2 && mine && allDoc(caps.approve) && <p className="hint" data-testid="self-approval-note">{t("stock.self_approval")}</p>}
       </form>
       {confirmSubmit && doc && <ConfirmDialog title={t("stock.submit")} message={t("stock.submit_message")} confirmLabel={t("form.confirm")} onCancel={() => setConfirmSubmit(false)} onConfirm={() => void act(() => auth.api.submitStockDocument(doc.id, rev), t("stock.submitted"))} />}
-      {dialog && doc && (
+      {dialog === "post" && doc && <ConfirmDialog title={t("stock.post")} message={t("stock.post_message")} confirmLabel={t("form.confirm")} onCancel={() => setDialog(null)} onConfirm={() => void act(() => auth.api.postStockDocument(doc.id, rev, postLines()), t("stock.posted"), true)} />}
+      {dialog === "reverse" && doc && (
+        <ConfirmDialog title={t("stock.reverse")} message={t("stock.reverse_message")} confirmLabel={t("form.confirm")} onCancel={() => setDialog(null)}
+          onConfirm={() => { if (!reason.trim() || !reverseDate) { setError(t("stock.reverse_required")); setDialog(null); return; } void act(() => auth.api.reverseStockDocument(doc.id, reverseDate, reason.trim()), t("stock.reversed"), true); }}>
+          <Field id="sd-reverse-date" label={t("stock.reverse_date")} required>{(aria) => <input {...aria} type="date" value={reverseDate} onChange={(e) => setReverseDate(e.target.value)} dir="ltr" />}</Field>
+          <Field id="sd-reverse-reason" label={t("stock.reverse_reason")} required>{(aria) => <textarea {...aria} value={reason} rows={3} maxLength={500} onChange={(e) => setReason(e.target.value)} />}</Field>
+        </ConfirmDialog>
+      )}
+      {(dialog === "reject" || dialog === "cancel") && doc && (
         <ConfirmDialog title={dialog === "reject" ? t("stock.reject") : t("stock.cancel_document")} message={dialog === "reject" ? t("stock.reject_message") : t("stock.cancel_message")} confirmLabel={t("form.confirm")}
           onCancel={() => setDialog(null)} onConfirm={() => { if (!reason.trim()) { setError(t(dialog === "reject" ? "stock.note_required" : "stock.reason_required")); setDialog(null); return; } void act(() => (dialog === "reject" ? auth.api.rejectStockDocument(doc.id, reason.trim(), rev) : auth.api.cancelStockDocument(doc.id, reason.trim(), rev)), dialog === "reject" ? t("stock.rejected") : t("stock.cancelled")); }}>
           <Field id="sd-reason" label={dialog === "reject" ? t("stock.decision_note") : t("stock.cancel_reason")} required>{(aria) => <textarea {...aria} value={reason} rows={3} maxLength={500} onChange={(e) => setReason(e.target.value)} />}</Field>
