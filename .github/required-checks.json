@@ -7,7 +7,8 @@
       "paths": [
         "src/backend/**",
         "tests/**",
-        ".github/workflows/backend.yml"
+        ".github/workflows/backend.yml",
+        ".github/workflows/backend-selfhosted.yml"
       ]
     },
     {
@@ -16,7 +17,8 @@
       "paths": [
         "src/backend/**",
         "tests/**",
-        ".github/workflows/backend.yml"
+        ".github/workflows/backend.yml",
+        ".github/workflows/backend-selfhosted.yml"
       ]
     },
     {
@@ -25,7 +27,8 @@
       "paths": [
         "src/frontend/**",
         "assets/branding/**",
-        ".github/workflows/frontend.yml"
+        ".github/workflows/frontend.yml",
+        ".github/workflows/frontend-selfhosted.yml"
       ]
     },
     {
@@ -34,7 +37,8 @@
       "paths": [
         "src/frontend/**",
         "assets/branding/**",
-        ".github/workflows/frontend.yml"
+        ".github/workflows/frontend.yml",
+        ".github/workflows/frontend-selfhosted.yml"
       ]
     },
     {
@@ -44,7 +48,8 @@
         "src/desktop/**",
         "src/frontend/**",
         "assets/branding/**",
-        ".github/workflows/desktop.yml"
+        ".github/workflows/desktop.yml",
+        ".github/workflows/desktop-selfhosted.yml"
       ]
     },
     {

@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ["src/backend/**", "tests/**", ".github/workflows/backend.yml"]
+    paths: ["src/backend/**", "tests/**", ".github/workflows/backend.yml", ".github/workflows/backend-selfhosted.yml"]
 
 permissions:
   contents: read
@@ -72,7 +72,9 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'hasm-pg-ci'
           if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
           New-Item -ItemType Directory -Force $dir | Out-Null
-          $boot = New-Secret; $testPw = New-Secret; $rolePw = New-Secret; $fingerprint = New-Secret + (New-Secret)
+          # exported at once so that the destroy step cleans up even when the start-up fails half way
+          "HASM_CI_PG_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $boot = New-Secret; $testPw = New-Secret; $rolePw = New-Secret; $fingerprint = (New-Secret) + (New-Secret)
           foreach ($s in $boot, $testPw, $rolePw, $fingerprint) { Write-Host "::add-mask::$s" }
           Set-Content -NoNewline -Path "$dir\pw.txt" -Value $boot
           & "$bin\initdb.exe" -D "$dir\data" -U ci_bootstrap --pwfile="$dir\pw.txt" --auth=scram-sha-256 -E UTF8 --locale=C | Out-Null
@@ -84,7 +86,6 @@ jobs:
           $deadline = (Get-Date).AddSeconds(90)
           do { Start-Sleep -Milliseconds 500; & "$bin\pg_isready.exe" -h 127.0.0.1 -p $port *> $null } until ($LASTEXITCODE -eq 0 -or (Get-Date) -gt $deadline)
           if ($LASTEXITCODE -ne 0) { if (Test-Path "$dir\postgres.log") { Get-Content "$dir\postgres.log" -Tail 30 }; throw 'The disposable PostgreSQL cluster did not become ready' }
-          "HASM_CI_PG_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           $env:PGPASSWORD = $boot
           function Psql([string]$Db, [string]$Sql) { $out = & "$bin\psql.exe" -h 127.0.0.1 -p $port -U ci_bootstrap -d $Db -v ON_ERROR_STOP=1 -X -q -At -c $Sql 2>&1; if ($LASTEXITCODE -ne 0) { throw "psql failed: $out" }; $out }
           # hasm_test_admin: the ordinary test account (create/drop its own temporary databases only; no superuser, role or replication rights).
@@ -119,8 +120,10 @@ jobs:
         if: ${{ always() }}
         run: |
           $dir = $env:HASM_CI_PG_DIR
-          if ($dir -and (Test-Path "$dir\data")) {
-            & 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D "$dir\data" -m immediate stop 2>&1 | Out-Null
+          if ($dir -and (Test-Path $dir)) {
+            if (Test-Path "$dir\data") { & 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D "$dir\data" -m immediate stop 2>&1 | Out-Null }
+            # a server that started late holds the data directory: stop any postgres process that was started from it
+            Get-CimInstance Win32_Process -Filter "Name = 'postgres.exe'" | Where-Object { $_.CommandLine -like "*$dir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 2
             Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
           }
