@@ -142,6 +142,8 @@ public sealed partial class PermissionCatalog
         new("company.inventoryaccounting", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse]),
         new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
+        // Stocktake (3.8B-1): warehouse-scoped like stock documents; the approver is never the submitter (service AND PostgreSQL). Counting and approving create no stock movement.
+        new("company.stocktake", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
     ]);
 
     public static class Codes
@@ -247,6 +249,12 @@ public sealed partial class PermissionCatalog
         public const string StockDocsPost = "company.stockdocs.post";
         public const string StockDocsReverse = "company.stockdocs.reverse";
         public const string StockBalanceView = "company.stockbalance.view";
+        public const string StocktakeView = "company.stocktake.view";
+        public const string StocktakeCreate = "company.stocktake.create";
+        public const string StocktakeUpdate = "company.stocktake.update";
+        public const string StocktakeSubmit = "company.stocktake.submit";
+        public const string StocktakeApprove = "company.stocktake.approve";
+        public const string StocktakeCancel = "company.stocktake.cancel";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";

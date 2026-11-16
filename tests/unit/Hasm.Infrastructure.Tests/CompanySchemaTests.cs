@@ -50,8 +50,8 @@ public class CompanySchemaTests
     {
         var system = MigrationScript.LoadEmbedded();
         var company = MigrationScript.LoadEmbeddedCompany();
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], system.Select(s => s.Version));
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], company.Select(s => s.Version));
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], system.Select(s => s.Version));
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], company.Select(s => s.Version));
         Assert.DoesNotContain(system, s => s.Name.Contains("identity"));
         Assert.DoesNotContain(company, s => s.Name.Contains("registry"));
     }

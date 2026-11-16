@@ -10,13 +10,15 @@ public static class DocumentTypes
     public const string StockReceipt = "stock_receipt";
     public const string StockIssue = "stock_issue";
     public const string StockTransfer = "stock_transfer";
+    /// <summary>Stocktake sheets (Phase 3.8B-1): numbered at approval like stock documents.</summary>
+    public const string Stocktake = "stocktake";
 
-    public static IReadOnlyList<string> All { get; } = [JournalEntry, StockReceipt, StockIssue, StockTransfer];
+    public static IReadOnlyList<string> All { get; } = [JournalEntry, StockReceipt, StockIssue, StockTransfer, Stocktake];
 
     /// <summary>Only journal entries run through the ordered approval-policy engine; stock documents use the independent-approver rule of their own service.</summary>
     public static bool UsesApprovalPolicies(string? docType) => docType == JournalEntry;
 
-    public static string DefaultPrefix(string docType) => docType switch { JournalEntry => "JV", StockReceipt => "SR", StockIssue => "SI", StockTransfer => "ST", _ => "" };
+    public static string DefaultPrefix(string docType) => docType switch { JournalEntry => "JV", StockReceipt => "SR", StockIssue => "SI", StockTransfer => "ST", Stocktake => "STK", _ => "" };
 
     public static bool IsKnown(string? docType) => docType is not null && All.Contains(docType, StringComparer.Ordinal);
 }

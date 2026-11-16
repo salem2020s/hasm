@@ -575,6 +575,30 @@ export interface StockWarehouseRef { id: string; branchId: string; code: string;
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
 
+// ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
+/** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
+export type StocktakeStatus = 1 | 2 | 3 | 4 | 5;
+/** Quantities: counted in the line's unit; countedBaseQuantity, bookQuantity (snapshot), currentBookQuantity and variance (counted base - book) in the item's base unit. stale = the current book differs from the snapshot. */
+export interface StocktakeLine {
+  lineNo: number; itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; unitId: string; unitCode: string; countedQuantity: number | null; factor: number;
+  countedBaseQuantity: number | null; bookQuantity: number; variance: number | null; baseUnitCode: string; reason: string | null; currentBookQuantity: number; stale: boolean;
+}
+/** kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 approved, 6 rejected, 7 cancelled, 8 sheet generated. */
+export interface Stocktake {
+  id: string; status: StocktakeStatus; branchId: string; warehouseId: string; countDate: string; reference: string | null; notes: string | null; number: string | null; fiscalYearId: string | null;
+  snapshotAtUtc: string; stale: boolean; createdBy: string; createdAtUtc: string; submittedBy: string | null; submittedAtUtc: string | null; decidedBy: string | null; decidedAtUtc: string | null; decisionNote: string | null;
+  cancelledBy: string | null; cancelledAtUtc: string | null; cancelReason: string | null; revision: number; updatedAtUtc: string; lines: StocktakeLine[]; events: StockDocumentEvent[];
+}
+export interface StocktakeSummary {
+  id: string; status: StocktakeStatus; number: string | null; countDate: string; branchId: string; warehouseId: string; reference: string | null; lineCount: number; countedLines: number; varianceLines: number;
+  revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+export interface StocktakeLineInput { itemId: string; unitId: string; countedQuantity: number | null; reason: string | null }
+export interface StocktakeInput { warehouseId: string; countDate: string; reference: string | null; notes: string | null; lines: StocktakeLineInput[] }
+export interface StocktakeQuery { status?: StocktakeStatus; warehouseId?: string; from?: string; to?: string; search?: string; offset?: number; limit?: number }
+/** For each action, the ids of the warehouses on which the caller holds the stocktake permission. */
+export interface StocktakeCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[] }
+
 // ---- Inventory accounting configuration (Phase 3.7A): which ledger accounts hold inventory and take the other side of stock movements. Versioned and immutable; nothing is posted by it.
 export interface InventoryAccountingVersion { id: string; versionNo: number; createdAtUtc: string; createdBy: string; note: string | null; groupCount: number; contentHash: string }
 export interface InventoryAccountingConfig {
@@ -818,6 +842,32 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/approve`, { ifMatch: revision }),
     rejectStockDocument: (id: string, note: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
     cancelStockDocument: (id: string, reason: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    // Stocktake (Phase 3.8B-1). Every change carries the stocktake revision as If-Match; the server enforces every rule and every warehouse-scoped permission.
+    getStocktakeCapabilities: () => get<StocktakeCapabilities>("/api/v1/company/stocktakes/capabilities"),
+    listStocktakeWarehouses: () => get<{ warehouses: StockWarehouseRef[] }>("/api/v1/company/stocktakes/warehouses"),
+    searchStocktakeItems: (search: string) => get<{ items: StockItemRef[] }>(`/api/v1/company/stocktakes/items?search=${enc(search)}`),
+    listStocktakes: (q: StocktakeQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.status !== undefined) p.set("status", String(q.status));
+      if (q.warehouseId) p.set("warehouseId", q.warehouseId);
+      if (q.from) p.set("from", q.from);
+      if (q.to) p.set("to", q.to);
+      if (q.search) p.set("search", q.search);
+      if (q.offset) p.set("offset", String(q.offset));
+      if (q.limit) p.set("limit", String(q.limit));
+      const qs = p.toString();
+      return get<{ stocktakes: StocktakeSummary[]; total: number }>(`/api/v1/company/stocktakes${qs ? "?" + qs : ""}`);
+    },
+    getStocktake: (id: string) => get<Stocktake>(`/api/v1/company/stocktakes/${enc(id)}`),
+    createStocktake: (input: StocktakeInput) => request<Stocktake>("POST", "/api/v1/company/stocktakes", { body: input }),
+    updateStocktake: (id: string, input: StocktakeInput, revision: number) => request<Stocktake>("PUT", `/api/v1/company/stocktakes/${enc(id)}`, { body: input, ifMatch: revision }),
+    /** Adds the items with a non-zero book quantity (or exactly the chosen items) that are not on the sheet yet; existing counts are kept. */
+    generateStocktakeSheet: (id: string, revision: number, itemIds?: string[]) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/generate-sheet`, { body: { itemIds: itemIds ?? null }, ifMatch: revision }),
+    submitStocktake: (id: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawStocktake: (id: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveStocktake: (id: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/approve`, { ifMatch: revision }),
+    rejectStocktake: (id: string, note: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
+    cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Inventory accounting configuration (Phase 3.7A). The version number is the If-Match value (0 while nothing is configured).
     getInventoryAccounting: () => get<InventoryAccountingResponse>("/api/v1/company/inventory/accounting"),
     listInventoryAccountingVersions: () => get<{ versions: InventoryAccountingVersion[] }>("/api/v1/company/inventory/accounting/versions"),
