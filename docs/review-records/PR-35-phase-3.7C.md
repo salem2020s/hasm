@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #35 (Phase 3.7C reversal, derived accounting states, valuation close probe)
-* **Head SHA reviewed (full 40 characters):** 23659683f430b73f038c0ad0b58e45755153e747
+* **Head SHA reviewed (full 40 characters):** bc206ed13d27e758b7bfa2f9ae1be686b3061ba2
 * **Reviewer context:** a separate agent in its own context (read-only: it read the full diff, the costing reversal code and the journal service, ran no tests and touched no database); same model family as the author
 * **Scope read:** the full diff against origin/main
 * **Checks run (commands and results):** none by the reviewer; the author ran StockReversal* (14 of 14) and StockPosting* (18 of 18) on the disposable cluster after the fixes
