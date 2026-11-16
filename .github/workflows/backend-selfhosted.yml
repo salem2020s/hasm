@@ -112,7 +112,7 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: dotnet test tests/integration/Hasm.Database.IntegrationTests --no-build --configuration Release --logger "trx;LogFileName=pg-integration.trx" --results-directory "$env:RUNNER_TEMP\trx"
 
-      - name: Verify all 901 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 906 PostgreSQL tests executed and passed (none skipped)
         # The exact per-class registry is the EXPECTED block in .github/workflows/backend.yml (single source, protected by ci-guard).
         run: node tools/verify/pg-trx-check.js "$env:RUNNER_TEMP\trx\pg-integration.trx" .github/workflows/backend.yml
 
