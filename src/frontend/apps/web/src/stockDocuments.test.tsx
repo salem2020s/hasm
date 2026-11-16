@@ -14,7 +14,7 @@ beforeEach(() => { localStorage.clear(); window.location.hash = ""; });
 const PERMS = [...ALL_PERMISSIONS, "company.stockdocs.view", "company.stockdocs.create"];
 const w1: StockWarehouseRef = { id: "w1", branchId: "b", code: "W1", nameAr: "المستودع الأول", nameEn: "First", isActive: true };
 const w2: StockWarehouseRef = { id: "w2", branchId: "b", code: "W2", nameAr: "المستودع الثاني", nameEn: "Second", isActive: true };
-const caps = (over: Partial<StockDocumentCapabilities> = {}): StockDocumentCapabilities => ({ view: ["w1", "w2"], create: ["w1", "w2"], update: ["w1", "w2"], submit: ["w1", "w2"], approve: ["w1", "w2"], cancel: ["w1", "w2"], ...over });
+const caps = (over: Partial<StockDocumentCapabilities> = {}): StockDocumentCapabilities => ({ view: ["w1", "w2"], create: ["w1", "w2"], update: ["w1", "w2"], submit: ["w1", "w2"], approve: ["w1", "w2"], cancel: ["w1", "w2"], post: ["w1", "w2"], reverse: ["w1", "w2"], ...over });
 const apple: StockItemRef = {
   id: "i1", code: "APPLE", nameAr: "تفاح", nameEn: "Apple",
   units: [{ id: "u-pcs", code: "PCS", nameAr: "قطعة", nameEn: "Piece", decimals: 0, factor: 1, isBase: true }, { id: "u-box", code: "BOX", nameAr: "علبة", nameEn: "Box", decimals: 2, factor: 12, isBase: false }],
@@ -55,7 +55,7 @@ describe("stock documents list", () => {
     expect(within(row).getByText("استلام")).toBeInTheDocument();
     expect(within(row).getByText("معتمد")).toBeInTheDocument();
     expect(within(screen.getByTestId("doc-d2")).getByText(/W1 — المستودع الأول ← W2 — المستودع الثاني/)).toBeInTheDocument();
-    expect(screen.getByTestId("no-posting-note")).toHaveTextContent("لا تغيّر كميات المخزون");
+    expect(screen.getByTestId("no-posting-note")).toHaveTextContent("الاعتماد لا يغيّر المخزون");
     await userEvent.selectOptions(screen.getByLabelText("الحالة"), "2");
     await waitFor(() => expect(client.listStockDocuments).toHaveBeenLastCalledWith(expect.objectContaining({ status: 2, offset: 0, limit: 25 })));
     await userEvent.type(screen.getByLabelText("بحث"), "SR-2026");
@@ -265,6 +265,95 @@ describe("stock documents in English and the Tauri shell", () => {
       await userEvent.click(tab("السطور"));
       await userEvent.click(tab("معلومات عامة"));
       expect(screen.getByLabelText(/^المرجع/)).toHaveValue("T");
+    } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+});
+
+const stockPosting = (over: Record<string, unknown> = {}) => ({
+  id: "p1", documentId: "d1", docType: 1, effectiveDate: "2026-03-10", postedAtUtc: "2026-03-10T09:00:00Z", postedBy: "u1", costOperationId: "o1", accountingVersionId: "v1", journalEntryId: "j1",
+  totalValue: 100.5, accountingState: 1, replayed: false, journalStatus: 1, reversal: null, lines: [{ lineNo: 1, itemId: "i1", warehouseId: "w1", baseQuantity: 24, amount: 100.5 }], ...over,
+});
+const approvedDoc = (over: Partial<StockDocument> = {}) => doc({ status: 3, number: "SR-2026-000001", revision: 5, submittedBy: "other", ...over });
+
+describe("stock document posting (Phase 3.7D)", () => {
+  it("a receipt needs an amount per line before it can be posted, then posts with the document revision as If-Match", async () => {
+    const post = vi.fn().mockResolvedValue(stockPosting());
+    const client = setup({ postStockDocument: post, getStockPosting: vi.fn().mockResolvedValue(null) }, caps(), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    expect(screen.getByTestId("doc-status")).toHaveTextContent("معتمد");
+    await userEvent.click(screen.getByTestId("post"));
+    expect(await screen.findByTestId("posting-error")).toHaveTextContent("أدخل مبلغاً لكل سطر.");                               // refused on the client, nothing was sent
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.getByTestId("not-executed")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("المبلغ"), "100.5");
+    expect(screen.getByTestId("amount-total")).toHaveTextContent("100.5");
+    await userEvent.click(screen.getByTestId("post"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(client.postStockDocument).toHaveBeenCalledWith("d1", 5, [{ lineNo: 1, amount: 100.5 }]));
+  });
+
+  it("an issue posts without amounts (the cost is computed from the stock) and a server refusal is shown in words", async () => {
+    const post = vi.fn().mockRejectedValue(apiError(409, "insufficient_stock"));
+    setup({ postStockDocument: post, getStockPosting: vi.fn().mockResolvedValue(null) }, caps(), [summary({ status: 3, docType: 2 })], approvedDoc({ docType: 2, sourceWarehouseId: "w1", targetWarehouseId: null }));
+    await openDoc();
+    expect(screen.queryByLabelText("المبلغ")).toBeNull();
+    expect(screen.getByText("تُحسب تكلفة السطور تلقائياً من المخزون (التكلفة الفعلية) عند الترحيل.")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("post"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("d1", 5, undefined));
+    expect(await screen.findByTestId("form-error")).toHaveTextContent("الكمية المتاحة لا تكفي");
+  });
+
+  it("an executed document shows its accounting state, journal and lines, cannot be cancelled, and is reversed with a date and a reason", async () => {
+    const reverse = vi.fn().mockResolvedValue(stockPosting({ accountingState: 5, reversal: { id: "r1", costOperationId: "o2", journalAction: 1, journalEntryId: "j1", effectiveDate: "2026-03-20", reversedAtUtc: "2026-03-20T09:00:00Z", reversedBy: "u1", reason: "x" } }));
+    setup({ reverseStockDocument: reverse, getStockPosting: vi.fn().mockResolvedValue(stockPosting()) }, caps(), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    expect(screen.queryByTestId("post")).toBeNull();
+    expect(screen.queryByRole("button", { name: "إلغاء المستند" })).toBeNull();                                                   // an executed document is never cancelled
+    await userEvent.click(screen.getByRole("tab", { name: "الترحيل" }));
+    expect(screen.getByTestId("accounting-state")).toHaveTextContent("بانتظار القيد");
+    expect(screen.getByTestId("posting-journal")).toHaveTextContent("j1");
+    expect(screen.getByTestId("posting-journal")).toHaveTextContent("مسودة");
+    expect(screen.getByTestId("posting-total")).toHaveTextContent("100.5");
+    await userEvent.click(screen.getByTestId("reverse"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "تأكيد" }));                      // no reason: refused on the client
+    expect(await screen.findByText("تاريخ العكس وسببه مطلوبان.")).toBeInTheDocument();
+    expect(reverse).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("reverse"));
+    const dlg = await screen.findByRole("dialog");
+    await userEvent.type(within(dlg).getByLabelText(/سبب العكس/), "أُدخل مرتين");
+    await userEvent.click(within(dlg).getByRole("button", { name: "تأكيد" }));
+    await waitFor(() => expect(reverse).toHaveBeenCalledWith("d1", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), "أُدخل مرتين"));
+  });
+
+  it("without the post and reverse permissions the actions are absent, and a reversed document shows its reversal", async () => {
+    setup({ getStockPosting: vi.fn().mockResolvedValue(null) }, caps({ post: [], reverse: [] }), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    expect(screen.queryByTestId("post")).toBeNull();
+    expect(screen.queryByTestId("reverse")).toBeNull();
+  });
+
+  it("a reversed posting shows the reversal and offers no further action", async () => {
+    setup({ getStockPosting: vi.fn().mockResolvedValue(stockPosting({ accountingState: 5, reversal: { id: "r1", costOperationId: "o2", journalAction: 2, journalEntryId: "j2", effectiveDate: "2026-03-20", reversedAtUtc: "2026-03-20T09:00:00Z", reversedBy: "u1", reason: "wrong supplier" } })) }, caps(), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    await userEvent.click(screen.getByRole("tab", { name: "الترحيل" }));
+    expect(screen.getByTestId("reversal-info")).toHaveTextContent("أُنشئ قيد عكسي مسودة");
+    expect(screen.getByTestId("reversal-info")).toHaveTextContent("wrong supplier");
+    expect(screen.queryByTestId("reverse")).toBeNull();
+  });
+
+  it("works in English (LTR) and inside the Tauri shell", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      setup({ getStockPosting: vi.fn().mockResolvedValue(stockPosting({ accountingState: 3, journalStatus: 4 })) }, caps(), [summary({ status: 3 })], approvedDoc());
+      await go("#/inventory/stock-documents");
+      await userEvent.click(await screen.findByRole("button", { name: "View" }));
+      await screen.findByTestId("stock-editor");
+      await userEvent.click(screen.getByRole("tab", { name: "Posting" }));
+      expect(screen.getByTestId("accounting-state")).toHaveTextContent("Journal entry posted");
+      expect(screen.getByTestId("posting-journal")).toHaveTextContent("Posted");
+      expect(document.documentElement.dir).toBe("ltr");
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
   });
 });
