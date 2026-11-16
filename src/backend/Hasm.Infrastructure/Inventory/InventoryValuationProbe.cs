@@ -17,8 +17,9 @@ namespace Hasm.Infrastructure.Inventory;
 /// <item>the value of the costing ledger (the sum of the signed values of every costing entry dated up to the period end) differs from the balance of the inventory accounts in the General Ledger (posted and reversed
 /// entries dated up to the period end). That difference is exactly the stock movement whose entry is still a draft or pending approval, a reversal entry not posted yet, or a manual entry on an inventory account.</item>
 /// </list>
-/// A company that has no stock posting yet is not affected: the inventory module is not in use, so no valuation can differ (the check never invents a difference for opening balances kept in the ledger only; opening stock
-/// is brought in by the import phase). The result is exact decimal arithmetic in the database and the same connection and transaction as the close, so it cannot be stale.
+/// A company that has no stock posting up to the period end is not affected: the inventory module is not in use. KNOWN LIMITATION (accepted, tracked for Phase 3.27): once a stock posting exists, any ledger balance on an
+/// inventory account that the costing ledger does not know about (an opening balance kept only in the ledger, a manual entry) counts as a difference until the opening stock is brought into the costing ledger by the opening-stock
+/// import or the entry is corrected. The result is exact decimal arithmetic in the database and the same connection and transaction as the close, so it cannot be stale.
 /// </summary>
 public sealed class InventoryValuationPeriodCloseProbe : IPeriodCloseProbe
 {

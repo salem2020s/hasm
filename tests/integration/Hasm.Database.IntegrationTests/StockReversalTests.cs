@@ -121,7 +121,7 @@ public class StockReversalTests : StockReversalTestBase
         Fails(await Posting.ReverseAsync(Admin.Id, Company.Id, Guid.NewGuid(), new StockReverseInput("2026-03-12", "x")), ConfigStatus.NotFound, "document_not_found");
         var march = await March();
         Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
-        Assert.False((await Reverse(receipt, "2026-03-25")).IsOk);                                                                  // the reversal date must lie in an open period
+        Fails(await Reverse(receipt, "2026-03-25"), ConfigStatus.Conflict, "fiscal_period_soft_closed");                             // the reversal date must lie in an open period
     }
 
     [PostgresFact]
@@ -213,5 +213,89 @@ public class StockReversalApiTests : StockReversalTestBase
         var (viewer, _) = await Member([PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null);
         Assert.Equal(System.Net.HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, url, body, await SignIn(viewer))).Status);
         Assert.Equal(2, (await Send(HttpMethod.Get, "/api/v1/company/stock-documents/capabilities", cookie: cookie)).Json.GetProperty("reverse").GetArrayLength());
+    }
+}
+
+/// <summary>Scenarios added after the independent review of Phase 3.7C: every journal state at reversal time, transfers, journals reversed outside the stock reversal, and the period rule for unposted journals.</summary>
+public class StockReversalScenarioTests : StockReversalTestBase
+{
+    [PostgresFact]
+    public async Task A_transfer_is_reversed_without_any_journal_and_the_costs_return_exactly()
+    {
+        await PreparePosting();
+        Ok(await Post(await Approved(Receipt(W1, "2026-03-10", L(Avg, Pcs, 10))), Amounts(100m)));
+        var before = (await Pos(Avg)).Value;
+        var transfer = await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 4)));
+        var t = Ok(await Post(transfer));
+        Assert.Equal(40m, (await Pos(Avg, W2)).Value);
+        var r = Ok(await Reverse(transfer, "2026-03-12", "wrong destination"));
+        Assert.Equal((0, (int)StockAccountingState.Reversed, (Guid?)null), (r.Reversal!.JournalAction, r.AccountingState, r.Reversal.JournalEntryId));
+        Assert.Equal((before, 0m), ((await Pos(Avg)).Value, (await Pos(Avg, W2)).Quantity));
+        Assert.Empty(await Cost.ReconcileAsync(Company.Id));
+        Assert.Equal(t.Id, r.Id);
+    }
+
+    [PostgresFact]
+    public async Task A_journal_entry_that_is_submitted_or_approved_is_cancelled_by_the_reversal()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        var p = Ok(await Post(doc, Amounts(100m)));
+        var d = (await Journal.GetAsync(Company.Id, p.JournalEntryId!.Value))!;
+        var submitted = Ok(await Journal.SubmitAsync(Admin.Id, Company.Id, d.Header.Id, d.Header.Revision));
+        Assert.NotEqual(JournalStatus.Draft, submitted.Header.Status);
+        var r = Ok(await Reverse(doc));
+        Assert.Equal(1, r.Reversal!.JournalAction);
+        Assert.Equal(JournalStatus.Cancelled, (await Journal.GetAsync(Company.Id, p.JournalEntryId!.Value))!.Header.Status);
+    }
+
+    [PostgresFact]
+    public async Task Once_the_reversal_entry_is_posted_the_original_is_reversed_and_the_period_can_close()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        var p = Ok(await Post(doc, Amounts(100m)));
+        await PostJournal(p);
+        var r = Ok(await Reverse(doc, "2026-03-20", "customer returned the goods"));
+        var march = await March();
+        Fails(await CloseCalendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision), ConfigStatus.Conflict, "period_close_blocked");     // the reversal entry is still a draft
+        await PostJournalEntry(r.Reversal!.JournalEntryId!.Value);
+        Assert.Equal(JournalStatus.Reversed, (await Journal.GetAsync(Company.Id, p.JournalEntryId!.Value))!.Header.Status);
+        Ok(await CloseCalendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));                                                         // costing and ledger agree again
+    }
+
+    [PostgresFact]
+    public async Task A_journal_reversed_outside_the_stock_reversal_fails_the_posting_until_the_stock_is_reversed_too()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        var p = Ok(await Post(doc, Amounts(100m)));
+        await PostJournal(p);
+        var original = (await Journal.GetAsync(Company.Id, p.JournalEntryId!.Value))!;
+        var draft = Ok(await Journal.ReverseAsync(Admin.Id, Company.Id, original.Header.Id, original.Header.Revision, new ReversalInput(new DateOnly(2026, 3, 15), null)));
+        await PostJournalEntry(draft.Header.Id);
+        Assert.Equal((int)StockAccountingState.Failed, (await Posting.GetAsync(Company.Id, doc.Id))!.AccountingState);
+        var march = await March();
+        Fails(await CloseCalendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision), ConfigStatus.Conflict, "period_close_blocked");
+        var r = Ok(await Reverse(doc, "2026-03-20", "repair"));                                                                                          // the stock side can still be repaired
+        Assert.Equal((1, (int)StockAccountingState.Reversed), (r.Reversal!.JournalAction, r.AccountingState));
+        Ok(await CloseCalendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
+    }
+
+    [PostgresFact]
+    public async Task An_unposted_journal_needs_the_reversal_in_the_same_period_while_a_posted_one_may_be_reversed_later()
+    {
+        await PreparePosting();
+        var unposted = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 5)));
+        Ok(await Post(unposted, Amounts(50m)));
+        var counts = await Counts();
+        Invalid(await Reverse(unposted, "2026-04-05", "later"), "effectiveDate", "must_stay_in_posting_period");
+        Assert.Equal(counts, await Counts());
+        var posted = await Approved(Receipt(W1, "2026-03-11", L(Avg, Pcs, 5)));
+        var p = Ok(await Post(posted, Amounts(70m)));
+        await PostJournal(p);
+        var r = Ok(await Reverse(posted, "2026-04-05", "later is fine for a posted entry"));
+        Assert.Equal(2, r.Reversal!.JournalAction);
+        Ok(await Reverse(unposted, "2026-03-25", "same period"));                                                                          // the same-period reversal of the unposted entry works
     }
 }
