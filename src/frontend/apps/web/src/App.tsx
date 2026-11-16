@@ -19,6 +19,7 @@ import { InventoryGroupsPage } from "./pages/InventoryGroups";
 import { InventoryUnitsPage } from "./pages/InventoryUnits";
 import { StockDocumentsPage } from "./pages/StockDocuments";
 import { InventoryAccountingPage } from "./pages/InventoryAccounting";
+import { StockBalancesPage } from "./pages/StockBalances";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
@@ -79,6 +80,7 @@ const ROUTES: RouteDef[] = [
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
   { path: "/accounting/report-center", anyScope: "company.ledgerreports.view", element: <ReportCenterPage /> },
   { path: "/inventory/accounting", permission: "company.inventoryaccounting.view", element: <InventoryAccountingPage /> },
+  { path: "/inventory/stock-balances", anyScope: "company.stockbalance.view", element: <StockBalancesPage /> },
   { path: "/inventory/stock-documents", anyScope: "company.stockdocs.view", element: <StockDocumentsPage /> },
   { path: "/inventory/items", permission: "company.items.view", element: <InventoryItemsPage /> },
   { path: "/inventory/groups", anyOf: ["company.itemgroups.view", "company.items.view"], element: <InventoryGroupsPage /> },
@@ -141,6 +143,7 @@ function Shell() {
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p))).map(({ id, label }) => ({ id, label }));
     if (auth.can("company.inventoryaccounting.view")) inventory.push({ id: "/inventory/accounting", label: t("nav.inventory_accounting") });
     if (auth.canAny("company.stockdocs.view")) inventory.push({ id: "/inventory/stock-documents", label: t("nav.stock_documents") });
+    if (auth.canAny("company.stockbalance.view")) inventory.push({ id: "/inventory/stock-balances", label: t("nav.stock_balances") });
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
