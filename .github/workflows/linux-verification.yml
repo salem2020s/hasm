@@ -1,0 +1,145 @@
+name: Linux verification
+
+# Only needed in the self-hosted runner mode (HASM_RUNNER_MODE=self-hosted): in the default hosted mode the pull-request jobs already run on Linux and these jobs are skipped (except on demand).
+# The Linux counterpart of the self-hosted Windows checks (SRS 2.4: PostgreSQL and the backend must also work on Linux). These jobs run on GitHub-hosted runners and therefore cost billed minutes,
+# so they are NOT part of every pull request: they run after every merge to main (build, unit tests, front-end tests), weekly (including the full PostgreSQL integration suite on a Linux service
+# container and the browser smoke tests on Chromium) and on demand (workflow_dispatch). They are not required checks of a pull request; a failure here blocks the next phase until fixed.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-verification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-build-test:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.HASM_RUNNER_MODE == 'self-hosted' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+      - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm run typecheck
+        working-directory: src/frontend
+      - run: npm test
+        working-directory: src/frontend
+      - run: npm run build
+        working-directory: src/frontend
+
+  linux-postgres-integration:
+    # Weekly and on demand only (about 20 billed minutes per run).
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.HASM_RUNNER_MODE == 'self-hosted' && github.event_name == 'schedule') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Throwaway bootstrap superuser of an ephemeral, job-local container; used only to create the restricted test role below. Not a real secret and unreachable outside this runner.
+          POSTGRES_USER: ci_bootstrap
+          POSTGRES_PASSWORD: ci-bootstrap-throwaway
+          # The bootstrap database carries the disposable test prefix so the cluster-identity gate accepts the inventory.
+          POSTGRES_DB: hasm_test_bootstrap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_bootstrap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HASM_REQUIRE_PG_TESTS: "1"
+      HASM_REQUIRE_PG_ROLE_TESTS: "1"
+      HASM_TEST_PG_DISPOSABLE: yes-this-server-is-disposable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Create restricted test-only database roles
+        run: |
+          set -euo pipefail
+          TEST_PW="$(openssl rand -hex 24)"
+          ROLE_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::${TEST_PW}"
+          echo "::add-mask::${ROLE_PW}"
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -v pw="${TEST_PW}" -v rpw="${ROLE_PW}" <<'SQL'
+          CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD :'pw';
+          CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD :'rpw';
+          SQL
+          FINGERPRINT="$(openssl rand -hex 32)"
+          echo "::add-mask::${FINGERPRINT}"
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE hasm_test_cluster_identity"
+          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d hasm_test_cluster_identity -v ON_ERROR_STOP=1 -v fp="${FINGERPRINT}" <<'SQL'
+          CREATE TABLE cluster_identity(fingerprint text NOT NULL, purpose text NOT NULL);
+          INSERT INTO cluster_identity VALUES (:'fp', 'hasm-disposable-test-cluster');
+          REVOKE ALL ON cluster_identity FROM PUBLIC;
+          GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;
+          SQL
+          echo "HASM_TEST_PG_CLUSTER_FINGERPRINT=${FINGERPRINT}" >> "$GITHUB_ENV"
+          INVENTORY="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SELECT datname FROM pg_database ORDER BY 1" | tr '\n' ' ')"
+          echo "Database inventory before tests: ${INVENTORY}"
+          [ "${INVENTORY}" = "hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1 " ] || { echo "::error::Unexpected database inventory in the disposable CI service"; exit 1; }
+          echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
+          echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
+
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+
+      - name: Run PostgreSQL integration tests
+        run: >
+          dotnet test tests/integration/Hasm.Database.IntegrationTests
+          --no-build --configuration Release
+          --logger "trx;LogFileName=pg-integration.trx"
+          --results-directory "$RUNNER_TEMP/trx"
+
+      - name: Verify the registered PostgreSQL tests executed and passed (none skipped)
+        run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
+
+  linux-e2e-smoke:
+    # Weekly and on demand only: the browser smoke tests on the Playwright Chromium of a Linux image.
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.HASM_RUNNER_MODE == 'self-hosted' && github.event_name == 'schedule') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test

@@ -1,16 +1,25 @@
 name: Desktop
 
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on GitHub-hosted runners (the default, while free minutes remain). Set HASM_RUNNER_MODE=self-hosted to run the same checks, under the same check names,
+# on the repository's self-hosted Windows runner instead (desktop-selfhosted.yml); the job of the other mode is skipped. See docs/CI-RUNNER.md.
+
 on:
   push:
     branches: [main]
   pull_request:
-    paths: ["src/desktop/**", "src/frontend/**", "assets/branding/**", ".github/workflows/desktop.yml"]
+    paths: ["src/desktop/**", "src/frontend/**", "assets/branding/**", ".github/workflows/desktop.yml", ".github/workflows/desktop-selfhosted.yml"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   desktop-build:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 45
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
