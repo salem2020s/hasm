@@ -32,7 +32,7 @@ jobs:
       - name: Rust toolchain (stable, MSVC) via rustup in the runner account profile (the dtolnay action needs bash on PATH, which a Windows service account does not have)
         run: |
           $ErrorActionPreference = 'Stop'
-          $cargoBin = Join-Path $env:USERPROFILE '.cargoin'
+          $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
           if (-not (Test-Path (Join-Path $cargoBin 'rustup.exe'))) {
             Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile (Join-Path $env:RUNNER_TEMP 'rustup-init.exe')
             & (Join-Path $env:RUNNER_TEMP 'rustup-init.exe') -y --default-toolchain stable --profile minimal --no-modify-path
