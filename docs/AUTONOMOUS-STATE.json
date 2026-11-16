@@ -76,7 +76,7 @@
   "environment": {
     "repository": "public since 2026-11-16",
     "runnerMode": "HASM_RUNNER_MODE=hosted (self-hosted vm-test is a disabled fallback, docs/CI-RUNNER.md)",
-    "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; path-filtered checks are verified by tools/verify/verify-head.js",
+    "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
   }
 }

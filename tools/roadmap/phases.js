@@ -177,7 +177,7 @@ for (const x of PH) if (x.id === "5.1" || x.id === "5.2") x.pre = [...new Set([.
 for (const x of PH) if (x.id === "5.3") x.pre = ["5.1", "5.2", ...allBefore];
 const S = (id, s) => { PH.find(x => x.id === id).state = s; };
 S("3.7A", "MERGED (PR #31, merge commit 1b27ad2)");
-S("4.0", "MERGED (PR #32, merge commit 7e05052; full-stack E2E, Desktop smoke test and a GitHub ruleset are NOT built)");
+S("4.0", "MERGED (PR #32, merge commit 7e05052; full-stack E2E, Desktop smoke test are NOT built; a GitHub ruleset ProtectMain was added on 2026-11-16 once the repository became public)");
 S("3.7B", "MERGED (PR #33, merge commit 5e4d627)");
 S("3.7C", "MERGED (PR #35, merge commit 484b4be)");
 S("3.7D", "MERGED (PR #37, merge commit ab60b55)");

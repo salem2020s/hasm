@@ -61,7 +61,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 3.25 | Visual report designer | High | 3.23 | company |
 | 3.26 | Document and print designer | Medium | 3.15, 3.16, 3.12 | company |
 | 3.27 | Opening balances and legacy migration | Critical | 3.17, 3.8B, 3.9C | company |
-| 4.0 | Verification infrastructure — **MERGED (PR #32, merge commit 7e05052; full-stack E2E, Desktop smoke test and a GitHub ruleset are NOT built)** | Medium | 3.7A | none |
+| 4.0 | Verification infrastructure — **MERGED (PR #32, merge commit 7e05052; full-stack E2E, Desktop smoke test are NOT built; a GitHub ruleset ProtectMain was added on 2026-11-16 once the repository became public)** | Medium | 3.7A | none |
 | 4.1 | Identity completion | High | 3.7D | system |
 | 4.2 | Licensing and Trial | Critical | 3.17 | system |
 | 4.3 | Backup and restore | Critical | 3.12, 3.9A | none |
