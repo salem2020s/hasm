@@ -1,8 +1,8 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-15",
+  "updatedAt": "2026-11-16",
   "main": {
-    "verifiedHead": "1b27ad2",
+    "verifiedHead": "9c43fc9",
     "note": "verify against GitHub at session start; a checkpoint never proves a merge"
   },
   "baseline": {
@@ -14,48 +14,56 @@
   },
   "mergedRecently": [
     {
-      "pr": 27,
-      "phase": "3.6",
-      "mergeCommit": "2d2f187"
+      "pr": 32,
+      "phase": "4.0",
+      "mergeCommit": "7e05052"
     },
     {
-      "pr": 28,
-      "phase": "autonomous tracker",
-      "mergeCommit": "80eea1f"
+      "pr": 33,
+      "phase": "3.7B",
+      "mergeCommit": "5e4d627"
     },
     {
-      "pr": 29,
-      "phase": "roadmap audit",
-      "mergeCommit": "99c99f7"
+      "pr": 35,
+      "phase": "3.7C",
+      "mergeCommit": "484b4be"
     },
     {
-      "pr": 30,
-      "phase": "roadmap review fixes",
-      "mergeCommit": "f1a751d"
+      "pr": 36,
+      "phase": "CI hybrid runner mode",
+      "mergeCommit": "33b2251"
     },
     {
-      "pr": 31,
-      "phase": "3.7A",
-      "mergeCommit": "1b27ad2",
-      "headTested": "c720107"
+      "pr": 39,
+      "phase": "Playwright git-info fix",
+      "mergeCommit": "855b013"
+    },
+    {
+      "pr": 37,
+      "phase": "3.7D",
+      "mergeCommit": "ab60b55"
+    },
+    {
+      "pr": 40,
+      "phase": "3.8A",
+      "mergeCommit": "9c43fc9"
     }
   ],
   "active": {
-    "phase": "4.0",
-    "branch": "feature/phase-4-0-verification",
-    "pr": 32,
-    "state": "in review: CI running on the PR head",
+    "phase": "3.8B",
+    "branch": null,
+    "pr": null,
+    "state": "not started",
     "knownIssues": [
-      "JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied failed once in a local full run (not reproduced in 12 isolated runs, a second local full run or CI); cause unknown, under observation, NOT resolved",
-      "Playwright bundled Chromium cannot be installed locally (binary removed after download); local E2E uses installed Chrome (E2E_CHANNEL=chrome); CI uses ubuntu-24.04 with Chromium",
-      "Full-stack E2E (real API and PostgreSQL) is not built"
+      "JournalAccessTests posting_and_approval_are_never_implied failed once locally (not reproduced; unresolved)",
+      "two dashboard.test.tsx tests flaky under CPU load (pass in isolation)"
     ]
   },
   "next": [
-    "3.7B",
-    "3.7C",
-    "3.7D",
-    "3.8A"
+    "3.8B",
+    "3.8C",
+    "3.8D",
+    "3.9A"
   ],
   "openDecisions": [
     "OD-1",
@@ -66,14 +74,9 @@
     "T-2"
   ],
   "environment": {
-    "branchProtectionApi": "unavailable (403, private repository on a plan without it)",
-    "ciWorkflows": [
-      "backend",
-      "frontend",
-      "desktop"
-    ],
-    "ciPathFiltered": true,
-    "documentationOnlyPrsRunNoChecks": true
-  },
-  "policyNote": "CLAUDE.md still says phases STOP before merging and the owner merges manually; the owner's later conversation directive authorizes autonomous merging when every gate holds. The two are not yet reconciled in CLAUDE.md (owner action)."
+    "repository": "public since 2026-11-16",
+    "runnerMode": "HASM_RUNNER_MODE=hosted (self-hosted vm-test is a disabled fallback, docs/CI-RUNNER.md)",
+    "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
+    "ciPathFiltered": true
+  }
 }
