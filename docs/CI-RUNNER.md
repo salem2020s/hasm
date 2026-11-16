@@ -53,11 +53,11 @@ The test safety gate (`PostgresClusterIdentity`) accepts this cluster only when 
 6. When the runner is offline, merges wait. When more capacity or stronger isolation is needed, use a dedicated VM (or a second runner account) for CI and move the label set accordingly.
 
 ## Resolved: Playwright smoke tests hung in pull-request jobs on vm-test
-Status (2026-11-16): **root cause found and fixed** (PR #39); the tests are never skipped or weakened in either mode.
+Status (2026-11-16): **root cause identified (strongly supported by the A/B runs below; the stalled git process itself was not captured) and fixed** (PR #39); the tests are never skipped or weakened in either mode.
 
 Root cause: in `pull_request` jobs Playwright's git-info plugin (`playwright/lib/plugins/gitCommitInfoPlugin.js`) reads `GITHUB_EVENT_PATH`, learns the PR base sha and runs `git fetch origin <base sha>` plus `git diff` to attach the PR diff to the report. The checkout uses `persist-credentials: false`, so on the Windows runner the fetch of the private repository waits for a credential that never comes and the run never starts (no web server, no browser, no output). A push event has no PR base sha, so the fetch is skipped and the same command passed in 6.5 s.
 
-Evidence (diagnostic pull request #38, closed, branch `ci/diag-pr`): the unmodified control run hung for the full 60 s with only a `conhost.exe` as descendant; with only `GITHUB_EVENT_PATH` removed the same command finished in 6.8 s; with all `GITHUB_*` variables removed it finished in 6.5 s. After the fix (`captureGitInfo: { commit: false, diff: false }` in `src/frontend/playwright.config.ts`, report metadata only) `e2e-smoke` passed in a pull-request job on vm-test in 1 m 5 s (PR #39). The earlier hypotheses (merge ref checkout, leftover process, antivirus) were wrong or irrelevant.
+Evidence (diagnostic pull request #38, closed, branch `ci/diag-pr`): the unmodified control run hung for the full 60 s with only a `conhost.exe` as descendant; with only `GITHUB_EVENT_PATH` removed the same command finished in 6.8 s; with all `GITHUB_*` variables removed it finished in 6.5 s. After the fix (`captureGitInfo: { commit: false, diff: false }` in `src/frontend/playwright.config.ts`, report metadata only) `e2e-smoke` passed in a pull-request job on vm-test in 1 m 5 s (PR #39). The earlier hypotheses (merge ref checkout, leftover process, antivirus) are not needed to explain it (antivirus was never tested directly).
 
 Kept: the hang detector, the `playwright-diagnostics` artifact, trace and screenshot configuration.
 
