@@ -62,4 +62,8 @@ jobs:
         run: |
           if (-not (Test-Path 'C:\Program Files\Google\Chrome\Application\chrome.exe')) { throw 'Google Chrome is not installed on the runner' }
       - run: npm ci
-      - run: npx playwright test
+      - name: Browser smoke tests (Playwright, installed Chrome)
+        timeout-minutes: 8
+        env:
+          DEBUG: pw:webserver
+        run: npx playwright test --reporter=list
