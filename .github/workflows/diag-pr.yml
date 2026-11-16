@@ -53,5 +53,7 @@ jobs:
           Write-Host "event=$env:GITHUB_EVENT_NAME ref=$env:GITHUB_REF sha=$env:GITHUB_SHA"
           Write-Host "git:"; git -C .. log -1 --format=%H%n%P%n%s
           Write-Host "env names:"; (Get-ChildItem env: | Where-Object { $_.Name -match '^(GITHUB_|CI|RUNNER_|PW|PLAYWRIGHT|NODE|DEBUG)' } | ForEach-Object { $_.Name }) -join ' '
-          Run 'A-as-is' 90 @{} @()
-          Run 'B-no-github-env' 90 @{} @('GITHUB_ACTIONS','GITHUB_EVENT_PATH','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_SHA','GITHUB_BASE_REF','GITHUB_HEAD_REF')
+          Run 'C-unset-event-path' 45 @{} @('GITHUB_EVENT_PATH')
+          Run 'D-unset-refs' 45 @{} @('GITHUB_BASE_REF','GITHUB_HEAD_REF')
+          Run 'E-unset-actions' 45 @{} @('GITHUB_ACTIONS')
+          Run 'F-unset-ci' 45 @{} @('CI')
