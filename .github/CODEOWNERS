@@ -1,0 +1,7 @@
+# Owner review is required for CI and verification wiring (effective once a ruleset enforces code-owner review).
+/.github/ @salem2020s
+/tools/verify/ @salem2020s
+/tools/roadmap/ @salem2020s
+/docs/SRS.md @salem2020s
+/docs/DECISIONS.md @salem2020s
+/CLAUDE.md @salem2020s

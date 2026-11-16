@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  build-test:
+  frontend-build-test:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,3 +26,21 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  e2e-smoke:
+    # Phase 4.0: browser smoke tests of the production bundle (no backend needed); full-stack E2E is a later extension.
+    # Pinned: Playwright 1.56 does not support the ubuntu-latest image (ubuntu 26.04).
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
