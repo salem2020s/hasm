@@ -25,7 +25,7 @@ Switching is manual and explicit: `gh variable set HASM_RUNNER_MODE --body self-
 
 Cost: the hosted mode bills roughly 50 to 60 minutes per full pull-request run (about 25 of them for the Windows desktop build, which is path filtered). Keep `cancel-in-progress` (a push cancels the superseded run), avoid needless pushes, and run focused tests locally. In `self-hosted` mode pull requests bill nothing; the Linux verification bills about 4 minutes per merge plus about 22 per week.
 
-The Playwright smoke tests run on hosted Linux by default. On vm-test the Playwright CLI is started directly with `node` (not through `npx`), detached with redirected output and a hang detector; investigation continues (see the pull request) and the tests are never skipped or weakened in either mode.
+The Playwright smoke tests run on hosted Linux by default. On vm-test they still hang in pull-request jobs: that issue is **unresolved** and documented below; the tests are never skipped or weakened in either mode.
 
 ## Cost controls in the workflows
 * `concurrency` with `cancel-in-progress` for pull requests only: a newer push cancels the superseded run; pushes to `main` are never cancelled.
@@ -52,5 +52,16 @@ The test safety gate (`PostgresClusterIdentity`) accepts this cluster only when 
 5. Google Chrome (installed machine-wide) is used by the browser smoke tests; the Playwright-downloaded Chromium is not used on the runner.
 6. When the runner is offline, merges wait. When more capacity or stronger isolation is needed, use a dedicated VM (or a second runner account) for CI and move the label set accordingly.
 
+## Open issue: Playwright smoke tests hang on vm-test (NOT fixed, not silently closed)
+Status (2026-11-16): **unresolved on the self-hosted runner**. The smoke tests (`src/frontend/e2e`, 3 tests) run on GitHub-hosted Linux (Chromium) in the default `hosted` mode; they are never skipped or weakened in either mode.
+
+Evidence collected:
+* In pull-request jobs on vm-test the step "Browser smoke tests" ran for the full 9-minute guard: one `node.exe ...\@playwright\test\cli.js test --reporter=list` process stayed alive, with no child process (no vite, no Chrome) and no output at all, not even `DEBUG=pw:webserver` lines. This happened with `npx playwright test` (attached and detached) and with the CLI started directly with `node`, on heads `ed154e6` and `956189b`. The same command had also hung in the first runs.
+* The identical invocation passes in 6.5 s (3 tests passed, installed Google Chrome) in a push-triggered diagnostic job on the same runner and account (`NT AUTHORITY\NETWORK SERVICE`, branch `ci/diag-e2e`, variants: exact step, without DEBUG, `DEBUG=pw:*`, one test), and from a scheduled task under the same account (a scratch copy of the frontend). `npx playwright --version`, `test --list` and the full test also passed there.
+* So the cause is not Chrome, the web server, the assertions or a headless problem: the run stalls before the web server starts, and only in the pull-request jobs. Open hypotheses (untested): the pull-request checkout (merge ref) or its environment differs from the push job; a leftover process or file lock from the job that ran just before; real-time antivirus scanning of freshly installed `node_modules`.
+* Kept for the next investigation: the hang detector (process tree printout, `taskkill`), the log upload as artifact `playwright-diagnostics`, `trace: retain-on-failure` and screenshots in `playwright.config.ts`.
+
+Next steps (owner-visible, after Release-1 work is not blocked by it): run the self-hosted mode on a pull request with the diagnostic variants (full environment dump, process list before the step, `node --cpu-prof` / `--report-on-signal` on the hung process), compare the push and pull-request environments, and exclude antivirus scanning of the runner work folder.
+
 ## Verified on this migration
-See the pull request description for the exact runs (job names, durations, head SHA) on vm-test.
+See the pull request description and `docs/review-records/PR-36-ci-runner.md` for the exact runs (job names, durations, head SHA).
