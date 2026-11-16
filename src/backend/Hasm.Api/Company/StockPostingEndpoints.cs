@@ -31,11 +31,13 @@ public static class StockPostingEndpoints
 
     public sealed record PostLineBody(int? LineNo, decimal? Amount);
     public sealed record PostBody(List<PostLineBody>? Lines);
+    public sealed record ReverseBody(string? EffectiveDate, string? Reason);
 
     private static object Body(StockPostingView p) => new
     {
         id = p.Id, documentId = p.DocumentId, docType = p.DocType, effectiveDate = p.EffectiveDate, postedAtUtc = p.PostedAtUtc, postedBy = p.PostedBy, costOperationId = p.CostOperationId,
-        accountingVersionId = p.AccountingVersionId, journalEntryId = p.JournalEntryId, totalValue = p.TotalValue, accountingState = p.AccountingState, replayed = p.Replayed,
+        accountingVersionId = p.AccountingVersionId, journalEntryId = p.JournalEntryId, totalValue = p.TotalValue, accountingState = p.AccountingState, replayed = p.Replayed, journalStatus = p.JournalStatus,
+        reversal = p.Reversal is null ? null : new { id = p.Reversal.Id, costOperationId = p.Reversal.CostOperationId, journalAction = p.Reversal.JournalAction, journalEntryId = p.Reversal.JournalEntryId, effectiveDate = p.Reversal.EffectiveDate, reversedAtUtc = p.Reversal.ReversedAtUtc, reversedBy = p.Reversal.ReversedBy, reason = p.Reversal.Reason },
         lines = p.Lines.Select(l => new { lineNo = l.LineNo, itemId = l.ItemId, warehouseId = l.WarehouseId, baseQuantity = l.BaseQuantity, amount = l.Amount }),
     };
 
@@ -44,6 +46,7 @@ public static class StockPostingEndpoints
         var g = app.MapGroup("/api/v1/company/stock-documents/{id:guid}/posting").RequireAuthorization();
         g.MapGet("", Get);
         g.MapPost("", Post).WithMetadata(new BodyLimit());
+        app.MapPost("/api/v1/company/stock-documents/{id:guid}/reversal", Reverse).RequireAuthorization().WithMetadata(new BodyLimit());
     }
 
     private static async Task<IResult> Get(Guid id, HttpContext http, AccessService access, StockPostingManagementService svc)
@@ -53,6 +56,13 @@ public static class StockPostingEndpoints
         var r = await svc.GetAsync(actor!.UserId, actor.CompanyId, id, http.RequestAborted);
         if (r.Status == ConfigStatus.Ok && r.Value is null) return CompanyConfigurationEndpoints.Error(404, "not_posted");
         return CompanyConfigurationEndpoints.Map(r, p => Body(p!));
+    }
+
+    private static async Task<IResult> Reverse(Guid id, ReverseBody? body, HttpContext http, AccessService access, StockPostingManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.ReverseAsync(actor!.UserId, actor.CompanyId, id, new StockReverseInput(body?.EffectiveDate, body?.Reason), http.RequestAborted), Body);
     }
 
     private static async Task<IResult> Post(Guid id, PostBody? body, HttpContext http, AccessService access, StockPostingManagementService svc)
