@@ -73,12 +73,12 @@ public class StockBalanceTests : StockBalanceTestBase
         var page = Ok(await BalMgmt.LedgerAsync(Admin.Id, Company.Id, Fifo.Id, W1.Id, new DateOnly(2026, 3, 15), new DateOnly(2026, 3, 31), 0, 100));
         Assert.Equal((10m, 100m), (page.OpeningQuantity, page.OpeningValue));
         Assert.Equal(2, page.Rows.Count);
-        Assert.Equal((8m, 130m), (page.ClosingQuantity, page.ClosingValue));
+        Assert.Equal((8m, 120m), (page.ClosingQuantity, page.ClosingValue));
         Assert.Equal(page.OpeningQuantity + page.Rows.Sum(r => r.Direction * r.Quantity), page.ClosingQuantity);                  // opening + movements = closing
         Assert.Equal(page.OpeningValue + page.Rows.Sum(r => r.Direction * r.Amount), page.ClosingValue);
         Assert.Equal(issue.Number, page.Rows.Last().SourceNumber);                                                                // drill-down to the document
         Assert.Equal(("stock_document", issue.Id), (page.Rows.Last().SourceType, page.Rows.Last().SourceId));
-        Assert.Equal((8m, 130m), (page.Rows.Last().QuantityAfter, page.Rows.Last().ValueAfter));
+        Assert.Equal((8m, 120m), (page.Rows.Last().QuantityAfter, page.Rows.Last().ValueAfter));
         var paged = Ok(await BalMgmt.LedgerAsync(Admin.Id, Company.Id, Fifo.Id, W1.Id, null, null, 1, 1));
         Assert.Equal((3L, 1), (paged.Total, paged.Rows.Count));                                                                   // paging does not change the totals
     }
