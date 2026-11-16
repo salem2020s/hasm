@@ -141,6 +141,7 @@ public sealed partial class PermissionCatalog
         // Inventory accounting configuration (3.7A): which ledger accounts hold inventory and take the other side of stock movements. Company-wide; configuring it is audited and versioned.
         new("company.inventoryaccounting", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse]),
+        new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
     ]);
 
     public static class Codes
@@ -245,6 +246,7 @@ public sealed partial class PermissionCatalog
         public const string StockDocsCancel = "company.stockdocs.cancel";
         public const string StockDocsPost = "company.stockdocs.post";
         public const string StockDocsReverse = "company.stockdocs.reverse";
+        public const string StockBalanceView = "company.stockbalance.view";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";

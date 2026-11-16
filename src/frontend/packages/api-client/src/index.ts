@@ -555,6 +555,22 @@ export interface StockPosting {
   totalValue: number; accountingState: number; replayed: boolean; journalStatus: number | null; reversal: StockReversal | null; lines: StockPostingLine[];
 }
 export interface StockPostLineInput { lineNo: number; amount: number }
+
+/** Stock balances, item ledger and the reconciliation with the General Ledger (Phase 3.8A, read-only). Quantities are in the item's base unit; values in the company base currency. */
+export interface StockBalanceRow {
+  itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; groupId: string; warehouseId: string; warehouseCode: string; warehouseNameAr: string | null; warehouseNameEn: string | null;
+  baseUnitCode: string; method: number; quantity: number; value: number; averageUnitCost: number;
+}
+export interface StockBalancePage { balances: StockBalanceRow[]; total: number; totalValue: number; asOf: string | null }
+export interface StockBalanceQuery { itemId?: string; warehouseId?: string; search?: string; asOf?: string; includeZero?: boolean; offset?: number; limit?: number }
+export interface StockLedgerRow {
+  seq: number; effectiveDate: string; kind: number; direction: number; quantity: number; amount: number; quantityAfter: number; valueAfter: number; sourceType: string | null; sourceId: string | null; sourceNumber: string | null;
+}
+export interface StockLedgerPage { itemId: string; warehouseId: string; openingQuantity: number; openingValue: number; closingQuantity: number; closingValue: number; total: number; rows: StockLedgerRow[] }
+export interface StockLedgerQuery { itemId: string; warehouseId: string; from?: string; to?: string; offset?: number; limit?: number }
+export interface StockBalanceItem { id: string; code: string; nameAr: string | null; nameEn: string | null }
+export interface StockReconciliationAccount { accountId: string; code: string; nameAr: string | null; nameEn: string | null; ledgerBalance: number }
+export interface StockReconciliation { asOf: string; costingValue: number; ledgerValue: number; difference: number; accounts: StockReconciliationAccount[] }
 export interface StockWarehouseRef { id: string; branchId: string; code: string; nameAr: string | null; nameEn: string | null; isActive: boolean }
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
@@ -763,6 +779,29 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       const qs = p.toString();
       return get<{ documents: StockDocumentSummary[]; total: number }>(`/api/v1/company/stock-documents${qs ? "?" + qs : ""}`);
     },
+    listStockBalanceWarehouses: () => get<{ warehouses: StockWarehouseRef[] }>("/api/v1/company/stock-balances/warehouses"),
+    searchStockBalanceItems: (search: string) => get<{ items: StockBalanceItem[] }>(`/api/v1/company/stock-balances/items?search=${enc(search)}`),
+    listStockBalances: (q: StockBalanceQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.itemId) p.set("itemId", q.itemId);
+      if (q.warehouseId) p.set("warehouseId", q.warehouseId);
+      if (q.search) p.set("search", q.search);
+      if (q.asOf) p.set("asOf", q.asOf);
+      if (q.includeZero) p.set("includeZero", "true");
+      if (q.offset) p.set("offset", String(q.offset));
+      if (q.limit) p.set("limit", String(q.limit));
+      const qs = p.toString();
+      return get<StockBalancePage>(`/api/v1/company/stock-balances${qs ? "?" + qs : ""}`);
+    },
+    getStockLedger: (q: StockLedgerQuery) => {
+      const p = new URLSearchParams({ itemId: q.itemId, warehouseId: q.warehouseId });
+      if (q.from) p.set("from", q.from);
+      if (q.to) p.set("to", q.to);
+      if (q.offset) p.set("offset", String(q.offset));
+      if (q.limit) p.set("limit", String(q.limit));
+      return get<StockLedgerPage>(`/api/v1/company/stock-balances/ledger?${p.toString()}`);
+    },
+    getStockReconciliation: (asOf: string) => get<StockReconciliation>(`/api/v1/company/stock-balances/reconciliation?asOf=${enc(asOf)}`),
     getStockDocument: (id: string) => get<StockDocument>(`/api/v1/company/stock-documents/${enc(id)}`),
     /** The execution of a document, or null while it has not been executed. */
     getStockPosting: async (id: string): Promise<StockPosting | null> => {
