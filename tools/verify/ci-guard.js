@@ -58,6 +58,7 @@ const WEAKENERS = [
   [/\|\|\s*(?:true|exit\s+0|:)(?=\s|$|;|\))/g, "a command that ignores failure"],
   [/dotnet\s+test[\s\S]{0,400}?--filter/gi, "dotnet test with --filter"],
   [/--no-verify|--no-gpg-sign/g, "a bypass flag"],
+  [/^\s*pull_request_target\s*:/gm, "pull_request_target (it would run pull-request code with repository secrets and, on the self-hosted runner, on the development machine)"],
 ];
 const SKIPS = [/\[(?:Fact|Theory|PostgresFact|PostgresTheory)\s*\(\s*Skip\s*=/g, /\bSkip\s*=\s*"/g, /\b(?:it|test|describe)\.(?:skip|todo|fixme|skipIf|runIf)\s*\(/g, /\b(?:xit|xdescribe)\s*\(/g, /\.only\s*\(/g,
   /\[Ignore\b/g, /\[Explicit\b/g, /Assert\.Skip/g, /\[SkippableFact/g];

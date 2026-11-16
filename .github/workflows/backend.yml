@@ -1,5 +1,9 @@
 name: Backend
 
+# Runs on the repository's self-hosted Windows runner (label set: self-hosted, Windows, X64) so no GitHub-hosted minutes are billed.
+# Security: only code of THIS repository runs there (the same-repository condition below; there is no pull_request_target anywhere), checkout never persists credentials,
+# every job has a timeout, and the PostgreSQL job creates and destroys its own disposable cluster on a private port (never the development cluster).
+# The Linux verification of the same code (build, unit tests, PostgreSQL on Linux) is in linux-verification.yml: after every merge to main, weekly and on demand.
 on:
   push:
     branches: [main]
@@ -9,182 +13,180 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend-build-test:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: powershell
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          persist-credentials: false
+      - name: Require the .NET 10 SDK installed on the runner
+        run: |
+          $v = (dotnet --version).Trim()
+          Write-Host "dotnet $v"
+          if (-not $v.StartsWith('10.')) { throw "The runner needs the .NET 10 SDK, found $v" }
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
 
   postgres-integration:
-    # Real PostgreSQL integration tests against an ephemeral service container (destroyed with the job).
-    # Nothing here touches production or customer data; see docs/DEVELOPMENT.md.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          # Throwaway bootstrap superuser of an ephemeral, job-local container; used only to create the
-          # restricted test role below. Not a real secret and unreachable outside this runner.
-          POSTGRES_USER: ci_bootstrap
-          POSTGRES_PASSWORD: ci-bootstrap-throwaway
-          # Without this the image creates a database named after POSTGRES_USER (ci_bootstrap), which the cluster-identity gate
-          # correctly refuses as a non-test database. The bootstrap database carries the disposable test prefix instead.
-          POSTGRES_DB: hasm_test_bootstrap
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U ci_bootstrap"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Real PostgreSQL integration tests against a DISPOSABLE cluster that this job creates in its own temporary folder on a private loopback port and destroys at the end.
+    # Nothing here touches the development cluster (5432), the standing disposable test cluster (5433), production or customer data; see docs/DEVELOPMENT.md and docs/CI-RUNNER.md.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: powershell
     env:
       HASM_REQUIRE_PG_TESTS: "1"                                      # a closed gate FAILS, never skips
       HASM_REQUIRE_PG_ROLE_TESTS: "1"                                 # same for the tests that need real distinct PostgreSQL login roles
       HASM_TEST_PG_DISPOSABLE: yes-this-server-is-disposable           # explicit disposable-server acknowledgement
+      HASM_CI_PG_PORT: "5439"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
-
-      - name: Create restricted test-only database roles
+          persist-credentials: false
+      - name: Require the .NET 10 SDK installed on the runner
         run: |
-          set -euo pipefail
-          psql --version
-          TEST_PW="$(openssl rand -hex 24)"
-          ROLE_PW="$(openssl rand -hex 24)"
-          echo "::add-mask::${TEST_PW}"
-          echo "::add-mask::${ROLE_PW}"
-          # hasm_test_admin: the ordinary test account. Minimum privileges to create/drop its own temporary databases: no superuser, role, or replication rights.
-          # hasm_test_roleadmin: used ONLY by the per-company runtime-role tests (Phase 3.1A-1) to create and drop the login roles those tests need.
-          # It holds CREATEROLE but is not a superuser and cannot create databases; it exists only in this job-local, disposable service.
-          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -v pw="${TEST_PW}" -v rpw="${ROLE_PW}" <<'SQL'
-          CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD :'pw';
-          CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD :'rpw';
-          SQL
-          # Cluster identity marker: the integration-test gate requires the server to prove it is this disposable service
-          # (marker database + per-run secret fingerprint), in addition to the loopback/acknowledgement checks.
-          FINGERPRINT="$(openssl rand -hex 32)"
-          echo "::add-mask::${FINGERPRINT}"
-          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE hasm_test_cluster_identity"
-          PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d hasm_test_cluster_identity -v ON_ERROR_STOP=1 -v fp="${FINGERPRINT}" <<'SQL'
-          CREATE TABLE cluster_identity(fingerprint text NOT NULL, purpose text NOT NULL);
-          INSERT INTO cluster_identity VALUES (:'fp', 'hasm-disposable-test-cluster');
-          REVOKE ALL ON cluster_identity FROM PUBLIC;
-          GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;
-          SQL
-          echo "HASM_TEST_PG_CLUSTER_FINGERPRINT=${FINGERPRINT}" >> "$GITHUB_ENV"
+          $v = (dotnet --version).Trim()
+          if (-not $v.StartsWith('10.')) { throw "The runner needs the .NET 10 SDK, found $v" }
+
+      - name: Create the disposable PostgreSQL cluster with restricted test-only roles
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = 'C:\Program Files\PostgreSQL\18\bin'
+          if (-not (Test-Path "$bin\initdb.exe")) { throw 'PostgreSQL 18 binaries were not found on the runner' }
+          $port = [int]$env:HASM_CI_PG_PORT
+          if ($port -in 5432, 5433) { throw "Port $port belongs to a standing cluster; this job only uses its own private port" }
+          if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { throw "Port $port is already in use; refusing to start a cluster" }
+          function New-Secret { $b = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') }) }
+          $dir = Join-Path $env:RUNNER_TEMP 'hasm-pg-ci'
+          if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $boot = New-Secret; $testPw = New-Secret; $rolePw = New-Secret; $fingerprint = New-Secret + (New-Secret)
+          foreach ($s in $boot, $testPw, $rolePw, $fingerprint) { Write-Host "::add-mask::$s" }
+          Set-Content -NoNewline -Path "$dir\pw.txt" -Value $boot
+          & "$bin\initdb.exe" -D "$dir\data" -U ci_bootstrap --pwfile="$dir\pw.txt" --auth=scram-sha-256 -E UTF8 --locale=C | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'initdb failed' }
+          Remove-Item "$dir\pw.txt" -Force
+          Add-Content -Path "$dir\data\postgresql.conf" -Value "`nport = $port`nlisten_addresses = '127.0.0.1'`nmax_connections = 200`nssl = off`nfsync = off`nsynchronous_commit = off`nfull_page_writes = off"
+          # Start-Process without -Wait: waiting on the server process tree would hang the step (its output handles stay open); readiness is polled instead.
+          Start-Process -FilePath "$bin\pg_ctl.exe" -ArgumentList @('-D', "`"$dir\data`"", '-l', "`"$dir\postgres.log`"", '-w', '-t', '60', 'start') -WindowStyle Hidden | Out-Null
+          $deadline = (Get-Date).AddSeconds(90)
+          do { Start-Sleep -Milliseconds 500; & "$bin\pg_isready.exe" -h 127.0.0.1 -p $port *> $null } until ($LASTEXITCODE -eq 0 -or (Get-Date) -gt $deadline)
+          if ($LASTEXITCODE -ne 0) { if (Test-Path "$dir\postgres.log") { Get-Content "$dir\postgres.log" -Tail 30 }; throw 'The disposable PostgreSQL cluster did not become ready' }
+          "HASM_CI_PG_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $env:PGPASSWORD = $boot
+          function Psql([string]$Db, [string]$Sql) { $out = & "$bin\psql.exe" -h 127.0.0.1 -p $port -U ci_bootstrap -d $Db -v ON_ERROR_STOP=1 -X -q -At -c $Sql 2>&1; if ($LASTEXITCODE -ne 0) { throw "psql failed: $out" }; $out }
+          # hasm_test_admin: the ordinary test account (create/drop its own temporary databases only; no superuser, role or replication rights).
+          # hasm_test_roleadmin: used ONLY by the per-company runtime-role tests to create and drop the login roles those tests need (CREATEROLE, not superuser, cannot create databases).
+          Psql postgres "CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD '$testPw'" | Out-Null
+          Psql postgres "CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD '$rolePw'" | Out-Null
+          Psql postgres "CREATE DATABASE hasm_test_bootstrap" | Out-Null
+          # Cluster identity marker: the integration-test gate requires the server to prove it is this disposable cluster (marker database + per-run secret fingerprint), in addition to the loopback/acknowledgement checks.
+          Psql postgres "CREATE DATABASE hasm_test_cluster_identity" | Out-Null
+          Psql hasm_test_cluster_identity "CREATE TABLE cluster_identity(fingerprint text NOT NULL, purpose text NOT NULL); INSERT INTO cluster_identity VALUES ('$fingerprint', 'hasm-disposable-test-cluster'); REVOKE ALL ON cluster_identity FROM PUBLIC; GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;" | Out-Null
           # Fail-fast inventory assertion: exactly the built-in databases, the bootstrap database and the identity marker may exist.
-          INVENTORY="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SELECT datname FROM pg_database ORDER BY 1" | tr '\n' ' ')"
-          echo "Database inventory before tests: ${INVENTORY}"
-          [ "${INVENTORY}" = "hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1 " ] || { echo "::error::Unexpected database inventory in the disposable CI service"; exit 1; }
-          # The container has no TLS; non-TLS is confined to this disposable loopback service (see DEVELOPMENT.md).
-          echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
-          echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
+          $inventory = ((Psql postgres "SELECT datname FROM pg_database ORDER BY 1") -join ' ').Trim()
+          Write-Host "Database inventory before tests: $inventory"
+          if ($inventory -ne 'hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1') { throw 'Unexpected database inventory in the disposable CI cluster' }
+          Remove-Item Env:PGPASSWORD
+          # The cluster has no TLS; non-TLS is confined to this disposable loopback cluster (see DEVELOPMENT.md).
+          "HASM_TEST_PG_CLUSTER_FINGERPRINT=$fingerprint" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "HASM_TEST_PG_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_admin;Password=$testPw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_roleadmin;Password=$rolePw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
 
       - name: Run PostgreSQL integration tests
-        run: >
-          dotnet test tests/integration/Hasm.Database.IntegrationTests
-          --no-build --configuration Release
-          --logger "trx;LogFileName=pg-integration.trx"
-          --results-directory "$RUNNER_TEMP/trx"
+        run: dotnet test tests/integration/Hasm.Database.IntegrationTests --no-build --configuration Release --logger "trx;LogFileName=pg-integration.trx" --results-directory "$env:RUNNER_TEMP\trx"
 
       - name: Verify all 887 PostgreSQL tests executed and passed (none skipped)
+        # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
+        env:
+          EXPECTED_REGISTRY: |
+            EXPECTED = {
+                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 17, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
+                "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
+                "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
+                "ConcurrentAccessChangeTests": 5, "AccessApiTests": 18,
+                "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
+                "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
+                # Phase 2.3C-2 cryptographic audit integrity
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
+                "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
+                # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
+                # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
+                "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 10, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
+                "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
+                # Phase 3.1A-2 company configuration (migration 0003, system migration 0006, services, API, projection)
+                "CompanyConfigurationMigrationTests": 4, "CompanyProfileTests": 12, "CompanySettingsTests": 5, "CompanyCurrencyTests": 8,
+                "CompanyNameProjectionTests": 5, "CompanyHistoryTests": 2, "CompanyConfigurationApiTests": 11,
+                # Phase 3.1B branches (migration 0004). BranchRuntimeRoleTests use REAL distinct PostgreSQL roles (CI service only).
+                "BranchMigrationTests": 7, "BranchConstraintTests": 8, "BranchServiceTests": 17, "BranchRuntimeRoleTests": 2,
+                # Phase 3.1B Checkpoint C: branch-scoped RBAC, activation epochs, authorized facade and HTTP API (system migration 0007)
+                "BranchAccessTests": 6, "BranchEpochTests": 4, "BranchApiTests": 5,
+                # Phase 3.1C warehouses (company migration 0005, system migration 0008). Warehouse RBAC/epoch/API tests use the same real-database harness.
+                "WarehouseMigrationTests": 4, "WarehouseConstraintTests": 6, "WarehouseServiceTests": 8,
+                "WarehouseAccessTests": 6, "WarehouseEpochTests": 4, "WarehouseApiTests": 6,
+                # Phase 3.1D fiscal calendar (company migration 0006, system migration 0009).
+                "FiscalMigrationTests": 4, "FiscalConstraintTests": 8, "FiscalApprovalConstraintTests": 3, "FiscalServiceTests": 15, "FiscalPostingGateTests": 2,
+                "FiscalAccessTests": 7, "FiscalApiTests": 6,
+                # Phase 3.2A chart of accounts (company migration 0007, system migration 0010).
+                "ChartMigrationTests": 4, "ChartConstraintTests": 6, "ChartServiceTests": 16, "ChartAccessTests": 3, "ChartApiTests": 4,
+                # Phase 3.2B ledger foundation (company migration 0008, system migration 0011), slice S1 document numbering.
+                "NumberingTests": 7, "NumberingDatabaseGuardTests": 5, "NumberingAccessTests": 2,
+                # slice S2 exchange rates (same migration 0008 and system migration 0011).
+                "ExchangeRateTests": 6, "ExchangeRateDatabaseGuardTests": 2, "ExchangeRateAccessTests": 2,
+                # slice S3 cost centers.
+                "CostCenterServiceTests": 8, "CostCenterConstraintTests": 3, "CostCenterAccessTests": 2,
+                # slice S4 approval policies and decisions.
+                "ApprovalPolicyTests": 4, "ApprovalDecisionTests": 5, "ApprovalDatabaseGuardTests": 3, "ApprovalAccessTests": 2,
+                # slice S5 journal and posting engine (company migration 0008, system migration 0011); slice S6 ledger reports.
+                "JournalLifecycleTests": 9, "JournalPeriodTests": 2, "JournalMultiCurrencyTests": 5, "JournalAllocationTests": 4, "JournalApprovalTests": 7,
+                "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 3, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
+                # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
+                "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
+                # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
+                "ApprovalStageTests": 8, "FiscalClosingTests": 11,
+                # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
+                "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
+                # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
+                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 9, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
+                # Phase 3.3 financial reporting: S1 reporting foundation.
+                "ReportingFoundationTests": 6, "ReportingComparisonTests": 8, "FinancialStatementTests": 13, "ExcelExportTests": 4,
+                # Phase 3.4 inventory master data (company migration 0012, system migration 0015).
+                "InventoryMasterDataTests": 14, "InventoryApiTests": 3, "InventoryImportTests": 13,
+                # Phase 3.5 stock movement documents (company migration 0013, system migration 0016).
+                "StockDocumentTests": 17, "StockDocumentApiTests": 5,
+                # Phase 3.6 inventory costing engine (company migration 0014).
+                "InventoryCostingTests": 28,
+                # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
+                "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
+                # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
+                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+            }
+        run: node tools/verify/pg-trx-check.js "$env:RUNNER_TEMP\trx\pg-integration.trx" .github/workflows/backend.yml
+
+      - name: Destroy the disposable PostgreSQL cluster
+        if: ${{ always() }}
         run: |
-          python3 - "$RUNNER_TEMP/trx/pg-integration.trx" <<'PY'
-          import re, sys, xml.etree.ElementTree as ET
-          # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class
-          # MUST be added here, so a skipped, missing or unregistered test fails the job.
-          EXPECTED = {
-              "SystemDatabaseTests": 10, "CompanyProvisioningTests": 17, "IdentityMigrationTests": 8, "UserCreationTests": 9,
-              "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
-              "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
-              "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
-              "ConcurrentAccessChangeTests": 5, "AccessApiTests": 18,
-              "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
-              "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
-              # Phase 2.3C-2 cryptographic audit integrity
-              "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
-              "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
-              "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
-              # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
-              # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
-              "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 10, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
-              "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
-              # Phase 3.1A-2 company configuration (migration 0003, system migration 0006, services, API, projection)
-              "CompanyConfigurationMigrationTests": 4, "CompanyProfileTests": 12, "CompanySettingsTests": 5, "CompanyCurrencyTests": 8,
-              "CompanyNameProjectionTests": 5, "CompanyHistoryTests": 2, "CompanyConfigurationApiTests": 11,
-              # Phase 3.1B branches (migration 0004). BranchRuntimeRoleTests use REAL distinct PostgreSQL roles (CI service only).
-              "BranchMigrationTests": 7, "BranchConstraintTests": 8, "BranchServiceTests": 17, "BranchRuntimeRoleTests": 2,
-              # Phase 3.1B Checkpoint C: branch-scoped RBAC, activation epochs, authorized facade and HTTP API (system migration 0007)
-              "BranchAccessTests": 6, "BranchEpochTests": 4, "BranchApiTests": 5,
-              # Phase 3.1C warehouses (company migration 0005, system migration 0008). Warehouse RBAC/epoch/API tests use the same real-database harness.
-              "WarehouseMigrationTests": 4, "WarehouseConstraintTests": 6, "WarehouseServiceTests": 8,
-              "WarehouseAccessTests": 6, "WarehouseEpochTests": 4, "WarehouseApiTests": 6,
-              # Phase 3.1D fiscal calendar (company migration 0006, system migration 0009).
-              "FiscalMigrationTests": 4, "FiscalConstraintTests": 8, "FiscalApprovalConstraintTests": 3, "FiscalServiceTests": 15, "FiscalPostingGateTests": 2,
-              "FiscalAccessTests": 7, "FiscalApiTests": 6,
-              # Phase 3.2A chart of accounts (company migration 0007, system migration 0010).
-              "ChartMigrationTests": 4, "ChartConstraintTests": 6, "ChartServiceTests": 16, "ChartAccessTests": 3, "ChartApiTests": 4,
-              # Phase 3.2B ledger foundation (company migration 0008, system migration 0011), slice S1 document numbering.
-              "NumberingTests": 7, "NumberingDatabaseGuardTests": 5, "NumberingAccessTests": 2,
-              # slice S2 exchange rates (same migration 0008 and system migration 0011).
-              "ExchangeRateTests": 6, "ExchangeRateDatabaseGuardTests": 2, "ExchangeRateAccessTests": 2,
-              # slice S3 cost centers.
-              "CostCenterServiceTests": 8, "CostCenterConstraintTests": 3, "CostCenterAccessTests": 2,
-              # slice S4 approval policies and decisions.
-              "ApprovalPolicyTests": 4, "ApprovalDecisionTests": 5, "ApprovalDatabaseGuardTests": 3, "ApprovalAccessTests": 2,
-              # slice S5 journal and posting engine (company migration 0008, system migration 0011); slice S6 ledger reports.
-              "JournalLifecycleTests": 9, "JournalPeriodTests": 2, "JournalMultiCurrencyTests": 5, "JournalAllocationTests": 4, "JournalApprovalTests": 7,
-              "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 3, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
-              # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
-              "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
-              # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
-              "ApprovalStageTests": 8, "FiscalClosingTests": 11,
-              # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
-              "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
-              # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
-              "ImportDatabaseGuardTests": 3, "ImportServiceTests": 9, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
-              # Phase 3.3 financial reporting: S1 reporting foundation.
-              "ReportingFoundationTests": 6, "ReportingComparisonTests": 8, "FinancialStatementTests": 13, "ExcelExportTests": 4,
-              # Phase 3.4 inventory master data (company migration 0012, system migration 0015).
-              "InventoryMasterDataTests": 14, "InventoryApiTests": 3, "InventoryImportTests": 13,
-              # Phase 3.5 stock movement documents (company migration 0013, system migration 0016).
-              "StockDocumentTests": 17, "StockDocumentApiTests": 5,
-              # Phase 3.6 inventory costing engine (company migration 0014).
-              "InventoryCostingTests": 28,
-              # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
-              "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
-              # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
-              "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+          $dir = $env:HASM_CI_PG_DIR
+          if ($dir -and (Test-Path "$dir\data")) {
+            & 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D "$dir\data" -m immediate stop 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
           }
-          TOTAL = sum(EXPECTED.values())  # 887
-          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
-          counts, outcomes, unknown = {}, {}, []
-          for r in ET.parse(sys.argv[1]).getroot().iterfind(".//t:UnitTestResult", ns):
-              name = r.get("testName", "")
-              m = re.match(r"Hasm\.Database\.IntegrationTests\.(\w+)\.", name)
-              cls = m.group(1) if m else ""
-              if cls == "SafetyGateTests":
-                  continue  # pure logic, needs no database
-              if cls not in EXPECTED:
-                  unknown.append(name)
-                  continue
-              counts[cls] = counts.get(cls, 0) + 1
-              outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
-          print(f"PostgreSQL tests found: {sum(counts.values())}; outcomes: {outcomes}; per class: {counts}")
-          ok = counts == EXPECTED and outcomes == {"Passed": TOTAL} and not unknown
-          if not ok:
-              print(f"::error::Expected exactly {TOTAL} PostgreSQL tests with the per-class counts above, all Passed (none skipped/failed); unregistered classes: {unknown[:5]}")
-              sys.exit(1)
-          PY

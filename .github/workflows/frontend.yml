@@ -1,5 +1,6 @@
 name: Frontend
 
+# Runs on the repository's self-hosted Windows runner (self-hosted, Windows, X64): no GitHub-hosted minutes are billed. Only code of THIS repository runs there (same-repository condition, no pull_request_target).
 on:
   push:
     branches: [main]
@@ -9,14 +10,23 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   frontend-build-test:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
     defaults:
       run:
+        shell: powershell
         working-directory: src/frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -28,19 +38,28 @@ jobs:
       - run: npm run build
 
   e2e-smoke:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     # Phase 4.0: browser smoke tests of the production bundle (no backend needed); full-stack E2E is a later extension.
-    # Pinned: Playwright 1.56 does not support the ubuntu-latest image (ubuntu 26.04).
-    runs-on: ubuntu-24.04
+    # The runner uses the Google Chrome installed on it (E2E_CHANNEL=chrome), so no browser is downloaded; the Linux/Chromium run of the same tests is in linux-verification.yml.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
     defaults:
       run:
+        shell: powershell
         working-directory: src/frontend
+    env:
+      E2E_CHANNEL: chrome
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: src/frontend/package-lock.json
+      - name: Require Google Chrome on the runner
+        run: |
+          if (-not (Test-Path 'C:\Program Files\Google\Chrome\Application\chrome.exe')) { throw 'Google Chrome is not installed on the runner' }
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npx playwright test

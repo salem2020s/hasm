@@ -1,5 +1,6 @@
 name: Desktop
 
+# Runs on the repository's self-hosted Windows runner (self-hosted, Windows, X64): no GitHub-hosted (and 2x-priced Windows) minutes are billed. Only code of THIS repository runs there.
 on:
   push:
     branches: [main]
@@ -9,11 +10,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   desktop-build:
-    runs-on: windows-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24

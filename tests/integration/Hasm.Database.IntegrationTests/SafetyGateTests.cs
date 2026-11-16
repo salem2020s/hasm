@@ -83,6 +83,44 @@ public class SafetyGateTests
         Assert.NotNull(PostgresClusterIdentity.Decide(5432, true, Fp, Observed(5432, marker: "wrong" + Fp)));
     }
 
+    // ---- the disposable cluster of a job on the self-hosted runner (private port 5439) ----
+
+    [Fact]
+    public void A_self_hosted_ci_job_may_use_exactly_its_private_port_after_proving_the_cluster_identity()
+    {
+        Assert.Null(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5439), selfHostedCiJob: true));
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5439)));                                                  // the port alone opens nothing: no job, no gate
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, true, Fp, Observed(5439)));                                                   // a GitHub-hosted job has its own port
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5439, marker: null), selfHostedCiJob: true));
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5439, marker: "wrong" + Fp), selfHostedCiJob: true));
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5439, extra: "customer_data"), selfHostedCiJob: true));
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, null, Observed(5439), selfHostedCiJob: true));
+        Assert.NotNull(PostgresClusterIdentity.Decide(5439, false, Fp, Observed(5433), selfHostedCiJob: true));                          // the server must report the port it was reached on
+    }
+
+    [Theory]
+    [InlineData(5432)]
+    [InlineData(5431)]
+    [InlineData(5434)]
+    [InlineData(6543)]
+    public void A_self_hosted_ci_job_never_opens_any_other_port_and_especially_not_the_development_cluster(int port) =>
+        Assert.NotNull(PostgresClusterIdentity.Decide(port, false, Fp, Observed(port), selfHostedCiJob: true));
+
+    [Theory]
+    [InlineData("true", "123", "self-hosted", "C:\\work\\pg", true)]
+    [InlineData("true", "123", "self-hosted", "", false)]
+    [InlineData("true", "123", "self-hosted", null, false)]
+    [InlineData("true", "123", "github-hosted", "C:\\work\\pg", false)]
+    [InlineData("true", "", "self-hosted", "C:\\work\\pg", false)]
+    [InlineData("false", "123", "self-hosted", "C:\\work\\pg", false)]
+    [InlineData(null, "123", "self-hosted", "C:\\work\\pg", false)]
+    public void Self_hosted_job_detection_needs_all_four_markers(string? actions, string? runId, string? runner, string? ciDir, bool expected)
+    {
+        string? Env(string k) => k switch { "GITHUB_ACTIONS" => actions, "GITHUB_RUN_ID" => runId, "RUNNER_ENVIRONMENT" => runner, "HASM_CI_PG_DIR" => ciDir, _ => null };
+        Assert.Equal(expected, PostgresClusterIdentity.IsSelfHostedActionsJob(Env));
+        Assert.False(PostgresClusterIdentity.IsGitHubActionsJob(Env) && runner == "self-hosted");                                          // the two job kinds never overlap
+    }
+
     [Theory]
     [InlineData(5431)]
     [InlineData(5434)]
@@ -178,14 +216,21 @@ public class SafetyGateTests
     }
 
     [Fact]
-    public void Workflow_names_the_bootstrap_database_with_the_test_prefix()
+    public void Workflows_name_the_bootstrap_database_with_the_test_prefix()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, ".github", "workflows", "backend.yml"))) dir = dir.Parent;
         Assert.NotNull(dir);
-        var yml = File.ReadAllText(Path.Combine(dir!.FullName, ".github", "workflows", "backend.yml"));
-        var m = System.Text.RegularExpressions.Regex.Match(yml, @"^\s*POSTGRES_DB:\s*(\S+)\s*$", System.Text.RegularExpressions.RegexOptions.Multiline);
+        // the Linux service container of linux-verification.yml names its bootstrap database explicitly
+        var linux = File.ReadAllText(Path.Combine(dir!.FullName, ".github", "workflows", "linux-verification.yml"));
+        var m = System.Text.RegularExpressions.Regex.Match(linux, @"^\s*POSTGRES_DB:\s*(\S+)\s*$", System.Text.RegularExpressions.RegexOptions.Multiline);
         Assert.True(m.Success, "The CI PostgreSQL service must name its bootstrap database explicitly.");
         Assert.StartsWith(PostgresTestEnvironment.DatabasePrefix, m.Groups[1].Value, StringComparison.Ordinal);
+        // the job on the self-hosted runner creates its own cluster: its bootstrap database carries the prefix too, only the identity marker and test databases may exist, and it never uses a standing cluster's port
+        var win = File.ReadAllText(Path.Combine(dir.FullName, ".github", "workflows", "backend.yml"));
+        Assert.Contains("CREATE DATABASE hasm_test_bootstrap", win, StringComparison.Ordinal);
+        Assert.Contains("hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1", win, StringComparison.Ordinal);
+        Assert.Contains($"HASM_CI_PG_PORT: \"{PostgresClusterIdentity.SelfHostedCiPort}\"", win, StringComparison.Ordinal);
+        Assert.Contains("if ($port -in 5432, 5433)", win, StringComparison.Ordinal);
     }
 }
