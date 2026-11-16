@@ -1,0 +1,57 @@
+name: Diag PR e2e
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  diag:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
+        working-directory: src/frontend
+    env:
+      E2E_CHANNEL: chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Variants (bounded, descendants listed on timeout)
+        run: |
+          $node = (Get-Command node).Source
+          $cli = Join-Path (Get-Location) 'node_modules\@playwright\test\cli.js'
+          function Descendants($rootId) {
+            $all = Get-CimInstance Win32_Process
+            $ids = @($rootId); $out = @(); $grew = $true
+            while ($grew) { $grew = $false; foreach ($pr in $all) { if (($ids -contains $pr.ParentProcessId) -and -not ($ids -contains $pr.ProcessId)) { $ids += $pr.ProcessId; $out += $pr; $grew = $true } } }
+            $out
+          }
+          function Run($label, $secs, $envSet, $envUnset) {
+            Write-Host "=== $label"
+            foreach ($k in $envUnset) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
+            foreach ($k in $envSet.Keys) { Set-Item "env:$k" $envSet[$k] }
+            $o = Join-Path $env:RUNNER_TEMP "$label.out"; $e = Join-Path $env:RUNNER_TEMP "$label.err"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $node -ArgumentList @($cli, 'test', '--reporter=list') -PassThru -WindowStyle Hidden -RedirectStandardOutput $o -RedirectStandardError $e
+            $fin = $p.WaitForExit($secs * 1000)
+            if (-not $fin) {
+              Write-Host "TIMEOUT after $secs s; descendants of $($p.Id):"
+              Descendants $p.Id | ForEach-Object { Write-Host ("  {0} <- {1} {2} {3}" -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine) }
+              $p2 = Get-Process -Id $p.Id -ErrorAction SilentlyContinue; if ($p2) { Write-Host ("  node cpu={0} threads={1} ws={2}" -f $p2.CPU, $p2.Threads.Count, $p2.WorkingSet64) }
+              taskkill /T /F /PID $p.Id | Out-Null
+            }
+            Write-Host ("finished={0} after {1:n1}s" -f $fin, $sw.Elapsed.TotalSeconds)
+            Get-Content $o -ErrorAction SilentlyContinue | Select-Object -Last 15
+            Get-Content $e -ErrorAction SilentlyContinue | Select-Object -Last 5
+          }
+          Write-Host "event=$env:GITHUB_EVENT_NAME ref=$env:GITHUB_REF sha=$env:GITHUB_SHA"
+          Write-Host "git:"; git -C .. log -1 --format=%H%n%P%n%s
+          Write-Host "env names:"; (Get-ChildItem env: | Where-Object { $_.Name -match '^(GITHUB_|CI|RUNNER_|PW|PLAYWRIGHT|NODE|DEBUG)' } | ForEach-Object { $_.Name }) -join ' '
+          Run 'A-as-is' 90 @{} @()
+          Run 'B-no-github-env' 90 @{} @('GITHUB_ACTIONS','GITHUB_EVENT_PATH','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_SHA','GITHUB_BASE_REF','GITHUB_HEAD_REF')
