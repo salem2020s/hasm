@@ -1,0 +1,135 @@
+name: Verification (self-hosted)
+
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on the self-hosted Windows runner (self-hosted, Windows, X64) ONLY when HASM_RUNNER_MODE=self-hosted; otherwise they are skipped and the hosted jobs of verification.yml run.
+# The job ids are the required check names and are identical in both files. Only code of THIS repository runs here (same-repository condition on every job, no pull_request_target). See docs/CI-RUNNER.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-vm-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs-traceability:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node tools/verify/check-docs.js
+
+  ci-guard:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Guard against weakened verification (the BASE copy of the guard judges the change when it exists)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          CI_CHANGE_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'ci-change-approved') && '1' || '0' }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          git cat-file -e "${env:BASE_REF}:tools/verify/ci-guard.js" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $copy = Join-Path $env:RUNNER_TEMP 'ci-guard.js'
+            cmd /c "git show ${env:BASE_REF}:tools/verify/ci-guard.js > `"$copy`""
+            node $copy --base $env:BASE_REF
+          } else {
+            Write-Host 'Base has no guard yet (introducing change); running the head copy'
+            node tools/verify/ci-guard.js --base $env:BASE_REF
+          }
+          exit $LASTEXITCODE
+
+  secret-scan:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node tools/verify/scan-secrets.js
+
+  dependency-scan:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: npm audit (frontend)
+        working-directory: src/frontend
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm audit --audit-level=high
+          exit $LASTEXITCODE
+      - name: npm audit (desktop)
+        working-directory: src/desktop
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm audit --audit-level=high
+          exit $LASTEXITCODE
+      - name: NuGet vulnerable packages
+        run: |
+          dotnet restore src/backend/Hasm.slnx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = (dotnet list src/backend/Hasm.slnx package --vulnerable --include-transitive 2>&1 | Out-String)
+          Write-Host $out
+          if ($out -match 'has the following vulnerable packages') { Write-Host '::error::Vulnerable NuGet packages found'; exit 1 }
+
+  guard-selftest:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tools/verify/tests/*.test.js

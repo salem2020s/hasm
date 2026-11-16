@@ -58,7 +58,7 @@ const WEAKENERS = [
   [/\|\|\s*(?:true|exit\s+0|:)(?=\s|$|;|\))/g, "a command that ignores failure"],
   [/dotnet\s+test[\s\S]{0,400}?--filter/gi, "dotnet test with --filter"],
   [/--no-verify|--no-gpg-sign/g, "a bypass flag"],
-  [/^\s*pull_request_target\s*:/gm, "pull_request_target (it would run pull-request code with repository secrets and, on the self-hosted runner, on the development machine)"],
+  [/^[^#\n]*\bpull_request_target\b/gm,"pull_request_target (it would run pull-request code with repository secrets and, on the self-hosted runner, on the development machine)"],
 ];
 const SKIPS = [/\[(?:Fact|Theory|PostgresFact|PostgresTheory)\s*\(\s*Skip\s*=/g, /\bSkip\s*=\s*"/g, /\b(?:it|test|describe)\.(?:skip|todo|fixme|skipIf|runIf)\s*\(/g, /\b(?:xit|xdescribe)\s*\(/g, /\.only\s*\(/g,
   /\[Ignore\b/g, /\[Explicit\b/g, /Assert\.Skip/g, /\[SkippableFact/g];
@@ -139,7 +139,7 @@ function run(root, base, env = process.env) {
     if (now < was && !approved) findings.push(`${label} decreased from ${was} to ${now} (a deliberate removal needs the owner approval flag)`);
   }
   // 4. protected files
-  const protectedChanged = changed.filter(f => PROTECTED.includes(f) || f.startsWith("tools/verify/"));
+  const protectedChanged = changed.filter(f => PROTECTED.includes(f) || f.startsWith("tools/verify/") || /^\.github\/workflows\/[a-z-]+-selfhosted\.yml$/.test(f));
   const guardExistedOnBase = showBase(root, base, "tools/verify/ci-guard.js") !== null;   // the PR that introduces the guard cannot be judged by it
   if (guardExistedOnBase && protectedChanged.length && !approved)
     findings.push(`protected verification files changed without the owner approval flag (CI_CHANGE_APPROVED): ${protectedChanged.join(", ")}`);

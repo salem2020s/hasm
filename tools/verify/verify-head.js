@@ -23,7 +23,12 @@ function evaluate({ headSha, expectSha, files, checkRuns, manifest }) {
     if (!touches(files, c.paths)) continue;
     // only runs created by GitHub Actions count: any other app or token able to create a check run of the same name must not satisfy a requirement
     const runs = checkRuns.filter(r => r.name === c.name && (r.appId === undefined || r.appId === GITHUB_ACTIONS_APP_ID));
-    const onHead = runs.filter(r => r.headSha === headSha);
+    // A check name can be defined by two jobs, one per runner mode (HASM_RUNNER_MODE); the job of the other mode is SKIPPED. A skipped run never counts as passing:
+    // it is ignored only when the required number of runs of that name really ran, so a check that was skipped everywhere is refused.
+    const isSkipped = r => r.status === "completed" && r.conclusion === "skipped";
+    const all = runs.filter(r => r.headSha === headSha);
+    const onHead = all.filter(r => !isSkipped(r));
+    if (onHead.length === 0 && all.length > 0) { problems.push(`${c.name}: conclusion skipped (no run of this check executed on ${headSha.slice(0, 7)})`); continue; }
     if (onHead.length < (c.count || 1)) { problems.push(`${c.name}: expected ${c.count || 1} run(s) on ${headSha.slice(0, 7)}, found ${onHead.length}${runs.length > onHead.length ? " (others belong to an older SHA)" : ""}`); continue; }
     for (const r of onHead) if (r.status !== "completed") problems.push(`${c.name}: still ${r.status}`);
     else if (r.conclusion !== "success") problems.push(`${c.name}: conclusion ${r.conclusion}`);

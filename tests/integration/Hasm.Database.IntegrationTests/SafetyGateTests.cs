@@ -227,7 +227,7 @@ public class SafetyGateTests
         Assert.True(m.Success, "The CI PostgreSQL service must name its bootstrap database explicitly.");
         Assert.StartsWith(PostgresTestEnvironment.DatabasePrefix, m.Groups[1].Value, StringComparison.Ordinal);
         // the job on the self-hosted runner creates its own cluster: its bootstrap database carries the prefix too, only the identity marker and test databases may exist, and it never uses a standing cluster's port
-        var win = File.ReadAllText(Path.Combine(dir.FullName, ".github", "workflows", "backend.yml"));
+        var win = File.ReadAllText(Path.Combine(dir.FullName, ".github", "workflows", "backend-selfhosted.yml"));
         Assert.Contains("CREATE DATABASE hasm_test_bootstrap", win, StringComparison.Ordinal);
         Assert.Contains("hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1", win, StringComparison.Ordinal);
         Assert.Contains($"HASM_CI_PG_PORT: \"{PostgresClusterIdentity.SelfHostedCiPort}\"", win, StringComparison.Ordinal);

@@ -80,14 +80,45 @@ test("guard: adding pull_request_target to a workflow is refused", () => {
   assert.ok(f.some(x => /pull_request_target/.test(x)), f.join("\n"));
 });
 
-test("the workflows use only the intended runner labels and never pull_request_target", () => {
+test("the workflows use only the intended runner labels, never pull_request_target, and gate every job by the runner mode", () => {
   const dir = path.join(__dirname, "..", "..", "..", ".github", "workflows");
+  const SAME = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository";
+  const jobsOf = (text) => text.slice(text.indexOf("\njobs:\n")).split(/\n(?=  [A-Za-z0-9_-]+:\n)/).slice(1).map((j) => ({ id: j.match(/^  ([A-Za-z0-9_-]+):/)[1], text: j }));
+  const read = (f) => fs.readFileSync(path.join(dir, f), "utf8").replace(/\r\n/g, "\n");
   for (const f of fs.readdirSync(dir).filter(x => /\.ya?ml$/.test(x))) {
-    const text = fs.readFileSync(path.join(dir, f), "utf8");
-    assert.ok(!/^\s*pull_request_target\s*:/m.test(text), `${f} uses pull_request_target`);
-    for (const m of text.matchAll(/^\s*runs-on\s*:\s*(.+)$/gm)) assert.ok(/^(\[self-hosted, Windows, X64\]|ubuntu-24\.04)\s*$/.test(m[1]), `${f}: unexpected runs-on ${m[1]}`);
-    // a job that runs on the self-hosted runner must only run code of this repository
-    const selfHosted = [...text.matchAll(/^  ([A-Za-z0-9_-]+):\n(?:    .*\n|\n)*?    runs-on: \[self-hosted/gm)];
-    for (const j of selfHosted) assert.ok(new RegExp(`  ${j[1]}:\\n    if: \\$\\{\\{ github.event_name != 'pull_request' \\|\\| github.event.pull_request.head.repo.full_name == github.repository \\}\\}`).test(text), `${f}: job ${j[1]} lacks the same-repository condition`);
+    const text = read(f);
+    assert.ok(!/^[^#\n]*\bpull_request_target\b/m.test(text), `${f} uses pull_request_target`);
+    assert.ok(!/^    name:/m.test(text.slice(text.indexOf("\njobs:\n"))), `${f}: a job-level name would rename a check`);
+    for (const m of text.matchAll(/^\s*runs-on\s*:\s*(.+)$/gm)) assert.ok(/^(\[self-hosted, Windows, X64\]|ubuntu-24\.04|ubuntu-latest|windows-latest)\s*$/.test(m[1]), `${f}: unexpected runs-on ${m[1]}`);
+    if (f === "linux-verification.yml") continue;
+    const selfHostedFile = f.endsWith("-selfhosted.yml");
+    for (const job of jobsOf(text)) {
+      if (selfHostedFile) {
+        // a job on the self-hosted runner runs only in that mode and only code of THIS repository (never a fork)
+        assert.ok(/^    runs-on: \[self-hosted, Windows, X64\]$/m.test(job.text), `${f}: ${job.id} is not on the self-hosted runner`);
+        assert.ok(job.text.includes("if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (" + SAME + ") }}"), `${f}: self-hosted job ${job.id} is not gated by the mode and the same-repository condition`);
+      } else {
+        assert.ok(!/self-hosted, Windows/.test(job.text), `${f}: hosted workflow ${job.id} runs on the self-hosted runner`);
+        assert.ok(job.text.includes("if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}"), `${f}: hosted job ${job.id} is not gated by the mode`);
+      }
+    }
+    if (selfHostedFile) assert.deepStrictEqual(jobsOf(text).map(j => j.id), jobsOf(read(f.replace("-selfhosted", ""))).map(j => j.id), `${f}: the job ids (= check names) differ from the hosted twin`);
+  }
+});
+
+test("guard: pull_request_target is refused in the list and inline forms of the on: key too", () => {
+  for (const on of ["on: pull_request_target", "on: [push, pull_request_target]", "on:\n  pull_request_target:\n    types: [opened]"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hasm-prt2-"));
+    git(root, "init", "-q", "-b", "main");
+    fs.mkdirSync(path.join(root, ".github", "workflows"), { recursive: true });
+    fs.mkdirSync(path.join(root, "tools", "verify"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".github", "workflows", "a.yml"), "name: A\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n");
+    fs.writeFileSync(path.join(root, ".github", "required-checks.json"), JSON.stringify({ checks: [] }));
+    fs.writeFileSync(path.join(root, "tools", "verify", "ci-guard.js"), "//\n");
+    git(root, "add", "-A"); git(root, "commit", "-q", "-m", "base"); git(root, "checkout", "-q", "-b", "pr");
+    fs.writeFileSync(path.join(root, ".github", "workflows", "a.yml"), "name: A\n" + on + "\njobs:\n  j:\n    runs-on: ubuntu-24.04\n");
+    git(root, "add", "-A"); git(root, "commit", "-q", "-m", "x");
+    const f = guard.run(root, "main", { CI_CHANGE_APPROVED: "1" });
+    assert.ok(f.some(x => /pull_request_target/.test(x)), on + "\n" + f.join("\n"));
   }
 });

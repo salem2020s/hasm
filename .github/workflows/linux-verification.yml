@@ -1,5 +1,6 @@
 name: Linux verification
 
+# Only needed in the self-hosted runner mode (HASM_RUNNER_MODE=self-hosted): in the default hosted mode the pull-request jobs already run on Linux and these jobs are skipped (except on demand).
 # The Linux counterpart of the self-hosted Windows checks (SRS 2.4: PostgreSQL and the backend must also work on Linux). These jobs run on GitHub-hosted runners and therefore cost billed minutes,
 # so they are NOT part of every pull request: they run after every merge to main (build, unit tests, front-end tests), weekly (including the full PostgreSQL integration suite on a Linux service
 # container and the browser smoke tests on Chromium) and on demand (workflow_dispatch). They are not required checks of a pull request; a failure here blocks the next phase until fixed.
@@ -19,6 +20,7 @@ concurrency:
 
 jobs:
   linux-build-test:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.HASM_RUNNER_MODE == 'self-hosted' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -47,7 +49,7 @@ jobs:
 
   linux-postgres-integration:
     # Weekly and on demand only (about 20 billed minutes per run).
-    if: ${{ github.event_name != 'push' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.HASM_RUNNER_MODE == 'self-hosted' && github.event_name == 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -123,7 +125,7 @@ jobs:
 
   linux-e2e-smoke:
     # Weekly and on demand only: the browser smoke tests on the Playwright Chromium of a Linux image.
-    if: ${{ github.event_name != 'push' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.HASM_RUNNER_MODE == 'self-hosted' && github.event_name == 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
