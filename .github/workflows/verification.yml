@@ -1,7 +1,8 @@
 name: Verification
 
-# Always-on controls (Phase 4.0): no path filter, so documentation-only and workflow-only changes are checked too.
-# They run on the repository's self-hosted Windows runner (self-hosted, Windows, X64) so no GitHub-hosted minutes are billed; only code of THIS repository runs there.
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on GitHub-hosted runners (the default, while free minutes remain). Set HASM_RUNNER_MODE=self-hosted to run the same checks, under the same check names,
+# on the repository's self-hosted Windows runner instead (verification-selfhosted.yml); the job of the other mode is skipped. See docs/CI-RUNNER.md.
+
 on:
   push:
     branches: [main]
@@ -17,33 +18,24 @@ concurrency:
 
 jobs:
   docs-traceability:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: powershell
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: node tools/verify/check-docs.js
 
   ci-guard:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: powershell
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -53,81 +45,56 @@ jobs:
           BASE_REF: origin/${{ github.base_ref }}
           CI_CHANGE_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'ci-change-approved') && '1' || '0' }}
         run: |
-          $ErrorActionPreference = 'Continue'
-          git cat-file -e "${env:BASE_REF}:tools/verify/ci-guard.js" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $copy = Join-Path $env:RUNNER_TEMP 'ci-guard.js'
-            cmd /c "git show ${env:BASE_REF}:tools/verify/ci-guard.js > `"$copy`""
-            node $copy --base $env:BASE_REF
-          } else {
-            Write-Host 'Base has no guard yet (introducing change); running the head copy'
-            node tools/verify/ci-guard.js --base $env:BASE_REF
-          }
-          exit $LASTEXITCODE
+          if git cat-file -e "${BASE_REF}:tools/verify/ci-guard.js" 2>/dev/null; then
+            git show "${BASE_REF}:tools/verify/ci-guard.js" > "$RUNNER_TEMP/ci-guard.js"
+            node "$RUNNER_TEMP/ci-guard.js" --base "${BASE_REF}"
+          else
+            echo "Base has no guard yet (introducing change); running the head copy"
+            node tools/verify/ci-guard.js --base "${BASE_REF}"
+          fi
 
   secret-scan:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: powershell
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: node tools/verify/scan-secrets.js
 
   dependency-scan:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: powershell
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
       - name: npm audit (frontend)
         working-directory: src/frontend
-        run: |
-          npm ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm audit --audit-level=high
-          exit $LASTEXITCODE
+        run: npm ci && npm audit --audit-level=high
       - name: npm audit (desktop)
         working-directory: src/desktop
-        run: |
-          npm ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm audit --audit-level=high
-          exit $LASTEXITCODE
+        run: npm ci && npm audit --audit-level=high
       - name: NuGet vulnerable packages
         run: |
           dotnet restore src/backend/Hasm.slnx
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $out = (dotnet list src/backend/Hasm.slnx package --vulnerable --include-transitive 2>&1 | Out-String)
-          Write-Host $out
-          if ($out -match 'has the following vulnerable packages') { Write-Host '::error::Vulnerable NuGet packages found'; exit 1 }
+          OUT="$(dotnet list src/backend/Hasm.slnx package --vulnerable --include-transitive 2>&1)"
+          echo "$OUT"
+          if echo "$OUT" | grep -q "has the following vulnerable packages"; then echo "::error::Vulnerable NuGet packages found"; exit 1; fi
 
   guard-selftest:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 15
-    defaults:
-      run:
-        shell: powershell
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24

@@ -1,0 +1,52 @@
+name: Desktop (self-hosted)
+
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on the self-hosted Windows runner (self-hosted, Windows, X64) ONLY when HASM_RUNNER_MODE=self-hosted; otherwise they are skipped and the hosted jobs of desktop.yml run.
+# The job ids are the required check names and are identical in both files. Only code of THIS repository runs here (same-repository condition on every job, no pull_request_target). See docs/CI-RUNNER.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["src/desktop/**", "src/frontend/**", "assets/branding/**", ".github/workflows/desktop.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-vm-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  desktop-build:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Rust toolchain (stable, MSVC) via rustup in the runner account profile (the dtolnay action needs bash on PATH, which a Windows service account does not have)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+          if (-not (Test-Path (Join-Path $cargoBin 'rustup.exe'))) {
+            Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile (Join-Path $env:RUNNER_TEMP 'rustup-init.exe')
+            & (Join-Path $env:RUNNER_TEMP 'rustup-init.exe') -y --default-toolchain stable --profile minimal --no-modify-path
+            if ($LASTEXITCODE -ne 0) { throw 'rustup-init failed' }
+          }
+          $cargoBin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & (Join-Path $cargoBin 'rustup.exe') toolchain install stable --profile minimal
+          & (Join-Path $cargoBin 'rustc.exe') --version
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm ci
+        working-directory: src/desktop
+      - name: Build Tauri shell (no installer)
+        run: npx tauri build --debug --no-bundle
+        working-directory: src/desktop

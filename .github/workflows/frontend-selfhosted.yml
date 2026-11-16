@@ -1,0 +1,100 @@
+name: Frontend (self-hosted)
+
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on the self-hosted Windows runner (self-hosted, Windows, X64) ONLY when HASM_RUNNER_MODE=self-hosted; otherwise they are skipped and the hosted jobs of frontend.yml run.
+# The job ids are the required check names and are identical in both files. Only code of THIS repository runs here (same-repository condition on every job, no pull_request_target). See docs/CI-RUNNER.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["src/frontend/**", "assets/branding/**", ".github/workflows/frontend.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-vm-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frontend-build-test:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e-smoke:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # Phase 4.0: browser smoke tests of the production bundle (no backend needed); full-stack E2E is a later extension.
+    # The runner uses the Google Chrome installed on it (E2E_CHANNEL=chrome), so no browser is downloaded; the Linux/Chromium run of the same tests is in linux-verification.yml.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+        working-directory: src/frontend
+    env:
+      E2E_CHANNEL: chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+      - name: Require Google Chrome on the runner
+        run: |
+          if (-not (Test-Path 'C:\Program Files\Google\Chrome\Application\chrome.exe')) { throw 'Google Chrome is not installed on the runner' }
+      - run: npm ci
+      - name: Browser smoke tests (Playwright, installed Chrome)
+        # Through npx the runner process never started in a job (idle node, no output) while the identical node invocation of the CLI works: the CLI is called directly. It is started detached from the runner's console (no inherited standard input) with its output redirected to a file: attached to the job's pipes it never started under the
+        # Windows service account (no output at all, zero CPU, no child process) although the same command passes there when run detached. A hang is detected here, the process tree is printed and the
+        # step fails; the log, traces and screenshots are uploaded as an artifact.
+        timeout-minutes: 12
+        env:
+          DEBUG: pw:webserver
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'playwright.log'
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $cli = Join-Path (Get-Location) 'node_modules\@playwright\test\cli.js'
+          $p = Start-Process -FilePath (Get-Command node).Source -ArgumentList @($cli, 'test', '--reporter=list') -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          $finished = $p.WaitForExit(540000)
+          if (-not $finished) {
+            Write-Host '::error::Playwright did not finish within 9 minutes; process tree follows'
+            Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'playwright|vite|chrome|npm' -and $_.ProcessId -ne $PID } | ForEach-Object { Write-Host ("{0} <- {1} {2} {3}" -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine.Substring(0, [Math]::Min(200, $_.CommandLine.Length))) }
+            & taskkill /T /F /PID $p.Id | Out-Null
+          }
+          $p.WaitForExit()
+          if (Test-Path $log) { Get-Content $log }
+          if (Test-Path "$log.err") { Get-Content "$log.err" }
+          if (-not $finished) { exit 1 }
+          exit $p.ExitCode
+
+      - name: Keep the Playwright diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            ${{ runner.temp }}/playwright.log
+            src/frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore
