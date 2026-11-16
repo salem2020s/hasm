@@ -97,9 +97,12 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.CostEntry.Table, ["SELECT", "INSERT"]),
         (CompanySchema.CostLayer.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CostConsumption.Table, ["SELECT", "INSERT"]),
-        // Inventory accounting configuration (Phase 3.7A): immutable versions, never updated or deleted.
+        // Inventory accounting configuration (Phase 3.7A): immutable versions, never updated or deleted. Stock posting records (Phase 3.7B): append-only.
         (CompanySchema.InventoryAccountingVersion.Table, ["SELECT", "INSERT"]),
         (CompanySchema.InventoryAccountingGroup.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockPosting.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockPostingLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockPostingEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

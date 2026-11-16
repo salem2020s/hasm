@@ -96,7 +96,7 @@ public class CompanyConfigurationMigrationTests : ConfigurationTestBase
     public async Task Fresh_provisioning_creates_the_configuration_schema_empty_with_the_currency_reference_seeded()
     {
         await Prepare();
-        Assert.Equal(15L, await Count(Company, SystemSchema.MigrationJournalTable));   // 0001-0005 (0004 branches 3.1B, 0005 warehouses 3.1C)
+        Assert.Equal(16L, await Count(Company, SystemSchema.MigrationJournalTable));   // 0001-0005 (0004 branches 3.1B, 0005 warehouses 3.1C)
         foreach (var t in new[] { Cfg.Profile.Table, Cfg.Settings.Table, Cfg.CompanyCurrency.Table, Cfg.ConfigRevision.Table })
             Assert.Equal(0L, await Count(Company, t));                                         // nothing is seeded or created by a read
         Assert.True(await Count(Company, Cfg.Currency.Table) >= 150);
@@ -115,7 +115,7 @@ public class CompanyConfigurationMigrationTests : ConfigurationTestBase
 
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], outcome.Applied);
+        Assert.Equal([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], outcome.Applied);
         Assert.Equal(7, await InCompany<int>(legacy.PhysicalDatabaseName, "SELECT a FROM zz_existing"));
         Assert.True(await Count(legacy, Cfg.Currency.Table) >= 150);
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);

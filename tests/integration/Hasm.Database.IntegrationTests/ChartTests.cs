@@ -62,7 +62,7 @@ public class ChartMigrationTests : ChartTestBase
     public async Task A_freshly_provisioned_company_has_an_empty_chart_with_defaults_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(15L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(16L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Chart().ListAsync(Company.Id));
         Assert.Equal(ChartSettingsView.Defaults, await Chart().GetSettingsAsync(Company.Id));          // a read never creates the settings row
         Assert.Equal(0L, await Count(Company, Ac.Table));
@@ -79,7 +79,7 @@ public class ChartMigrationTests : ChartTestBase
         await Sql("CREATE TABLE zz_existing (a int); INSERT INTO zz_existing VALUES (7)", legacy);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([7, 8, 9, 10, 11, 12, 13, 14, 15], outcome.Applied);
+        Assert.Equal([7, 8, 9, 10, 11, 12, 13, 14, 15, 16], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(0L, await Count(legacy, Ac.Table));                          // nothing is seeded
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
