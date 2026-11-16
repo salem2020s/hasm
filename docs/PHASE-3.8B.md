@@ -12,9 +12,9 @@ Status: plan written before any code, as CLAUDE.md requires for substantial chan
 ## Slicing (each slice is a PR with full backend, PostgreSQL, frontend tests and the independent review)
 1. **3.8B-1 Stocktake and variance (no negative stock).** Stocktake sheet per warehouse (snapshot of the book quantity at a stated date, counted quantity per item, variance = counted − book, reason per line), draft → submitted → approved with the existing warehouse-scoped permission pattern and audit. Company migration (new tables, additive only); system migration only for new permissions.
 2. **3.8B-2 Adjustments posted through the 3.7 machinery.** An approved stocktake generates **one** adjustment document: shortage lines are issues at the current cost (exact, from the costing engine), surplus lines are receipts whose amount is entered by the poster like any receipt. Posting is exactly-once with an accounting state; reversal reuses 3.7C. Needs the inventory adjustment counter account of the 3.7A configuration.
-3. **3.8B-3 Negative-stock exception.** BLOCKED on the owner decision below.
+3. **3.8B-3 Negative-stock exception.** Designed in `docs/PHASE-3.8B-3-DESIGN.md` (revisions 1 to 3, independently reviewed twice); the questions N1 to N4 below were answered by the owner policy message of 2026-11-16 and the remaining technical decisions D1 to D7 were taken under the owner standing authority. Not implemented yet.
 
-## Ambiguities that need the owner (not decided by the agent)
+## Ambiguities that needed the owner (N1 to N4 answered by the owner policy of 2026-11-16; see the design document)
 The SRS states the exception in one sentence. These are accounting rules and must not be invented:
 * **N1.** How the provisional cost of a negative position is determined (last known average cost? a manually entered cost? the last receipt cost?) and who may enter it.
 * **N2.** The accounting entries at the time of the negative issue (which account carries the provisional cost) and at settlement (the difference between the provisional cost and the cost of the receipt that covers it: which account, which period if it falls in a closed period).
