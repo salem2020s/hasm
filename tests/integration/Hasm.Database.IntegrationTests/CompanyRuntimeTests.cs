@@ -15,7 +15,7 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 {
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0017_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0018_extra.sql", sql);
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
 
     [PostgresFact]
@@ -225,7 +225,7 @@ public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 public class CompanyMigrationTests : CompanyRuntimeTestBase
 {
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0017_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0018_extra.sql", sql);
 
     private async Task<long> JournalRows(CompanyRecord c) =>
         await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}");
@@ -239,7 +239,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await StartCompanies();
         var c = await ReadyCompany();
         Assert.True(await HasAuditTable(c));
-        Assert.Equal(16L, await JournalRows(c));
+        Assert.Equal(17L, await JournalRows(c));
         Assert.Equal(0L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
     }
 
@@ -254,7 +254,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
 
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], outcome.Applied);
+        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], outcome.Applied);
         Assert.True(await HasAuditTable(legacy));
         Assert.Equal(7, await InCompany<int>(legacy.PhysicalDatabaseName, "SELECT a FROM zz_existing"));
         Assert.Equal(legacy.Id, await InCompany<Guid>(legacy.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
@@ -274,7 +274,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
 
         Assert.Equal(CompanyMigrationStatus.UpToDate, second.Status);
         Assert.Empty(second.Applied);
-        Assert.Equal(16L, await JournalRows(legacy));
+        Assert.Equal(17L, await JournalRows(legacy));
         Assert.Equal(checksums, await InCompany<string>(legacy.PhysicalDatabaseName, $"SELECT string_agg(checksum, ',' ORDER BY version) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
@@ -331,7 +331,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var statuses = runs.Select(r => Assert.Single(r).Status).ToList();
         Assert.All(statuses, s => Assert.Contains(s, new[] { CompanyMigrationStatus.Migrated, CompanyMigrationStatus.UpToDate, CompanyMigrationStatus.Busy }));
         Assert.Equal(1, statuses.Count(s => s == CompanyMigrationStatus.Migrated));
-        Assert.Equal(16L, await JournalRows(legacy));
+        Assert.Equal(17L, await JournalRows(legacy));
         Assert.True(await HasAuditTable(legacy));
     }
 
@@ -350,12 +350,12 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var g = outcomes.Single(o => o.CompanyId == good.Id);
         var b = outcomes.Single(o => o.CompanyId == bad.Id);
         Assert.Equal(CompanyMigrationStatus.Migrated, g.Status);
-        Assert.Equal([17], g.Applied);
+        Assert.Equal([18], g.Applied);
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
-        Assert.Equal(17L, await JournalRows(good));
-        Assert.Equal(16L, await JournalRows(bad));
+        Assert.Equal(18L, await JournalRows(good));
+        Assert.Equal(17L, await JournalRows(bad));
         Assert.Equal(0L, await InCompany<long>(bad.PhysicalDatabaseName, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'zz_added'"));
         Assert.Equal(ProvisioningState.Ready, (await Registry.GetAsync(bad.Id))!.State);       // never marked Failed or dropped
         Assert.Equal(1L, await Scalar<long>("SELECT count(*) FROM pg_database WHERE datname = @n", ("n", bad.PhysicalDatabaseName)));

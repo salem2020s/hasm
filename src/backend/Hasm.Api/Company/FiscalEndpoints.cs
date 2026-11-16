@@ -12,8 +12,8 @@ public static class FiscalSetup
 {
     public static IServiceCollection AddHasmFiscalCalendar(this IServiceCollection services)
     {
-        // Real probes: pending entries, pending adjustments and year-end consistency block a close. Inventory valuation differences belong to a module that does not exist in this release: listed as not applicable, never as passed.
-        services.AddSingleton(new PeriodCloseGuard([new Hasm.Infrastructure.Ledger.PendingJournalPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.PendingAdjustmentsPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.YearEndClosingPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.ModuleAbsentPeriodCloseProbe("inventory_valuation_differences")]));
+        // Real probes: pending entries, pending adjustments and year-end consistency block a close. The inventory valuation probe (Phase 3.7C) is real: stock history that no longer agrees with the ledger, or a stock posting whose accounting side failed, blocks a close.
+        services.AddSingleton(new PeriodCloseGuard([new Hasm.Infrastructure.Ledger.PendingJournalPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.PendingAdjustmentsPeriodCloseProbe(), new Hasm.Infrastructure.Ledger.YearEndClosingPeriodCloseProbe(), new Hasm.Infrastructure.Inventory.InventoryValuationPeriodCloseProbe()]));
         services.AddSingleton(sp => new FiscalCalendarService(
             sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
             sp.GetRequiredService<PeriodCloseGuard>(), sp.GetRequiredService<FinancialHistoryGuard>(), sp.GetRequiredService<TimeProvider>()));

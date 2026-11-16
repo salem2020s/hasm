@@ -71,7 +71,7 @@ public static class StockDocumentEndpoints
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         var c = await svc.CapabilitiesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
-        return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, approve = c.Approve, cancel = c.Cancel, post = c.Post });
+        return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, approve = c.Approve, cancel = c.Cancel, post = c.Post, reverse = c.Reverse });
     }
 
     private static async Task<IResult> Warehouses(HttpContext http, AccessService access, StockDocumentManagementService svc)

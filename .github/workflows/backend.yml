@@ -112,7 +112,7 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: dotnet test tests/integration/Hasm.Database.IntegrationTests --no-build --configuration Release --logger "trx;LogFileName=pg-integration.trx" --results-directory "$env:RUNNER_TEMP\trx"
 
-      - name: Verify all 887 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 901 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         env:
           EXPECTED_REGISTRY: |
@@ -178,6 +178,8 @@ jobs:
                 "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
                 # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
                 "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+                # Phase 3.7C reversal of executed stock documents, valuation close probe (company migration 0017, system migration 0019).
+                "StockReversalTests": 8, "StockReversalApiTests": 1, "StockReversalScenarioTests": 5,
             }
         run: node tools/verify/pg-trx-check.js "$env:RUNNER_TEMP\trx\pg-integration.trx" .github/workflows/backend.yml
 
