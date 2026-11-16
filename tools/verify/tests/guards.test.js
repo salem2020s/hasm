@@ -146,3 +146,13 @@ test("documentation check: the repository passes and a tree missing required fil
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), "hasm-docs-"));
   assert.ok(docs.check(empty).some(x => /missing required file/.test(x)));
 });
+
+test("head verification: the job of the other runner mode is skipped and does not count; a check skipped everywhere is refused", () => {
+  const base = { headSha: "a".repeat(40), files: ["src/backend/x.cs"], manifest };
+  const skipped = run("backend-build-test", undefined, "completed", "skipped");
+  assert.deepStrictEqual(head.evaluate({ ...base, checkRuns: [skipped, run("backend-build-test"), run("ci-guard")] }), []);
+  assert.ok(head.evaluate({ ...base, checkRuns: [skipped, run("backend-build-test", undefined, "completed", "failure"), run("ci-guard")] }).some(x => /conclusion failure/.test(x)));
+  assert.ok(head.evaluate({ ...base, checkRuns: [skipped, run("backend-build-test", undefined, "in_progress", null), run("ci-guard")] }).some(x => /still in_progress/.test(x)));
+  assert.ok(head.evaluate({ ...base, checkRuns: [skipped, skipped, run("ci-guard")] }).some(x => /conclusion skipped/.test(x)));
+  assert.ok(head.evaluate({ ...base, checkRuns: [skipped, run("ci-guard")] }).some(x => /conclusion skipped/.test(x)));
+});

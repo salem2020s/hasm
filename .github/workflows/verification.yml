@@ -1,6 +1,8 @@
 name: Verification
 
-# Always-on controls (Phase 4.0): no path filter, so documentation-only and workflow-only changes are checked too.
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on GitHub-hosted runners (the default, while free minutes remain). Set HASM_RUNNER_MODE=self-hosted to run the same checks, under the same check names,
+# on the repository's self-hosted Windows runner instead (verification-selfhosted.yml); the job of the other mode is skipped. See docs/CI-RUNNER.md.
+
 on:
   push:
     branches: [main]
@@ -10,8 +12,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   docs-traceability:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +29,8 @@ jobs:
       - run: node tools/verify/check-docs.js
 
   ci-guard:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +54,8 @@ jobs:
           fi
 
   secret-scan:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +65,8 @@ jobs:
       - run: node tools/verify/scan-secrets.js
 
   dependency-scan:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +90,8 @@ jobs:
           if echo "$OUT" | grep -q "has the following vulnerable packages"; then echo "::error::Vulnerable NuGet packages found"; exit 1; fi
 
   guard-selftest:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
