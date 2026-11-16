@@ -2,7 +2,7 @@
 
 Sources: SRS §9 (stocktake and adjustments; negative stock forbidden by default; limited authorized exception for eligible moving-average items with a provisional cost and later settlement; never FIFO, lot or serial items), ROADMAP 3.8B (SRS 9.1, 9.4), PHASE-3.6 (costing engine), PHASE-3.7A–D (accounting configuration, posting, reversal, UI), PHASE-3.8A (balances).
 
-Status: **PLAN ONLY — nothing is implemented yet.** Written before any code, as CLAUDE.md requires for substantial changes.
+Status: plan written before any code, as CLAUDE.md requires for substantial changes. Slice 3.8B-1 is built (see `docs/PHASE-3.8B-1.md`); 3.8B-2 is not started; 3.8B-3 is designed only (`docs/PHASE-3.8B-3-DESIGN.md`).
 
 ## What exists today
 * Document types are `Receipt`, `Issue`, `Transfer` (`StockDocType`); there is no stocktake and no adjustment document.
