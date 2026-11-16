@@ -32,10 +32,10 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | Phase | Title | Risk | Prerequisites | Migration implications |
 |---|---|---|---|---|
 | 3.7A | Inventory accounting configuration (first slice of 3.7) — **MERGED (PR #31, merge commit 1b27ad2)** | High | 3.6 | company 0015, system 0017 |
-| 3.7B | Atomic inventory posting (core) — **IN REVIEW (PR #33)** | Critical | 3.7A | company (posting links, state, receipt cost input), system (post permission) |
-| 3.7C | Reversal, cancellation and period-close protection — **WORK IN PROGRESS on branch feature/phase-3-7c-stock-reversal (untested)** | Critical | 3.7B | company (if state transitions need columns) |
-| 3.7D | Posting UI and capabilities | Medium | 3.7C | none |
-| 3.8A | Stock balances and item ledger | High | 3.7D, 4.0 | none or read models only |
+| 3.7B | Atomic inventory posting (core) — **MERGED (PR #33, merge commit 5e4d627)** | Critical | 3.7A | company (posting links, state, receipt cost input), system (post permission) |
+| 3.7C | Reversal, cancellation and period-close protection — **MERGED (PR #35, merge commit 484b4be)** | Critical | 3.7B | company (if state transitions need columns) |
+| 3.7D | Posting UI and capabilities — **MERGED (PR #37, merge commit ab60b55)** | Medium | 3.7C | none |
+| 3.8A | Stock balances and item ledger — **MERGED (PR #40, merge commit 9c43fc9)** | High | 3.7D, 4.0 | none or read models only |
 | 3.8B | Stocktaking, adjustments and the negative-stock exception | Critical | 3.8A | company, system |
 | 3.8C | Lots, serial numbers, expiry and reservations | High | 3.8A | company |
 | 3.8D | Back-dated movements, impact preview, recalculation, method change and revaluation | Critical | 3.7C, 3.8A | company |
