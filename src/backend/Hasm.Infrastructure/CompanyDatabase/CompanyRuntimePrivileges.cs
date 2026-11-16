@@ -104,6 +104,10 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.StockPostingLine.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockPostingEvent.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockPostingReversal.Table, ["SELECT", "INSERT"]),
+        // Stocktake (Phase 3.8B-1): sheets are never deleted (PostgreSQL refuses it); lines are rewritten only while the sheet is a draft; the history is append-only.
+        (CompanySchema.Stocktake.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.StocktakeLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.StocktakeEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
