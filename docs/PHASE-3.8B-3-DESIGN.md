@@ -103,3 +103,12 @@ Review result: no Critical; High H1 to H6 and Medium M1 to M10 are resolved in t
 **Proposals marked for the owner (not decided by the agent):** the obligation account type (liability or contra-inventory), oldest-first matching, the scope of "latest reliable receipt" (item and warehouse, non-reversed, non-zero value), approver different from creator, the soft-close warning, refusal of every other inflow while an obligation is open (R3), and the schema choice of R1.
 
 **Additional tests:** fully uncovered issue, fully matched receipt, another inflow with an open obligation, a receipt dated before the issue, rounding remainders across three partial matches, a change of account O between versions, receipt reversal after Final Close, deactivation attempts, manual entries to O refused.
+
+## Decisions taken under the owner's standing authority (2026-11-16)
+* **D1 (R1):** a costing operation of a new kind `provisional` is allowed with zero entries; `StockPosting.cost_operation` stays NOT NULL and unique. Rationale: no change to the 0016 column semantics, the one-row-per-execution rule and the 3.7C reversal traceability stay intact; the only change to existing tables is widening the operation-kind domain (an additive CHECK change) and allowing an operation of that kind to have no entries.
+* **D2:** the obligation account O is a configured liability-type account (an accrued/clearing obligation to be settled by a receipt), the conventional conservative treatment for goods issued before receipt; contra-inventory is not used because it would make the inventory asset appear negative.
+* **D3:** oldest-first matching by (effective date, sequence), receipts dated on or after the obligation only.
+* **D4:** every other inflow into an item and warehouse with an open obligation is refused (R3).
+* **D5:** "latest reliable receipt" means the most recent non-reversed receipt entry of that item and warehouse with positive quantity and positive value.
+* **D6:** the exception approver must differ from the poster and from the creator by default; a company may additionally require a second distinct approver (configurable).
+* **D7:** open obligations at soft close appear as a warning on the closing checklist; at Final Close they block (N3).
