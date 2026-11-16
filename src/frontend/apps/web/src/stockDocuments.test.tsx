@@ -326,6 +326,25 @@ describe("stock document posting (Phase 3.7D)", () => {
     await waitFor(() => expect(reverse).toHaveBeenCalledWith("d1", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), "أُدخل مرتين"));
   });
 
+  it("a reversal refused for its date is explained on the Posting tab (field errors of the server are shown, in words)", async () => {
+    const reverse = vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "effectiveDate", code: "must_stay_in_posting_period" }] }));
+    setup({ reverseStockDocument: reverse, getStockPosting: vi.fn().mockResolvedValue(stockPosting()) }, caps(), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    await userEvent.click(screen.getByRole("tab", { name: "الترحيل" }));
+    await userEvent.click(screen.getByTestId("reverse"));
+    const dlg = await screen.findByRole("dialog");
+    await userEvent.type(within(dlg).getByLabelText(/سبب العكس/), "خطأ في التاريخ");
+    await userEvent.click(within(dlg).getByRole("button", { name: "تأكيد" }));
+    expect(await screen.findByTestId("posting-error")).toHaveTextContent("يجب أن يبقى تاريخ العكس في الفترة المحاسبية");
+  });
+
+  it("the posted total keeps its decimals (100.50, not 100.5)", async () => {
+    setup({ getStockPosting: vi.fn().mockResolvedValue(stockPosting()) }, caps(), [summary({ status: 3 })], approvedDoc());
+    await openDoc();
+    await userEvent.click(screen.getByRole("tab", { name: "الترحيل" }));
+    expect(screen.getByTestId("posting-total")).toHaveTextContent("100.50");
+  });
+
   it("without the post and reverse permissions the actions are absent, and a reversed document shows its reversal", async () => {
     setup({ getStockPosting: vi.fn().mockResolvedValue(null) }, caps({ post: [], reverse: [] }), [summary({ status: 3 })], approvedDoc());
     await openDoc();

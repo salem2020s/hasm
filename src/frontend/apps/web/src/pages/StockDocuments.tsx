@@ -16,7 +16,10 @@ import { blankToNull, invName } from "./inventoryCommon";
  */
 const PAGE = 25;
 const TYPES: StockDocType[] = [1, 2, 3];
-const todayIso = () => new Date().toISOString().slice(0, 10);
+/** The user's LOCAL calendar date (not the UTC date: near midnight the UTC date is another day and could pick the wrong fiscal period). */
+const todayIso = () => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+/** Amounts are shown with at least two decimals (exact, no floating point artefacts); the server enforces the scale of the base currency. */
+const money = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6, useGrouping: false });
 
 interface LineRow { key: number; item: StockItemRef | null; unitId: string; quantity: string; notes: string }
 interface Form { docType: StockDocType; source: string; target: string; date: string; reference: string; notes: string; lines: LineRow[] }
@@ -328,10 +331,10 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
       ),
     },
     ...(doc && status === 3 ? [{
-      id: "posting", label: t("stock.tab.posting"), invalid: invalid.has("general") === false && !!errors.lines && tab === "posting",
+      id: "posting", label: t("stock.tab.posting"), invalid: Object.keys(errors).length > 0,
       content: (
         <div data-testid="posting-panel">
-          {errors.lines && <Banner kind="error" testId="posting-error">{errors.lines}</Banner>}
+          {Object.keys(errors).length > 0 && <Banner kind="error" testId="posting-error">{[...new Set(Object.values(errors))].join(" ")}</Banner>}
           {!posting ? (
             <div>
               <Banner kind="info" testId="not-executed">{t("stock.posting.not_executed")}</Banner>
@@ -356,7 +359,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
                       </tbody>
                     </table>
                   </div>
-                  <p data-testid="amount-total">{t("stock.posting.total_preview")}: <bdi dir="ltr">{String(Number(previewTotal.toFixed(6)))}</bdi></p>
+                  <p data-testid="amount-total">{t("stock.posting.total_preview")}: <bdi dir="ltr">{money(Number(previewTotal.toFixed(6)))}</bdi></p>
                 </div>
               ) : <p className="hint">{t("stock.posting.cost_computed")}</p>}
             </div>
@@ -364,7 +367,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
             <div data-testid="posting-summary">
               <p><span className={`chip ${posting.accountingState === 3 || posting.accountingState === 2 ? "chip-ok" : posting.accountingState === 4 ? "chip-off" : ""}`} data-testid="accounting-state">{t(`stock.posting.state.${posting.accountingState}`)}</span></p>
               <dl className="details">
-                <dt>{t("stock.posting.total")}</dt><dd><bdi dir="ltr" data-testid="posting-total">{posting.totalValue}</bdi></dd>
+                <dt>{t("stock.posting.total")}</dt><dd><bdi dir="ltr" data-testid="posting-total">{money(posting.totalValue)}</bdi></dd>
                 <dt>{t("stock.posting.effective")}</dt><dd><bdi dir="ltr">{posting.effectiveDate}</bdi></dd>
                 <dt>{t("stock.posting.at")}</dt><dd><bdi dir="ltr">{posting.postedAtUtc.slice(0, 19).replace("T", " ")}</bdi></dd>
                 <dt>{t("stock.posting.journal")}</dt>
@@ -376,8 +379,8 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
                   <thead><tr><th scope="col">#</th><th scope="col">{t("stock.item")}</th><th scope="col">{t("stock.base_quantity")}</th><th scope="col">{t("stock.posting.amount")}</th></tr></thead>
                   <tbody>
                     {posting.lines.map((l) => {
-                      const line = doc.lines.find((x) => x.itemId === l.itemId);
-                      return <tr key={l.lineNo}><td>{l.lineNo}</td><td><bdi dir="ltr">{line?.itemCode ?? l.itemId}</bdi></td><td><bdi dir="ltr">{l.baseQuantity}</bdi></td><td><bdi dir="ltr">{l.amount}</bdi></td></tr>;
+                      const line = doc.lines.find((x) => x.lineNo === l.lineNo);
+                      return <tr key={l.lineNo}><td>{l.lineNo}</td><td><bdi dir="ltr">{line?.itemCode ?? l.itemId}</bdi></td><td><bdi dir="ltr">{l.baseQuantity}</bdi></td><td><bdi dir="ltr">{money(l.amount)}</bdi></td></tr>;
                     })}
                   </tbody>
                 </table>
