@@ -85,8 +85,7 @@ public class StockPostingHardeningTests : StockPostingTestBase
         var item = (await Inv.GetItemAsync(Company.Id, Fifo.Id))!;
         Ok(await Inv.SetItemActiveAsync(Admin.Id, Company.Id, Fifo.Id, item.Revision, false));
         var counts = await Counts();
-        var r = await Post(doc, Amounts(10m));
-        Assert.False(r.IsOk);
+        Invalid(await Post(doc, Amounts(10m)), "lines[0].itemId", "item_inactive");
         Assert.Equal(counts, await Counts());
     }
 }
