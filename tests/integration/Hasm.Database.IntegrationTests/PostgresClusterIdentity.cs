@@ -22,6 +22,8 @@ public static class PostgresClusterIdentity
 {
     public const int LocalTestPort = 5433;
     public const int GitHubServicePort = 5432;
+    /// <summary>The private loopback port of the disposable cluster that a job on the repository's SELF-HOSTED Windows runner creates for itself (never 5432 and never the standing 5433 cluster).</summary>
+    public const int SelfHostedCiPort = 5439;
     public const string MarkerDatabase = "hasm_test_cluster_identity";
     public const string FingerprintVar = "HASM_TEST_PG_CLUSTER_FINGERPRINT";
     public const int MinimumFingerprintLength = 32;
@@ -34,12 +36,19 @@ public static class PostgresClusterIdentity
     public static bool IsGitHubActionsJob(Func<string, string?> env) =>
         env("GITHUB_ACTIONS") == "true" && !string.IsNullOrEmpty(env("GITHUB_RUN_ID")) && env("RUNNER_ENVIRONMENT") == "github-hosted";
 
+    /// <summary>
+    /// True only inside a GitHub Actions job on a SELF-HOSTED runner whose workflow step created its own disposable cluster (the step exports HASM_CI_PG_DIR). Like <see cref="IsGitHubActionsJob"/> this alone never opens the gate:
+    /// the server must still prove its identity (marker database, per-run fingerprint, database inventory, loopback, acknowledgement) and the port must be exactly <see cref="SelfHostedCiPort"/>.
+    /// </summary>
+    public static bool IsSelfHostedActionsJob(Func<string, string?> env) =>
+        env("GITHUB_ACTIONS") == "true" && !string.IsNullOrEmpty(env("GITHUB_RUN_ID")) && env("RUNNER_ENVIRONMENT") == "self-hosted" && !string.IsNullOrEmpty(env("HASM_CI_PG_DIR"));
+
     /// <summary>Pure decision. Returns null when the observed server is verified as the disposable instance, otherwise the reason.</summary>
-    public static string? Decide(int connectionPort, bool githubJob, string? expectedFingerprint, ClusterObservation? observed)
+    public static string? Decide(int connectionPort, bool githubJob, string? expectedFingerprint, ClusterObservation? observed, bool selfHostedCiJob = false)
     {
         if (string.IsNullOrWhiteSpace(expectedFingerprint) || expectedFingerprint.Length < MinimumFingerprintLength)
             return $"{FingerprintVar} is not set to the disposable cluster fingerprint.";
-        var portAllowed = connectionPort == LocalTestPort || (githubJob && connectionPort == GitHubServicePort);
+        var portAllowed = connectionPort == LocalTestPort || (githubJob && connectionPort == GitHubServicePort) || (selfHostedCiJob && connectionPort == SelfHostedCiPort);
         if (!portAllowed) return "The server port is not the disposable test port; refusing to run destructive tests.";
         if (observed is null) return NotInspectedReason;
         if (observed.ServerPort != connectionPort) return "The server reports a different port than the one connected to; refusing.";
@@ -64,11 +73,12 @@ public static class PostgresClusterIdentity
         {
             var builder = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false, Timeout = 5, CommandTimeout = 10 };
             var githubJob = IsGitHubActionsJob(Environment.GetEnvironmentVariable);
+            var selfHostedJob = IsSelfHostedActionsJob(Environment.GetEnvironmentVariable);
             var expected = Environment.GetEnvironmentVariable(FingerprintVar);
             // Port and fingerprint presence are decided BEFORE any connection: a non-disposable port (e.g. the permanent development
             // cluster) is refused without ever being contacted.
-            reason = Decide(builder.Port, githubJob, expected, null);
-            if (reason == NotInspectedReason) reason = Decide(builder.Port, githubJob, expected, Observe(builder));
+            reason = Decide(builder.Port, githubJob, expected, null, selfHostedJob);
+            if (reason == NotInspectedReason) reason = Decide(builder.Port, githubJob, expected, Observe(builder), selfHostedJob);
         }
         catch (Exception)
         {

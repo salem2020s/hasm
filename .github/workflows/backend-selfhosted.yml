@@ -1,0 +1,129 @@
+name: Backend (self-hosted)
+
+# Runner mode (repository variable HASM_RUNNER_MODE): these jobs run on the self-hosted Windows runner (self-hosted, Windows, X64) ONLY when HASM_RUNNER_MODE=self-hosted; otherwise they are skipped and the hosted jobs of backend.yml run.
+# The job ids are the required check names and are identical in both files. Only code of THIS repository runs here (same-repository condition on every job, no pull_request_target). See docs/CI-RUNNER.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["src/backend/**", "tests/**", ".github/workflows/backend.yml", ".github/workflows/backend-selfhosted.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-vm-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend-build-test:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require the .NET 10 SDK installed on the runner
+        run: |
+          $v = (dotnet --version).Trim()
+          Write-Host "dotnet $v"
+          if (-not $v.StartsWith('10.')) { throw "The runner needs the .NET 10 SDK, found $v" }
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+      - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
+
+  postgres-integration:
+    if: ${{ vars.HASM_RUNNER_MODE == 'self-hosted' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # Real PostgreSQL integration tests against a DISPOSABLE cluster that this job creates in its own temporary folder on a private loopback port and destroys at the end.
+    # Nothing here touches the development cluster (5432), the standing disposable test cluster (5433), production or customer data; see docs/DEVELOPMENT.md and docs/CI-RUNNER.md.
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: powershell
+    env:
+      HASM_REQUIRE_PG_TESTS: "1"                                      # a closed gate FAILS, never skips
+      HASM_REQUIRE_PG_ROLE_TESTS: "1"                                 # same for the tests that need real distinct PostgreSQL login roles
+      HASM_TEST_PG_DISPOSABLE: yes-this-server-is-disposable           # explicit disposable-server acknowledgement
+      HASM_CI_PG_PORT: "5439"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require the .NET 10 SDK installed on the runner
+        run: |
+          $v = (dotnet --version).Trim()
+          if (-not $v.StartsWith('10.')) { throw "The runner needs the .NET 10 SDK, found $v" }
+
+      - name: Create the disposable PostgreSQL cluster with restricted test-only roles
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = 'C:\Program Files\PostgreSQL\18\bin'
+          if (-not (Test-Path "$bin\initdb.exe")) { throw 'PostgreSQL 18 binaries were not found on the runner' }
+          $port = [int]$env:HASM_CI_PG_PORT
+          if ($port -in 5432, 5433) { throw "Port $port belongs to a standing cluster; this job only uses its own private port" }
+          if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { throw "Port $port is already in use; refusing to start a cluster" }
+          function New-Secret { $b = New-Object byte[] 24; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') }) }
+          $dir = Join-Path $env:RUNNER_TEMP 'hasm-pg-ci'
+          if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # exported at once so that the destroy step cleans up even when the start-up fails half way
+          "HASM_CI_PG_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $boot = New-Secret; $testPw = New-Secret; $rolePw = New-Secret; $fingerprint = (New-Secret) + (New-Secret)
+          foreach ($s in $boot, $testPw, $rolePw, $fingerprint) { Write-Host "::add-mask::$s" }
+          Set-Content -NoNewline -Path "$dir\pw.txt" -Value $boot
+          & "$bin\initdb.exe" -D "$dir\data" -U ci_bootstrap --pwfile="$dir\pw.txt" --auth=scram-sha-256 -E UTF8 --locale=C | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'initdb failed' }
+          Remove-Item "$dir\pw.txt" -Force
+          Add-Content -Path "$dir\data\postgresql.conf" -Value "`nport = $port`nlisten_addresses = '127.0.0.1'`nmax_connections = 200`nssl = off`nfsync = off`nsynchronous_commit = off`nfull_page_writes = off"
+          # Start-Process without -Wait: waiting on the server process tree would hang the step (its output handles stay open); readiness is polled instead.
+          Start-Process -FilePath "$bin\pg_ctl.exe" -ArgumentList @('-D', "`"$dir\data`"", '-l', "`"$dir\postgres.log`"", '-w', '-t', '60', 'start') -WindowStyle Hidden | Out-Null
+          $deadline = (Get-Date).AddSeconds(90)
+          do { Start-Sleep -Milliseconds 500; & "$bin\pg_isready.exe" -h 127.0.0.1 -p $port *> $null } until ($LASTEXITCODE -eq 0 -or (Get-Date) -gt $deadline)
+          if ($LASTEXITCODE -ne 0) { if (Test-Path "$dir\postgres.log") { Get-Content "$dir\postgres.log" -Tail 30 }; throw 'The disposable PostgreSQL cluster did not become ready' }
+          $env:PGPASSWORD = $boot
+          function Psql([string]$Db, [string]$Sql) { $out = & "$bin\psql.exe" -h 127.0.0.1 -p $port -U ci_bootstrap -d $Db -v ON_ERROR_STOP=1 -X -q -At -c $Sql 2>&1; if ($LASTEXITCODE -ne 0) { throw "psql failed: $out" }; $out }
+          # hasm_test_admin: the ordinary test account (create/drop its own temporary databases only; no superuser, role or replication rights).
+          # hasm_test_roleadmin: used ONLY by the per-company runtime-role tests to create and drop the login roles those tests need (CREATEROLE, not superuser, cannot create databases).
+          Psql postgres "CREATE ROLE hasm_test_admin LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD '$testPw'" | Out-Null
+          Psql postgres "CREATE ROLE hasm_test_roleadmin LOGIN CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION PASSWORD '$rolePw'" | Out-Null
+          Psql postgres "CREATE DATABASE hasm_test_bootstrap" | Out-Null
+          # Cluster identity marker: the integration-test gate requires the server to prove it is this disposable cluster (marker database + per-run secret fingerprint), in addition to the loopback/acknowledgement checks.
+          Psql postgres "CREATE DATABASE hasm_test_cluster_identity" | Out-Null
+          Psql hasm_test_cluster_identity "CREATE TABLE cluster_identity(fingerprint text NOT NULL, purpose text NOT NULL); INSERT INTO cluster_identity VALUES ('$fingerprint', 'hasm-disposable-test-cluster'); REVOKE ALL ON cluster_identity FROM PUBLIC; GRANT SELECT ON cluster_identity TO hasm_test_admin, hasm_test_roleadmin;" | Out-Null
+          # Fail-fast inventory assertion: exactly the built-in databases, the bootstrap database and the identity marker may exist.
+          $inventory = ((Psql postgres "SELECT datname FROM pg_database ORDER BY 1") -join ' ').Trim()
+          Write-Host "Database inventory before tests: $inventory"
+          if ($inventory -ne 'hasm_test_bootstrap hasm_test_cluster_identity postgres template0 template1') { throw 'Unexpected database inventory in the disposable CI cluster' }
+          Remove-Item Env:PGPASSWORD
+          # The cluster has no TLS; non-TLS is confined to this disposable loopback cluster (see DEVELOPMENT.md).
+          "HASM_TEST_PG_CLUSTER_FINGERPRINT=$fingerprint" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "HASM_TEST_PG_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_admin;Password=$testPw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_roleadmin;Password=$rolePw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - run: dotnet restore src/backend/Hasm.slnx
+      - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
+
+      - name: Run PostgreSQL integration tests
+        run: dotnet test tests/integration/Hasm.Database.IntegrationTests --no-build --configuration Release --logger "trx;LogFileName=pg-integration.trx" --results-directory "$env:RUNNER_TEMP\trx"
+
+      - name: Verify all 901 PostgreSQL tests executed and passed (none skipped)
+        # The exact per-class registry is the EXPECTED block in .github/workflows/backend.yml (single source, protected by ci-guard).
+        run: node tools/verify/pg-trx-check.js "$env:RUNNER_TEMP\trx\pg-integration.trx" .github/workflows/backend.yml
+
+      - name: Destroy the disposable PostgreSQL cluster
+        if: ${{ always() }}
+        run: |
+          $dir = $env:HASM_CI_PG_DIR
+          if ($dir -and (Test-Path $dir)) {
+            if (Test-Path "$dir\data") { & 'C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe' -D "$dir\data" -m immediate stop 2>&1 | Out-Null }
+            # a server that started late holds the data directory: stop any postgres process that was started from it
+            Get-CimInstance Win32_Process -Filter "Name = 'postgres.exe'" | Where-Object { $_.CommandLine -like "*$dir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+          }
