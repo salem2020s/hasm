@@ -96,7 +96,7 @@ emit("RELEASE1-TRACEABILITY.md", t);
 
 // ---------- ROADMAP.md ----------
 const appendix = fs.readFileSync(path.join(__dirname, "appendix-a.md"), "utf8").replace(/\r\n/g, "\n").trimEnd();
-const prc = phases.map(p => `| ${p.id} | ${esc(p.title)} | ${RISK[p.risk]} | ${p.pre.join(", ")} | ${esc(p.mig)} |`).join("\n");
+const prc = phases.map(p => `| ${p.id} | ${esc(p.title)}${p.state ? " — **" + p.state + "**" : ""} | ${RISK[p.risk]} | ${p.pre.join(", ")} | ${esc(p.mig)} |`).join("\n");
 const exec = order.filter(id => phaseIds.has(id));
 const decisionTable = ["| ID | Status | Topic | Question | Basis in approved documents | Resolution / proposal and consequence | Blocks |", "|---|---|---|---|---|---|---|", ...decisions.map(x => `| ${x.id} | ${x.status} | ${esc(x.topic)} | ${esc(x.question)} | ${esc(x.basis)} | ${esc(x.resolution)} | ${esc(x.blocks)} |`)].join("\n");
 let r = `# HASM — Release 1 implementation roadmap (authoritative phase sequence)
@@ -125,7 +125,7 @@ Status words: *merged* = on \`main\` with CI green on the pull request head (che
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Built and **in review, not merged**: **3.7A** (inventory accounting configuration) on branch \`feature/phase-3-7a-inventory-accounting\`.
+Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit \`1b27ad2\`). In review: **4.0** verification infrastructure (PR #32).
 
 ## Remaining phases (summary)
 Execution order is in \`docs/RELEASE1-DEPENDENCIES.md\`. Risk is the accounting and security risk of the phase.
