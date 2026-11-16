@@ -125,7 +125,7 @@ Status words: *merged* = on \`main\` with CI green on the pull request head (che
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit \`1b27ad2\`). In review: **4.0** verification infrastructure (PR #32).
+Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit \`1b27ad2\`). Merged: **4.0** verification infrastructure (PR #32, merge commit \`7e05052\`). In review: **3.7B** (PR #33).
 
 ## Remaining phases (summary)
 Execution order is in \`docs/RELEASE1-DEPENDENCIES.md\`. Risk is the accounting and security risk of the phase.

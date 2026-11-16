@@ -279,7 +279,7 @@ public class FiscalApiTests : FiscalAccessTestBase
         Assert.Equal(0, empty.Json.GetProperty("years").GetArrayLength());
         Assert.Equal("2026-11-09", empty.Json.GetProperty("today").GetString());
         Assert.True(empty.Json.GetProperty("closeChecksImplemented").GetBoolean());                                                // every domain with a module has a real probe
-        Assert.Equal(["inventory_valuation_differences"], empty.Json.GetProperty("closeChecksNotApplicable").EnumerateArray().Select(x => x.GetString()).ToArray());   // listed honestly, never as passed
+        Assert.Empty(empty.Json.GetProperty("closeChecksNotApplicable").EnumerateArray());   // since Phase 3.7C the inventory valuation check is a real probe, so no domain is listed as not applicable any more
         var can = empty.Json.GetProperty("can");
         Assert.True(can.GetProperty("create").GetBoolean());
         Assert.True(can.GetProperty("softClose").GetBoolean());

@@ -9,12 +9,20 @@ using NpgsqlTypes;
 using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 using PE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingEvent;
 using RV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingReversal;
+using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 
 namespace Hasm.Infrastructure.Inventory;
 
 public sealed partial class StockPostingService
 {
     public static string ReversalKeyOf(Guid documentId) => $"stock_document_reversal:{documentId}";
+
+    private static async Task<Guid?> PeriodOfAsync(CompanyAuditedWork work, DateOnly date, CancellationToken ct)
+    {
+        await using var q = new NpgsqlCommand($"SELECT {FP.Id} FROM {FP.Table} WHERE {FP.StartDate} <= @d AND {FP.EndDate} >= @d", work.Connection, work.Transaction);
+        q.Parameters.AddWithValue("d", date);
+        return await q.ExecuteScalarAsync(ct) as Guid?;
+    }
 
     /// <summary>
     /// Reverses an EXECUTED document (Phase 3.7C) in one transaction: the costing engine takes the stock effect back with compensating entries (an outflow gets back exactly what it consumed; an inflow is taken out again,
@@ -61,6 +69,10 @@ public sealed partial class StockPostingService
                 {
                     var view = await JournalService.LoadViewAsync(work.Connection, work.Transaction, jid, true, ct) ?? throw Conflict("journal_not_found");
                     var description = $"Reversal of stock document {doc.Number}";
+                    // while the journal entry is not posted the stock movement is not in the ledger, so the costing reversal must stay in the SAME fiscal period as the posting (otherwise the posting period would show a
+                    // valuation difference forever); a posted entry is reversed by a draft reversal entry, so a later date is fine
+                    if (view.Header.Status is not (JournalStatus.Posted or JournalStatus.Reversed) && await PeriodOfAsync(work, postedOn, ct) != await PeriodOfAsync(work, date, ct))
+                        throw StockDocumentService.Invalid("effectiveDate", "must_stay_in_posting_period");
                     switch (view.Header.Status)
                     {
                         case JournalStatus.Draft or JournalStatus.PendingApproval or JournalStatus.Approved:
@@ -71,11 +83,11 @@ public sealed partial class StockPostingService
                             var reversal = await journal.ReverseInWorkAsync(work, actor, jid, view.Header.Revision, new ReversalInput(date, description), description, ct);
                             action = 2; journalRef = reversal.Header.Id;
                             break;
-                        case JournalStatus.Cancelled:
-                            action = 1; journalRef = jid;                                  // already cancelled outside: there is no accounting effect left to undo
+                        case JournalStatus.Cancelled or JournalStatus.Reversed:
+                            action = 1; journalRef = jid;                                  // already cancelled or reversed outside the stock reversal: there is no accounting effect left to undo, and the stock side can now be repaired
                             break;
                         default:
-                            throw Conflict("journal_already_reversed");
+                            throw Conflict("journal_state_not_reversible");
                     }
                 }
                 var id = Guid.NewGuid();
