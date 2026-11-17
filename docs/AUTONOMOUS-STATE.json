@@ -85,20 +85,22 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "Internal authorized snapshot slice implemented; PG17/17,unit887/887,frontend450/450 passed; full regression and new-head CI pending; PR48 Draft, phase incomplete",
+    "state": "PAUSED at owner shutdown request; implementation pushed4616cc4; PR48 Draft/incomplete; CI dependency-scan FAILED (picomatch GHSA-fc5q-39xc-vjpf), other six applicable checks passed; final documentation-head checks/review pending",
     "knownIssues": [
-      "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
-      "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "Public preview, complete transfer/reversal/negative replay, persistence/execution, method conversion and UI remain incomplete; accounting proposals are not approved",
-      "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
-      "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
+      "High dependency advisory GHSA-fc5q-39xc-vjpf; reviewed advisory says no patched release; no exemption/downgrade/gate change made",
+      "Local full integration985pass/50fail/0skip; Admin RID-layout and later PG connection/auth failures; remaining failures unclassified; shared TRX overwritten by subsequent API run",
+      "Disk-space shortage during verification copies; exact failed temp copy removed; clean committed-source verification rerun34/34 passed",
+      "Public preview, full transfer/reversal/obligation replay, proposals/execution, revaluation and UI incomplete; owner-held accounting proposals unresolved",
+      "Final committed-head independent confirmation pending; no merge permitted",
+      "Original Claude work untouched; no caches, temporary files, test databases or secrets committed",
+      "Four PR46 Medium follow-ups before3.9B; OD-11 blocks3.8C"
     ]
   },
   "next": [
-    "Finish full regression and preserve snapshot checkpoint on existing PR48; verify exact head CI and independent review",
-    "Resolve consequential compensation-classification and nonempty-method-conversion contracts in PHASE-3.8D-ACCOUNTING-PROPOSAL.md before dependent implementation",
-    "Complete all remaining 3.8D slices before ready/merge; existing backdated and method-change guards stay active",
-    "3.8C remains blocked by OD-11; four PR46 Medium fixes required before3.9B"
+    "Resume only after owner restarts: reconcile main, PR48 exact head, open PRs and working tree; implementation is4616cc4c9be03a99a13bd13f483e8d32a048f983",
+    "Investigate supported picomatch remediation without bypassing dependency-scan; capture new exact-head CI",
+    "Recover adequate disk space using only verified disposable artifacts; diagnose local PG connection failures; rerun full suite with unique per-project TRX paths and normal Admin layout",
+    "Confirm final-head independent review; resolve accounting proposals before dependent writes; finish whole3.8D and every required gate before merge"
   ],
   "openDecisions": [
     "OD-1",
