@@ -9,6 +9,11 @@
   * **M1 (Medium, fixed)** — valuation-policy race: group valuation and company-default changes run under the inventory master lock, not the posting lock, and the obligation insert trigger checked only the position's method.
     Fixed: the trigger locks every group of the item's chain and the inventory settings row `FOR SHARE` and also requires the item's live resolved method (`ResolvedMethodFunction`) to be moving average. Test
     `NegativeStockReviewTests.M1_…` (direct insert refused after a policy change; a concurrent policy change and exception posting never leave an open obligation under another method).
+  * **M1 CI follow-up (fixed)** — on CI (head 704406d) the policy change won the race and the posting met the new trigger as a raw database error (HTTP 500). The posting now locks the flagged items, their group chains and
+    the inventory settings row `FOR SHARE` first and refuses a flagged line that would exceed the stock but no longer resolves to moving average, is tracked or inactive with the business conflict
+    `negative_exception_item_ineligible` (409 with the line field), before anything is written; the trigger stays the backstop. The concurrency test asserts the clean answer for BOTH orderings; a sequential test covers the
+    policy-changed-first path (and shows tracking switched on after the approval is refused cleanly by the existing line re-validation, 400). The concurrent test passed 5 of 5 local runs. Other new trigger paths were scanned: each has a service pre-check under the same locks or is mapped to a stable code (flag `negative_*`, guards
+    `negative_obligation_open`, journal `account_automatic_only`); the deferred and empty-operation triggers are backstops of service checks.
   * **M2 (Medium, fixed)** — approving committed a cost position (the plan created positions with their method fixed). Fixed: approvals and previews plan READ-ONLY (a missing position reads as empty with the
     method its policy resolves to); only posting creates the position. Test `M2_M4_…`.
   * **M3 / M5 (Medium, fixed)** — the live receipt counter G could equal the O or V of an open obligation (settlement journal netting, reconciliation wrong). Fixed: refused at settlement

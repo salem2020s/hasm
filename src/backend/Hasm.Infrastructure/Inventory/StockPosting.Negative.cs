@@ -11,6 +11,10 @@ using NO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligation;
 using NX = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeSettlement;
 using NR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligationReversal;
 using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
+using I = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Item;
+using GR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ItemGroup;
+using IS = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventorySettings;
+using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 
 namespace Hasm.Infrastructure.Inventory;
 
@@ -33,6 +37,7 @@ public sealed partial class StockPostingService
     /// </summary>
     private async Task<NegativeIssue?> PrepareNegativeIssueAsync(CompanyAuditedWork work, Guid actor, StockDocumentView doc, CancellationToken ct)
     {
+        await RefuseIneligibleUnderLocksAsync(work, doc, ct);
         var first = await NegativeStockPlanner.PlanAsync(work, costing, doc, null, true, ct);
         if (!first.Needed) return null;
         var settings = await NegativeStockPlanner.SettingsAsync(work.Connection, work.Transaction, ct);
@@ -46,6 +51,59 @@ public sealed partial class StockPostingService
             throw Conflict(approvals.Any(a => a.Hash == plan.Hash && a.ApproverId == actor) ? "negative_exception_self_approval" : "negative_exception_approval_required");
         if (plan.Problems.Count > 0) throw Conflict(plan.Problems[0]);
         return new NegativeIssue(plan, valid[0].Id);
+    }
+
+    /// <summary>
+    /// CI follow-up of review M1: the item rows, every group of their chains and the inventory settings row are locked <c>FOR SHARE</c> FIRST (a policy, tracking or activity change under the inventory master lock either
+    /// committed before, and is seen now, or waits for this posting and its guard trigger then refuses it), then a flagged item whose line would exceed the stock but which no longer resolves to moving average, is tracked or
+    /// is inactive is refused with the business conflict <c>negative_exception_item_ineligible</c> naming the line, before anything is written. The obligation trigger stays the backstop.
+    /// </summary>
+    private async Task RefuseIneligibleUnderLocksAsync(CompanyAuditedWork work, StockDocumentView doc, CancellationToken ct)
+    {
+        if (doc.DocType != (int)StockDocType.Issue || doc.SourceWarehouseId is not { } wh) return;
+        // only flagged items can use the exception (the flag changes under the structure lock this posting holds); an ordinary issue locks nothing more
+        var flags = await NegativeStockPlanner.FlagsAsync(work.Connection, work.Transaction, doc.Lines.Select(l => l.ItemId), ct);
+        var items = flags.Where(f => f.Value).Select(f => f.Key).OrderBy(x => x).ToArray();
+        if (items.Length == 0) return;
+        await using (var lk = new NpgsqlCommand(
+            $"SELECT 1 FROM {I.Table} WHERE {I.Id} = ANY(@ids) ORDER BY {I.Id} FOR SHARE", work.Connection, work.Transaction))
+        {
+            lk.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = items });
+            await lk.ExecuteNonQueryAsync(ct);
+        }
+        foreach (var item in items)
+        {
+            Guid? g;
+            await using (var q = new NpgsqlCommand($"SELECT {I.GroupId} FROM {I.Table} WHERE {I.Id} = @i", work.Connection, work.Transaction)) { q.Parameters.AddWithValue("i", item); g = await q.ExecuteScalarAsync(ct) as Guid?; }
+            for (var depth = 0; g is { } gid && depth < 32; depth++)
+            {
+                await using var q = new NpgsqlCommand($"SELECT {GR.ParentId} FROM {GR.Table} WHERE {GR.Id} = @g FOR SHARE", work.Connection, work.Transaction);
+                q.Parameters.AddWithValue("g", gid);
+                g = await q.ExecuteScalarAsync(ct) as Guid?;
+            }
+        }
+        await using (var s = new NpgsqlCommand($"SELECT 1 FROM {IS.Table} FOR SHARE", work.Connection, work.Transaction)) await s.ExecuteNonQueryAsync(ct);
+        var fields = new List<FieldError>();
+        var onHand = new Dictionary<Guid, decimal>();
+        for (var i = 0; i < doc.Lines.Count; i++)
+        {
+            var l = doc.Lines[i];
+            if (!flags[l.ItemId]) continue;                                                                   // not flagged: the default refusal applies (insufficient_stock)
+            bool ok; decimal qty;
+            await using (var q = new NpgsqlCommand(
+                $"SELECT ({NG.ResolvedMethodFunction}(i.{I.Id}) = 2 AND i.{I.IsActive} AND NOT (i.{I.IsLot} OR i.{I.IsSerial} OR i.{I.HasExpiry})), coalesce((SELECT p.{PO.Quantity} FROM {PO.Table} p WHERE p.{PO.ItemId} = i.{I.Id} AND p.{PO.WarehouseId} = @w), 0) " +
+                $"FROM {I.Table} i WHERE i.{I.Id} = @i", work.Connection, work.Transaction))
+            {
+                q.Parameters.AddWithValue("i", l.ItemId); q.Parameters.AddWithValue("w", wh);
+                await using var r = await q.ExecuteReaderAsync(ct);
+                await r.ReadAsync(ct);
+                ok = r.GetBoolean(0); qty = r.GetDecimal(1);
+            }
+            var left = onHand.TryGetValue(l.ItemId, out var used) ? used : qty;
+            onHand[l.ItemId] = Math.Max(0m, left - l.BaseQuantity);
+            if (!ok && l.BaseQuantity > left) fields.Add(new FieldError($"lines[{i}].itemId", "negative_exception_item_ineligible"));
+        }
+        if (fields.Count > 0) throw new StockDocumentService.Abort(ConfigStatus.Conflict, "negative_exception_item_ineligible", fields);
     }
 
     private static async Task<Guid> PositionIdAsync(CompanyAuditedWork work, Guid item, Guid warehouse, CancellationToken ct)

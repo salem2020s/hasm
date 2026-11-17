@@ -100,6 +100,8 @@ issue above the stock is split into the COVERED part (the unchanged engine, real
 ## Review of PR #45 (record: `docs/review-records/PR-45-phase-3.8B-3.md`)
 * **M1** — the obligation insert trigger also requires the item's LIVE resolved method to be moving average and locks the item's group chain and the inventory settings row `FOR SHARE` (a policy change under the
   inventory master lock and an exception posting serialise; whichever wins, no open obligation coexists with another method).
+* **M1 CI follow-up** — the posting itself takes those `FOR SHARE` locks first and refuses a flagged line that no longer resolves to moving average (or is tracked or inactive) with `negative_exception_item_ineligible`
+  (409, line field) before writing anything; the trigger is only the backstop. `NegativeStockReviewTests` now has 4 tests (registry 946 → 947).
 * **M2 / M4** — approval and preview plan read-only: no position is created or locked (a missing position reads as empty with the method its policy resolves to, so the snapshot equals the posting's); the preview takes no
   company-wide lock and is rolled back. Only posting creates the position.
 * **M3 / M5** — the receipt counter account may not be the O or V of an open obligation: refused at settlement (`negative_settlement_account_conflict`) and at configuration save

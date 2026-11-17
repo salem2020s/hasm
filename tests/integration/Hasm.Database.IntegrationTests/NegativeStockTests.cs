@@ -690,12 +690,38 @@ public class NegativeStockReviewTests : NegativeStockTestBase
         var both = await Task.WhenAll(
             Task.Run(async () => (object)await Post(next)),
             Task.Run(async () => (object)await Inv.UpdateGroupAsync(Admin.Id, Company.Id, group.Id, group.Revision, new ItemGroupInput(group.Code, group.NameAr, group.NameEn, group.ParentId, 1))));
-        var posted = ((ConfigResult<StockPostingView>)both[0]).IsOk;
-        var changed = ((ConfigResult<ItemGroupView>)both[1]).IsOk;
-        Assert.True(posted ^ changed, $"posted={posted} changed={changed}");
+        var post = (ConfigResult<StockPostingView>)both[0];
+        var change = (ConfigResult<ItemGroupView>)both[1];
+        Assert.True(post.IsOk ^ change.IsOk, $"posted={post.Code} changed={change.Code}");
+        // both orderings end in a clean business answer (never a raw database error): the loser is refused with its conflict code
+        if (post.IsOk) Assert.Equal((ConfigStatus.Conflict, "negative_obligation_open"), (change.Status, change.Code));
+        else Assert.Equal((ConfigStatus.Conflict, "negative_exception_item_ineligible", "lines[0].itemId"), (post.Status, post.Code, post.Fields!.Single().Field));
         var valuation = await Sql<short>($"SELECT {G.Valuation} FROM {G.Table} WHERE {G.Id} = '{Avg.GroupId}'");
-        Assert.Equal(posted ? (short)2 : (short)1, valuation);
-        Assert.Equal(posted ? 1 : 0, (await Obligations(openOnly: true)).Count);
+        Assert.Equal(post.IsOk ? (short)2 : (short)1, valuation);
+        Assert.Equal(post.IsOk ? 1 : 0, (await Obligations(openOnly: true)).Count);                         // the invariant: no open obligation under another method
+    }
+
+    [PostgresFact]
+    public async Task M1_a_policy_changed_after_the_approval_refuses_the_posting_with_a_business_conflict_naming_the_line_and_writes_nothing()
+    {
+        await PrepareNegative();
+        await Emptied(Avg, 3m, 15m);
+        var doc = await Exceptional(Avg, 7m, "2026-03-12");
+        var group = (await Inv.ListGroupsAsync(Company.Id)).Single(g => g.Id == Avg.GroupId);
+        Ok(await Inv.UpdateGroupAsync(Admin.Id, Company.Id, group.Id, group.Revision, new ItemGroupInput(group.Code, group.NameAr, group.NameEn, group.ParentId, 1)));   // no obligation open yet: allowed
+        var before = await NegCounts();
+        var refused = await Post(doc);
+        Assert.Equal((ConfigStatus.Conflict, "negative_exception_item_ineligible"), (refused.Status, refused.Code));
+        Assert.Equal([("lines[0].itemId", "negative_exception_item_ineligible")], refused.Fields!.Select(f => (f.Field, f.Code)));
+        Assert.Equal(before, await NegCounts());
+        // tracking switched on after the approval (the item has no open obligation, so the change itself is allowed): still a clean refusal, nothing written
+        var g2 = (await Inv.ListGroupsAsync(Company.Id)).Single(g => g.Id == Avg.GroupId);
+        Ok(await Inv.UpdateGroupAsync(Admin.Id, Company.Id, g2.Id, g2.Revision, new ItemGroupInput(g2.Code, g2.NameAr, g2.NameEn, g2.ParentId, 2)));
+        Assert.Null(await RawMessage($"UPDATE {I.Table} SET {I.IsLot} = true, {I.Revision} = {I.Revision} + 1 WHERE {I.Id} = '{Avg.Id}'"));
+        var tracked = await Post(doc);
+        Assert.Equal(ConfigStatus.Invalid, tracked.Status);                                                   // a tracked item is already refused by the re-validation of the document lines (a clean 400), before the exception
+        Assert.NotEmpty(tracked.Fields!);
+        Assert.Equal(before, await NegCounts());
     }
 
     [PostgresFact]
