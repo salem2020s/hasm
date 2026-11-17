@@ -78,11 +78,11 @@
   "active": {
     "phase": "Roadmap/checkpoint reconciliation after 3.9A",
     "branch": "feature/roadmap-checkpoint-3-9a",
-    "pr": null,
-    "state": "PR46 merged safely; documentation reconciliation in progress, then 3.8D design",
+    "pr": 47,
+    "state": "PR46 merged; PR47 roadmap reconciliation in review; then 3.8D design",
     "knownIssues": [
       "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
-      "Additional local full Windows-RID run is diagnostic, with admin CLI layout failures; all 14 affected CLI cases pass in standard layout; full head CI is 1018/1018 green",
+      "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
       "Main post-merge Actions must be observed; no production or release claim",
       "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
       "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"

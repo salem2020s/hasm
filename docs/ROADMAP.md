@@ -21,7 +21,7 @@ Status words: *merged* = on `main` with CI green on the pull request head (check
 | 3.3 | Excel/PDF export, financial statements, ledger and trial balance completion | #21 (`85035d1`) |
 | 3.4 / 3.4B | Inventory master data and tabs standard; inventory master-data import | #24 (`d4038ed`), #25 (`5f194d6`) |
 | 3.5 | Stock movement documents up to approval (non-posting) | #26 (`4ffc4ec`) |
-| 3.6 | Inventory costing engine (not wired to any document) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
+| 3.6 | Inventory costing engine foundation (wired to documents by Phase 3.7B) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
 | 3.7A-3.7D | Inventory accounting configuration, atomic posting, reversal/close protection, shared posting UI | #31, #33, #35, #37 |
 | 3.8A | Stock balances and item ledger | #40 (9c43fc9) |
 | 3.8B | Stocktakes, adjustments, negative-stock exception and settlement | #42 (84dbb4e), #43 (981e991), #45 (4b79030) |

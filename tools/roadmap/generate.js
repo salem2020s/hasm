@@ -71,7 +71,7 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 * Items traced: **${total}** = ${srsTotal} SRS items (sections 2 to 19: ${srsIds.filter(i => +i.split(".")[0] <= 19).length} requirements; section 21: ${srsIds.filter(i => i.startsWith("21.")).length} acceptance scenarios) + 12 reporting requirements.
 * MERGED: **${cnt.M || 0}** · PARTIAL: **${cnt.P || 0}** · NOT STARTED: **${cnt.N || 0}** · IN REVIEW: **${cnt.R || 0}** · CONSTRAINT: **${cnt.C || 0}** · NOT MANDATORY (R1): **${cnt.X || 0}**.
 * Still incomplete (PARTIAL + NOT STARTED + CONSTRAINT awaiting its phase): **${mandatoryOpen}**.
-* Phase 3.7A (inventory accounting configuration) is built on a branch and is counted under the items it supports (7.5 and 9.3) as PARTIAL, never as merged.
+* Phase evidence is reconciled through merged PR #46. Supplier-invoice GRNI remains PARTIAL, and the customer/supplier balance-query acceptance scenario remains PARTIAL until the corresponding subledger exists.
 
 ## Matrix
 
@@ -122,7 +122,7 @@ Status words: *merged* = on \`main\` with CI green on the pull request head (che
 | 3.3 | Excel/PDF export, financial statements, ledger and trial balance completion | #21 (\`85035d1\`) |
 | 3.4 / 3.4B | Inventory master data and tabs standard; inventory master-data import | #24 (\`d4038ed\`), #25 (\`5f194d6\`) |
 | 3.5 | Stock movement documents up to approval (non-posting) | #26 (\`4ffc4ec\`) |
-| 3.6 | Inventory costing engine (not wired to any document) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
+| 3.6 | Inventory costing engine foundation (wired to documents by Phase 3.7B) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
 | 3.7A-3.7D | Inventory accounting configuration, atomic posting, reversal/close protection, shared posting UI | #31, #33, #35, #37 |
 | 3.8A | Stock balances and item ledger | #40 (9c43fc9) |
 | 3.8B | Stocktakes, adjustments, negative-stock exception and settlement | #42 (84dbb4e), #43 (981e991), #45 (4b79030) |
