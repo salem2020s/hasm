@@ -21,7 +21,7 @@
     (`term: too_short`, UI button disabled). Tests: the reconciliation test asserts the proposal id; the M1 test asserts the search minimum.
   * **Low (follow-up, not fixed, by design)** — identity administrators see the proposals of every company (company name, proposed identifying data). This is decision D1: the only central role is the identity
     administrator, who already administers every company. Follow-up: a dedicated central master-data approver role with its own scope, if the owner wants one.
-  * **Lows (follow-up)** — the remaining Low observations were relayed to the author only in summary form; none concerns isolation, accounting or security invariants. They are carried as follow-ups of 3.9B
+  * **Lows (follow-up, not fixed)** — an `already_linked` refusal moves the local party to Rejected although a system link exists (permanent `link_missing_locally`; manual path documented, reconciliation is report-only by D6); the registry revision shown to companies reveals that other parties changed the shared data (negligible); administrator search had no minimum term length (fixed: 2 characters).
     (customer/supplier layer) and are not fixed in this PR.
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** the reviewer ran no tests. GitHub Actions on the fixed head not yet observed by the author at the time of writing.
