@@ -80,6 +80,9 @@ export function fakeClient(overrides: Partial<Record<keyof ApiClient, unknown>> 
     activateAccount: vi.fn(),
     putChartSettings: vi.fn(),
     applyChartTemplate: vi.fn(),
+    // Phase 3.8B-3: an issue document whose lines are covered by the stock has no negative-stock exception (the panel shows nothing)
+    getNegativeException: vi.fn().mockResolvedValue({ canApprove: false, exception: { enabled: false, requireSecondApprover: false, approvalsRequired: 1, validApprovals: 0, posted: false, approvals: [],
+      plan: { documentId: "d1", documentRevision: 1, documentDate: "2026-03-10", needed: false, accountingVersionId: null, obligationAccountId: null, varianceAccountId: null, counterAccountId: null, problems: [], hash: "", lines: [] } } }),
   };
   return { ...base, ...overrides } as unknown as ApiClient;
 }

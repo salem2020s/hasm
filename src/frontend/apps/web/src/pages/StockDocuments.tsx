@@ -7,6 +7,7 @@ import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 import { blankToNull, invName } from "./inventoryCommon";
+import { NegativeExceptionPanel } from "./NegativeExceptionPanel";
 
 /**
  * Stock movement documents (Phase 3.5): receipt, issue and warehouse-to-warehouse transfer, from draft to approval. ONE implementation for Web and Windows Desktop. The screen only drives the server: every rule
@@ -362,6 +363,8 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
                   <p data-testid="amount-total">{t("stock.posting.total_preview")}: <bdi dir="ltr">{money(Number(previewTotal.toFixed(6)))}</bdi></p>
                 </div>
               ) : <p className="hint">{t("stock.posting.cost_computed")}</p>}
+              {/* Phase 3.8B-3: the negative-stock exception of an approved, not executed issue document (shown only when a line exceeds the stock or approvals exist) */}
+              {doc.docType === 2 && <NegativeExceptionPanel doc={doc} onApproved={(m) => onChanged(m)} />}
             </div>
           ) : (
             <div data-testid="posting-summary">

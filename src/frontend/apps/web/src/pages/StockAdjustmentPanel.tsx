@@ -54,6 +54,12 @@ export function StockAdjustmentPanel({ id, canPost, canReverse, onChanged }: { i
       setErrors(out); setError(t("form.fix_errors"));
       return;
     }
+    // Phase 3.8B-3 (R15): an inflow refused while a negative-stock obligation is open names the item(s) of the adjustment concerned
+    if (e instanceof ApiError && e.status === 409 && e.code === "negative_obligation_open" && adj) {
+      const codes = (e.details.fields ?? []).map((f) => /^lines\[(\d+)\]\.itemId$/.exec(f.field)).filter((m): m is RegExpExecArray => m !== null).map((m) => adj.lines[Number(m[1])]?.itemCode).filter((c): c is string => !!c);
+      setError(codes.length > 0 ? `${text(e)} (${codes.join(", ")})` : text(e));
+      return;
+    }
     setError(text(e));
   }
 
