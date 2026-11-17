@@ -1,8 +1,8 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-16",
+  "updatedAt": "2026-11-17",
   "main": {
-    "verifiedHead": "9c43fc9",
+    "verifiedHead": "981e991",
     "note": "verify against GitHub at session start; a checkpoint never proves a merge"
   },
   "baseline": {
@@ -47,20 +47,37 @@
       "pr": 40,
       "phase": "3.8A",
       "mergeCommit": "9c43fc9"
+    },
+    {
+      "pr": 41,
+      "phase": "progress docs",
+      "mergeCommit": "fb4ce69"
+    },
+    {
+      "pr": 42,
+      "phase": "3.8B-1",
+      "mergeCommit": "84dbb4e"
+    },
+    {
+      "pr": 43,
+      "phase": "3.8B-2",
+      "mergeCommit": "981e991"
     }
   ],
   "active": {
-    "phase": "3.8B",
+    "phase": "3.8B-3 design confirmation, then 3.8C/3.8D/3.9A",
     "branch": null,
     "pr": null,
     "state": "not started",
     "knownIssues": [
       "JournalAccessTests posting_and_approval_are_never_implied failed once locally (not reproduced; unresolved)",
-      "two dashboard.test.tsx tests flaky under CPU load (pass in isolation)"
+      "two dashboard.test.tsx tests flaky under CPU load (pass in isolation)",
+      "3.8B-3 implementation waits for a short confirmation re-review of docs/PHASE-3.8B-3-DESIGN.md revision 3",
+      "follow-ups: PR-42 L1-L6 (L6 done in 3.8B-2), PR-43 L1, L3, L4"
     ]
   },
   "next": [
-    "3.8B",
+    "3.8B-3",
     "3.8C",
     "3.8D",
     "3.9A"

@@ -36,7 +36,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 3.7C | Reversal, cancellation and period-close protection — **MERGED (PR #35, merge commit 484b4be)** | Critical | 3.7B | company (if state transitions need columns) |
 | 3.7D | Posting UI and capabilities — **MERGED (PR #37, merge commit ab60b55)** | Medium | 3.7C | none |
 | 3.8A | Stock balances and item ledger — **MERGED (PR #40, merge commit 9c43fc9)** | High | 3.7D, 4.0 | none or read models only |
-| 3.8B | Stocktaking, adjustments and the negative-stock exception | Critical | 3.8A | company, system |
+| 3.8B | Stocktaking, adjustments and the negative-stock exception — **SLICES 3.8B-1 (PR #42, 84dbb4e) and 3.8B-2 (PR #43, 981e991) MERGED; slice 3.8B-3 (negative-stock exception) DESIGNED (docs/PHASE-3.8B-3-DESIGN.md, revision 3, two independent reviews), NOT implemented** | Critical | 3.8A | company, system |
 | 3.8C | Lots, serial numbers, expiry and reservations | High | 3.8A | company |
 | 3.8D | Back-dated movements, impact preview, recalculation, method change and revaluation | Critical | 3.7C, 3.8A | company |
 | 3.8E | Inventory reports and cost-of-sales statement | Medium | 3.8A, 3.8D | none |
