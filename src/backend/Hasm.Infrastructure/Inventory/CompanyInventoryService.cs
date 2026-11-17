@@ -104,6 +104,8 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
         }
         catch (Abort a) { return a.To<T>(); }
         catch (Unchanged u) { return ConfigResult<T>.Ok((T)u.Value); }
+        // Phase 3.8B-3 (R12): PostgreSQL refuses a guarded change (group, tracking, deactivation, valuation policy) while a negative-stock obligation is open
+        catch (PostgresException ex) when (ex.MessageText == "negative_obligation_open") { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "negative_obligation_open"); }
     }
 
     private static object Db<T>(T? value) where T : class => (object?)value ?? DBNull.Value;

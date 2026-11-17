@@ -62,6 +62,20 @@ public static class CostingMath
         return q * step;
     }
 
+    /// <summary>
+    /// Phase 3.8B-3: the provisional value of an uncovered quantity priced from a (value, quantity) pair (the last average or the latest receipt): <c>amount x part / whole</c> with ONE rounding half away from zero to
+    /// <paramref name="moneyDecimals"/>; unlike <see cref="Proportion"/> the part may exceed the whole (more is issued than the pair held). The whole is the exact amount.
+    /// </summary>
+    public static BigInteger Scale(BigInteger amountUnits, BigInteger partQuantityUnits, BigInteger wholeQuantityUnits, int moneyDecimals)
+    {
+        if (wholeQuantityUnits.Sign <= 0 || partQuantityUnits.Sign <= 0 || amountUnits.Sign < 0) throw new CostingException("invalid_proportion");
+        if (partQuantityUnits == wholeQuantityUnits) return amountUnits;
+        var step = Pow[AmountScale - moneyDecimals];
+        var num = amountUnits * partQuantityUnits;
+        var den = wholeQuantityUnits * step;
+        return (2 * num + den) / (2 * den) * step;
+    }
+
     /// <summary>One open FIFO layer as the planner sees it (integer units).</summary>
     public sealed record LayerState(Guid Id, long Seq, BigInteger RemainingQuantity, BigInteger RemainingAmount);
 

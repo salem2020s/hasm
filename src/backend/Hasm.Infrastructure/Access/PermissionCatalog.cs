@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel, NegativeException }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -140,7 +140,8 @@ public sealed partial class PermissionCatalog
         // Approve is held by the Company Administrator preset, but separation of duties (the approver is never the submitter) is enforced by the service AND by PostgreSQL.
         // Inventory accounting configuration (3.7A): which ledger accounts hold inventory and take the other side of stock movements. Company-wide; configuring it is audited and versioned.
         new("company.inventoryaccounting", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
-        new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse]),
+        // Phase 3.8B-3: negativeexception = approve the negative-stock exception of an issue document of the warehouse (never the creator; never the poster; system migration 0022)
+        new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse, PermissionAction.NegativeException]),
         new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
         // Stocktake (3.8B-1): warehouse-scoped like stock documents; the approver is never the submitter (service AND PostgreSQL). Counting and approving create no stock movement.
         new("company.stocktake", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
@@ -248,6 +249,7 @@ public sealed partial class PermissionCatalog
         public const string StockDocsCancel = "company.stockdocs.cancel";
         public const string StockDocsPost = "company.stockdocs.post";
         public const string StockDocsReverse = "company.stockdocs.reverse";
+        public const string StockDocsNegativeException = "company.stockdocs.negativeexception";
         public const string StockBalanceView = "company.stockbalance.view";
         public const string StocktakeView = "company.stocktake.view";
         public const string StocktakeCreate = "company.stocktake.create";

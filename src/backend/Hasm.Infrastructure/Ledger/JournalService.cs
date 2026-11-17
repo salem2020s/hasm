@@ -709,6 +709,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
     /// <summary>Stable codes for the rules PostgreSQL enforces (the database message is never shown to clients).</summary>
     internal static string MapDatabaseRule(string message) => message switch
     {
+        _ when message.Contains("account_automatic_only") => "account_automatic_only",          // Phase 3.8B-3: the negative-stock obligation account takes automatic postings only
         _ when message.Contains("independent approver") => "separation_of_duties",
         _ when message.Contains("not balanced") => "entry_not_balanced",
         _ when message.Contains("at least two lines") => "entry_needs_two_lines",

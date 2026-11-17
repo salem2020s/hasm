@@ -12,6 +12,7 @@ using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 using EN = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostEntry;
 using LY = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostLayer;
 using CS = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostConsumption;
+using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 using I = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Item;
 using U = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Unit;
 using W = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Warehouse;
@@ -63,7 +64,7 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
     // ================================================================================================================ common
 
     private sealed record ItemFacts(Guid Id, int Type, bool Tracked, int BaseDecimals);
-    private sealed record Position(Guid Id, Guid ItemId, Guid WarehouseId, CostMethod Method, BigInteger Quantity, BigInteger Value, long LastSeq, DateOnly? LastDate);
+    private sealed record Position(Guid Id, Guid ItemId, Guid WarehouseId, CostMethod Method, BigInteger Quantity, BigInteger Value, long LastSeq, DateOnly? LastDate, decimal? LastAverageQuantity = null, decimal? LastAverageValue = null);
 
     private sealed class Context(CompanyAuditedWork work, int moneyDecimals)
     {
@@ -71,6 +72,8 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
         public int MoneyDecimals { get; } = moneyDecimals;
         public Dictionary<Guid, ItemFacts> Items { get; } = [];
         public Dictionary<(Guid Item, Guid Warehouse), Position> Positions { get; } = [];
+        /// <summary>Positions whose open negative-stock obligations the caller settles or reverses in this transaction (Phase 3.8B-3); every other inflow into a position with an open obligation is refused.</summary>
+        public HashSet<(Guid Item, Guid Warehouse)> ObligationAware { get; } = [];
     }
 
     private static void ValidateKey(string? key)
@@ -212,14 +215,31 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
 
     private async Task<Position> LoadPositionAsync(Context cx, Guid item, Guid wh, ValuationMethod resolved, CancellationToken ct)
     {
-        await using var q = new NpgsqlCommand($"SELECT {PO.Id}, {PO.Method}, {PO.Quantity}, {PO.Value}, {PO.LastSeq}, {PO.LastEffectiveDate} FROM {PO.Table} WHERE {PO.ItemId} = @i AND {PO.WarehouseId} = @w FOR UPDATE", cx.Work.Connection, cx.Work.Transaction);
+        await using var q = new NpgsqlCommand($"SELECT {PO.Id}, {PO.Method}, {PO.Quantity}, {PO.Value}, {PO.LastSeq}, {PO.LastEffectiveDate}, {PO.LastAverageQuantity}, {PO.LastAverageValue} FROM {PO.Table} WHERE {PO.ItemId} = @i AND {PO.WarehouseId} = @w FOR UPDATE", cx.Work.Connection, cx.Work.Transaction);
         q.Parameters.AddWithValue("i", item); q.Parameters.AddWithValue("w", wh);
         await using var r = await q.ExecuteReaderAsync(ct);
         await r.ReadAsync(ct);
         var method = (CostMethod)r.GetInt16(1);
         var wanted = resolved == ValuationMethod.Fifo ? CostMethod.Fifo : CostMethod.MovingAverage;
         if (method != wanted) throw new CostingException("valuation_method_changed", $"{item}/{wh}");              // the policy changed after the position was costed: never applied silently
-        return new Position(r.GetGuid(0), item, wh, method, CostingMath.ToUnits(r.GetDecimal(2), CostingMath.QuantityScale), CostingMath.ToUnits(r.GetDecimal(3), CostingMath.AmountScale), r.GetInt64(4), r.IsDBNull(5) ? null : r.GetFieldValue<DateOnly>(5));
+        return new Position(r.GetGuid(0), item, wh, method, CostingMath.ToUnits(r.GetDecimal(2), CostingMath.QuantityScale), CostingMath.ToUnits(r.GetDecimal(3), CostingMath.AmountScale), r.GetInt64(4), r.IsDBNull(5) ? null : r.GetFieldValue<DateOnly>(5),
+            r.IsDBNull(6) ? null : r.GetDecimal(6), r.IsDBNull(7) ? null : r.GetDecimal(7));
+    }
+
+    /// <summary>
+    /// Phase 3.8B-3: creates the positions that do not exist yet (method fixed from the policy chain, exactly as for a first entry) and locks them <c>FOR UPDATE</c> in the deterministic order, inside the caller's transaction, so the
+    /// negative-stock exception reads the same figures the engine will use. The same transaction may then call the engine, which takes the same locks again.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<(Guid ItemId, Guid WarehouseId), LockedPosition>> LockPositionsInWorkAsync(CompanyAuditedWork work, IEnumerable<(Guid ItemId, Guid WarehouseId)> wanted, CancellationToken ct = default)
+    {
+        var cx = await BeginAsync(work, ct);
+        var list = wanted.Distinct().ToList();
+        await LockPositionsAsync(cx, list, ct);
+        return list.ToDictionary(k => k, k =>
+        {
+            var p = cx.Positions[k];
+            return new LockedPosition(p.Id, p.ItemId, p.WarehouseId, p.Method, Q(p.Quantity), M(p.Value), p.LastDate, p.LastAverageQuantity, p.LastAverageValue);
+        });
     }
 
     /// <summary>Appends one entry to a position (next sequence number), moves the position and returns the entry id. Enforces the no-back-dating rule.</summary>
@@ -229,6 +249,13 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
         var qtyAfter = pos.Quantity + direction * quantity;
         var valueAfter = pos.Value + direction * amount;
         if (qtyAfter.Sign < 0 || valueAfter.Sign < 0) throw new CostingException("insufficient_stock");
+        // Phase 3.8B-3 (R3, D4): while a negative-stock obligation of this item and warehouse is open the position holds nothing; no inflow enters it except through the caller that settles or reverses the obligation
+        if (direction > 0 && !cx.ObligationAware.Contains((pos.ItemId, pos.WarehouseId)))
+        {
+            await using var open = new NpgsqlCommand($"SELECT {NG.HasOpenFunction}(@i, @w)", cx.Work.Connection, cx.Work.Transaction);
+            open.Parameters.AddWithValue("i", pos.ItemId); open.Parameters.AddWithValue("w", pos.WarehouseId);
+            if ((bool)(await open.ExecuteScalarAsync(ct))!) throw new CostingException("negative_obligation_open", $"{pos.ItemId}/{pos.WarehouseId}");
+        }
         var seq = pos.LastSeq + 1;
         long id;
         await using (var ins = new NpgsqlCommand(
@@ -241,12 +268,16 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
             ins.Parameters.AddWithValue("s", seq); ins.Parameters.AddWithValue("rv", (object?)reverses ?? DBNull.Value); ins.Parameters.AddWithValue("now", Now);
             id = (long)(await ins.ExecuteScalarAsync(ct))!;
         }
-        await using (var upd = new NpgsqlCommand($"UPDATE {PO.Table} SET {PO.Quantity} = @q, {PO.Value} = @v, {PO.LastSeq} = @s, {PO.LastEffectiveDate} = @d, {PO.UpdatedAtUtc} = @now WHERE {PO.Id} = @id", cx.Work.Connection, cx.Work.Transaction))
+        // the last average pair (Phase 3.8B-3): the figures after this entry while the position holds stock, retained unchanged when it falls to zero (provisional-cost source 1; no backfill)
+        decimal? lastQ = qtyAfter.Sign > 0 ? Q(qtyAfter) : pos.LastAverageQuantity, lastV = qtyAfter.Sign > 0 ? M(valueAfter) : pos.LastAverageValue;
+        await using (var upd = new NpgsqlCommand($"UPDATE {PO.Table} SET {PO.Quantity} = @q, {PO.Value} = @v, {PO.LastSeq} = @s, {PO.LastEffectiveDate} = @d, {PO.UpdatedAtUtc} = @now, {PO.LastAverageQuantity} = @lq, {PO.LastAverageValue} = @lv WHERE {PO.Id} = @id", cx.Work.Connection, cx.Work.Transaction))
         {
             upd.Parameters.AddWithValue("id", pos.Id); upd.Parameters.AddWithValue("q", Q(qtyAfter)); upd.Parameters.AddWithValue("v", M(valueAfter)); upd.Parameters.AddWithValue("s", seq); upd.Parameters.AddWithValue("d", date); upd.Parameters.AddWithValue("now", Now);
+            upd.Parameters.Add(new NpgsqlParameter("lq", NpgsqlDbType.Numeric) { Value = (object?)lastQ ?? DBNull.Value });
+            upd.Parameters.Add(new NpgsqlParameter("lv", NpgsqlDbType.Numeric) { Value = (object?)lastV ?? DBNull.Value });
             await upd.ExecuteNonQueryAsync(ct);
         }
-        cx.Positions[(pos.ItemId, pos.WarehouseId)] = pos with { Quantity = qtyAfter, Value = valueAfter, LastSeq = seq, LastDate = date };
+        cx.Positions[(pos.ItemId, pos.WarehouseId)] = pos with { Quantity = qtyAfter, Value = valueAfter, LastSeq = seq, LastDate = date, LastAverageQuantity = lastQ, LastAverageValue = lastV };
         return id;
     }
 
@@ -304,9 +335,10 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
     public async Task<CostingResult> ReceiveAsync(CompanyAuditedWork work, Guid actor, CostingReceiptRequest request, CancellationToken ct = default)
     {
         ValidateKey(request.Key);
-        if (request.Lines is null || request.Lines.Count == 0 || request.Lines.Count > 500) throw new CostingException("invalid_lines");
+        if (request.Lines is null || (request.Lines.Count == 0 && !request.Provisional) || request.Lines.Count > 500) throw new CostingException("invalid_lines");
         var cx = await BeginAsync(work, ct);
-        var hash = Hash($"receipt|{request.EffectiveDate:yyyy-MM-dd}|{Src(request.Source)}|" + string.Join(";", request.Lines.Select(l => $"{l.ItemId}:{l.WarehouseId}:{D(l.Quantity)}:{D(l.Amount)}")));
+        foreach (var p in request.ObligationAware ?? []) cx.ObligationAware.Add(p);
+        var hash = Hash($"receipt|{request.EffectiveDate:yyyy-MM-dd}|{Src(request.Source)}|" + string.Join(";", request.Lines.Select(l => $"{l.ItemId}:{l.WarehouseId}:{D(l.Quantity)}:{D(l.Amount)}")) + (request.Provisional ? "|provisional" : ""));
         if (await FindReplayAsync(cx, request.Key, CostOperationKind.Receipt, hash, ct) is { } replay) return replay;
         await LockPositionsAsync(cx, request.Lines.Select(l => (l.ItemId, l.WarehouseId)), ct);
         var opId = await InsertOperationAsync(cx, request.Key, CostOperationKind.Receipt, hash, request.Source, request.EffectiveDate, actor, null, ct);
@@ -353,9 +385,9 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
     public async Task<CostingResult> IssueAsync(CompanyAuditedWork work, Guid actor, CostingIssueRequest request, CancellationToken ct = default)
     {
         ValidateKey(request.Key);
-        if (request.Lines is null || request.Lines.Count == 0 || request.Lines.Count > 500) throw new CostingException("invalid_lines");
+        if (request.Lines is null || (request.Lines.Count == 0 && !request.Provisional) || request.Lines.Count > 500) throw new CostingException("invalid_lines");
         var cx = await BeginAsync(work, ct);
-        var hash = Hash($"issue|{request.EffectiveDate:yyyy-MM-dd}|{Src(request.Source)}|" + string.Join(";", request.Lines.Select(l => $"{l.ItemId}:{l.WarehouseId}:{D(l.Quantity)}")));
+        var hash = Hash($"issue|{request.EffectiveDate:yyyy-MM-dd}|{Src(request.Source)}|" + string.Join(";", request.Lines.Select(l => $"{l.ItemId}:{l.WarehouseId}:{D(l.Quantity)}")) + (request.Provisional ? "|provisional" : ""));
         if (await FindReplayAsync(cx, request.Key, CostOperationKind.Issue, hash, ct) is { } replay) return replay;
         await LockPositionsAsync(cx, request.Lines.Select(l => (l.ItemId, l.WarehouseId)), ct);
         var opId = await InsertOperationAsync(cx, request.Key, CostOperationKind.Issue, hash, request.Source, request.EffectiveDate, actor, null, ct);
@@ -427,6 +459,7 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
         ValidateKey(request.Key);
         ValidateKey(request.ReversesKey);
         var cx = await BeginAsync(work, ct);
+        foreach (var p in request.ObligationAware ?? []) cx.ObligationAware.Add(p);
         var hash = Hash($"reversal|{request.ReversesKey}|{request.EffectiveDate:yyyy-MM-dd}|{Src(request.Source)}");
         if (await FindReplayAsync(cx, request.Key, CostOperationKind.Reversal, hash, ct) is { } replay) return replay;
         Guid originalId; short originalKind; Guid? reversedBy;
@@ -561,6 +594,10 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
             $"SELECT o.{OP.Id}::text FROM {OP.Table} o JOIN {EN.Table} e ON e.{EN.OperationId} = o.{OP.Id} WHERE o.{OP.Kind} = 3 GROUP BY o.{OP.Id} HAVING sum(e.{EN.Direction} * e.{EN.Amount}) <> 0 OR sum(e.{EN.Direction} * e.{EN.Quantity}) <> 0");
         await Check("company_total_equals_entries",
             $"SELECT 'total' WHERE (SELECT coalesce(sum({PO.Value}), 0) FROM {PO.Table}) <> (SELECT coalesce(sum({EN.Direction} * {EN.Amount}), 0) FROM {EN.Table})");
+        // Phase 3.8B-3 (C2): a stored last average pair is the figures after the latest entry that left the position holding stock (null only while no entry of this release has run)
+        await Check("last_average_equals_last_stocked_entry",
+            $"SELECT p.{PO.Id}::text FROM {PO.Table} p WHERE p.{PO.LastAverageQuantity} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM (SELECT e.{EN.QuantityAfter} q, e.{EN.ValueAfter} v FROM {EN.Table} e " +
+            $"WHERE e.{EN.PositionId} = p.{PO.Id} AND e.{EN.QuantityAfter} > 0 ORDER BY e.{EN.Seq} DESC LIMIT 1) l WHERE l.q = p.{PO.LastAverageQuantity} AND l.v = p.{PO.LastAverageValue})");
         await Check("no_negative_balances",
             $"SELECT {PO.Id}::text FROM {PO.Table} WHERE {PO.Quantity} < 0 OR {PO.Value} < 0 OR ({PO.Quantity} = 0 AND {PO.Value} <> 0)");
         return found;
