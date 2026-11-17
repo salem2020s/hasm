@@ -182,4 +182,5 @@ S("3.7B", "MERGED (PR #33, merge commit 5e4d627)");
 S("3.7C", "MERGED (PR #35, merge commit 484b4be)");
 S("3.7D", "MERGED (PR #37, merge commit ab60b55)");
 S("3.8A", "MERGED (PR #40, merge commit 9c43fc9)");
+S("3.8B", "SLICES 3.8B-1 (PR #42, 84dbb4e) and 3.8B-2 (PR #43, 981e991) MERGED; slice 3.8B-3 (negative-stock exception) DESIGNED (docs/PHASE-3.8B-3-DESIGN.md, revision 3, two independent reviews), NOT implemented");
 module.exports = PH;
