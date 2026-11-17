@@ -105,7 +105,7 @@ Status of this file: authoritative, dependency-ordered plan for all remaining ap
 
 Status words: *merged* = on \`main\` with CI green on the pull request head (checked against GitHub); *built* = on a branch only; *planned* = nothing exists. "Verified" is reserved for Phase 5.3.
 
-## Delivered (merged to main; verified against GitHub on 2026-11-15)
+## Delivered (merged to main; reconciled against GitHub on 2026-11-17)
 | Phase | Content | PR / merge commit |
 |---|---|---|
 | 2.1-2.3C | System database, provisioning, identity, RBAC, security hardening, cryptographic audit | #4-#9 |
@@ -123,9 +123,14 @@ Status words: *merged* = on \`main\` with CI green on the pull request head (che
 | 3.4 / 3.4B | Inventory master data and tabs standard; inventory master-data import | #24 (\`d4038ed\`), #25 (\`5f194d6\`) |
 | 3.5 | Stock movement documents up to approval (non-posting) | #26 (\`4ffc4ec\`) |
 | 3.6 | Inventory costing engine (not wired to any document) | #27 (\`2d2f187\`, head \`e212a49\`, 861 PostgreSQL tests) |
+| 3.7A-3.7D | Inventory accounting configuration, atomic posting, reversal/close protection, shared posting UI | #31, #33, #35, #37 |
+| 3.8A | Stock balances and item ledger | #40 (9c43fc9) |
+| 3.8B | Stocktakes, adjustments, negative-stock exception and settlement | #42 (84dbb4e), #43 (981e991), #45 (4b79030) |
+| 3.9A | Shared party identity, local records, central approval, outbox and reconciliation | #46 (bd56a25; reviewed head 6f57651) |
+| 4.0 | Verification infrastructure; full-stack E2E and desktop smoke coverage remain open | #32 (7e05052) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit \`1b27ad2\`). Merged: **4.0** verification infrastructure (PR #32, merge commit \`7e05052\`). In review: **3.7B** (PR #33).
+All phases through 3.8B and Phase 3.9A listed above are merged. PR #46 passed all ten manifest-required checks on exact head 6f57651 and was independently reviewed before merge. Phase 3.8C remains blocked by OPEN decision OD-11; Phase 3.8D is the next dependency-ready inventory phase. The four Medium party-registry follow-ups are scheduled before 3.9B. No Release 1 completion or production-readiness claim is made.
 
 ## Remaining phases (summary)
 Execution order is in \`docs/RELEASE1-DEPENDENCIES.md\`. Risk is the accounting and security risk of the phase.

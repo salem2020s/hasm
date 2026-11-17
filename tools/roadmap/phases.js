@@ -182,5 +182,9 @@ S("3.7B", "MERGED (PR #33, merge commit 5e4d627)");
 S("3.7C", "MERGED (PR #35, merge commit 484b4be)");
 S("3.7D", "MERGED (PR #37, merge commit ab60b55)");
 S("3.8A", "MERGED (PR #40, merge commit 9c43fc9)");
-S("3.8B", "SLICES 3.8B-1 (PR #42, 84dbb4e) and 3.8B-2 (PR #43, 981e991) MERGED; slice 3.8B-3 (negative-stock exception) DESIGNED (docs/PHASE-3.8B-3-DESIGN.md, revision 3, two independent reviews), NOT implemented");
+S("3.8B", "MERGED: 3.8B-1 stocktaking (PR #42, 84dbb4e), 3.8B-2 adjustments (PR #43, 981e991), 3.8B-3 negative-stock exception (PR #45, 4b79030)");
+S("3.9A", "MERGED (PR #46, merge commit bd56a25; exact head 6f57651, all ten required checks green, independent review recorded). Four Medium follow-ups remain before 3.9B; see docs/review-records/PR-46-final.md");
+// Preserve old implementation notes as history without presenting them as the current phase status.
+for (const phase of PH) if (phase.state?.startsWith("MERGED") && phase.notes.startsWith("BUILT;"))
+    phase.notes = "Historical checkpoint, superseded by the merged status above: " + phase.notes;
 module.exports = PH;

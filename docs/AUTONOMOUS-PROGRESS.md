@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## PR #46 merged and roadmap reconciliation (2026-11-17)
+
+PR #46 merged through the protected workflow as `bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb`, from reviewed head `6f5765173c470d8511c63d2167bb71c43c1868b5`. Main's tree equals that reviewed head's tree, and the head is an ancestor of main. Main's copy of `verify-head.js` confirmed all ten applicable Actions checks green immediately before the SHA-pinned merge. Independent final-head review is durably recorded in the PR description and `review-records/PR-46-final.md`; adversarial self-review is recorded too. No Critical/High findings remain; the four Medium follow-ups must be repaired before 3.9B.
+
+Validation: CI PostgreSQL **1018/1018 passed**, no skips (962 registered PostgreSQL cases plus 56 safety cases). Backend, shared frontend, Windows desktop, E2E smoke and all five always-on verification checks passed on the exact head. Local unit **868/868**, API **69/69**, shared frontend **450/450**, typecheck/build, affected PostgreSQL regressions **25/25**, verification self-tests **34/34** passed. Disk exhaustion interrupted the first local full build. A Windows-RID run then exposed admin-tool tests' standard-output-layout assumption; all 14 CLI cases passed when rerun in the existing standard layout. The additional full local run remains in progress and is NOT claimed green; the full exact-head CI suite is green. No source, assertion or gate was altered for those environment failures.
+
+Roadmap generator sources now reflect merged 3.8B-3 and 3.9A, correct stale inventory/party traceability evidence, and preserve OPEN decisions. Next dependency-ready inventory work is **3.8D**; **3.8C remains blocked by OD-11**, not silently deferred or decided by the agent. Full-stack E2E, desktop smoke acceptance, production operations and Release 1 final acceptance remain incomplete. Main's post-merge workflows are monitored separately and are not claimed passed until observed.
+
+Work is on `feature/roadmap-checkpoint-3-9a`; the PR #46 branch and Claude's original checkout remain preserved. Temporary patch/review files, dependency caches, build outputs and test results are excluded from commits.
+
 ## Codex takeover checkpoint (2026-11-17; PR #46 remains open)
 
 GitHub reconciliation confirms main `4b79030d1aa039a9106c5a06f0b472fe9ec1b781` (PR #45, Phase 3.8B-3 merged; PR and merge-head hosted CI green during the accepted assessment). PR #46 remains draft at `71e68ec1d347e9567108cae41b833bd2080aeef4`. The older entries below and roadmap still contain historical statuses and must be reconciled after #46 completes.
