@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-17",
   "main": {
-    "verifiedHead": "bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb",
-    "note": "Reviewed PR head 6f57651 exact-head CI green; merge tree equals reviewed tree and ancestry verified; main post-merge workflows still to be observed"
+    "verifiedHead": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
+    "note": "PR47 exact-head five-check CI/review green; merged ancestry verified. PR46 merge bd56a25 post-merge Backend/Frontend/Desktop/Verification all passed. Observe PR47 post-merge workflows separately."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -73,26 +73,32 @@
       "phase": "3.9A",
       "mergeCommit": "bd56a25",
       "reviewedHead": "6f5765173c470d8511c63d2167bb71c43c1868b5"
+    },
+    {
+      "pr": 47,
+      "phase": "Roadmap/checkpoint reconciliation",
+      "mergeCommit": "814bd7c",
+      "reviewedHead": "8b1913b2dc3782312d6f1d5865956f3a448b3f37"
     }
   ],
   "active": {
-    "phase": "Roadmap/checkpoint reconciliation after 3.9A",
-    "branch": "feature/roadmap-checkpoint-3-9a",
-    "pr": 47,
-    "state": "PR46 merged; PR47 roadmap reconciliation in review; then 3.8D design",
+    "phase": "3.8D impact-preview design",
+    "branch": "feature/phase-3-8d-impact-preview",
+    "pr": null,
+    "state": "Design proposal prepared; implementation not started; independent design review pending",
     "knownIssues": [
       "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
       "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "Main post-merge Actions must be observed; no production or release claim",
+      "PR47 post-merge Actions must be observed; PR46 post-merge workflows all passed",
       "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
       "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
     ]
   },
   "next": [
-    "Merge reviewed roadmap reconciliation with all five always-on checks green",
-    "3.8D design and implementation (3.8C blocked by owner decision OD-11)",
-    "3.8E after 3.8D",
-    "Repair four PR46 Medium follow-ups before starting 3.9B"
+    "Review 3.8D design; implement read-only preview without enabling backdated posting",
+    "Complete replay, approved adjustments, execution and separately reviewed method-change/revaluation design",
+    "3.8C blocked by OD-11;3.8E requires3.8D",
+    "Repair four PR46 Medium follow-ups before3.9B"
   ],
   "openDecisions": [
     "OD-1",

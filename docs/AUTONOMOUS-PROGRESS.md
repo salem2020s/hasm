@@ -1,5 +1,11 @@
 # HASM — Autonomous execution progress
 
+## Reconciliation merged; next approved phase started (2026-11-17)
+
+PR #47 merged as `814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb`, from reviewed head `8b1913b2dc3782312d6f1d5865956f3a448b3f37`. All five applicable exact-head checks passed; independent review and self-review were recorded in the PR description, and the final record is preserved in `review-records/PR-47-final.md`. Generator and traceability now distinguish merged functionality from incomplete acceptance scenarios; no approved requirement or OPEN owner decision changed. PR #46's post-merge Backend, Frontend, Desktop and Verification workflows all passed.
+
+The next branch is `feature/phase-3-8d-impact-preview`. `PHASE-3.8D-DESIGN.md` is a design proposal for the approved 3.8D scope, with read-only impact planning first. Implementation has NOT started and back-dated posting remains refused. The proposal preserves the existing costing, approval, audit and closed-period contracts; replay of reversals/transfers/negative obligations and method-change conversion need explicit review before execution is enabled. OD-11 remains OPEN and 3.8C remains blocked. A design-only PR stays Draft; it is not completion of 3.8D.
+
 ## PR #46 merged and roadmap reconciliation (2026-11-17)
 
 PR #46 merged through the protected workflow as `bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb`, from reviewed head `6f5765173c470d8511c63d2167bb71c43c1868b5`. Main's tree equals that reviewed head's tree, and the head is an ancestor of main. Main's copy of `verify-head.js` confirmed all ten applicable Actions checks green immediately before the SHA-pinned merge. Independent final-head review is durably recorded in the PR description and `review-records/PR-46-final.md`; adversarial self-review is recorded too. No Critical/High findings remain; the four Medium follow-ups must be repaired before 3.9B.
