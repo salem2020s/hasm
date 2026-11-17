@@ -29,7 +29,9 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
 {
     internal sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
-        public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields) : ConfigResult<T>.Fail(status, code, currentRevision);
+        public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields)
+            : status == ConfigStatus.Conflict && fields is { Count: > 0 } ? new ConfigResult<T>(status, code, default, fields, currentRevision)      // Phase 3.8B-3: a conflict that names its lines (the item refused, the line without a provisional cost)
+            : ConfigResult<T>.Fail(status, code, currentRevision);
     }
 
     internal static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, "validation_failed", [new FieldError(field, code)]);

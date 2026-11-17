@@ -1,4 +1,4 @@
--- Migration 0020: company-local party records and the request log (outbox) of the party registry (Phase 3.9A). Forward-only, additive, nothing seeded, no existing data read or modified.
+-- Migration 0021: company-local party records and the request log (outbox) of the party registry (Phase 3.9A). Forward-only, additive, nothing seeded, no existing data read or modified.
 -- Opaque physical names (D-029); the logical dictionary lives in CompanySchema.Parties.cs.
 --
 -- WHAT THIS IS (SRS 3.3, 3.4, 17.4): the LocalPartyId of a business party in THIS company (company-local code, the company's own display name, notes, active flag) and its link to the shared

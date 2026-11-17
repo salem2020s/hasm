@@ -298,6 +298,9 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
             StockPostingService.EnsureConfiguredAsync(work, groups.Values.Distinct(), a => a.AdjustmentCounterAccountId, "adjustment_counter_account_not_configured", ct);
         var shortages = adj.Lines.Where(l => l.Direction < 0).ToList();
         var surpluses = adj.Lines.Where(l => l.Direction > 0).ToList();
+        // Phase 3.8B-3 (R15): a surplus is an "other inflow": refused while an obligation of that item and warehouse is open, naming the item, before anything is written (the engine refuses it too).
+        // Shortages never use the exception: an issue above stock stays insufficient_stock.
+        await RefuseInflowsWithOpenObligationsAsync(work, adj, surpluses, ct);
         // the configuration is needed before the stock moves when entered surplus value must be booked; after costing when the shortages turned out to have value
         if (surpluses.Sum(l => amounts[l.LineNo]) > 0) config = await Configure();
         // 2. the stock and its valuation: the unchanged costing engine, one issue and one receipt operation in this transaction
@@ -353,6 +356,20 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
         await work.AppendAuditAsync(new AuditEventData(StockAdjustmentAuditEvents.Posted, ActorUserId: actor, SubjectId: adj.Id,
             Detail: $"stock adjustment posted number={adj.Number} value={total.ToString(CultureInfo.InvariantCulture)} accounting={(state == StockAccountingState.Pending ? "pending" : "not_required")}"), ct);
         return (await LoadAsync(work.Connection, work.Transaction, adj.Id, null, ct))!;
+    }
+
+    /// <summary>
+    /// Phase 3.8B-3 (R15 (2) and (4)): the positions of the whole adjustment are locked first (the posting lock sequence: structure lock, adjustment, positions, obligations), then every inflow line whose item has an open
+    /// negative-stock obligation in the warehouse is refused with <c>negative_obligation_open</c> and a field error on that line's item. Nothing has been written at this point.
+    /// </summary>
+    private async Task RefuseInflowsWithOpenObligationsAsync(CompanyAuditedWork work, StockAdjustmentView adj, IReadOnlyList<StockAdjustmentLineView> inflows, CancellationToken ct)
+    {
+        if (inflows.Count == 0) return;
+        await costing.LockPositionsInWorkAsync(work, adj.Lines.Select(l => (l.ItemId, adj.WarehouseId)), ct);
+        var open = await NegativeStockPlanner.LockForPositionsAsync(work, inflows.Select(l => (l.ItemId, adj.WarehouseId)), true, ct);
+        if (open.Count == 0) return;
+        var fields = adj.Lines.Select((l, i) => (l, i)).Where(x => inflows.Contains(x.l) && open.Any(o => o.ItemId == x.l.ItemId)).Select(x => new FieldError($"lines[{x.i}].itemId", "negative_obligation_open")).ToList();
+        throw new StockDocumentService.Abort(ConfigStatus.Conflict, "negative_obligation_open", fields);
     }
 
     /// <summary>
@@ -415,6 +432,8 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
                 var gate = await FiscalPeriodGate.CheckAsync(work.Connection, work.Transaction, date, false, ct);
                 if (!gate.Allowed) throw Conflict(gate.Reason!);
                 var source = new CostingSource("stock_adjustment_reversal", adj.Id);
+                // Phase 3.8B-3 (R15): taking a shortage back is an inflow, refused while an obligation of that item and warehouse is open
+                if (posting.IssueOperationId is not null) await RefuseInflowsWithOpenObligationsAsync(work, adj, [.. adj.Lines.Where(l => l.Direction < 0)], ct);
                 Guid? issueBack = null, receiptBack = null;
                 // the inflow first: it is the side the engine may refuse (goods consumed or later movements), and nothing is written before that answer
                 if (posting.ReceiptOperationId is not null)

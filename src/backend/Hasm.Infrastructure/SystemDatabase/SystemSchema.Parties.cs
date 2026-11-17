@@ -1,6 +1,6 @@
 namespace Hasm.Infrastructure.SystemDatabase;
 
-// Generated once for system migration 0022 (Phase 3.9A, party registry: shared identity, central proposals, links). Physical names are opaque and fixed: changing one requires a new migration.
+// Generated once for system migration 0023 (Phase 3.9A, party registry: shared identity, central proposals, links). Physical names are opaque and fixed: changing one requires a new migration.
 public static partial class SystemSchema
 {
     public static class GlobalParty

@@ -62,8 +62,11 @@ public sealed partial class StockPostingService
                 if (date < postedOn) throw StockDocumentService.Invalid("effectiveDate", "before_posting_date");
                 var gate = await FiscalPeriodGate.CheckAsync(work.Connection, work.Transaction, date, false, ct);
                 if (!gate.Allowed) throw Conflict(gate.Reason!);
+                // Phase 3.8B-3: the obligations of an issue, or the settlements of a receipt, are checked before anything is written; settlement journals follow the 3.7C rule like the document's own journal
+                var negative = await PrepareReversalAsync(work, posting, ct);
+                var settlementJournals = negative is { Settlements.Count: > 0 } ? await ReverseSettlementJournalsAsync(work, actor, doc, negative, postedOn, date, ct) : [];
                 // the stock effect first (the engine refuses when the goods were consumed or later movements exist), then the accounting side
-                var operation = await costing.ReverseAsync(work, actor, new CostingReversalRequest(ReversalKeyOf(documentId), KeyOf(documentId), date, new CostingSource("stock_document_reversal", documentId)), ct);
+                var operation = await costing.ReverseAsync(work, actor, new CostingReversalRequest(ReversalKeyOf(documentId), KeyOf(documentId), date, new CostingSource("stock_document_reversal", documentId), negative?.Aware), ct);
                 short action = 0; Guid? journalRef = null;
                 if (posting.JournalEntryId is { } jid)
                 {
@@ -99,6 +102,7 @@ public sealed partial class StockPostingService
                     ins.Parameters.Add(new NpgsqlParameter("r", NpgsqlDbType.Varchar) { Value = reason });
                     await ins.ExecuteNonQueryAsync(ct);
                 }
+                if (negative is not null) await RecordNegativeReversalAsync(work, actor, doc, negative, id, operation.OperationId, date, settlementJournals, ct);
                 await using (var ev = new NpgsqlCommand($"INSERT INTO {PE.Table} ({PE.PostingId}, {PE.Kind}, {PE.JournalEntryId}, {PE.AtUtc}, {PE.ActorUserId}, {PE.Note}) VALUES (@p, 3, @j, @at, @a, @n)", work.Connection, work.Transaction))
                 {
                     ev.Parameters.AddWithValue("p", posting.Id); ev.Parameters.AddWithValue("j", (object?)journalRef ?? DBNull.Value); ev.Parameters.AddWithValue("at", Now); ev.Parameters.AddWithValue("a", actor);

@@ -18,7 +18,7 @@ using PR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PartyRequest;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.9A party registry (system migration 0022, company migration 0020) against real PostgreSQL: shared identity in the system database, local record and request log (outbox) in the company
+/// Phase 3.9A party registry (system migration 0023, company migration 0021) against real PostgreSQL: shared identity in the system database, local record and request log (outbox) in the company
 /// database, central proposal and approval, idempotent retry and reconciliation across the two databases, company isolation, permissions, audit and the database guards. Disposable cluster only.
 /// </summary>
 public abstract class PartyTestBase : HttpApiTestBase

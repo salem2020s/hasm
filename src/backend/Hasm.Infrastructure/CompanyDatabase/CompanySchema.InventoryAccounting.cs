@@ -19,6 +19,11 @@ public static partial class CompanySchema
         /// <summary>Company migration 0019 (Phase 3.8B-2): the counter account of stock adjustments (null in every version saved before; nothing with value can be adjusted until one is configured).</summary>
         public const string AdjustmentCounterAccountId = "c_76c92b02";
         public const string ForeignKeyAdjustment = "k_cceb2706";
+        /// <summary>Company migration 0020 (Phase 3.8B-3): the provisional obligation account O and the settlement variance account V of the negative-stock exception (null in every version saved before).</summary>
+        public const string ObligationAccountId = "c_17133030";
+        public const string VarianceAccountId = "c_3dcd9eb2";
+        public const string ForeignKeyObligationAccount = "k_3d8110d0";
+        public const string ForeignKeyVarianceAccount = "k_807d7ceb";
         public const string PrimaryKey = "k_7bd31da5";
         public const string UniqueVersion = "k_6843e5c1";
         public const string ForeignKeyDefault = "k_753f71eb";
@@ -72,6 +77,10 @@ public static partial class CompanySchema
         ["InventoryAccountingVersion.GuardTruncate"] = InventoryAccountingVersion.GuardTruncate,
         ["InventoryAccountingVersion.AdjustmentCounterAccountId"] = InventoryAccountingVersion.AdjustmentCounterAccountId,
         ["InventoryAccountingVersion.ForeignKeyAdjustment"] = InventoryAccountingVersion.ForeignKeyAdjustment,
+        ["InventoryAccountingVersion.ObligationAccountId"] = InventoryAccountingVersion.ObligationAccountId,
+        ["InventoryAccountingVersion.VarianceAccountId"] = InventoryAccountingVersion.VarianceAccountId,
+        ["InventoryAccountingVersion.ForeignKeyObligationAccount"] = InventoryAccountingVersion.ForeignKeyObligationAccount,
+        ["InventoryAccountingVersion.ForeignKeyVarianceAccount"] = InventoryAccountingVersion.ForeignKeyVarianceAccount,
         ["InventoryAccountingGroup"] = InventoryAccountingGroup.Table,
         ["InventoryAccountingGroup.VersionId"] = InventoryAccountingGroup.VersionId,
         ["InventoryAccountingGroup.GroupId"] = InventoryAccountingGroup.GroupId,

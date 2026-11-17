@@ -18,10 +18,13 @@ public sealed record CostingIssueLine(Guid ItemId, Guid WarehouseId, decimal Qua
 public sealed record CostingTransferLine(Guid ItemId, decimal Quantity);
 
 /// <summary><see cref="Key"/> is the idempotency key of the operation (1-100 characters): the same key with the same content returns the original result and changes nothing; the same key with other content is refused.</summary>
-public sealed record CostingReceiptRequest(string Key, DateOnly EffectiveDate, CostingSource? Source, IReadOnlyList<CostingReceiptLine> Lines);
-public sealed record CostingIssueRequest(string Key, DateOnly EffectiveDate, CostingSource? Source, IReadOnlyList<CostingIssueLine> Lines);
+/// <para>Phase 3.8B-3: <see cref="Provisional"/> allows an operation WITHOUT lines (a receipt fully matched to negative-stock obligations / an issue fully uncovered); PostgreSQL accepts it only when an obligation or a settlement
+/// references it at commit. <see cref="ObligationAware"/> names the positions whose open obligations the CALLER handles in the same transaction (a settling receipt, the reversal of the issue that created them): every other inflow
+/// into a position with an open obligation is refused (<c>negative_obligation_open</c>). Neither enters the idempotency hash unless set.</para>
+public sealed record CostingReceiptRequest(string Key, DateOnly EffectiveDate, CostingSource? Source, IReadOnlyList<CostingReceiptLine> Lines, bool Provisional = false, IReadOnlyCollection<(Guid ItemId, Guid WarehouseId)>? ObligationAware = null);
+public sealed record CostingIssueRequest(string Key, DateOnly EffectiveDate, CostingSource? Source, IReadOnlyList<CostingIssueLine> Lines, bool Provisional = false);
 public sealed record CostingTransferRequest(string Key, DateOnly EffectiveDate, CostingSource? Source, Guid FromWarehouseId, Guid ToWarehouseId, IReadOnlyList<CostingTransferLine> Lines);
-public sealed record CostingReversalRequest(string Key, string ReversesKey, DateOnly EffectiveDate, CostingSource? Source);
+public sealed record CostingReversalRequest(string Key, string ReversesKey, DateOnly EffectiveDate, CostingSource? Source, IReadOnlyCollection<(Guid ItemId, Guid WarehouseId)>? ObligationAware = null);
 
 public sealed record CostConsumptionView(Guid LayerId, decimal Quantity, decimal Amount, bool Restores);
 
@@ -51,3 +54,6 @@ public sealed record CostPositionView(Guid Id, Guid ItemId, Guid WarehouseId, Co
 
 /// <summary>One broken invariant found by the reconciliation (an empty list means the costing ledger is consistent at item, warehouse and company level).</summary>
 public sealed record CostDiscrepancy(string Check, string Detail);
+
+/// <summary>A locked cost position as the negative-stock exception sees it (Phase 3.8B-3): the live figures and the stored last average pair (null before the first entry written by this release).</summary>
+public sealed record LockedPosition(Guid Id, Guid ItemId, Guid WarehouseId, CostMethod Method, decimal Quantity, decimal Value, DateOnly? LastDate, decimal? LastAverageQuantity, decimal? LastAverageValue);

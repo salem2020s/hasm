@@ -41,6 +41,10 @@ public static partial class CompanySchema
         public const string LastEffectiveDate = "c_3c880b93";
         public const string CreatedAtUtc = "c_b6a6317a";
         public const string UpdatedAtUtc = "c_7672cc5e";
+        // Phase 3.8B-3 (company migration 0020): the last (quantity, value) the position held while it had stock, written by its entries only (no backfill)
+        public const string LastAverageQuantity = "c_97877d45";
+        public const string LastAverageValue = "c_548e8abe";
+        public const string CheckLastAverage = "k_351f45a9";
         public const string PrimaryKey = "k_369b1663";
         public const string ForeignKeyItem = "k_ceb4d486";
         public const string ForeignKeyWarehouse = "k_1be4b387";
@@ -167,6 +171,9 @@ public static partial class CompanySchema
         ["CostPosition.LastEffectiveDate"] = CostPosition.LastEffectiveDate,
         ["CostPosition.CreatedAtUtc"] = CostPosition.CreatedAtUtc,
         ["CostPosition.UpdatedAtUtc"] = CostPosition.UpdatedAtUtc,
+        ["CostPosition.LastAverageQuantity"] = CostPosition.LastAverageQuantity,
+        ["CostPosition.LastAverageValue"] = CostPosition.LastAverageValue,
+        ["CostPosition.CheckLastAverage"] = CostPosition.CheckLastAverage,
         ["CostPosition.PrimaryKey"] = CostPosition.PrimaryKey,
         ["CostPosition.ForeignKeyItem"] = CostPosition.ForeignKeyItem,
         ["CostPosition.ForeignKeyWarehouse"] = CostPosition.ForeignKeyWarehouse,

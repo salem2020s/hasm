@@ -1,6 +1,6 @@
 namespace Hasm.Infrastructure.CompanyDatabase;
 
-// Generated once for company migration 0020 (Phase 3.9A, company-local party records and the request log of the party registry). Physical names are opaque and fixed: changing one requires a new migration.
+// Generated once for company migration 0021 (Phase 3.9A, company-local party records and the request log of the party registry). Physical names are opaque and fixed: changing one requires a new migration.
 public static partial class CompanySchema
 {
     public static class LocalParty

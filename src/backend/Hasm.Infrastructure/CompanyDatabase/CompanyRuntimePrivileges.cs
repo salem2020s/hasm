@@ -114,6 +114,13 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.StockAdjustmentPosting.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockAdjustmentPostingLine.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockAdjustmentReversal.Table, ["SELECT", "INSERT"]),
+        // Negative-stock exception (Phase 3.8B-3): settings versions, eligibility flags, exception approvals, obligations, settlements and obligation reversals are all append-only.
+        (CompanySchema.NegativeStockSetting.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeStockItemFlag.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeExceptionApproval.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeObligation.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeSettlement.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeObligationReversal.Table, ["SELECT", "INSERT"]),
         // Party registry (Phase 3.9A): local parties and the request log (outbox) are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates.
         (CompanySchema.LocalParty.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.PartyRequest.Table, ["SELECT", "INSERT", "UPDATE"]),

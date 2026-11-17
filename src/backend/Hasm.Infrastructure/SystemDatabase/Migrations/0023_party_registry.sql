@@ -1,4 +1,4 @@
--- Migration 0022: party registry (Phase 3.9A). Forward-only and additive: three new tables and the company permission codes of the party registry for the preset Company Administrator role.
+-- Migration 0023: party registry (Phase 3.9A). Forward-only and additive: three new tables and the company permission codes of the party registry for the preset Company Administrator role.
 -- Opaque physical names (D-029); the logical dictionary lives in SystemSchema.Parties.cs. Nothing is seeded into the new tables; no existing data is read or modified except the preset role's permission rows.
 --
 -- WHAT THIS IS (SRS 3.3, 3.4, 17.4, 19.4): the SHARED IDENTITY of a business party (GlobalPartyId) and the central workflow that changes it.
