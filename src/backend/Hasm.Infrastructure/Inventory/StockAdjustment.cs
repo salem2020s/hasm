@@ -259,10 +259,14 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
                 if (adj.Posting is not null)
                 {
                     // the identical retry returns the original posting; different amounts are a conflict, never a second posting
-                    if (input?.Lines is { Count: > 0 })
+                    if (input?.Lines is { Count: > 0 } sent)
                     {
-                        var again = ReadAmounts(adj, input);
-                        if (adj.Lines.Any(l => l.Direction > 0 && again[l.LineNo] != l.Amount)) throw Conflict("already_posted");
+                        // compared with what was booked, line by line (also for a shortage-only adjustment, whose retry may carry amounts): any difference is a conflict, never a second posting
+                        var byLine = adj.Lines.ToDictionary(l => l.LineNo, l => l.Amount);
+                        var seen = new HashSet<int>();
+                        foreach (var s in sent)
+                            if (s.LineNo is not { } no || !byLine.TryGetValue(no, out var booked) || s.Amount != booked || !seen.Add(no)) throw Conflict("already_posted");
+                        if (adj.Lines.Any(l => l.Direction > 0 && !seen.Contains(l.LineNo))) throw Conflict("already_posted");
                     }
                     throw new Replay(adj with { Replayed = true });
                 }
@@ -284,6 +288,10 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
             if (resolved[i].Base != adj.Lines[i].Quantity) throw Conflict("line_conversion_changed");
         var gate = await FiscalPeriodGate.CheckAsync(work.Connection, work.Transaction, date, false, ct);
         if (!gate.Allowed) throw Conflict(gate.Reason!);
+        // the book quantity up to the count date must still be the one the adjustment was computed from (read under the stock lock, in this transaction): a movement on or before the count date posted or reversed
+        // since generation would make the adjustment book a wrong difference, so it is refused and nothing is written (a new stocktake is needed). Later-dated movements are caught by the engine (backdated_not_supported).
+        var book = await StocktakeService.BookAsync(work.Connection, work.Transaction, adj.WarehouseId, date, [.. adj.Lines.Select(l => l.ItemId)], ct);
+        if (adj.Lines.Any(l => book.GetValueOrDefault(l.ItemId) != l.BookQuantity)) throw Conflict("book_changed");
         var groups = await StockPostingService.ItemGroupsAsync(work, adj.Lines.Select(l => l.ItemId), ct);
         IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>? config = null;
         Task<IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>> Configure() =>

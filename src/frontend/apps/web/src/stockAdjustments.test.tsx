@@ -2,7 +2,7 @@ import type { StockAdjustment, StockWarehouseRef, Stocktake, StocktakeCapabiliti
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ALL_PERMISSIONS, renderApp, signedIn } from "./test-utils";
+import { ALL_PERMISSIONS, apiError, renderApp, signedIn } from "./test-utils";
 
 // Phase 3.8B-2: the adjustment of an approved stocktake on the shared stocktake screen (Web and Desktop), and follow-up M2 (reloaded lines offer every unit of their item).
 const go = async (hash: string) => {
@@ -108,7 +108,7 @@ describe("stock adjustment", () => {
     expect(screen.getByTestId("adj-amount-1")).toHaveTextContent("60");
   });
 
-  it("reverses a posted adjustment with a date and a reason when allowed, and offers nothing without the permission", async () => {
+  it("reverses a posted adjustment with a date and a reason when allowed", async () => {
     const client = setup({ getStockAdjustment: vi.fn().mockResolvedValue(posted), reverseStockAdjustment: vi.fn().mockResolvedValue({ ...posted, posting: { ...posted.posting!, accountingState: 5, reversal: { id: "r1", issueOperationId: "o3", receiptOperationId: "o4", journalAction: 1, journalEntryId: "j1", effectiveDate: "2026-03-20", reversedAtUtc: stamp, reversedBy: "u1", reason: "recount" } } }) },
       caps(), take({ adjustmentId: "a1", adjustmentNumber: "SA-2026-000001" }));
     await open();
@@ -121,5 +121,35 @@ describe("stock adjustment", () => {
     await userEvent.click(screen.getByTestId("adj-reverse-button"));
     await waitFor(() => expect(client.reverseStockAdjustment).toHaveBeenCalledWith("a1", "2026-03-20", "recount"));
     expect(await screen.findByTestId("adj-reversed")).toHaveTextContent("recount");
+  });
+
+  it("offers neither posting nor reversal without the stock document permissions", async () => {
+    setup({}, caps({ post: [], reverse: [] }), take({ adjustmentId: "a1", adjustmentNumber: "SA-2026-000001" }));
+    await open();
+    await userEvent.click(tab("التسوية"));
+    await screen.findByTestId("stk-adjustment");
+    expect(screen.queryByTestId("adj-post")).toBeNull();
+    expect(within(screen.getByTestId("adj-line-2")).queryByLabelText("المبلغ")).toBeNull();                              // nothing to enter without the right to post
+    expect(screen.queryByTestId("adj-reverse")).toBeNull();
+  });
+
+  it("does not offer reversal of a posted adjustment without the reverse permission", async () => {
+    setup({ getStockAdjustment: vi.fn().mockResolvedValue(posted) }, caps({ reverse: [] }), take({ adjustmentId: "a1", adjustmentNumber: "SA-2026-000001" }));
+    await open();
+    await userEvent.click(tab("التسوية"));
+    expect(await screen.findByTestId("adj-total")).toHaveValue("81");
+    expect(screen.queryByTestId("adj-reverse")).toBeNull();
+  });
+
+  it("shows a server error on a line's amount next to that line's input", async () => {
+    setup({ postStockAdjustment: vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "lines[0].amount", code: "negative_amount" }] })) }, caps(), take({ adjustmentId: "a1", adjustmentNumber: "SA-2026-000001" }));
+    await open();
+    await userEvent.click(tab("التسوية"));
+    await screen.findByTestId("stk-adjustment");
+    const input = within(screen.getByTestId("adj-line-2")).getByLabelText("المبلغ");
+    await userEvent.type(input, "5");
+    await userEvent.click(screen.getByTestId("adj-post"));
+    await waitFor(() => expect(within(screen.getByTestId("adj-line-2")).getByLabelText("المبلغ")).toHaveAttribute("aria-invalid", "true"));
+    expect(within(screen.getByTestId("adj-line-2")).getByText("المبلغ لا يكون سالباً.")).toBeInTheDocument();
   });
 });

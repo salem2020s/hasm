@@ -41,11 +41,16 @@ export function StockAdjustmentPanel({ id, canPost, canReverse, onChanged }: { i
   }, [auth.api, auth.handleError, id, text]);
   useEffect(() => { void load(); }, [load]);
 
-  function fail(e: unknown) {
+  /** sent = the line numbers in the order they were submitted, so a server error on lines[i].amount or lines[i].lineNo lands on the input of that line. */
+  function fail(e: unknown, sent: number[] = []) {
     if (auth.handleError(e)) return;
     if (e instanceof ApiError && e.status === 400) {
       const out: Record<string, string> = {};
-      for (const f of e.details.fields ?? []) out[f.field] = field(f.code);
+      for (const f of e.details.fields ?? []) {
+        const m = /^lines\[(\d+)\]\.(amount|lineNo)$/.exec(f.field);
+        const lineNo = m ? sent[Number(m[1])] : undefined;
+        out[lineNo !== undefined ? `amount-${lineNo}` : f.field] = field(f.code);
+      }
       setErrors(out); setError(t("form.fix_errors"));
       return;
     }
@@ -63,7 +68,7 @@ export function StockAdjustmentPanel({ id, canPost, canReverse, onChanged }: { i
     try {
       setAdj(await auth.api.postStockAdjustment(adj.id, surplus.map((l) => ({ lineNo: l.lineNo, amount: Number(amounts[l.lineNo].trim()) }))));
       onChanged(t("stk.adj.posted"));
-    } catch (e) { fail(e); } finally { setBusy(false); }
+    } catch (e) { fail(e, surplus.map((l) => l.lineNo)); } finally { setBusy(false); }
   }
 
   async function reverse() {

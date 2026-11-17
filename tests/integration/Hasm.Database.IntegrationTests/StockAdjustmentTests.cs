@@ -348,6 +348,68 @@ public class StockAdjustmentTests : StockAdjustmentTestBase
         Assert.NotNull(await Raw($"INSERT INTO {SAP.Table} ({SAP.Id}, {SAP.AdjustmentId}, {SAP.EffectiveDate}, {SAP.PostedAtUtc}, {SAP.PostedBy}, {SAP.TotalValue}) VALUES (gen_random_uuid(), '{ok.Id}', '{CountDate}', now(), gen_random_uuid(), 0)"));   // no costing operation
         Assert.Equal((2L, 1L), (await Sql<long>($"SELECT count(*) FROM {SA.Table}"), await Sql<long>($"SELECT count(*) FROM {SAP.Table}")));
     }
+
+    [PostgresFact]
+    public async Task Posting_is_refused_with_book_changed_when_a_movement_up_to_the_count_date_was_posted_after_generation_and_nothing_is_written()
+    {
+        await PrepareAdjustments();
+        await Receive(Fifo, 10m, 100m);                                                                                           // 2026-03-10
+        var a = Ok(await Generate(await ApprovedTake(W1, C(Fifo, Pcs, 8m))));
+        Assert.Equal(10m, a.Lines.Single().BookQuantity);
+        Ok(await Post(await Approved(Receipt(W1, "2026-03-11", L(Fifo, Pcs, 1))), Amounts(10m)));                                // on the count date, after generation: the book is now 11
+        var before = await AdjCounts();
+        Fails(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, null), ConfigStatus.Conflict, "book_changed");
+        Assert.Equal(before, await AdjCounts());                                                                                  // no cost operation, journal or posting
+        Assert.Equal((11m, 110m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value));
+        Assert.Null((await Adj.GetAsync(Company.Id, a.Id))!.Posting);
+    }
+
+    [PostgresFact]
+    public async Task Posting_is_refused_with_backdated_not_supported_when_the_item_moved_after_the_count_date()
+    {
+        await PrepareAdjustments();
+        await Receive(Fifo, 10m, 100m);
+        var a = Ok(await Generate(await ApprovedTake(W1, C(Fifo, Pcs, 8m))));
+        await Receive(Fifo, 1m, 10m, date: new DateOnly(2026, 3, 12));                                                           // after the count date: the book up to the count date is unchanged
+        var before = await AdjCounts();
+        Fails(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, null), ConfigStatus.Conflict, "backdated_not_supported");
+        Assert.Equal(before, await AdjCounts());
+        Assert.Equal((11m, 110m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value));
+    }
+
+    [PostgresFact]
+    public async Task Reversing_an_adjustment_whose_journal_is_posted_creates_a_draft_reversal_entry_and_restores_the_stock()
+    {
+        await PrepareAdjustments();
+        await Receive(Fifo, 10m, 100m);
+        var a = Ok(await Generate(await ApprovedTake(W1, C(Fifo, Pcs, 8m), C(Apple, Pcs, 3m))));
+        var p = Ok(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, Values((2, 30m)))).Posting!;
+        await PostJournalEntry(p.JournalEntryId!.Value);
+        Assert.Equal((int)StockAccountingState.Posted, (await Adj.GetAsync(Company.Id, a.Id))!.Posting!.AccountingState);
+        // a posted entry may be reversed in a later period: the ledger is never edited, a draft reversal entry follows the ordinary workflow
+        var r = Ok(await Adj.ReverseAsync(Admin.Id, Company.Id, a.Id, new StockReverseInput("2026-04-02", "recount")));
+        var rv = r.Posting!.Reversal!;
+        Assert.Equal(((int)StockAccountingState.Reversed, 2), (r.Posting.AccountingState, rv.JournalAction));
+        Assert.NotEqual(p.JournalEntryId, rv.JournalEntryId);
+        var entry = (await Journal.GetAsync(Company.Id, rv.JournalEntryId!.Value))!;
+        Assert.Equal((JournalStatus.Draft, true, 50m), (entry.Header.Status, entry.Balanced, entry.BaseDebitTotal));            // 2 x 10.00 out + 30.00 in, taken back
+        Assert.Equal(JournalStatus.Posted, (await Journal.GetAsync(Company.Id, p.JournalEntryId!.Value))!.Header.Status);
+        Assert.Equal((10m, 100m, 0m, 0m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value, (await Pos(Apple)).Quantity, (await Pos(Apple)).Value));
+        await AssertConsistent();
+    }
+
+    [PostgresFact]
+    public async Task An_identical_retry_of_a_posted_shortage_only_adjustment_replays_even_when_it_carries_amounts()
+    {
+        await PrepareAdjustments();
+        await Receive(Fifo, 10m, 100m);
+        var a = Ok(await Generate(await ApprovedTake(W1, C(Fifo, Pcs, 8m))));
+        var p = Ok(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, null));
+        var counts = await AdjCounts();
+        Assert.True(Ok(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, Values((1, 20m)))).Replayed);                            // the booked value of the shortage
+        Fails(await Adj.PostAsync(Admin.Id, Company.Id, a.Id, Values((1, 5m))), ConfigStatus.Conflict, "already_posted");
+        Assert.Equal((counts, 20m), (await AdjCounts(), p.Lines.Single().Amount!.Value));
+    }
 }
 
 /// <summary>End-to-end HTTP tests of the adjustment endpoints (Web and Windows Desktop use exactly these).</summary>
