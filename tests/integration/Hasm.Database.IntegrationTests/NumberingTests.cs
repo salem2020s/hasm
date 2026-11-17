@@ -53,8 +53,8 @@ public class NumberingTests : NumberingTestBase
         await PrepareNumbering();
         foreach (var t in new[] { Nr.Table, Nc.Table, Ni.Table, Lh.Table }) Assert.Equal(0L, await Count(Company, t));
         var rules = Ok(await NMgmt.ListAsync(Admin.Id, Company.Id));
-        Assert.Equal(["journal_entry", "stock_receipt", "stock_issue", "stock_transfer", "stocktake"], rules.Select(r => r.DocType));      // one default rule per registered document type (journal entries, the three stock documents and the stocktake)
-        Assert.Equal(["JV", "SR", "SI", "ST", "STK"], rules.Select(r => r.Prefix));
+        Assert.Equal(["journal_entry", "stock_receipt", "stock_issue", "stock_transfer", "stocktake", "stock_adjustment"], rules.Select(r => r.DocType));      // one default rule per registered document type (journal entries, the three stock documents, the stocktake and the stock adjustment)
+        Assert.Equal(["JV", "SR", "SI", "ST", "STK", "SA"], rules.Select(r => r.Prefix));
         Assert.All(rules, r => Assert.Equal(("-", 6, false, true, 0L, false, false), (r.Separator, r.Width, r.PerBranch, r.PerFiscalYear, r.Revision, r.Exists, r.NumbersIssued)));
         Assert.Equal(0L, await Count(Company, Nr.Table));
         Assert.Equal(0L, await Count(Company, Audit_.Table) - Baseline);
@@ -251,7 +251,7 @@ public class NumberingAccessTests : NumberingTestBase
         Assert.DoesNotContain(roles.Where(r => r.PresetKey != "company-administrator").SelectMany(r => r.Permissions), p => p.StartsWith("company.numbering"));
         var (viewer, _) = await Holder(PermissionCatalog.Codes.NumberingView);
         var (configurer, _) = await Holder(PermissionCatalog.Codes.NumberingConfigure);
-        Assert.Equal(5, Ok(await NMgmt.ListAsync(viewer.Id, Company.Id)).Count);                       // journal entries, three stock documents, stocktake
+        Assert.Equal(6, Ok(await NMgmt.ListAsync(viewer.Id, Company.Id)).Count);                       // journal entries, three stock documents, stocktake, stock adjustment
         Assert.Equal(ConfigStatus.Forbidden, (await NMgmt.PutRuleAsync(viewer.Id, Company.Id, "journal_entry", 0, Rule())).Status);
         Assert.Equal(ConfigStatus.Forbidden, (await NMgmt.ListAsync(configurer.Id, Company.Id)).Status);
         Assert.Equal(1, Ok(await NMgmt.PutRuleAsync(configurer.Id, Company.Id, "journal_entry", 0, Rule("ZZ"))).Revision);

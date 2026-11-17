@@ -250,7 +250,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         return (await LoadByDocumentAsync(work.Connection, work.Transaction, doc.Id, false, ct))!;
     }
 
-    private static async Task<Dictionary<Guid, Guid>> ItemGroupsAsync(CompanyAuditedWork work, IEnumerable<Guid> itemIds, CancellationToken ct)
+    internal static async Task<Dictionary<Guid, Guid>> ItemGroupsAsync(CompanyAuditedWork work, IEnumerable<Guid> itemIds, CancellationToken ct)
     {
         var map = new Dictionary<Guid, Guid>();
         await using var q = new NpgsqlCommand($"SELECT {I.Id}, {I.GroupId} FROM {I.Table} WHERE {I.Id} = ANY(@ids)", work.Connection, work.Transaction);
@@ -265,14 +265,18 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
     /// (checked against the live chart) and all groups were resolved under the SAME configuration version (a configuration saved in between is refused with <c>accounting_configuration_changed</c> and the posting can simply be repeated).
     /// The result is used for the journal, so the validated accounts are exactly the accounts booked.
     /// </summary>
-    private static async Task<IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>> EnsureConfiguredAsync(CompanyAuditedWork work, IEnumerable<Guid> groupIds, bool receipt, CancellationToken ct)
+    private static Task<IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>> EnsureConfiguredAsync(CompanyAuditedWork work, IEnumerable<Guid> groupIds, bool receipt, CancellationToken ct) =>
+        EnsureConfiguredAsync(work, groupIds, receipt ? a => a.ReceiptCounterAccountId : a => a.IssueCounterAccountId, receipt ? "receipt_counter_account_not_configured" : "issue_counter_account_not_configured", ct);
+
+    /// <summary>The same resolution for any counter account (Phase 3.8B-2 uses it with the adjustment counter account, refused with <paramref name="missing"/> when that account is not configured).</summary>
+    internal static async Task<IReadOnlyDictionary<Guid, ResolvedInventoryAccounts>> EnsureConfiguredAsync(CompanyAuditedWork work, IEnumerable<Guid> groupIds, Func<ResolvedInventoryAccounts, Guid?> counterOf, string missing, CancellationToken ct)
     {
         var resolved = new Dictionary<Guid, ResolvedInventoryAccounts>();
         foreach (var g in groupIds) resolved[g] = await InventoryAccountingService.ResolveAsync(work, g, ct);
         var accounts = resolved.Values.ToList();
         if (accounts.Select(a => a.VersionId).Distinct().Count() > 1) throw Conflict("accounting_configuration_changed");
-        var counter = receipt ? accounts[0].ReceiptCounterAccountId : accounts[0].IssueCounterAccountId;
-        if (counter is null) throw Conflict(receipt ? "receipt_counter_account_not_configured" : "issue_counter_account_not_configured");
+        var counter = counterOf(accounts[0]);
+        if (counter is null) throw Conflict(missing);
         if (await InventoryAccountingService.ValidateForPostingAsync(work, [.. accounts.Select(a => a.InventoryAccountId).Distinct()], counter, ct) is { } bad) throw Conflict(bad);
         return resolved;
     }

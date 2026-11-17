@@ -7,13 +7,15 @@ using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
 using JL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalLine;
 using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 using RV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingReversal;
+using AP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustmentPosting;
+using AR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustmentReversal;
 
 namespace Hasm.Infrastructure.Inventory;
 
 /// <summary>
 /// The REAL inventory close probe (domain <c>inventory_valuation_differences</c>, Phase 3.7C; it replaces the "module absent" placeholder). A period cannot be closed while, for the stock history up to the END of that period:
 /// <list type="bullet">
-/// <item>a stock posting whose accounting side FAILED exists (its journal entry was cancelled or reversed outside the stock reversal), or</item>
+/// <item>a stock posting or stock adjustment posting (Phase 3.8B-2) whose accounting side FAILED exists (its journal entry was cancelled or reversed outside the stock reversal), or</item>
 /// <item>the value of the costing ledger (the sum of the signed values of every costing entry dated up to the period end) differs from the balance of the inventory accounts in the General Ledger (posted and reversed
 /// entries dated up to the period end). That difference is exactly the stock movement whose entry is still a draft or pending approval, a reversal entry not posted yet, or a manual entry on an inventory account.</item>
 /// </list>
@@ -30,7 +32,7 @@ public sealed class InventoryValuationPeriodCloseProbe : IPeriodCloseProbe
     {
         var end = period.EndDate.ToDateTime(TimeOnly.MinValue);
         // the module is in use only once something was posted
-        await using (var any = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {P.Table} WHERE {P.EffectiveDate} <= @e)", connection, transaction))
+        await using (var any = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {P.Table} WHERE {P.EffectiveDate} <= @e) OR EXISTS (SELECT 1 FROM {AP.Table} WHERE {AP.EffectiveDate} <= @e)", connection, transaction))
         {
             any.Parameters.AddWithValue("e", end);
             if (!(bool)(await any.ExecuteScalarAsync(ct))!) return false;
@@ -38,7 +40,10 @@ public sealed class InventoryValuationPeriodCloseProbe : IPeriodCloseProbe
         // a posting whose journal entry was cancelled or reversed outside the stock reversal has no valid accounting side (and is not reversed)
         await using (var failed = new NpgsqlCommand(
             $"SELECT EXISTS (SELECT 1 FROM {P.Table} p JOIN {JE.Table} j ON j.{JE.Id} = p.{P.JournalEntryId} WHERE p.{P.EffectiveDate} <= @e AND j.{JE.Status} IN (5, 6) " +
-            $"AND NOT EXISTS (SELECT 1 FROM {RV.Table} rv WHERE rv.{RV.PostingId} = p.{P.Id}))", connection, transaction))
+            $"AND NOT EXISTS (SELECT 1 FROM {RV.Table} rv WHERE rv.{RV.PostingId} = p.{P.Id})) " +
+            // Phase 3.8B-2: the same for stock adjustments posted from a stocktake
+            $"OR EXISTS (SELECT 1 FROM {AP.Table} p JOIN {JE.Table} j ON j.{JE.Id} = p.{AP.JournalEntryId} WHERE p.{AP.EffectiveDate} <= @e AND j.{JE.Status} IN (5, 6) " +
+            $"AND NOT EXISTS (SELECT 1 FROM {AR.Table} rv WHERE rv.{AR.PostingId} = p.{AP.Id}))", connection, transaction))
         {
             failed.Parameters.AddWithValue("e", end);
             if ((bool)(await failed.ExecuteScalarAsync(ct))!) return true;

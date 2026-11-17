@@ -16,6 +16,9 @@ public static partial class CompanySchema
         public const string IssueCounterAccountId = "c_1661ba21";
         public const string GroupCount = "c_3ab635fe";
         public const string ContentHash = "c_767c84c9";
+        /// <summary>Company migration 0019 (Phase 3.8B-2): the counter account of stock adjustments (null in every version saved before; nothing with value can be adjusted until one is configured).</summary>
+        public const string AdjustmentCounterAccountId = "c_76c92b02";
+        public const string ForeignKeyAdjustment = "k_cceb2706";
         public const string PrimaryKey = "k_7bd31da5";
         public const string UniqueVersion = "k_6843e5c1";
         public const string ForeignKeyDefault = "k_753f71eb";
@@ -67,6 +70,8 @@ public static partial class CompanySchema
         ["InventoryAccountingVersion.GuardFunction"] = InventoryAccountingVersion.GuardFunction,
         ["InventoryAccountingVersion.GuardRow"] = InventoryAccountingVersion.GuardRow,
         ["InventoryAccountingVersion.GuardTruncate"] = InventoryAccountingVersion.GuardTruncate,
+        ["InventoryAccountingVersion.AdjustmentCounterAccountId"] = InventoryAccountingVersion.AdjustmentCounterAccountId,
+        ["InventoryAccountingVersion.ForeignKeyAdjustment"] = InventoryAccountingVersion.ForeignKeyAdjustment,
         ["InventoryAccountingGroup"] = InventoryAccountingGroup.Table,
         ["InventoryAccountingGroup.VersionId"] = InventoryAccountingGroup.VersionId,
         ["InventoryAccountingGroup.GroupId"] = InventoryAccountingGroup.GroupId,
