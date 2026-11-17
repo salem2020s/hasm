@@ -11,6 +11,8 @@ using V = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccountingV
 using VG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccountingGroup;
 using G = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ItemGroup;
 using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
+using NO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligation;
+using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 
 namespace Hasm.Infrastructure.Inventory;
 
@@ -20,14 +22,18 @@ public static class InventoryAccountingAuditEvents { public const short Saved = 
 public sealed record InventoryAccountingGroupInput(Guid? GroupId, Guid? AccountId);
 /// <summary>The complete configuration (every save is a full, immutable version). A null account means "not configured": nothing can be posted for it.
 /// Phase 3.8B-2: <see cref="AdjustmentCounterAccountId"/> takes the other side of stock adjustments (stocktake shortages and surpluses); optional, but nothing with value can be adjusted until it is set.</summary>
-public sealed record InventoryAccountingInput(Guid? DefaultInventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, IReadOnlyList<InventoryAccountingGroupInput>? Groups, string? Note, Guid? AdjustmentCounterAccountId = null);
+/// Phase 3.8B-3: <see cref="ObligationAccountId"/> (O, a liability) holds negative-stock obligations until a receipt settles them and <see cref="VarianceAccountId"/> (V, optional; default the issue counter account) takes the settlement differences.
+public sealed record InventoryAccountingInput(Guid? DefaultInventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, IReadOnlyList<InventoryAccountingGroupInput>? Groups, string? Note, Guid? AdjustmentCounterAccountId = null,
+    Guid? ObligationAccountId = null, Guid? VarianceAccountId = null);
 public sealed record InventoryAccountingVersionView(Guid Id, int VersionNo, DateTimeOffset CreatedAtUtc, Guid CreatedBy, string? Note, int GroupCount, string ContentHash);
-public sealed record InventoryAccountingView(InventoryAccountingVersionView? Version, Guid? DefaultInventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, IReadOnlyDictionary<Guid, Guid> GroupAccounts, Guid? AdjustmentCounterAccountId = null);
+public sealed record InventoryAccountingView(InventoryAccountingVersionView? Version, Guid? DefaultInventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, IReadOnlyDictionary<Guid, Guid> GroupAccounts, Guid? AdjustmentCounterAccountId = null,
+    Guid? ObligationAccountId = null, Guid? VarianceAccountId = null);
 public sealed record InventoryAccountRef(Guid Id, string Code, string? NameAr, string? NameEn, int Type);
 public sealed record InventoryAccountingLookups(IReadOnlyList<InventoryAccountRef> Accounts, IReadOnlyList<(Guid Id, string Code, string? NameAr, string? NameEn, Guid? ParentId)> Groups);
 
 /// <summary>The accounts a posting would use for one item group under one configuration version.</summary>
-public sealed record ResolvedInventoryAccounts(int VersionNo, Guid VersionId, Guid InventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, Guid? AdjustmentCounterAccountId = null);
+public sealed record ResolvedInventoryAccounts(int VersionNo, Guid VersionId, Guid InventoryAccountId, Guid? ReceiptCounterAccountId, Guid? IssueCounterAccountId, Guid? AdjustmentCounterAccountId = null,
+    Guid? ObligationAccountId = null, Guid? VarianceAccountId = null);
 
 /// <summary>Pure resolution of the inventory account of a group: the nearest group on the chain (the group itself first, then its parents) with a mapping, otherwise the company default; null when none is configured.</summary>
 public static class InventoryAccountResolver
@@ -57,11 +63,11 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
     }
     private sealed class Unchanged(InventoryAccountingView view) : Exception("unchanged") { public InventoryAccountingView View { get; } = view; }
 
-    private static string Cols => $"{V.Id}, {V.VersionNo}, {V.CreatedAtUtc}, {V.CreatedBy}, {V.Note}, {V.DefaultAccountId}, {V.ReceiptCounterAccountId}, {V.IssueCounterAccountId}, {V.GroupCount}, {V.ContentHash}, {V.AdjustmentCounterAccountId}";
+    private static string Cols => $"{V.Id}, {V.VersionNo}, {V.CreatedAtUtc}, {V.CreatedBy}, {V.Note}, {V.DefaultAccountId}, {V.ReceiptCounterAccountId}, {V.IssueCounterAccountId}, {V.GroupCount}, {V.ContentHash}, {V.AdjustmentCounterAccountId}, {V.ObligationAccountId}, {V.VarianceAccountId}";
 
     public static async Task<InventoryAccountingView> ReadAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, int? versionNo, CancellationToken ct)
     {
-        InventoryAccountingVersionView? version = null; Guid? def = null, receipt = null, issue = null, adjustment = null;
+        InventoryAccountingVersionView? version = null; Guid? def = null, receipt = null, issue = null, adjustment = null, obligation = null, variance = null;
         await using (var cmd = new NpgsqlCommand($"SELECT {Cols} FROM {V.Table} " + (versionNo is null ? $"ORDER BY {V.VersionNo} DESC LIMIT 1" : $"WHERE {V.VersionNo} = @n"), conn, tx))
         {
             if (versionNo is not null) cmd.Parameters.AddWithValue("n", versionNo.Value);
@@ -70,6 +76,7 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
             {
                 version = new InventoryAccountingVersionView(r.GetGuid(0), r.GetInt32(1), new DateTimeOffset(r.GetDateTime(2), TimeSpan.Zero), r.GetGuid(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetInt32(8), r.GetString(9).Trim());
                 def = r.IsDBNull(5) ? null : r.GetGuid(5); receipt = r.IsDBNull(6) ? null : r.GetGuid(6); issue = r.IsDBNull(7) ? null : r.GetGuid(7); adjustment = r.IsDBNull(10) ? null : r.GetGuid(10);
+                obligation = r.IsDBNull(11) ? null : r.GetGuid(11); variance = r.IsDBNull(12) ? null : r.GetGuid(12);
             }
         }
         var groups = new Dictionary<Guid, Guid>();
@@ -80,7 +87,7 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) groups[r.GetGuid(0)] = r.GetGuid(1);
         }
-        return new InventoryAccountingView(version, def, receipt, issue, groups, adjustment);
+        return new InventoryAccountingView(version, def, receipt, issue, groups, adjustment, obligation, variance);
     }
 
     public async Task<InventoryAccountingView> GetAsync(Guid companyId, int? versionNo = null, CancellationToken ct = default)
@@ -132,7 +139,8 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
     /// <summary>The adjustment counter account (3.8B-2) enters the hash only when it is set, so the hash of every configuration without one is exactly what it was before (an unchanged save stays a no-op).</summary>
     private static string Hash(InventoryAccountingInput n, IReadOnlyDictionary<Guid, Guid> groups) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{n.DefaultInventoryAccountId}|{n.ReceiptCounterAccountId}|{n.IssueCounterAccountId}|" + string.Join(";", groups.OrderBy(g => g.Key).Select(g => $"{g.Key}:{g.Value}"))
-            + (n.AdjustmentCounterAccountId is { } adj ? $"|adjustment:{adj}" : "")))).ToLowerInvariant();
+            + (n.AdjustmentCounterAccountId is { } adj ? $"|adjustment:{adj}" : "")
+            + (n.ObligationAccountId is { } obl ? $"|obligation:{obl}" : "") + (n.VarianceAccountId is { } vr ? $"|variance:{vr}" : "")))).ToLowerInvariant();
 
     public async Task<ConfigResult<InventoryAccountingView>> SaveAsync(Guid actor, Guid companyId, long? expectedVersion, InventoryAccountingInput? input, CancellationToken ct = default)
     {
@@ -166,7 +174,7 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
                 // base currency: stock is valued in it, so no configured account may be limited to another currency
                 string? baseCurrency;
                 await using (var bq = new NpgsqlCommand($"SELECT {CC.Code} FROM {CC.Table} WHERE {CC.IsBase}", work.Connection, work.Transaction)) baseCurrency = (await bq.ExecuteScalarAsync(ct))?.ToString()?.Trim();
-                var allIds = groups.Values.Concat(new[] { input.DefaultInventoryAccountId, input.ReceiptCounterAccountId, input.IssueCounterAccountId, input.AdjustmentCounterAccountId }.Where(x => x is not null).Select(x => x!.Value)).ToList();
+                var allIds = groups.Values.Concat(new[] { input.DefaultInventoryAccountId, input.ReceiptCounterAccountId, input.IssueCounterAccountId, input.AdjustmentCounterAccountId, input.ObligationAccountId, input.VarianceAccountId }.Where(x => x is not null).Select(x => x!.Value)).ToList();
                 var accounts = await AccountsAsync(work.Connection, work.Transaction, allIds, ct);
                 var fields = new List<FieldError>();
                 void Check(Guid? id, string field, bool inventory)
@@ -194,17 +202,41 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
                 if (input.ReceiptCounterAccountId is { } rc && inventoryAccounts.Contains(rc)) fields.Add(new("receiptCounterAccountId", "counter_equals_inventory_account"));
                 if (input.IssueCounterAccountId is { } ic && inventoryAccounts.Contains(ic)) fields.Add(new("issueCounterAccountId", "counter_equals_inventory_account"));
                 if (input.AdjustmentCounterAccountId is { } ac && inventoryAccounts.Contains(ac)) fields.Add(new("adjustmentCounterAccountId", "counter_equals_inventory_account"));
+                // Phase 3.8B-3 (R8, R17): O is a liability, never an inventory account nor the issue or receipt counter; V never an inventory account, O or the receipt counter
+                Check(input.ObligationAccountId, "obligationAccountId", false);
+                Check(input.VarianceAccountId, "varianceAccountId", false);
+                if (input.ObligationAccountId is { } oa)
+                {
+                    if (accounts.TryGetValue(oa, out var oacc) && oacc.Type != (int)AccountType.Liability) fields.Add(new("obligationAccountId", "obligation_account_must_be_liability"));
+                    if (inventoryAccounts.Contains(oa)) fields.Add(new("obligationAccountId", "counter_equals_inventory_account"));
+                    else if (oa == input.IssueCounterAccountId || oa == input.ReceiptCounterAccountId) fields.Add(new("obligationAccountId", "obligation_equals_counter_account"));
+                }
+                if (input.VarianceAccountId is { } va)
+                {
+                    if (inventoryAccounts.Contains(va)) fields.Add(new("varianceAccountId", "counter_equals_inventory_account"));
+                    else if (va == input.ObligationAccountId) fields.Add(new("varianceAccountId", "variance_equals_obligation_account"));
+                    else if (va == input.ReceiptCounterAccountId) fields.Add(new("varianceAccountId", "variance_equals_receipt_counter_account"));
+                }
+                // review M5: the receipt counter G that will settle the OPEN negative-stock obligations may not be the O or V they were issued with
+                if (input.ReceiptCounterAccountId is { } liveG)
+                {
+                    await using var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {NO.Table} o WHERE (o.{NO.ObligationAccountId} = @g OR o.{NO.VarianceAccountId} = @g) AND {NG.OpenQuantityFunction}(o.{NO.Id}) > 0)", work.Connection, work.Transaction);
+                    q.Parameters.AddWithValue("g", liveG);
+                    if ((bool)(await q.ExecuteScalarAsync(ct))!) fields.Add(new("receiptCounterAccountId", "receipt_counter_equals_open_obligation_account"));
+                }
                 if (fields.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: fields);
                 var hash = Hash(input, groups);
                 if (current.Version is { } cv && cv.ContentHash == hash && (note is null || string.Equals(note, cv.Note, StringComparison.Ordinal))) throw new Unchanged(current);   // a new note on an identical mapping is still recorded as a version
                 var versionId = Guid.NewGuid(); var no = currentNo + 1; var now = clock.GetUtcNow().UtcDateTime;
-                await using (var ins = new NpgsqlCommand($"INSERT INTO {V.Table} ({V.Id}, {V.VersionNo}, {V.CreatedAtUtc}, {V.CreatedBy}, {V.Note}, {V.DefaultAccountId}, {V.ReceiptCounterAccountId}, {V.IssueCounterAccountId}, {V.GroupCount}, {V.ContentHash}, {V.AdjustmentCounterAccountId}) VALUES (@id, @no, @now, @by, @note, @d, @r, @i, @c, @h, @adj)", work.Connection, work.Transaction))
+                await using (var ins = new NpgsqlCommand($"INSERT INTO {V.Table} ({V.Id}, {V.VersionNo}, {V.CreatedAtUtc}, {V.CreatedBy}, {V.Note}, {V.DefaultAccountId}, {V.ReceiptCounterAccountId}, {V.IssueCounterAccountId}, {V.GroupCount}, {V.ContentHash}, {V.AdjustmentCounterAccountId}, {V.ObligationAccountId}, {V.VarianceAccountId}) VALUES (@id, @no, @now, @by, @note, @d, @r, @i, @c, @h, @adj, @obl, @var)", work.Connection, work.Transaction))
                 {
                     ins.Parameters.AddWithValue("id", versionId); ins.Parameters.AddWithValue("no", no); ins.Parameters.AddWithValue("now", now); ins.Parameters.AddWithValue("by", actor);
                     ins.Parameters.Add(new NpgsqlParameter("note", NpgsqlDbType.Varchar) { Value = (object?)note ?? DBNull.Value });
                     ins.Parameters.AddWithValue("d", (object?)input.DefaultInventoryAccountId ?? DBNull.Value); ins.Parameters.AddWithValue("r", (object?)input.ReceiptCounterAccountId ?? DBNull.Value);
                     ins.Parameters.AddWithValue("i", (object?)input.IssueCounterAccountId ?? DBNull.Value); ins.Parameters.AddWithValue("c", groups.Count); ins.Parameters.AddWithValue("h", hash);
                     ins.Parameters.Add(new NpgsqlParameter("adj", NpgsqlDbType.Uuid) { Value = (object?)input.AdjustmentCounterAccountId ?? DBNull.Value });
+                    ins.Parameters.Add(new NpgsqlParameter("obl", NpgsqlDbType.Uuid) { Value = (object?)input.ObligationAccountId ?? DBNull.Value });
+                    ins.Parameters.Add(new NpgsqlParameter("var", NpgsqlDbType.Uuid) { Value = (object?)input.VarianceAccountId ?? DBNull.Value });
                     await ins.ExecuteNonQueryAsync(ct);
                 }
                 foreach (var (gid, aid) in groups)
@@ -247,7 +279,7 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
         var chain = new List<Guid>();
         for (Guid? cur = groupId; cur is { } id && parents.ContainsKey(id) && !chain.Contains(id); cur = parents[id]) chain.Add(id);
         var account = InventoryAccountResolver.Resolve(cfg.GroupAccounts, chain, cfg.DefaultInventoryAccountId) ?? throw new InvalidOperationException("inventory_account_not_configured");
-        return new ResolvedInventoryAccounts(cfg.Version.VersionNo, cfg.Version.Id, account, cfg.ReceiptCounterAccountId, cfg.IssueCounterAccountId, cfg.AdjustmentCounterAccountId);
+        return new ResolvedInventoryAccounts(cfg.Version.VersionNo, cfg.Version.Id, account, cfg.ReceiptCounterAccountId, cfg.IssueCounterAccountId, cfg.AdjustmentCounterAccountId, cfg.ObligationAccountId, cfg.VarianceAccountId);
     }
 
     /// <summary>

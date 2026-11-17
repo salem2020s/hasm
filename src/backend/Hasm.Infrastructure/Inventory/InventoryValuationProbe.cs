@@ -9,6 +9,8 @@ using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 using RV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPostingReversal;
 using AP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustmentPosting;
 using AR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustmentReversal;
+using NO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligation;
+using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 
 namespace Hasm.Infrastructure.Inventory;
 
@@ -47,6 +49,19 @@ public sealed class InventoryValuationPeriodCloseProbe : IPeriodCloseProbe
         {
             failed.Parameters.AddWithValue("e", end);
             if ((bool)(await failed.ExecuteScalarAsync(ct))!) return true;
+        }
+        // Phase 3.8B-3 (N3, D7, R20): an obligation open now with a document date up to the period end blocks FINAL close (a period being final-closed is Soft Closed; at soft close it is only a warning of the close
+        // report); for both closes the obligation account must reconcile at the period end and no settlement journal may have failed
+        var negative = await NegativeStockReconciliation.ComputeAsync(connection, transaction, period.EndDate, ct);
+        if (negative.Any)
+        {
+            if (negative.Expected != negative.Ledger || negative.Differences != negative.LedgerVariance || negative.FailedJournals > 0) return true;
+            if (period.State == FiscalPeriodState.SoftClosed)
+            {
+                await using var open = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {NO.Table} o WHERE o.{NO.EffectiveDate} <= @e AND {NG.OpenQuantityFunction}(o.{NO.Id}) > 0)", connection, transaction);
+                open.Parameters.AddWithValue("e", end);
+                if ((bool)(await open.ExecuteScalarAsync(ct))!) return true;
+            }
         }
         // costing ledger value versus the inventory accounts of the General Ledger, both up to the period end
         await using var diff = new NpgsqlCommand(

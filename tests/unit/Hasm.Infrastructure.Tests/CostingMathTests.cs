@@ -127,6 +127,18 @@ public class CostingMathTests
     }
 
     [Fact]
+    public void A_provisional_value_scales_a_pair_beyond_its_quantity_with_one_rounding_and_is_exact_for_the_whole()
+    {
+        // Phase 3.8B-3: the uncovered quantity may exceed the quantity of the (value, quantity) pair it is priced from
+        Assert.Equal(35m, A(Scale(Amt(15m), Qty(7m), Qty(3m), 2)));                                         // 15.00 x 7 / 3
+        Assert.Equal(6.67m, A(Scale(Amt(10m), Qty(2m), Qty(3m), 2)));                                       // half away from zero
+        Assert.Equal(10m, A(Scale(Amt(10m), Qty(3m), Qty(3m), 2)));                                         // the whole: the exact value
+        Assert.Equal(0m, A(Scale(Amt(0.01m), Qty(1m), Qty(1000m), 2)));                                     // rounds to zero: the caller refuses it, never accepts it
+        Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(0m), Qty(1m), 2));
+        Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(1m), Qty(0m), 2));
+    }
+
+    [Fact]
     public void The_derived_unit_cost_is_display_only_ten_decimals_and_zero_for_no_quantity()
     {
         Assert.Equal(0.3333333333m, UnitCost(1m, 3m));

@@ -77,7 +77,10 @@ public static class CompanyConfigurationEndpoints
             case ConfigStatus.PreconditionFailed: return Results.Json(new { error = "revision_conflict", currentRevision = r.CurrentRevision }, statusCode: 412);
             case ConfigStatus.EntitlementDenied: return Error(403, "entitlement_denied");
             case ConfigStatus.NotFound: return Error(404, r.Code ?? "not_found");
-            default: return Error(409, r.Code ?? "conflict");
+            default:
+                // a conflict may name the lines it concerns (Phase 3.8B-3); otherwise the body is the plain error as before
+                if (r.Fields is { Count: > 0 } f) return Results.Json(new { error = r.Code ?? "conflict", fields = f.Select(x => new { field = x.Field, code = x.Code }) }, statusCode: 409);
+                return Error(409, r.Code ?? "conflict");
         }
     }
 

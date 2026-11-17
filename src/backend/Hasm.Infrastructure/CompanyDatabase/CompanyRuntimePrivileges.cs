@@ -114,6 +114,13 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.StockAdjustmentPosting.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockAdjustmentPostingLine.Table, ["SELECT", "INSERT"]),
         (CompanySchema.StockAdjustmentReversal.Table, ["SELECT", "INSERT"]),
+        // Negative-stock exception (Phase 3.8B-3): settings versions, eligibility flags, exception approvals, obligations, settlements and obligation reversals are all append-only.
+        (CompanySchema.NegativeStockSetting.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeStockItemFlag.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeExceptionApproval.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeObligation.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeSettlement.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.NegativeObligationReversal.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

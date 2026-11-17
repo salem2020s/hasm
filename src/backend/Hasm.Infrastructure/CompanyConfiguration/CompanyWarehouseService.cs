@@ -202,6 +202,8 @@ public sealed class CompanyWarehouseService(
     {
         try { return ConfigResult<WarehouseView>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
         catch (Abort abort) { return abort.ToResult(); }
+        // Phase 3.8B-3 (R12): PostgreSQL refuses deactivating a warehouse that holds an open negative-stock obligation
+        catch (PostgresException ex) when (ex.MessageText == "negative_obligation_open") { return ConfigResult<WarehouseView>.Fail(ConfigStatus.Conflict, "negative_obligation_open"); }
     }
 
     private static async Task LockAsync(CompanyAuditedWork work, CancellationToken ct)

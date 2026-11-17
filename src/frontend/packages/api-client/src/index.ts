@@ -626,11 +626,29 @@ export interface InventoryAccountingConfig {
   version: InventoryAccountingVersion | null; versionNo: number; defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; groups: { groupId: string; accountId: string }[];
   /** Phase 3.8B-2: the counter account of stock adjustments (null until configured). */
   adjustmentCounterAccountId?: string | null;
+  /** Phase 3.8B-3: the provisional obligation account O (a liability) and the settlement variance account V (null = the issue counter account). */
+  obligationAccountId?: string | null; varianceAccountId?: string | null;
 }
 export interface InventoryAccountingAccountRef { id: string; code: string; nameAr: string | null; nameEn: string | null; type: number }
 export interface InventoryAccountingGroupRef { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null }
 export interface InventoryAccountingResponse { configuration: InventoryAccountingConfig; canConfigure: boolean; accounts: InventoryAccountingAccountRef[]; groups: InventoryAccountingGroupRef[] }
-export interface InventoryAccountingInput { defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; adjustmentCounterAccountId?: string | null; groups: { groupId: string; accountId: string }[]; note: string | null }
+export interface InventoryAccountingInput { defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; adjustmentCounterAccountId?: string | null; obligationAccountId?: string | null; varianceAccountId?: string | null; groups: { groupId: string; accountId: string }[]; note: string | null }
+
+// ---- Negative-stock exception (Phase 3.8B-3): off by default; an eligible moving-average item may be issued above its stock by an explicit, segregated exception approval. The uncovered part is a provisional
+// obligation settled by later receipts; the cost position never goes negative. Every rule (eligibility, approval, provisional cost, settlement, reversal, close) is enforced by the server.
+export interface NegativeStockSettings { versionNo: number; enabled: boolean; requireSecondApprover: boolean; note: string | null; createdBy: string | null; createdAtUtc: string | null }
+export interface NegativeItemFlag { itemId: string; code: string; nameAr: string | null; nameEn: string | null; eligible: boolean; effectiveValuation: number | null; tracked: boolean; isActive: boolean; hasOpenObligation: boolean; note: string | null; changedBy: string | null; changedAtUtc: string | null }
+/** source: 1 last average, 2 latest stock-document receipt, 3 manual (justified). problem: a stable refusal code for the line. */
+export interface NegativeExceptionLine { lineNo: number; itemId: string; warehouseId: string; quantity: number; onHand: number; covered: number; uncovered: number; source: number | null; sourceEntryId: number | null; sourceQuantity: number | null; sourceValue: number | null; provisionalTotal: number | null; provisionalUnitCost: number | null; justification: string | null; problem: string | null }
+export interface NegativeExceptionPlan { documentId: string; documentRevision: number; documentDate: string; needed: boolean; accountingVersionId: string | null; obligationAccountId: string | null; varianceAccountId: string | null; counterAccountId: string | null; problems: string[]; hash: string; lines: NegativeExceptionLine[] }
+export interface NegativeApproval { id: string; approverId: string; approvedAtUtc: string; reason: string; snapshotHash: string; current: boolean }
+export interface NegativeException { plan: NegativeExceptionPlan; enabled: boolean; requireSecondApprover: boolean; approvalsRequired: number; validApprovals: number; posted: boolean; approvals: NegativeApproval[] }
+/** amount is sent as the decimal text typed (the server reads it exactly; no binary floating point). */
+export interface NegativeManualCost { lineNo: number; amount: string; justification: string }
+export interface NegativeSettlement { id: string; receiptPostingId: string; receiptDocumentId: string; receiptNumber: string | null; receiptLineNo: number; effectiveDate: string; matchedQuantity: number; provisionalAmount: number; actualAmount: number; difference: number; journalEntryId: string | null; reversesSettlementId: string | null; reversed: boolean }
+/** status: 1 open, 2 settled, 3 reversed. */
+export interface NegativeObligation { id: string; seq: number; itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; warehouseId: string; documentId: string; documentNumber: string | null; lineNo: number; effectiveDate: string; originalQuantity: number; provisionalTotal: number; openQuantity: number; openProvisional: number; source: number; justification: string | null; status: number; ageDays: number; journalEntryId: string; journalStatus: number | null; obligationAccountId: string; varianceAccountId: string; settlements: NegativeSettlement[] }
+export interface NegativeCloseReport { periodEnd: string; open: NegativeObligation[]; expectedObligationBalance: number; ledgerObligationBalance: number; settlementDifferences: number; ledgerVariance: number; failedSettlementJournals: number; reconciled: boolean; blocksFinalClose: boolean }
 
 export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
 export interface StatementResponse {
@@ -900,7 +918,16 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getInventoryAccounting: () => get<InventoryAccountingResponse>("/api/v1/company/inventory/accounting"),
     listInventoryAccountingVersions: () => get<{ versions: InventoryAccountingVersion[] }>("/api/v1/company/inventory/accounting/versions"),
     putInventoryAccounting: (config: InventoryAccountingInput, versionNo: number) => request<InventoryAccountingConfig>("PUT", "/api/v1/company/inventory/accounting", { body: config, ifMatch: versionNo }),
-    // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
+    // Negative-stock exception (Phase 3.8B-3): enablement (If-Match = version number), eligibility flags, the exception of an issue document (If-Match = document revision), obligations and the close report.
+    getNegativeStockSettings: () => get<{ settings: NegativeStockSettings; canConfigure: boolean }>("/api/v1/company/negative-stock/settings"),
+    putNegativeStockSettings: (input: { enabled: boolean; requireSecondApprover: boolean; note: string | null }, versionNo: number) => request<NegativeStockSettings>("PUT", "/api/v1/company/negative-stock/settings", { body: input, ifMatch: versionNo }),
+    listNegativeItemFlags: () => get<{ items: NegativeItemFlag[] }>("/api/v1/company/negative-stock/items"),
+    setNegativeItemFlag: (itemId: string, eligible: boolean, note: string | null) => request<NegativeItemFlag>("PUT", `/api/v1/company/negative-stock/items/${enc(itemId)}`, { body: { eligible, note } }),
+    getNegativeException: (documentId: string) => get<{ exception: NegativeException; canApprove: boolean }>(`/api/v1/company/stock-documents/${enc(documentId)}/negative-exception`),
+    approveNegativeException: (documentId: string, revision: number, reason: string, manualCosts: NegativeManualCost[]) =>
+      request<NegativeException>("POST", `/api/v1/company/stock-documents/${enc(documentId)}/negative-exception/approvals`, { body: { reason, manualCosts }, ifMatch: revision }),
+    listNegativeObligations: (status: "open" | "all" = "open") => get<{ obligations: NegativeObligation[] }>(`/api/v1/company/negative-stock/obligations?status=${status}`),
+    getNegativeCloseReport: (periodEnd: string) => get<NegativeCloseReport>(`/api/v1/company/negative-stock/close-report?periodEnd=${enc(periodEnd)}`),    // Fiscal calendar (Phase 3.1D). Changes carry the revision of the year or period as If-Match; the server enforces every rule.
     listFiscalYears: () => get<FiscalYearsResponse>("/api/v1/company/fiscal-years"),
     getFiscalYear: (id: string) => get<FiscalYear>(`/api/v1/company/fiscal-years/${enc(id)}`),
     createFiscalYear: (year: FiscalYearInput) => request<FiscalYear>("POST", "/api/v1/company/fiscal-years", { body: year }),

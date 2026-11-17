@@ -187,19 +187,43 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         // 3. the stock and its valuation
         CostingResult result;
         var postingLines = new List<StockPostingLineView>();
+        NegativeIssue? negative = null;
+        NegativeReceipt? settling = null;
+        IReadOnlyList<StockPostingLineView>? journalLines = null;                       // the lines the journal books when they differ from what was posted (negative-stock exception, Phase 3.8B-3)
         if (type == StockDocType.Receipt)
         {
-            var request = new CostingReceiptRequest(key, date, source, [.. doc.Lines.Select(l => new CostingReceiptLine(l.ItemId, warehouse, l.BaseQuantity, amounts[l.LineNo]))]);
+            // Phase 3.8B-3: open obligations of these positions are settled first (oldest first); only the rest of each line enters the position
+            settling = await PrepareSettlementAsync(work, doc, warehouse, date, amounts, ct);
+            var request = settling is null
+                ? new CostingReceiptRequest(key, date, source, [.. doc.Lines.Select(l => new CostingReceiptLine(l.ItemId, warehouse, l.BaseQuantity, amounts[l.LineNo]))])
+                : new CostingReceiptRequest(key, date, source, [.. settling.Remainders.Select(r => new CostingReceiptLine(r.ItemId, warehouse, r.Quantity, r.Amount))], settling.Remainders.Count == 0, settling.Positions);
             // accounting configuration is needed before the stock moves only when there is value to book
             if (doc.Lines.Sum(l => amounts[l.LineNo]) > 0) config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), true, ct);
             result = await costing.ReceiveAsync(work, actor, request, ct);
-            for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, result.Lines[i].Amount));
+            for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, settling is null ? result.Lines[i].Amount : amounts[doc.Lines[i].LineNo]));
+            if (settling is not null)
+                journalLines = [.. settling.Remainders.Select((r, i) => new StockPostingLineView(r.LineNo, r.ItemId, warehouse, r.Quantity, result.Lines[i].Amount))];
         }
         else if (type == StockDocType.Issue)
         {
-            result = await costing.IssueAsync(work, actor, new CostingIssueRequest(key, date, source, [.. doc.Lines.Select(l => new CostingIssueLine(l.ItemId, warehouse, l.BaseQuantity))]), ct);
-            for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, result.Lines[i].Amount));
-            if (result.Lines.Sum(l => l.Amount) > 0) config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), false, ct);
+            // Phase 3.8B-3: an issue above the stock of an eligible item may use the approved exception; otherwise the engine refuses it exactly as before (insufficient_stock)
+            negative = await PrepareNegativeIssueAsync(work, actor, doc, ct);
+            if (negative is null)
+            {
+                result = await costing.IssueAsync(work, actor, new CostingIssueRequest(key, date, source, [.. doc.Lines.Select(l => new CostingIssueLine(l.ItemId, warehouse, l.BaseQuantity))]), ct);
+                for (var i = 0; i < doc.Lines.Count; i++) postingLines.Add(new StockPostingLineView(doc.Lines[i].LineNo, doc.Lines[i].ItemId, warehouse, doc.Lines[i].BaseQuantity, result.Lines[i].Amount));
+                if (result.Lines.Sum(l => l.Amount) > 0) config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), false, ct);
+            }
+            else
+            {
+                var covered = negative.Plan.Lines.Where(l => l.Covered > 0).ToList();
+                result = await costing.IssueAsync(work, actor, new CostingIssueRequest(key, date, source, [.. covered.Select(l => new CostingIssueLine(l.ItemId, warehouse, l.Covered))], covered.Count == 0), ct);
+                var coveredAmount = covered.Select((l, i) => (l.LineNo, result.Lines[i].Amount)).ToDictionary(x => x.LineNo, x => x.Amount);
+                foreach (var l in negative.Plan.Lines) postingLines.Add(new StockPostingLineView(l.LineNo, l.ItemId, warehouse, l.Quantity, coveredAmount.GetValueOrDefault(l.LineNo) + (l.ProvisionalTotal ?? 0m)));
+                journalLines = [.. negative.Plan.Lines.Select(l => new StockPostingLineView(l.LineNo, l.ItemId, warehouse, l.Covered, coveredAmount.GetValueOrDefault(l.LineNo)))];
+                config = await EnsureConfiguredAsync(work, groups.Values.Distinct(), false, ct);
+                if (config.Values.First().VersionId != negative.Plan.AccountingVersionId) throw Conflict("negative_exception_stale");
+            }
         }
         else
         {
@@ -210,12 +234,14 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
             foreach (var o in result.Lines.Where(l => l.Direction < 0)) postingLines.Add(new StockPostingLineView(++n, o.ItemId, o.WarehouseId, o.Quantity, o.Amount));
         }
         var total = type == StockDocType.Transfer ? result.Lines.Where(l => l.Direction < 0).Sum(l => l.Amount) : result.NetValueChange < 0 ? -result.NetValueChange : result.NetValueChange;
+        if (negative is not null || settling is not null) total = postingLines.Sum(l => l.Amount);         // the document's whole value: the covered cost plus the provisional value / every entered receipt amount
+        var bookable = journalLines ?? postingLines;
         // 4. the accounting side: one balanced draft journal entry, or an explicit "no journal required"
-        Guid? journalId = null; Guid? versionId = null;
+        Guid? journalId = null; Guid? versionId = settling is not null && config is not null ? config.Values.First().VersionId : null;
         var state = StockAccountingState.NotRequired;
-        if (type != StockDocType.Transfer && total > 0)
+        if (type != StockDocType.Transfer && (negative is not null || bookable.Sum(l => l.Amount) > 0))
         {
-            var plan = PlanJournal(doc, type, groups, config!, postingLines);
+            var plan = PlanJournal(doc, type, groups, config!, bookable, negative is null ? null : (negative.Plan.ObligationAccountId!.Value, negative.Plan.Lines.Sum(l => l.ProvisionalTotal ?? 0m)));
             versionId = plan.VersionId;
             var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(date, $"Stock {(type == StockDocType.Receipt ? "receipt" : "issue")} {doc.Number}", doc.BranchId, plan.Lines, null), false, DocumentSource.Automatic, key, ct);
             journalId = entry.Header.Id;
@@ -247,6 +273,9 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         }
         await work.AppendAuditAsync(new AuditEventData(StockPostingAuditEvents.Posted, ActorUserId: actor, SubjectId: doc.Id,
             Detail: $"stock document posted number={doc.Number} type={doc.DocType} value={total.ToString(CultureInfo.InvariantCulture)} accounting={(state == StockAccountingState.Pending ? "pending" : "not_required")}"), ct);
+        // 6. Phase 3.8B-3: the obligations of the uncovered parts, or the settlements of the open obligations this receipt matched, in the same transaction
+        if (negative is not null) await RecordObligationsAsync(work, actor, doc, negative, postingId, result.OperationId, journalId!.Value, ct);
+        if (settling is not null) await RecordSettlementsAsync(work, actor, doc, settling, postingId, result.OperationId, config, date, ct);
         return (await LoadByDocumentAsync(work.Connection, work.Transaction, doc.Id, false, ct))!;
     }
 
@@ -284,8 +313,26 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
     private sealed record JournalPlan(Guid VersionId, IReadOnlyList<JournalLineInput> Lines);
 
     /// <summary>Receipt: debit the inventory account of each item group by the entered value, credit the receipt counter account by the total. Issue: debit the issue counter account by the costed total, credit each inventory account. Pure: uses the configuration resolved once for the posting.</summary>
-    private static JournalPlan PlanJournal(StockDocumentView doc, StockDocType type, IReadOnlyDictionary<Guid, Guid> groupOfItem, IReadOnlyDictionary<Guid, ResolvedInventoryAccounts> config, IReadOnlyList<StockPostingLineView> lines)
+    private static JournalPlan PlanJournal(StockDocumentView doc, StockDocType type, IReadOnlyDictionary<Guid, Guid> groupOfItem, IReadOnlyDictionary<Guid, ResolvedInventoryAccounts> config, IReadOnlyList<StockPostingLineView> lines,
+        (Guid Account, decimal Amount)? obligation = null)
     {
+        if (obligation is { } o)
+        {
+            // Phase 3.8B-3 (5.1): Dr issue counter K by the covered cost plus the provisional value / Cr each inventory account by its covered cost / Cr the obligation account O by the provisional value
+            var inventory = new SortedDictionary<Guid, decimal>();
+            ResolvedInventoryAccounts? first = null;
+            foreach (var l in lines)
+            {
+                var r = config[groupOfItem[l.ItemId]];
+                first ??= r;
+                if (l.Amount > 0) inventory[r.InventoryAccountId] = inventory.GetValueOrDefault(r.InventoryAccountId) + l.Amount;
+            }
+            JournalLineInput L(Guid account, decimal? debit, decimal? credit) => new(account, null, null, debit, credit, doc.BranchId, null, null, null);
+            var result = new List<JournalLineInput> { L(first!.IssueCounterAccountId!.Value, inventory.Values.Sum() + o.Amount, null) };
+            foreach (var (account, amount) in inventory) result.Add(L(account, null, amount));
+            result.Add(L(o.Account, null, o.Amount));
+            return new JournalPlan(first.VersionId, result);
+        }
         var perAccount = new SortedDictionary<Guid, decimal>();
         ResolvedInventoryAccounts? any = null;
         foreach (var l in lines.Where(x => x.Amount > 0))
