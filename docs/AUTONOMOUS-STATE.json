@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-16",
+  "updatedAt": "2026-11-17",
   "main": {
     "verifiedHead": "981e991",
     "note": "verify against GitHub at session start; a checkpoint never proves a merge"
