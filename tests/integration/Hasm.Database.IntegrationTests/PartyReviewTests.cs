@@ -21,8 +21,10 @@ public class PartyReviewTests : PartyTestBase
         return new PartyRegistryStore(b.ConnectionString, Audit, Clock);
     }
 
-    [PostgresFact]
-    public async Task Two_companies_changing_the_same_identity_cannot_lose_an_update_and_the_rejected_company_sees_why()
+    [PostgresTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Two_companies_changing_the_same_identity_cannot_lose_an_update_and_the_rejected_company_sees_why(bool aFirst)
     {
         await PrepareParties();
         var (b, adminB) = await OtherCompany();
@@ -39,24 +41,81 @@ public class PartyReviewTests : PartyTestBase
         var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a1.Id, curA.Revision, Id_("اسم أ", tax: "700", reg: "RA"))).OpenRequest!;
         var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, b1.Id, curB.Revision, Id_("اسم ب", tax: "700", reg: "RB"))).OpenRequest!;
         Assert.Equal((1L, 1L), (reqA.BasedOnRevision!.Value, reqB.BasedOnRevision!.Value));
-        Ok(await Registry.ApproveAsync(Central.Id, await ProposalOf(reqA.Id), Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqA.Id))).Revision, null));
-        var pb = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqB.Id, b.Id)));
-        Assert.Equal((1L, 2L, "اسم أ"), (pb.BasedOnRevision!.Value, pb.Target!.Revision, pb.Target.LegalNameAr));          // the approver sees the current data
+        var winner = aFirst ? (Request: reqA, Company: Company, Admin: Admin, Name: "اسم أ", Reg: "RA") : (Request: reqB, Company: b, Admin: adminB, Name: "اسم ب", Reg: "RB");
+        var loser = aFirst ? (Request: reqB, Company: b, Admin: adminB, Party: b1) : (Request: reqA, Company: Company, Admin: Admin, Party: a1);
+        await Approve(winner.Request.Id, company: winner.Company.Id);
+        var pb = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(loser.Request.Id, loser.Company.Id)));
+        Assert.Equal((1L, 2L, winner.Name), (pb.BasedOnRevision!.Value, pb.Target!.Revision, pb.Target.LegalNameAr));          // the approver sees the current data
         Fails(await Registry.ApproveAsync(Central.Id, pb.Id, pb.Revision, null), ConfigStatus.Conflict, "identity_changed");  // B's stale change would overwrite A's
-        Assert.Equal(("اسم أ", "RA", 2L), (await Scalar<string>($"SELECT {GP.LegalNameAr} FROM {GP.Table}"), await Scalar<string>($"SELECT {GP.RegistrationNumber} FROM {GP.Table}"), await Scalar<long>($"SELECT {GP.Revision} FROM {GP.Table}")));
+        Assert.Equal((winner.Name, winner.Reg, 2L), (await Scalar<string>($"SELECT {GP.LegalNameAr} FROM {GP.Table}"), await Scalar<string>($"SELECT {GP.RegistrationNumber} FROM {GP.Table}"), await Scalar<long>($"SELECT {GP.Revision} FROM {GP.Table}")));
         Ok(await Registry.RejectAsync(Central.Id, pb.Id, pb.Revision, "based on an outdated version; propose again"));
-        await Parties.SyncAsync(adminB.Id, b.Id);
-        var bAfter = Ok(await PMgmt.GetAsync(adminB.Id, b.Id, b1.Id));
-        Assert.Equal(((int?)PartyRequestOutcome.Rejected, "based on an outdated version; propose again"), (bAfter.Requests[0].Outcome, bAfter.Requests[0].DecisionNote));   // M3
-        Assert.Equal(("اسم أ", 2L), (bAfter.Identity!.LegalNameAr, bAfter.Identity.Revision));                               // B now sees A's approved change
+        await Parties.SyncAsync(loser.Admin.Id, loser.Company.Id);
+        var bAfter = Ok(await PMgmt.GetAsync(loser.Admin.Id, loser.Company.Id, loser.Party.Id));
+        // The fixed clock deliberately ties both timestamps. UUID tie order is not creation order:
+        // select the actual change request, never assume the first history row is the newest operation.
+        var rejected = Assert.Single(bAfter.Requests, r => r.Id == loser.Request.Id);
+        var original = Assert.Single(bAfter.Requests, r => r.Id == loser.Party.Requests[0].Id);
+        Assert.Equal(original.CreatedAtUtc, rejected.CreatedAtUtc);
+        Assert.Equal(((int?)PartyRequestOutcome.Approved, (string?)null), (original.Outcome, original.DecisionNote));
+        Assert.Equal(((int?)PartyRequestOutcome.Rejected, "based on an outdated version; propose again"), (rejected.Outcome, rejected.DecisionNote));   // M3
+        Assert.Equal((winner.Name, 2L), (bAfter.Identity!.LegalNameAr, bAfter.Identity.Revision));
         // a new proposal of B is based on the current revision and can be approved
-        var again = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, b1.Id, bAfter.Revision, Id_("اسم ب", tax: "700", reg: "RB"))).OpenRequest!;
+        var again = Ok(await PMgmt.ProposeAsync(loser.Admin.Id, loser.Company.Id, loser.Party.Id, bAfter.Revision, Id_("اسم جديد", tax: "700", reg: "RC"))).OpenRequest!;
         Assert.Equal(2L, again.BasedOnRevision);
-        Ok(await Registry.ApproveAsync(Central.Id, await ProposalOf(again.Id, b.Id), Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(again.Id, b.Id))).Revision, null));
+        await Approve(again.Id, company: loser.Company.Id);
         Assert.Equal(3L, await Scalar<long>($"SELECT {GP.Revision} FROM {GP.Table}"));
         // M4: the registry cannot be enumerated with a one-character search
         Fails(await Registry.SearchIdentitiesAsync(Central.Id, " ا "), ConfigStatus.Invalid, "validation_failed");
         Assert.Single(Ok(await Registry.SearchIdentitiesAsync(Central.Id, "700")));
+    }
+
+    [PostgresFact]
+    public async Task Concurrent_approvals_commit_one_identity_change_and_refuse_the_other_without_losing_either_request()
+    {
+        await PrepareParties();
+        var (b, adminB) = await OtherCompany();
+        var a = await NewParty("RACE-A", Id_(tax: "701"));
+        var global = (await Approve(a.Requests[0].Id)).OutcomeGlobalPartyId!.Value;
+        await Parties.SyncAsync(Admin.Id, Company.Id);
+        var other = await NewParty("RACE-B", Id_(tax: "701"), b.Id, adminB);
+        await Approve(other.Requests[0].Id, global, b.Id);
+        await Parties.SyncAsync(adminB.Id, b.Id);
+        var curA = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, a.Id));
+        var curB = Ok(await PMgmt.GetAsync(adminB.Id, b.Id, other.Id));
+        var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a.Id, curA.Revision, Id_("Race A", tax: "701", reg: "RA"))).OpenRequest!;
+        var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, other.Id, curB.Revision, Id_("Race B", tax: "701", reg: "RB"))).OpenRequest!;
+        Assert.Equal((1L, 1L), (reqA.BasedOnRevision!.Value, reqB.BasedOnRevision!.Value));
+        var pa = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqA.Id)));
+        var pb = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqB.Id, b.Id)));
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<ConfigResult<PartyProposalView>> Decide(PartyProposalView proposal)
+        {
+            await start.Task;
+            return await Registry.ApproveAsync(Central.Id, proposal.Id, proposal.Revision, null);
+        }
+        var first = Decide(pa);
+        var second = Decide(pb);
+        start.SetResult();
+        var results = await Task.WhenAll(first, second);
+        var wonA = results[0].IsOk;
+        Assert.Single(results, r => r.IsOk);
+        Fails(Assert.Single(results, r => !r.IsOk), ConfigStatus.Conflict, "identity_changed");
+        Assert.Equal((wonA ? "Race A" : "Race B", wonA ? "RA" : "RB", 2L),
+            (await Scalar<string>($"SELECT {GP.LegalNameAr} FROM {GP.Table}"), await Scalar<string>($"SELECT {GP.RegistrationNumber} FROM {GP.Table}"), await Scalar<long>($"SELECT {GP.Revision} FROM {GP.Table}")));
+        var losing = wonA ? pb : pa;
+        Ok(await Registry.RejectAsync(Central.Id, losing.Id, losing.Revision, "stale concurrent proposal"));
+        await Parties.SyncAsync(Admin.Id, Company.Id);
+        await Parties.SyncAsync(adminB.Id, b.Id);
+        var afterA = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, a.Id));
+        var afterB = Ok(await PMgmt.GetAsync(adminB.Id, b.Id, other.Id));
+        var outcomeA = Assert.Single(afterA.Requests, r => r.Id == reqA.Id);
+        var outcomeB = Assert.Single(afterB.Requests, r => r.Id == reqB.Id);
+        Assert.Equal(((int?) (wonA ? PartyRequestOutcome.Approved : PartyRequestOutcome.Rejected), wonA ? null : "stale concurrent proposal"), (outcomeA.Outcome, outcomeA.DecisionNote));
+        Assert.Equal(((int?) (wonA ? PartyRequestOutcome.Rejected : PartyRequestOutcome.Approved), wonA ? "stale concurrent proposal" : null), (outcomeB.Outcome, outcomeB.DecisionNote));
+        Assert.Equal(afterA.Identity, afterB.Identity);
+        Assert.Equal(2L, afterA.Identity!.Revision);
+        Assert.Empty((await Parties.ReconcileAsync(Admin.Id, Company.Id, repair: false)).Findings);
+        Assert.Empty((await Parties.ReconcileAsync(adminB.Id, b.Id, repair: false)).Findings);
     }
 
     [PostgresFact]

@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Codex takeover checkpoint (2026-11-17; PR #46 remains open)
+
+GitHub reconciliation confirms main `4b79030d1aa039a9106c5a06f0b472fe9ec1b781` (PR #45, Phase 3.8B-3 merged; PR and merge-head hosted CI green during the accepted assessment). PR #46 remains draft at `71e68ec1d347e9567108cae41b833bd2080aeef4`. The older entries below and roadmap still contain historical statuses and must be reconciled after #46 completes.
+
+The original PostgreSQL failure reproduced on the disposable 5433 cluster: tied fixed-clock timestamps plus UUID ordering made `Requests[0]` select the original approved request. The repair selects the change request by ID, preserves all business assertions, tests both approval orders and adds simultaneous approvals; expected PostgreSQL registry 960 -> 962. Five strengthened cases passed in five complete runs (25/25, zero skips). CI guard, secret scan, documentation/traceability, roadmap consistency and 34 verification self-tests passed. Full required CI and final committed-head review are PENDING; no merge or phase completion is claimed.
+
+The independent full-diff Codex review found no Critical/High issue. Four Medium follow-ups are recorded in `review-records/PR-46-phase-3.9A.md` for a separate repair before 3.9B. Claude's uncommitted files in `C:\Projects\Hasm-c` are untouched. The owner confirmed Claude stopped. Work continues in `C:\Projects\Hasm-Codex`, on the existing PR branch; no alternative Phase 3.9A implementation exists.
+
+**Publishing resumed:** the earlier sandbox/approval-policy restriction prevented staging or publishing; the owner updated permissions and a narrowly approved Git staging/fetch check now succeeds. The PR head remains `71e68ec` and is mergeable. The six intended tracked files are being prepared for a normal commit on the existing branch; the ignored patch `pr46-ci-repair.tmp` and generated untracked `.npm-cache/` are excluded. Full PostgreSQL/frontend/desktop and final-head CI remain pending. No dependent phase or merge is authorized until every exact-head gate passes.
+
 Machine-readable twin: `docs/AUTONOMOUS-STATE.json` (non-secret metadata only). At every resumed session: read both, **reconcile with GitHub and the repository** (a checkpoint never proves a merge), then continue from the first incomplete approved dependency.
 
 ## Reconciled checkpoint (verified against GitHub, 2026-11-15)

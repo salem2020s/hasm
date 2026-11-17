@@ -2,7 +2,7 @@
   "schema": 2,
   "updatedAt": "2026-11-17",
   "main": {
-    "verifiedHead": "981e991",
+    "verifiedHead": "4b79030d1aa039a9106c5a06f0b472fe9ec1b781",
     "note": "verify against GitHub at session start; a checkpoint never proves a merge"
   },
   "baseline": {
@@ -62,25 +62,31 @@
       "pr": 43,
       "phase": "3.8B-2",
       "mergeCommit": "981e991"
+    },
+    {
+      "pr": 45,
+      "phase": "3.8B-3",
+      "mergeCommit": "4b79030"
     }
   ],
   "active": {
-    "phase": "3.8B-3 design confirmation, then 3.8C/3.8D/3.9A",
-    "branch": null,
-    "pr": null,
-    "state": "not started",
+    "phase": "3.9A - PR 46 CI repair",
+    "branch": "feature/phase-3-9a-party-registry",
+    "pr": 46,
+    "state": "publishing resumed with approved Git access; five PostgreSQL cases passed five times (25/25); complete local suites, final-head CI and committed-head review pending",
     "knownIssues": [
-      "JournalAccessTests posting_and_approval_are_never_implied failed once locally (not reproduced; unresolved)",
-      "two dashboard.test.tsx tests flaky under CPU load (pass in isolation)",
-      "3.8B-3 implementation waits for a short confirmation re-review of docs/PHASE-3.8B-3-DESIGN.md revision 3",
-      "follow-ups: PR-42 L1-L6 (L6 done in 3.8B-2), PR-43 L1, L3, L4"
+      "Full required local suites, exact-head CI and final committed-head independent review pending; no merge yet",
+      "PR-46 four Medium follow-ups recorded in review record for repair before 3.9B",
+      "Sandbox requires approved escalation for Git/network and test configuration. Earlier publishing block resolved; temporary files and caches must stay uncommitted.",
+      "Claude uncommitted changes in C:\\Projects\\Hasm-c are preserved untouched",
+      "Historical follow-ups: PR-42 L1-L6 (L6 done), PR-43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
     ]
   },
   "next": [
-    "3.8B-3",
-    "3.8C",
-    "3.8D",
-    "3.9A"
+    "Complete 3.9A PR 46 exact-head gates",
+    "Reconcile generated roadmap and progress after merge",
+    "Repair PR-46 Medium findings before 3.9B",
+    "3.8C blocked by OD-11; proceed with next dependency-ready approved phase such as 3.8D"
   ],
   "openDecisions": [
     "OD-1",
