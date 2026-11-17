@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## 3.8D-1 authorized snapshot checkpoint (PR #48, 2026-11-17)
+
+Remote reconciliation confirmed main `814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb` and Draft PR #48 head `2344d4fc18360e712e1427ff6d1febac2e0f662d`; no other open PR or Claude process was found. All seven applicable Actions checks passed on that previous arithmetic checkpoint, with exact-head verification and an independent review in the PR description. Existing original checkouts and their unfinished work remain untouched.
+
+The next internal snapshot slice is implemented: authorized company/warehouse access checked before and after a consistent read-only load; ordinary FIFO/average history fully reconciled; authentic posted-document source links; stable evidence fingerprint; bounded history and cancellation; explicit refusal of transfers, reversals, adjustments and all negative-obligation history, including settlements. There is no public API, production caller or write path. The original back-dated/method-change barriers remain active.
+
+Local snapshot PostgreSQL **17/17**, full unit **887/887**, shared frontend **450/450**, typecheck and production build passed, zero skips. Full backend/PostgreSQL regression is running; final exact-head CI and committed-head independent confirmation are PENDING. Registry increases 962 -> 979. Independent full-diff review confirmed both Medium findings fixed (source provenance and repeated FIFO work/cancellation), with no remaining Critical/High/Medium in this limited checkpoint. No phase completion or merge is claimed.
+
+`PHASE-3.8D-ACCOUNTING-PROPOSAL.md` makes two consequential unresolved contracts reviewable: compensation classification for previously settled negative-stock history, and the basis for changing a nonempty position's method. These are proposals only, not approved accounting policy. Complete transfer/reversal/obligation replay, adjustment/execution-group design, persistence, approvals, revaluation, public preview and shared UI remain pending. PR #48 stays Draft until the whole phase and all gates pass.
+
 ## 3.8D-1 internal arithmetic checkpoint (PR #48, 2026-11-17)
 
 The limited internal receipt/issue replay primitive and 17 exact-value/boundary cases are implemented, reusing `CostingMath`; full local unit regression passed 885/885, no skips. It has no production caller, database/API/journal access or scheduler. Existing back-dated and method-change barriers remain. All public preview, snapshot, transfer/reversal/negative-obligation integration, persistence, approval/execution and UI work is still pending; PR #48 remains Draft.

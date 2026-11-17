@@ -132,4 +132,24 @@ public class CostReplayTests
         var events = Enumerable.Range(1, 9).Select(n => Receipt(n, 900_000_000_000_000_000m, 1)).ToImmutableArray();
         Assert.Equal("replay_total_out_of_range", Assert.Throws<CostingException>(() => CostReplay.Calculate(CostMethod.MovingAverage, 2, events)).Code);
     }
+
+    [Fact]
+    public void Many_single_unit_fifo_issues_preserve_each_receipt_and_the_total_value()
+    {
+        var events = Enumerable.Range(1, 2_000).Select(n => Receipt(n, 1, 1))
+            .Concat(Enumerable.Range(2_001, 2_000).Select(n => Issue(n, 1))).ToImmutableArray();
+        var result = CostReplay.Calculate(CostMethod.Fifo, 2, events);
+        Assert.Equal((0m, 0m), (result.QuantityAfter, result.ValueAfter));
+        var issues = result.Steps.Skip(2_000).ToArray();
+        Assert.Equal(2_000m, issues.Sum(s => s.Amount));
+        Assert.Equal(Enumerable.Range(1, 2_000).Select(Id), issues.Select(s => Assert.Single(s.Consumptions).LayerId));
+    }
+
+    [Fact]
+    public void Cancelled_replay_returns_no_partial_result()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => CostReplay.Calculate(CostMethod.Fifo, 2, [Receipt(1, 10, 100)], cancelled.Token));
+    }
 }

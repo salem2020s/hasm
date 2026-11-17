@@ -20,8 +20,9 @@ internal static class CostReplay
     private const decimal MaxInput = 1_000_000_000_000_000_000m;
     private static readonly BigInteger MaxConvertibleUnits = new(decimal.MaxValue);
 
-    public static ReplayResult Calculate(CostMethod method, int moneyDecimals, ImmutableArray<ReplayEvent> events)
+    public static ReplayResult Calculate(CostMethod method, int moneyDecimals, ImmutableArray<ReplayEvent> events, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (method is not (CostMethod.Fifo or CostMethod.MovingAverage) || moneyDecimals is < 0 or > CostingMath.MaxMoneyDecimals || events.IsDefault)
             throw new CostingException("invalid_replay_input");
         // Classify the complete input before arithmetic; unsupported history cannot become a misleading partial result.
@@ -30,6 +31,7 @@ internal static class CostReplay
         var ids = new HashSet<Guid>();
         foreach (var e in events)
         {
+            ct.ThrowIfCancellationRequested();
             if (e.Id == Guid.Empty || !ids.Add(e.Id) || e.Quantity <= 0m || e.Quantity >= MaxInput ||
                 (e.Kind == CostOperationKind.Receipt ? e.ReceiptAmount is null or < 0m or >= MaxInput : e.ReceiptAmount is not null))
                 throw new CostingException("invalid_replay_input");
@@ -40,18 +42,19 @@ internal static class CostReplay
 
         var quantity = BigInteger.Zero;
         var value = BigInteger.Zero;
-        var layers = new Dictionary<Guid, CostingMath.LayerState>();
+        var layers = new LinkedList<CostingMath.LayerState>();
         var steps = ImmutableArray.CreateBuilder<ReplayStep>(events.Length);
         long arrival = 0;
         foreach (var e in events)
         {
+            ct.ThrowIfCancellationRequested();
             var q = CostingMath.ToUnits(e.Quantity, CostingMath.QuantityScale);
             BigInteger amount;
             var takes = ImmutableArray<CostingMath.Take>.Empty;
             if (e.Kind == CostOperationKind.Receipt)
             {
                 amount = CostingMath.ToUnits(e.ReceiptAmount!.Value, CostingMath.AmountScale);
-                if (method == CostMethod.Fifo) layers.Add(e.Id, new CostingMath.LayerState(e.Id, ++arrival, q, amount));
+                if (method == CostMethod.Fifo) layers.AddLast(new CostingMath.LayerState(e.Id, ++arrival, q, amount));
                 quantity += q;
                 value += amount;
             }
@@ -59,13 +62,24 @@ internal static class CostReplay
             {
                 if (method == CostMethod.Fifo)
                 {
-                    takes = CostingMath.PlanFifo(layers.Values, q, moneyDecimals).ToImmutableArray();
+                    // Only send the required FIFO prefix to the existing arithmetic. Sorting every open layer
+                    // for each small issue would otherwise make a long ordinary history quadratic.
+                    var prefix = new List<CostingMath.LayerState>();
+                    var needed = q;
+                    for (var node = layers.First; node is not null && needed.Sign > 0; node = node.Next)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        prefix.Add(node.Value);
+                        needed -= node.Value.RemainingQuantity;
+                    }
+                    takes = CostingMath.PlanFifo(prefix, q, moneyDecimals).ToImmutableArray();
                     amount = takes.Aggregate(BigInteger.Zero, (sum, t) => sum + t.Amount);
                     foreach (var take in takes)
                     {
-                        var layer = layers[take.LayerId];
-                        if (take.Quantity == layer.RemainingQuantity) layers.Remove(layer.Id);
-                        else layers[layer.Id] = layer with { RemainingQuantity = layer.RemainingQuantity - take.Quantity, RemainingAmount = layer.RemainingAmount - take.Amount };
+                        var first = layers.First!;
+                        var layer = first.Value;
+                        if (take.Quantity == layer.RemainingQuantity) layers.RemoveFirst();
+                        else first.Value = layer with { RemainingQuantity = layer.RemainingQuantity - take.Quantity, RemainingAmount = layer.RemainingAmount - take.Amount };
                     }
                 }
                 else amount = CostingMath.PlanAverage(quantity, value, q, moneyDecimals);

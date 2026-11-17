@@ -82,22 +82,22 @@
     }
   ],
   "active": {
-    "phase": "3.8D impact-preview design",
+    "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "3.8D-1 internal arithmetic primitive implemented;17 new cases, full unit885/885 passed; final checkpoint review/CI pending; PR stays Draft",
+    "state": "Internal authorized snapshot slice implemented; PG17/17,unit887/887,frontend450/450 passed; full regression and new-head CI pending; PR48 Draft, phase incomplete",
     "knownIssues": [
       "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
       "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "3.8D history/snapshot loader, authorization integration, complete replay and execution contracts remain unimplemented; no public backdated feature",
+      "Public preview, complete transfer/reversal/negative replay, persistence/execution, method conversion and UI remain incomplete; accounting proposals are not approved",
       "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
       "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
     ]
   },
   "next": [
-    "Review and verify current internal arithmetic checkpoint on exact pushed head",
-    "Implement authorized consistent read-only history snapshot adapter, refusing unsupported history without data leakage",
-    "Resolve/review reconciliation, negative-obligation transitions, scheduler and execution-group contracts before any persistence/execution",
+    "Finish full regression and preserve snapshot checkpoint on existing PR48; verify exact head CI and independent review",
+    "Resolve consequential compensation-classification and nonempty-method-conversion contracts in PHASE-3.8D-ACCOUNTING-PROPOSAL.md before dependent implementation",
+    "Complete all remaining 3.8D slices before ready/merge; existing backdated and method-change guards stay active",
     "3.8C remains blocked by OD-11; four PR46 Medium fixes required before3.9B"
   ],
   "openDecisions": [

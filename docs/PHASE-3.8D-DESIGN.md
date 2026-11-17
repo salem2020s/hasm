@@ -1,6 +1,6 @@
 # Phase 3.8D - impact preview and recalculation design proposal
 
-Status: **design proposal with an initial internal arithmetic primitive; the public feature is not implemented**. This is the next dependency-ready inventory phase after merged 3.7C and 3.8A. It does not approve a new accounting rule, remove the existing `backdated_not_supported` barrier, or claim that back-dated posting, revaluation or method changes work today. Independent design review is required before implementing the proposed persistence/execution slices.
+Status: **design proposal with internal arithmetic and an authorized read-only ordinary-history snapshot adapter; the public feature is not implemented**. This is the next dependency-ready inventory phase after merged 3.7C and 3.8A. It does not approve a new accounting rule, remove the existing `backdated_not_supported` barrier, or claim that back-dated posting, revaluation or method changes work today. Independent design review is required before implementing the proposed persistence/execution slices.
 
 ## Approved scope and existing behavior
 
@@ -36,13 +36,23 @@ The initial review of checkpoint `b22cbe0` identified a High design omission: or
 
 Before implementing persistence or execution, the following contracts still need explicit review: reconciliation of original and replayed amounts by account, branch, cost center, currency and period; historical versus current mappings; a transition matrix for negative coverage/settlement changes that never mutates or silently reopens old obligations; deterministic transfer-cycle and reversal examples; and fingerprints covering adjustment contents, original/reversal links, obligation/settlement state, mapping versions and approval binding. Authorization and revocation must always be rechecked live, regardless of fingerprint equality. Consequential accounting questions without an approved answer stay with the owner; the read-only primitive does not decide them.
 
-The safe initial code slice is an internal, immutable receipt/issue replay primitive reusing `CostingMath`, with exact numeric fixtures. It is not a database history loader, scheduler, API or posting service. An eventual snapshot adapter must classify the complete history and refuse unsupported transfer, reversal, negative-exception or stocktake cases until they are modeled. Existing back-dated and method-change guards stay unchanged.
+The initial code slice is an internal, immutable receipt/issue replay primitive reusing `CostingMath`, with exact numeric fixtures. The next internal snapshot adapter now classifies ordinary history and refuses unsupported transfer, reversal, negative-exception or stocktake cases until they are modeled. Neither is a scheduler, public API or posting service. Existing back-dated and method-change guards stay unchanged.
 
 ## Initial arithmetic checkpoint
 
 `CostReplay` now implements only the internal, already-ordered ordinary receipt/issue primitive. It reuses existing FIFO/moving-average rounding, returns immutable trajectories/consumptions, refuses unsupported operation kinds before partial calculation, and matches the live engine's per-event numeric bounds. Aggregates beyond the existing arithmetic conversion range fail with a stable code. There is no database access, clock, scheduler, API, dependency-injection registration or production caller; it cannot create a position, obligation, approval or journal.
 
-Seventeen new unit cases cover exact remainders, free receipts, shortages, FIFO allocations, inserted-receipt changes under both methods, immutable/repeatable results, unsupported history, input identity/precision and numeric boundaries. The full local unit suite passed **885/885**, with zero skips. Integration, authorization, snapshot loading, transfer/reversal/obligation replay, proposal persistence, execution and UI remain unimplemented. The PR stays Draft; no broader 3.8D capability is claimed complete.
+Nineteen new unit cases cover exact remainders, free receipts, shortages, FIFO allocations, inserted-receipt changes under both methods, immutable/repeatable results, unsupported history, input identity/precision, numeric boundaries, long FIFO histories and cancellation. The full local unit suite passed **887/887**, with zero skips. FIFO replay considers only the consumed layer prefix instead of repeatedly sorting every remaining layer.
+
+## Authorized snapshot checkpoint
+
+`CostHistorySnapshotService` is internal and has no API, dependency-injection registration or production caller. It checks the existing warehouse-scoped stock-balance cost-visibility permission before opening the company database and again before returning. A repeatable-read, read-only transaction loads the resolved method, base currency, position and complete ordinary receipt/issue trajectory. It replays and reconciles every historical amount and balance against the existing engine. Real stock-document sources must match document type, warehouse and the posting's exact cost-operation link. It never creates positions, changes layers, writes audit entries or takes posting locks.
+
+Transfers, reversals, stock adjustments, tracked items and any negative-obligation history (including settled obligations) are explicitly refused. A 100,000-entry bound refuses oversized history rather than truncating it. The immutable snapshot's hash identifies this limited history evidence only; it is **not** an approval, authorization or executable-plan token. Cancellation reaches reads and replay work.
+
+Seventeen new PostgreSQL cases passed on isolated port 5433, zero skips: FIFO/average reconciliation, empty position without creation, unsupported histories, real posted-document provenance and invalid links, scope/company isolation, live revocation, concurrent writer snapshot consistency, read-only isolation, method changes and resource bounds. Registry increases from 962 to 979. Independent full-diff review confirmed the source-provenance and FIFO-work findings fixed, with no remaining Critical/High/Medium in this checkpoint. Final committed-head review and applicable CI are separate gates.
+
+Public preview, transfer/reversal/obligation replay, proposal persistence, approval/execution, method conversion/revaluation and shared UI remain unimplemented. The PR stays Draft; no broader 3.8D capability is claimed complete. Consequential accounting contracts that require owner resolution are described concretely in [PHASE-3.8D-ACCOUNTING-PROPOSAL.md](PHASE-3.8D-ACCOUNTING-PROPOSAL.md); that proposal is not an approved decision.
 
 ## Preserved boundaries
 
