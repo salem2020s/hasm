@@ -11,6 +11,8 @@ using V = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccountingV
 using VG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccountingGroup;
 using G = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ItemGroup;
 using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
+using NO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligation;
+using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 
 namespace Hasm.Infrastructure.Inventory;
 
@@ -214,6 +216,13 @@ public sealed class InventoryAccountingService(CompanyDatabaseResolver resolver,
                     if (inventoryAccounts.Contains(va)) fields.Add(new("varianceAccountId", "counter_equals_inventory_account"));
                     else if (va == input.ObligationAccountId) fields.Add(new("varianceAccountId", "variance_equals_obligation_account"));
                     else if (va == input.ReceiptCounterAccountId) fields.Add(new("varianceAccountId", "variance_equals_receipt_counter_account"));
+                }
+                // review M5: the receipt counter G that will settle the OPEN negative-stock obligations may not be the O or V they were issued with
+                if (input.ReceiptCounterAccountId is { } liveG)
+                {
+                    await using var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {NO.Table} o WHERE (o.{NO.ObligationAccountId} = @g OR o.{NO.VarianceAccountId} = @g) AND {NG.OpenQuantityFunction}(o.{NO.Id}) > 0)", work.Connection, work.Transaction);
+                    q.Parameters.AddWithValue("g", liveG);
+                    if ((bool)(await q.ExecuteScalarAsync(ct))!) fields.Add(new("receiptCounterAccountId", "receipt_counter_equals_open_obligation_account"));
                 }
                 if (fields.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: fields);
                 var hash = Hash(input, groups);

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using Hasm.Api.Access;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
@@ -30,7 +31,8 @@ public static class NegativeStockEndpoints
 
     public sealed record SettingsBody(bool? Enabled, bool? RequireSecondApprover, string? Note);
     public sealed record FlagBody(bool? Eligible, string? Note);
-    public sealed record ManualBody(int? LineNo, decimal? Amount, string? Justification);
+    /// <summary>The manual amount may be sent as a JSON string (the clients do, so no binary floating point ever touches it) or a number.</summary>
+    public sealed record ManualBody(int? LineNo, [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] decimal? Amount, string? Justification);
     public sealed record ApprovalBody(string? Reason, List<ManualBody>? ManualCosts);
 
     public static void MapNegativeStockEndpoints(this WebApplication app)

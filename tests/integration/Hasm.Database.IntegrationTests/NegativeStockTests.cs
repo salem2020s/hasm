@@ -21,6 +21,7 @@ using NX = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeSettlement;
 using NR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligationReversal;
 using SAP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustmentPosting;
 using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
+using IAV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccountingVersion;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -662,6 +663,73 @@ public class NegativeStockTests : NegativeStockTestBase
         Ok(await Post(receipt, Amounts(33m)));
         Assert.Equal((3m, 30m, 33m), ((await SettlementsOf(receipt)).Single().MatchedQuantity, (await SettlementsOf(receipt)).Single().ProvisionalAmount, (await SettlementsOf(receipt)).Single().ActualAmount));
         await AssertConsistent();
+    }
+}
+
+/// <summary>Fixes of the independent review of PR #45 (M1 to M5).</summary>
+public class NegativeStockReviewTests : NegativeStockTestBase
+{
+    [PostgresFact]
+    public async Task M1_an_obligation_needs_the_live_moving_average_policy_and_a_concurrent_policy_change_never_leaves_an_open_obligation_under_another_method()
+    {
+        await PrepareNegative();
+        await Emptied(Avg, 3m, 15m);
+        var issue = await Exceptional(Avg, 7m, "2026-03-12");
+        Ok(await Post(issue));
+        Ok(await Post(await Approved(Receipt(W1, "2026-03-13", L(Avg, Pcs, 7m))), Amounts(42m)));          // settled: the policy may change again
+        var o = await ObligationOf(issue);
+        Assert.Null(await RawMessage($"UPDATE {G.Table} SET {G.Valuation} = 1, {G.Revision} = {G.Revision} + 1 WHERE {G.Id} = '{Avg.GroupId}'"));
+        // the position still says moving average, the flag is still set, but the item no longer RESOLVES to moving average: refused (before the posting-line check)
+        var cols = $"{NO.Id}, {NO.ItemId}, {NO.WarehouseId}, {NO.PositionId}, {NO.PostingId}, {NO.LineNo}, {NO.DocumentId}, {NO.IssueOperationId}, {NO.JournalEntryId}, {NO.AccountingVersionId}, {NO.ObligationAccountId}, {NO.VarianceAccountId}, {NO.CounterAccountId}, {NO.EffectiveDate}, {NO.OriginalQuantity}, {NO.ProvisionalTotal}, {NO.SourceCode}, {NO.SourceEntryId}, {NO.SourceQuantity}, {NO.SourceValue}, {NO.Justification}, {NO.ApprovalId}, {NO.CreatedBy}, {NO.CreatedAtUtc}";
+        var select = cols.Replace($"{NO.Id},", "gen_random_uuid(),").Replace($"{NO.LineNo},", "99,");
+        Assert.Contains("eligible", await RawMessage($"INSERT INTO {NO.Table} ({cols}) SELECT {select} FROM {NO.Table} WHERE {NO.Id} = '{o.Id}'") ?? "");
+        Assert.Null(await RawMessage($"UPDATE {G.Table} SET {G.Valuation} = 2, {G.Revision} = {G.Revision} + 1 WHERE {G.Id} = '{Avg.GroupId}'"));
+        // a policy change (inventory master lock) racing an exception posting (posting lock): whichever wins, an open obligation never coexists with another resolved method
+        var next = await Exceptional(Avg, 2m, "2026-03-15");
+        var group = (await Inv.ListGroupsAsync(Company.Id)).Single(g => g.Id == Avg.GroupId);
+        var both = await Task.WhenAll(
+            Task.Run(async () => (object)await Post(next)),
+            Task.Run(async () => (object)await Inv.UpdateGroupAsync(Admin.Id, Company.Id, group.Id, group.Revision, new ItemGroupInput(group.Code, group.NameAr, group.NameEn, group.ParentId, 1))));
+        var posted = ((ConfigResult<StockPostingView>)both[0]).IsOk;
+        var changed = ((ConfigResult<ItemGroupView>)both[1]).IsOk;
+        Assert.True(posted ^ changed, $"posted={posted} changed={changed}");
+        var valuation = await Sql<short>($"SELECT {G.Valuation} FROM {G.Table} WHERE {G.Id} = '{Avg.GroupId}'");
+        Assert.Equal(posted ? (short)2 : (short)1, valuation);
+        Assert.Equal(posted ? 1 : 0, (await Obligations(openOnly: true)).Count);
+    }
+
+    [PostgresFact]
+    public async Task M2_M4_a_preview_and_an_approval_write_no_cost_position_only_the_posting_creates_it()
+    {
+        await PrepareNegative();
+        var doc = await Approved(Issue(W2, "2026-03-12", L(Avg2, Pcs, 4m)));
+        string Positions() => $"SELECT count(*) FROM {PO.Table} WHERE {PO.ItemId} = '{Avg2.Id}' AND {PO.WarehouseId} = '{W2.Id}'";
+        var preview = Ok(await NegMgmt.GetExceptionAsync(Excepter.Id, Company.Id, doc.Id));
+        Assert.Equal((0m, 4m, "provisional_cost_unavailable"), (preview.Plan.Lines[0].OnHand, preview.Plan.Lines[0].Uncovered, preview.Plan.Lines[0].Problem));
+        Assert.Equal(0L, await Sql<long>(Positions()));
+        Ok(await NegMgmt.ApproveAsync(Excepter.Id, Company.Id, doc.Id, doc.Revision, Why(new NegativeManualCostInput(1, 40m, "supplier quote"))));
+        Assert.Equal(0L, await Sql<long>(Positions()));                                                      // approving without posting leaves no position
+        Ok(await Post(doc));                                                                                  // the same snapshot: the posting creates the position (method fixed) and the obligation
+        Assert.Equal(1L, await Sql<long>(Positions()));
+        Assert.Equal((4m, 40m, 3), ((await ObligationOf(doc)).OriginalQuantity, (await ObligationOf(doc)).ProvisionalTotal, (await ObligationOf(doc)).Source));
+        await AssertConsistent();
+    }
+
+    [PostgresFact]
+    public async Task M3_M5_the_receipt_counter_account_may_not_become_the_obligation_or_variance_account_of_an_open_obligation()
+    {
+        await PrepareNegative();
+        await Emptied(Avg, 3m, 15m);
+        Ok(await Post(await Exceptional(Avg, 7m, "2026-03-12")));
+        // at configuration save (M5)
+        Invalid(await Acc.SaveAsync(Admin.Id, Company.Id, 3, new InventoryAccountingInput(StockAcc.Id, VarAcc.Id, CogsAcc.Id, [], null, AdjAcc.Id, OblAcc.Id, null)), "receiptCounterAccountId", "receipt_counter_equals_open_obligation_account");
+        // at settlement (M3): a version that names V as the receipt counter (written directly, as a version saved before the obligation could have been) is refused when the receipt would settle
+        var v = $"{IAV.Id}, {IAV.VersionNo}, {IAV.CreatedAtUtc}, {IAV.CreatedBy}, {IAV.Note}, {IAV.DefaultAccountId}, {IAV.ReceiptCounterAccountId}, {IAV.IssueCounterAccountId}, {IAV.GroupCount}, {IAV.ContentHash}, {IAV.AdjustmentCounterAccountId}, {IAV.ObligationAccountId}, {IAV.VarianceAccountId}";
+        Assert.Null(await RawMessage($"INSERT INTO {IAV.Table} ({v}) SELECT gen_random_uuid(), {IAV.VersionNo} + 1, now(), {IAV.CreatedBy}, 'hack', {IAV.DefaultAccountId}, '{VarAcc.Id}', {IAV.IssueCounterAccountId}, {IAV.GroupCount}, repeat('b', 64), {IAV.AdjustmentCounterAccountId}, {IAV.ObligationAccountId}, {IAV.VarianceAccountId} FROM {IAV.Table} ORDER BY {IAV.VersionNo} DESC LIMIT 1"));
+        var before = await NegCounts();
+        Fails(await Post(await Approved(Receipt(W1, "2026-03-13", L(Avg, Pcs, 7m))), Amounts(42m)), ConfigStatus.Conflict, "negative_settlement_account_conflict");
+        Assert.Equal(before, await NegCounts());
+        Assert.Single(await Obligations(openOnly: true));
     }
 }
 

@@ -41,7 +41,8 @@ export const negstockAr: Record<string, string> = {
   "invacc.obligation_account": "حساب الالتزامات المؤقتة", "invacc.obligation_hint": "حساب خصوم يحمل قيمة الكميات المصروفة قبل استلامها حتى تسويتها؛ لا يقبل قيوداً يدوية.",
   "invacc.variance_account": "حساب فروقات التسوية", "invacc.variance_hint": "اختياري؛ إن لم يحدد تُقيَّد الفروق في الحساب المقابل للإخراج.",
   "invacc.field.obligation_account_must_be_liability": "حساب الالتزامات يجب أن يكون حساب خصوم.", "invacc.field.obligation_equals_counter_account": "حساب الالتزامات لا يجوز أن يكون الحساب المقابل للإخراج أو الاستلام.",
-  "invacc.field.variance_equals_obligation_account": "حساب الفروقات لا يجوز أن يكون حساب الالتزامات.", "invacc.field.variance_equals_receipt_counter_account": "حساب الفروقات لا يجوز أن يكون الحساب المقابل للاستلام.",
+  "invacc.field.variance_equals_obligation_account": "حساب الفروقات لا يجوز أن يكون حساب الالتزامات.", "invacc.field.receipt_counter_equals_open_obligation_account": "الحساب المقابل للاستلام لا يجوز أن يكون حساب الالتزامات أو الفروقات لالتزام مخزون سالب مفتوح.",
+  "stock.error.negative_settlement_account_conflict": "الحساب المقابل للاستلام يساوي حساب الالتزامات أو الفروقات لالتزام مفتوح: صحّح إعداد حسابات المخزون.", "invacc.field.variance_equals_receipt_counter_account": "حساب الفروقات لا يجوز أن يكون الحساب المقابل للاستلام.",
 };
 
 export const negstockEn: Record<string, string> = {
@@ -84,5 +85,6 @@ export const negstockEn: Record<string, string> = {
   "invacc.obligation_account": "Provisional obligation account", "invacc.obligation_hint": "A liability account that holds the value of quantities issued before they were received until they are settled; it takes no manual entry.",
   "invacc.variance_account": "Settlement variance account", "invacc.variance_hint": "Optional; when not set the differences go to the issue counter account.",
   "invacc.field.obligation_account_must_be_liability": "The obligation account must be a liability account.", "invacc.field.obligation_equals_counter_account": "The obligation account cannot be the issue or receipt counter account.",
-  "invacc.field.variance_equals_obligation_account": "The variance account cannot be the obligation account.", "invacc.field.variance_equals_receipt_counter_account": "The variance account cannot be the receipt counter account.",
+  "invacc.field.variance_equals_obligation_account": "The variance account cannot be the obligation account.", "invacc.field.receipt_counter_equals_open_obligation_account": "The receipt counter account cannot be the obligation or variance account of an open negative-stock obligation.",
+  "stock.error.negative_settlement_account_conflict": "The receipt counter account equals the obligation or variance account of an open obligation: correct the inventory accounting configuration.", "invacc.field.variance_equals_receipt_counter_account": "The variance account cannot be the receipt counter account.",
 };

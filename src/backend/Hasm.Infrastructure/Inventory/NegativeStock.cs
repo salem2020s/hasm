@@ -18,6 +18,7 @@ using NX = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeSettlement;
 using NR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeObligationReversal;
 using NG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NegativeStockGuard;
 using EN = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostEntry;
+using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 using P = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 using D = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockDocument;
 using I = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Item;
@@ -170,6 +171,29 @@ internal static class NegativeStockPlanner
         return v is DateOnly d ? d : v is DateTime dt ? DateOnly.FromDateTime(dt) : null;
     }
 
+    /// <summary>
+    /// The positions as they are, WITHOUT creating or locking any (review M2/M4: an approval or a preview never writes a position). A missing position reads as empty with the method its policy resolves to now (the
+    /// method a first posting would fix), so the plan and its hash equal what posting computes after creating it.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<(Guid ItemId, Guid WarehouseId), LockedPosition>> ReadPositionsAsync(CompanyAuditedWork work, IEnumerable<(Guid ItemId, Guid WarehouseId)> pairs, CancellationToken ct)
+    {
+        var map = new Dictionary<(Guid, Guid), LockedPosition>();
+        foreach (var (item, wh) in pairs.Distinct())
+        {
+            await using var q = new NpgsqlCommand(
+                $"SELECT p.{PO.Id}, p.{PO.Method}, p.{PO.Quantity}, p.{PO.Value}, p.{PO.LastEffectiveDate}, p.{PO.LastAverageQuantity}, p.{PO.LastAverageValue}, {NG.ResolvedMethodFunction}(@i) " +
+                $"FROM (SELECT 1) one LEFT JOIN {PO.Table} p ON p.{PO.ItemId} = @i AND p.{PO.WarehouseId} = @w", work.Connection, work.Transaction);
+            q.Parameters.AddWithValue("i", item); q.Parameters.AddWithValue("w", wh);
+            await using var r = await q.ExecuteReaderAsync(ct);
+            await r.ReadAsync(ct);
+            var resolved = r.IsDBNull(7) ? (short)0 : r.GetInt16(7);
+            map[(item, wh)] = r.IsDBNull(0)
+                ? new LockedPosition(Guid.Empty, item, wh, resolved == 2 ? CostMethod.MovingAverage : CostMethod.Fifo, 0m, 0m, null, null, null)
+                : new LockedPosition(r.GetGuid(0), item, wh, (CostMethod)r.GetInt16(1), r.GetDecimal(2), r.GetDecimal(3), r.IsDBNull(4) ? null : r.GetFieldValue<DateOnly>(4), r.IsDBNull(5) ? null : r.GetDecimal(5), r.IsDBNull(6) ? null : r.GetDecimal(6));
+        }
+        return map;
+    }
+
     /// <summary>D5 narrowed by R15 (3): the latest non-reversed costing RECEIPT entry produced by the posting of a STOCK-DOCUMENT receipt of this item and warehouse, with positive quantity and value.</summary>
     private static async Task<(long Entry, decimal Quantity, decimal Amount)?> LatestReceiptAsync(CompanyAuditedWork work, Guid item, Guid warehouse, CancellationToken ct)
     {
@@ -187,7 +211,7 @@ internal static class NegativeStockPlanner
     /// order from the quantity on hand BEFORE the document; the uncovered rest is priced by source 1 (the position's current average, else its stored last pair; a zero value is no valid average), 2 (latest
     /// stock-document receipt) or 3 (<paramref name="manual"/>, only when 1 and 2 are unavailable). Nothing is written except a missing position row.
     /// </summary>
-    internal static async Task<NegativeExceptionPlan> PlanAsync(CompanyAuditedWork work, InventoryCostingService costing, StockDocumentView doc, IReadOnlyDictionary<int, Manual>? manual, CancellationToken ct)
+    internal static async Task<NegativeExceptionPlan> PlanAsync(CompanyAuditedWork work, InventoryCostingService costing, StockDocumentView doc, IReadOnlyDictionary<int, Manual>? manual, bool create, CancellationToken ct)
     {
         var date = DateOnly.ParseExact(doc.DocumentDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
         var problems = new List<string>();
@@ -195,7 +219,8 @@ internal static class NegativeStockPlanner
         if (doc.DocType != (int)StockDocType.Issue || doc.SourceWarehouseId is not { } wh)
             return new NegativeExceptionPlan(doc.Id, doc.Revision, doc.DocumentDate, false, null, null, null, null, [], [doc.DocType == (int)StockDocType.Transfer ? "negative_exception_transfer_not_allowed" : "negative_exception_issue_only"], "");
         var decimals = await MoneyDecimalsAsync(work.Connection, work.Transaction, ct);
-        var positions = await costing.LockPositionsInWorkAsync(work, doc.Lines.Select(l => (l.ItemId, wh)), ct);
+        // posting locks (and creates) the positions; an approval or a preview only READS them (review M2/M4: nothing is written, a missing position is an empty one whose method the policy will fix at posting)
+        var positions = create ? await costing.LockPositionsInWorkAsync(work, doc.Lines.Select(l => (l.ItemId, wh)), ct) : await ReadPositionsAsync(work, doc.Lines.Select(l => (l.ItemId, wh)), ct);
         var onHand = positions.ToDictionary(p => p.Key, p => p.Value.Quantity);
         foreach (var l in doc.Lines)
         {
@@ -271,14 +296,14 @@ internal static class NegativeStockPlanner
     /// The plan as it stands now for a document that may have approvals: each distinct approved snapshot is recomputed with ITS manual inputs, and the first one whose live hash equals the approved hash is current
     /// (independent of the approval times); otherwise the live plan without manual inputs, and no approval is current.
     /// </summary>
-    internal static async Task<(NegativeExceptionPlan Plan, ApprovalRow? Approved)> CurrentAsync(CompanyAuditedWork work, InventoryCostingService costing, StockDocumentView doc, IReadOnlyList<ApprovalRow> approvals, CancellationToken ct)
+    internal static async Task<(NegativeExceptionPlan Plan, ApprovalRow? Approved)> CurrentAsync(CompanyAuditedWork work, InventoryCostingService costing, StockDocumentView doc, IReadOnlyList<ApprovalRow> approvals, bool create, CancellationToken ct)
     {
         foreach (var a in approvals.GroupBy(x => x.Hash).Select(g => g.First()))
         {
-            var p = await PlanAsync(work, costing, doc, ManualOf(a.Snapshot), ct);
+            var p = await PlanAsync(work, costing, doc, ManualOf(a.Snapshot), create, ct);
             if (p.Hash == a.Hash) return (p, a);
         }
-        return (await PlanAsync(work, costing, doc, null, ct), null);
+        return (await PlanAsync(work, costing, doc, null, create, ct), null);
     }
 
     /// <summary>The manual inputs recorded in an approval snapshot (only source-3 lines carry them).</summary>
@@ -448,7 +473,7 @@ public sealed class NegativeStockService(CompanyDatabaseResolver resolver, Compa
     {
         var settings = await NegativeStockPlanner.SettingsAsync(work.Connection, work.Transaction, ct);
         var approvals = await NegativeStockPlanner.ApprovalsAsync(work.Connection, work.Transaction, doc.Id, ct);
-        var plan = manual is null ? (await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, ct)).Plan : await NegativeStockPlanner.PlanAsync(work, costing, doc, manual, ct);
+        var plan = manual is null ? (await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, false, ct)).Plan : await NegativeStockPlanner.PlanAsync(work, costing, doc, manual, false, ct);
         var posted = await StockPostingService.LoadByDocumentAsync(work.Connection, work.Transaction, doc.Id, false, ct) is not null;
         var valid = approvals.Where(a => a.Hash == plan.Hash).Select(a => a.ApproverId).Distinct().Count();
         return new NegativeExceptionView(plan, settings.Enabled, settings.RequireSecondApprover, settings.RequireSecondApprover ? 2 : 1, valid, posted,
@@ -460,7 +485,8 @@ public sealed class NegativeStockService(CompanyDatabaseResolver resolver, Compa
     {
         try
         {
-            await InLockAsync<int>(companyId, async work =>
+            // a preview takes no company-wide lock and writes nothing (review M4): the plan only reads, and the transaction is rolled back
+            await transactions.ExecuteAsync<int>(companyId, async work =>
             {
                 var doc = await StockDocumentService.Load(work.Connection, work.Transaction, documentId, false, ct) ?? throw new StockDocumentService.Abort(ConfigStatus.NotFound, "document_not_found");
                 throw new Rollback(await ViewAsync(work, doc, null, ct));
@@ -514,7 +540,7 @@ public sealed class NegativeStockService(CompanyDatabaseResolver resolver, Compa
                 if (!settings.Enabled) throw Conflict("negative_exception_disabled");
                 var approvals = await NegativeStockPlanner.ApprovalsAsync(work.Connection, work.Transaction, doc.Id, ct);
                 // a second approver confirms the current approved snapshot (manual totals included) unless they enter their own
-                var plan = manual is null ? (await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, ct)).Plan : await NegativeStockPlanner.PlanAsync(work, costing, doc, manual, ct);
+                var plan = manual is null ? (await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, false, ct)).Plan : await NegativeStockPlanner.PlanAsync(work, costing, doc, manual, false, ct);
                 manual ??= plan.Lines.Where(l => l.Source == 3 && l.ProvisionalTotal is not null).ToDictionary(l => l.LineNo, l => new NegativeStockPlanner.Manual(l.ProvisionalTotal!.Value, l.Justification ?? ""));
                 if (!plan.Needed) throw Conflict("negative_exception_not_needed");
                 if (plan.Problems.Count > 0)

@@ -52,7 +52,7 @@ export function NegativeExceptionPanel({ doc, onApproved }: { doc: StockDocument
     if (Object.keys(v).length > 0) { setError(t("form.fix_errors")); return; }
     setBusy(true); setError(null);
     try {
-      const manualCosts = needsManual.filter((l) => manual[l.lineNo]).map((l) => ({ lineNo: l.lineNo, amount: Number(manual[l.lineNo].amount.trim()), justification: manual[l.lineNo].justification.trim() }));
+      const manualCosts = needsManual.filter((l) => manual[l.lineNo]).map((l) => ({ lineNo: l.lineNo, amount: manual[l.lineNo].amount.trim(), justification: manual[l.lineNo].justification.trim() }));
       await auth.api.approveNegativeException(doc.id, doc.revision, reason.trim(), manualCosts);
       setReason(""); setManual({});
       await load();

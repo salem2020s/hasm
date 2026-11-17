@@ -97,6 +97,15 @@ issue above the stock is split into the COVERED part (the unchanged engine, real
 * Unit: `CostingMath.Scale`; schema map, migration list and permission fixtures raised.
 * Frontend (vitest): `negativeStock.test.tsx` (screen tabs and actions, eligibility, obligations, close report, English, the exception panel's approval with manual value and refusals).
 
+## Review of PR #45 (record: `docs/review-records/PR-45-phase-3.8B-3.md`)
+* **M1** — the obligation insert trigger also requires the item's LIVE resolved method to be moving average and locks the item's group chain and the inventory settings row `FOR SHARE` (a policy change under the
+  inventory master lock and an exception posting serialise; whichever wins, no open obligation coexists with another method).
+* **M2 / M4** — approval and preview plan read-only: no position is created or locked (a missing position reads as empty with the method its policy resolves to, so the snapshot equals the posting's); the preview takes no
+  company-wide lock and is rolled back. Only posting creates the position.
+* **M3 / M5** — the receipt counter account may not be the O or V of an open obligation: refused at settlement (`negative_settlement_account_conflict`) and at configuration save
+  (`receipt_counter_equals_open_obligation_account`).
+* Lows: the manual amount travels as decimal text; the group guard checks the open quantity first. Follow-ups: re-check the approver's permission at posting; scope the close report per warehouse if needed.
+* Tests: `NegativeStockReviewTests` (3 PostgreSQL tests; registry 943 → 946).
 ## Not in this slice
 * The owner policy's "approved current-period correction workflow" (C3) does not exist; a receipt in a Final Closed period is refused (`fiscal_period_final_closed`) and reported.
 * Back-dated movements with obligations (C4) belong to 3.8D; until then they are refused.

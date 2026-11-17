@@ -368,12 +368,24 @@ CREATE TRIGGER r_e5805e00 BEFORE INSERT ON t_3fb62185 FOR EACH ROW EXECUTE FUNCT
 -- Obligation (backstop of the service): eligible item at this moment (flag, active untracked goods, moving average position of this item and warehouse), an issue posting of this document with this operation,
 -- an approval of this document, a counter account that is not the obligation account.
 CREATE FUNCTION f_b0ee255f() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    g uuid; depth integer := 0;
 BEGIN
+    -- the valuation policy the item resolves to may change under the inventory master lock (not the posting lock): every group of the chain and the company settings are locked FOR SHARE, so a concurrent policy
+    -- change waits for this transaction (and its guard trigger then sees the obligation) or this check sees the committed change
+    SELECT c_61dee773 INTO g FROM t_2f2a7184 WHERE c_be51f22e = NEW.c_05baef20;
+    WHILE g IS NOT NULL AND depth < 32 LOOP
+        PERFORM 1 FROM t_2640a66e WHERE c_01551296 = g FOR SHARE;
+        SELECT c_57852ce5 INTO g FROM t_2640a66e WHERE c_01551296 = g;
+        depth := depth + 1;
+    END LOOP;
+    PERFORM 1 FROM t_1cf46c0f FOR SHARE;
     PERFORM 1 FROM t_2f2a7184 WHERE c_be51f22e = NEW.c_05baef20 FOR SHARE;                      -- serialises with a concurrent change of the item (its guard trigger then sees this obligation)
     PERFORM 1 FROM t_a2903683 WHERE c_6b4abdd9 = NEW.c_e58fa36c FOR UPDATE;
     IF NOT EXISTS (SELECT 1 FROM t_2f2a7184 i WHERE i.c_be51f22e = NEW.c_05baef20 AND i.c_74e6031c = 1 AND i.c_18451cd8 AND NOT i.c_5a28ea5e AND NOT i.c_f913e227 AND NOT i.c_6617f8f5)
        OR (SELECT f.c_7d66a9cb FROM t_3fb62185 f WHERE f.c_59aa8519 = NEW.c_05baef20 ORDER BY f.c_dd9030ed DESC LIMIT 1) IS DISTINCT FROM true
-       OR NOT EXISTS (SELECT 1 FROM t_a2903683 p WHERE p.c_6b4abdd9 = NEW.c_e58fa36c AND p.c_3380c61e = NEW.c_05baef20 AND p.c_f0a91938 = NEW.c_971e8265 AND p.c_a71bfccf = 2) THEN
+       OR NOT EXISTS (SELECT 1 FROM t_a2903683 p WHERE p.c_6b4abdd9 = NEW.c_e58fa36c AND p.c_3380c61e = NEW.c_05baef20 AND p.c_f0a91938 = NEW.c_971e8265 AND p.c_a71bfccf = 2)
+       OR f_23735cac(NEW.c_05baef20) IS DISTINCT FROM 2 THEN
         RAISE EXCEPTION 'an obligation needs an eligible moving average item without tracking';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM t_4d4b251f p JOIN t_7eb4c679 l ON l.c_ecf9865c = p.c_fc71418e AND l.c_8c33b614 = NEW.c_acdfca73
@@ -489,7 +501,7 @@ CREATE TRIGGER r_b3836cf7 AFTER UPDATE ON t_2f2a7184 FOR EACH ROW
     EXECUTE FUNCTION f_c9eb2c1d();
 CREATE FUNCTION f_d497cd12() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM t_b56b119d o WHERE f_6efd1234(o.c_05baef20, NEW.c_01551296) AND f_a21c7b04(o.c_89d0d4ae) > 0) THEN
+    IF EXISTS (SELECT 1 FROM t_b56b119d o WHERE f_a21c7b04(o.c_89d0d4ae) > 0 AND f_6efd1234(o.c_05baef20, NEW.c_01551296)) THEN
         RAISE EXCEPTION 'negative_obligation_open';
     END IF;
     RETURN NULL;

@@ -162,7 +162,7 @@ describe("negative-stock exception on an issue document", () => {
     await userEvent.type(within(panel).getByLabelText("تبرير القيمة اليدوية #2"), "supplier quote");
     await userEvent.type(within(panel).getByLabelText("سبب الموافقة"), "urgent dispatch");
     await userEvent.click(within(panel).getByRole("button", { name: "الموافقة على الاستثناء" }));
-    await waitFor(() => expect(client.approveNegativeException).toHaveBeenCalledWith("d1", 5, "urgent dispatch", [{ lineNo: 2, amount: 20, justification: "supplier quote" }]));
+    await waitFor(() => expect(client.approveNegativeException).toHaveBeenCalledWith("d1", 5, "urgent dispatch", [{ lineNo: 2, amount: "20", justification: "supplier quote" }]));
   });
 
   it("explains a disabled company and a server refusal in words, and offers no approval without the permission", async () => {

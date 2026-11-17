@@ -33,13 +33,13 @@ public sealed partial class StockPostingService
     /// </summary>
     private async Task<NegativeIssue?> PrepareNegativeIssueAsync(CompanyAuditedWork work, Guid actor, StockDocumentView doc, CancellationToken ct)
     {
-        var first = await NegativeStockPlanner.PlanAsync(work, costing, doc, null, ct);
+        var first = await NegativeStockPlanner.PlanAsync(work, costing, doc, null, true, ct);
         if (!first.Needed) return null;
         var settings = await NegativeStockPlanner.SettingsAsync(work.Connection, work.Transaction, ct);
         if (!settings.Enabled || first.Lines.Any(l => l.Problem == "negative_exception_item_not_eligible")) throw Conflict("insufficient_stock");
         var approvals = await NegativeStockPlanner.ApprovalsAsync(work.Connection, work.Transaction, doc.Id, ct);
         if (approvals.Count == 0) throw Conflict("negative_exception_approval_required");
-        var (plan, current) = await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, ct);
+        var (plan, current) = await NegativeStockPlanner.CurrentAsync(work, costing, doc, approvals, true, ct);
         if (current is null) throw Conflict("negative_exception_stale");
         var valid = approvals.Where(a => a.Hash == plan.Hash && a.ApproverId != actor && a.ApproverId != doc.CreatedBy).ToList();
         if (valid.Select(a => a.ApproverId).Distinct().Count() < (settings.RequireSecondApprover ? 2 : 1))
@@ -134,6 +134,8 @@ public sealed partial class StockPostingService
             Guid? journalId = null;
             var receiptCounter = config?.Values.First().ReceiptCounterAccountId;
             if (m.Actual > 0 && receiptCounter is null) throw Conflict("receipt_counter_account_not_configured");
+            // review M3: the live receipt counter account G must stay apart from the O and V the obligation was issued with, or the settlement journal would net them (and the O/V reconciliation would be wrong)
+            if (receiptCounter is { } g && (g == m.Obligation.VarianceAccount || g == m.Obligation.ObligationAccount)) throw Conflict("negative_settlement_account_conflict");
             if (NegativeStockPlanner.SettlementLines(m.Obligation.ObligationAccount, m.Obligation.VarianceAccount, receiptCounter ?? Guid.Empty, m.Provisional, m.Actual, doc.BranchId) is { } lines)
             {
                 var entry = await journal.CreateInWorkAsync(work, actor, new JournalInput(date, $"Negative stock settlement: issue {m.Obligation.DocumentNumber} by receipt {doc.Number}", doc.BranchId, lines, null), false,
