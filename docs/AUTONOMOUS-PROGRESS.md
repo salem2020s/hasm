@@ -1,5 +1,17 @@
 # HASM — Autonomous execution progress
 
+## Security-policy proposal checkpoint — 2026-11-18
+
+PR50, `feature/security-picomatch`, preserves the shared dependency investigation and the complete **INERT, NOT APPROVED** proposal under `docs/security/proposals/picomatch/`. The previously pushed report head is e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12; this checkpoint is a later normal commit, whose exact SHA is recorded in the PR body after pushing. No live workflow/verifier, manifest, lockfile or gate has changed. No fork or temporary dependency is committed.
+
+Proposed exception: only GHSA-fc5q-39xc-vjpf and its exact six development-only package records/versions/paths; hosted Linux, same-repository heads, frozen frontend/desktop/branding trees, owner salem2020s, null approval metadata, hard expiry2026-11-24T00:00Z and maximum seven days. Other High/all Critical, production findings, schema/network errors, missing records, changed inputs, unsupported runners and expired/unapproved policies remain blocking. Raw full audit reporting and the vulnerability's High status remain visible. See the risk assessment for the precise final owner approval required; **a general continuation instruction is not approval**.
+
+Validation:14 fixture cases passed, zero skips; production audit zero vulnerabilities; checked unapplied workflow patch; docs/generator checks passed. Independent GPT-6/Codex review fixed one Medium missing-record validation issue and confirmed no remaining Critical/High/Medium in this inert checkpoint. Node24/Linux live CLI/network integration, final copied-path CI and Windows installer scanning remain NOT VERIFIED. Local production build inventory used Node26/Windows:95 modules, no affected tool modules, six final file hashes matched. Tauri configuration references the same frontend output; installer contents were not newly verified.
+
+Known repository state: main814bd7c; PR48 remains Draft at34255945dab04d8a093f7b396c39a124a585b463 (internal replay/snapshot/comparison/scheduler; local unit919, PG1035, API69 passed in the documented separate runs); PR49 remains Draft atdfe86dd2179f3d63be978d17e23554d3cb9e72bc. PR50's report head has four passing always-on checks and failed dependency-scan. New proposal-head CI must be reconciled separately; no green security claim or merge is made. Independent worktrees remain untouched.
+
+Resume: first reconcile remote heads/status and preserve newer work. Obtain explicit approval before activating any policy or changing a mandatory gate. Meanwhile continue the next safe PR48 multi-warehouse history/valuation slice, with full financial/authorization tests and independent review. Do not repeat rejected fork/downgrade investigations. CLI automatic continuation is NOT CONFIRMED; `docs/RESUME-CODEX.md` is the durable fallback instruction. No background restart mechanism was installed.
+
 ## PR #46 merged and roadmap reconciliation (2026-11-17)
 
 PR #46 merged through the protected workflow as `bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb`, from reviewed head `6f5765173c470d8511c63d2167bb71c43c1868b5`. Main's tree equals that reviewed head's tree, and the head is an ancestor of main. Main's copy of `verify-head.js` confirmed all ten applicable Actions checks green immediately before the SHA-pinned merge. Independent final-head review is durably recorded in the PR description and `review-records/PR-46-final.md`; adversarial self-review is recorded too. No Critical/High findings remain; the four Medium follow-ups must be repaired before 3.9B.
