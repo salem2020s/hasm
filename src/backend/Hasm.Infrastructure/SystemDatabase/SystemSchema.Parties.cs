@@ -37,6 +37,8 @@ public static partial class SystemSchema
         public const string LocalPartyId = "c_a9dfc171";
         public const string Kind = "c_d51f2b1e";
         public const string TargetGlobalPartyId = "c_1d897157";
+        /// <summary>Revision of the target identity the change was based on (change proposals only); a stale base is refused at approval (review M1).</summary>
+        public const string BasedOnRevision = "c_0d401c90";
         public const string PartyKind = "c_93954331";
         public const string LegalNameAr = "c_1d21b300";
         public const string LegalNameEn = "c_a95c5183";
@@ -118,6 +120,7 @@ public static partial class SystemSchema
         ["PartyProposal.Id"] = PartyProposal.Id,
         ["PartyProposal.CompanyId"] = PartyProposal.CompanyId,
         ["PartyProposal.RequestKey"] = PartyProposal.RequestKey,
+        ["PartyProposal.BasedOnRevision"] = PartyProposal.BasedOnRevision,
         ["PartyProposal.LocalPartyId"] = PartyProposal.LocalPartyId,
         ["PartyProposal.Kind"] = PartyProposal.Kind,
         ["PartyProposal.TargetGlobalPartyId"] = PartyProposal.TargetGlobalPartyId,

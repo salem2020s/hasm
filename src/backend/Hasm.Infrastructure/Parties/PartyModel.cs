@@ -62,30 +62,32 @@ public sealed record LocalPartyInput(string? Code, string? DisplayName, string? 
 public sealed record SharedIdentityView(Guid GlobalPartyId, int Kind, string LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int Status, long Revision);
 
 public sealed record PartyRequestView(Guid Id, int Kind, int Status, int? Outcome, int PartyKind, string LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int ProposedStatus,
-    string? Note, int Attempts, DateTimeOffset? LastAttemptAtUtc, string? LastErrorCode, Guid CreatedBy, DateTimeOffset CreatedAtUtc, DateTimeOffset? DeliveredAtUtc, DateTimeOffset? CompletedAtUtc);
+    string? Note, int Attempts, DateTimeOffset? LastAttemptAtUtc, string? LastErrorCode, Guid CreatedBy, DateTimeOffset CreatedAtUtc, DateTimeOffset? DeliveredAtUtc, DateTimeOffset? CompletedAtUtc, long? BasedOnRevision = null, string? DecisionNote = null);
 
 public sealed record LocalPartyView(Guid Id, string Code, string DisplayName, string? Notes, bool IsActive, int LinkState, Guid? GlobalPartyId, long Revision, Guid CreatedBy, DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc, SharedIdentityView? Identity, IReadOnlyList<PartyRequestView> Requests)
+    DateTimeOffset UpdatedAtUtc, SharedIdentityView? Identity, IReadOnlyList<PartyRequestView> Requests, bool RegistryUnavailable = false)
 {
     public PartyRequestView? OpenRequest => Requests.FirstOrDefault(r => r.Status != (int)PartyRequestStatus.Completed);
 }
 
 public sealed record LocalPartySummary(Guid Id, string Code, string DisplayName, bool IsActive, int LinkState, string? LegalNameAr, string? LegalNameEn, bool HasOpenRequest, long Revision, DateTimeOffset UpdatedAtUtc);
 public sealed record PartyFilter(string? Search, int? LinkState, int Offset, int Limit);
-public sealed record PartyPage(IReadOnlyList<LocalPartySummary> Items, long Total);
+/// <summary><see cref="RegistryUnavailable"/>: the registry could not be read; the list is shown without the shared legal names (review M2).</summary>
+public sealed record PartyPage(IReadOnlyList<LocalPartySummary> Items, long Total, bool RegistryUnavailable = false);
 public sealed record PartyCapabilities(bool View, bool Create, bool Update, bool Submit, bool Configure);
 
 /// <summary>Result of synchronizing the request log: requests delivered, outcomes applied, attempts that failed, requests still waiting (pending delivery or an undecided proposal).</summary>
-public sealed record PartySyncResult(int Delivered, int Applied, int Failed, int Waiting);
+public sealed record PartySyncResult(int Delivered, int Applied, int Failed, int Waiting, bool RegistryUnavailable = false);
 
 /// <summary>One mismatch between the company's request log and links and the registry of the system database (codes in docs/PHASE-3.9A.md D6).</summary>
-public sealed record PartyReconciliationFinding(string Code, Guid? LocalPartyId, Guid? RequestId, Guid? GlobalPartyId, bool Repairable, bool Repaired);
-public sealed record PartyReconciliationReport(IReadOnlyList<PartyReconciliationFinding> Findings, bool RepairRequested);
+/// <summary><see cref="ProposalId"/> identifies the central proposal (for <c>proposal_unknown_locally</c>, so an identity administrator can find and decide it).</summary>
+public sealed record PartyReconciliationFinding(string Code, Guid? LocalPartyId, Guid? RequestId, Guid? GlobalPartyId, bool Repairable, bool Repaired, Guid? ProposalId = null);
+public sealed record PartyReconciliationReport(IReadOnlyList<PartyReconciliationFinding> Findings, bool RepairRequested, bool RegistryUnavailable = false);
 
 /// <summary>A central proposal as the central approver sees it, with the target identity (change) and the registry identities that look like it (same identifier or legal name).</summary>
 public sealed record PartyProposalView(Guid Id, Guid CompanyId, string? CompanyNameAr, string? CompanyNameEn, Guid LocalPartyId, int Kind, Guid? TargetGlobalPartyId, int PartyKind, string LegalNameAr,
     string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int ProposedStatus, string? Note, Guid ProposedBy, string? ProposedByName, DateTimeOffset ProposedAtUtc, int Status, int? Resolution,
-    Guid? OutcomeGlobalPartyId, Guid? DecidedBy, DateTimeOffset? DecidedAtUtc, string? DecisionNote, long Revision, SharedIdentityView? Target, IReadOnlyList<SharedIdentityView> Matches);
+    Guid? OutcomeGlobalPartyId, Guid? DecidedBy, DateTimeOffset? DecidedAtUtc, string? DecisionNote, long Revision, SharedIdentityView? Target, IReadOnlyList<SharedIdentityView> Matches, long? BasedOnRevision = null);
 
 public sealed record PartyProposalSummary(Guid Id, Guid CompanyId, string? CompanyNameAr, string? CompanyNameEn, int Kind, string LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber,
     DateTimeOffset ProposedAtUtc, int Status, long Revision);

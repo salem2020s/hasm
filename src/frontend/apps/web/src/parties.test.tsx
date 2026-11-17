@@ -154,3 +154,43 @@ describe("party approvals", () => {
     await waitFor(() => expect(client.rejectPartyProposal).toHaveBeenCalledWith("pp1", "dup", 1));
   });
 });
+
+describe("party registry review follow-ups (PR #46)", () => {
+  const ADMIN = { ...USER, isIdentityAdministrator: true };
+
+  it("shows the list without shared names and a banner when the central registry is unavailable", async () => {
+    setup({ listParties: vi.fn().mockResolvedValue({ parties: [{ ...summary, legalNameAr: null }], total: 1, registryUnavailable: true }) });
+    await go("#/company/parties");
+    await screen.findByTestId("pty-p1");
+    expect(screen.getByTestId("pty-registry-down")).toHaveTextContent("السجل المركزي غير متاح");
+  });
+
+  it("shows the company the central reason of its rejected proposal", async () => {
+    const rejected = party({ linkState: 3, globalPartyId: null, identity: null, requests: [{ ...party().requests[0]!, outcome: 2, decisionNote: "مكرر" }] });
+    setup({ getParty: vi.fn().mockResolvedValue(rejected) });
+    await go("#/company/parties");
+    await userEvent.click(within(await screen.findByTestId("pty-p1")).getByRole("button", { name: "عرض" }));
+    await screen.findByTestId("pty-editor");
+    await userEvent.click(tab("الطلبات"));
+    expect(screen.getByTestId("pty-decision-note")).toHaveTextContent("مكرر");
+  });
+
+  it("refuses one-character registry searches and explains a change based on an outdated identity", async () => {
+    const stale = proposal({ kind: 2, targetGlobalPartyId: "g1", basedOnRevision: 1, matches: [], target: { globalPartyId: "g1", kind: 1, legalNameAr: "حالية", legalNameEn: null, taxNumber: null, registrationNumber: null, status: 1, revision: 2 } });
+    const { ApiError } = await import("@hasm/api-client");
+    setup({ listPartyProposals: vi.fn().mockResolvedValue({ proposals: [stale], total: 1 }), getPartyProposal: vi.fn().mockResolvedValue(stale), approvePartyProposal: vi.fn().mockRejectedValue(new ApiError(409, "identity_changed", {})) }, caps(), ADMIN);
+    await go("#/admin/party-proposals");
+    await userEvent.click(within(await screen.findByTestId("ppa-pp1")).getByRole("button", { name: "فتح" }));
+    expect(await screen.findByTestId("ppa-stale")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("ppa-approve"));
+    expect(await screen.findByTestId("form-error")).toHaveTextContent("تغيّرت الهوية المشتركة");
+  });
+
+  it("disables the registry search below two characters", async () => {
+    setup({ listPartyProposals: vi.fn().mockResolvedValue({ proposals: [proposal()], total: 1 }), getPartyProposal: vi.fn().mockResolvedValue(proposal()) }, caps(), ADMIN);
+    await go("#/admin/party-proposals");
+    await userEvent.click(within(await screen.findByTestId("ppa-pp1")).getByRole("button", { name: "فتح" }));
+    await userEvent.type(await screen.findByLabelText(/^بحث في السجل/), "ا");
+    expect(screen.getByRole("button", { name: "بحث في السجل" })).toBeDisabled();
+  });
+});

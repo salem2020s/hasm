@@ -43,10 +43,10 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
 
     private const string LocalCols = $"{LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.Notes}, {LP.IsActive}, {LP.LinkState}, {LP.GlobalPartyId}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}";
     private const string RequestCols = $"{PR.Id}, {PR.Kind}, {PR.Status}, {PR.Outcome}, {PR.PartyKind}, {PR.LegalNameAr}, {PR.LegalNameEn}, {PR.TaxNumber}, {PR.RegistrationNumber}, {PR.ProposedStatus}, " +
-                                       $"{PR.Note}, {PR.Attempts}, {PR.LastAttemptAtUtc}, {PR.LastErrorCode}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.DeliveredAtUtc}, {PR.CompletedAtUtc}";
+                                       $"{PR.Note}, {PR.Attempts}, {PR.LastAttemptAtUtc}, {PR.LastErrorCode}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.DeliveredAtUtc}, {PR.CompletedAtUtc}, {PR.BasedOnRevision}, {PR.DecisionNote}";
 
     private static PartyRequestView ReadRequest(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetInt16(1), r.GetInt16(2), r.IsDBNull(3) ? null : r.GetInt16(3), r.GetInt16(4), r.GetString(5), Str(r, 6), Str(r, 7),
-        Str(r, 8), r.GetInt16(9), Str(r, 10), r.GetInt32(11), T(r, 12), Str(r, 13), r.GetGuid(14), r.GetFieldValue<DateTimeOffset>(15), T(r, 16), T(r, 17));
+        Str(r, 8), r.GetInt16(9), Str(r, 10), r.GetInt32(11), T(r, 12), Str(r, 13), r.GetGuid(14), r.GetFieldValue<DateTimeOffset>(15), T(r, 16), T(r, 17), r.IsDBNull(18) ? null : r.GetInt64(18), Str(r, 19));
 
     private static async Task<LocalPartyView?> LoadLocal(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, CancellationToken ct)
     {
@@ -75,7 +75,9 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
     private async Task<LocalPartyView> WithIdentity(Guid companyId, LocalPartyView v, CancellationToken ct)
     {
         if (v.GlobalPartyId is not { } g) return v;
-        var linked = await registry.GetLinkedIdentitiesAsync(companyId, [v.Id], ct);
+        IReadOnlyDictionary<Guid, SharedIdentityView> linked;
+        try { linked = await registry.GetLinkedIdentitiesAsync(companyId, [v.Id], ct); }
+        catch (NpgsqlException) { return v with { RegistryUnavailable = true }; }        // review M2: the local record stays readable when the registry is not
         return linked.TryGetValue(v.Id, out var identity) && identity.GlobalPartyId == g ? v with { Identity = identity } : v;
     }
 
@@ -112,12 +114,15 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) rows.Add((r.GetGuid(0), r.GetString(1), r.GetString(2), r.GetBoolean(3), r.GetInt16(4), G(r, 5), r.GetBoolean(6), r.GetInt64(7), r.GetFieldValue<DateTimeOffset>(8)));
         }
-        var linked = await registry.GetLinkedIdentitiesAsync(companyId, [.. rows.Where(x => x.Global is not null).Select(x => x.Id)], ct);
+        IReadOnlyDictionary<Guid, SharedIdentityView> linked;
+        var unavailable = false;
+        try { linked = await registry.GetLinkedIdentitiesAsync(companyId, [.. rows.Where(x => x.Global is not null).Select(x => x.Id)], ct); }
+        catch (NpgsqlException) { linked = new Dictionary<Guid, SharedIdentityView>(); unavailable = true; }   // review M2: the list without the shared names
         return new PartyPage([.. rows.Select(x =>
         {
             var identity = linked.TryGetValue(x.Id, out var i) && i.GlobalPartyId == x.Global ? i : null;
             return new LocalPartySummary(x.Id, x.Code, x.Name, x.Active, x.State, identity?.LegalNameAr, identity?.LegalNameEn, x.Open, x.Rev, x.Updated);
-        })], total);
+        })], total, unavailable);
     }
 
     // ================================================================================================================ local writes
@@ -136,15 +141,16 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         }
     }
 
-    private static async Task<Guid> QueueRequest(CompanyAuditedWork work, Guid actor, Guid localId, PartyRequestKind kind, Guid? target, PartyValidation.Identity v, DateTime now, CancellationToken ct)
+    private static async Task<Guid> QueueRequest(CompanyAuditedWork work, Guid actor, Guid localId, PartyRequestKind kind, Guid? target, long? basedOn, PartyValidation.Identity v, DateTime now, CancellationToken ct)
     {
         var id = Guid.NewGuid();
         await using (var ins = new NpgsqlCommand(
-            $"INSERT INTO {PR.Table} ({PR.Id}, {PR.LocalPartyId}, {PR.Kind}, {PR.TargetGlobalPartyId}, {PR.PartyKind}, {PR.LegalNameAr}, {PR.LegalNameEn}, {PR.TaxNumber}, {PR.RegistrationNumber}, {PR.ProposedStatus}, " +
-            $"{PR.Note}, {PR.Status}, {PR.Attempts}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.Revision}) VALUES (@id, @l, @k, @t, @pk, @ar, @en, @tax, @reg, @ps, @note, 1, 0, @a, @now, 1)", work.Connection, work.Transaction))
+            $"INSERT INTO {PR.Table} ({PR.Id}, {PR.LocalPartyId}, {PR.Kind}, {PR.TargetGlobalPartyId}, {PR.BasedOnRevision}, {PR.PartyKind}, {PR.LegalNameAr}, {PR.LegalNameEn}, {PR.TaxNumber}, {PR.RegistrationNumber}, {PR.ProposedStatus}, " +
+            $"{PR.Note}, {PR.Status}, {PR.Attempts}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.Revision}) VALUES (@id, @l, @k, @t, @based, @pk, @ar, @en, @tax, @reg, @ps, @note, 1, 0, @a, @now, 1)", work.Connection, work.Transaction))
         {
             ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("l", localId); ins.Parameters.AddWithValue("k", (short)kind);
             ins.Parameters.Add(new NpgsqlParameter("t", NpgsqlDbType.Uuid) { Value = target is { } t ? t : DBNull.Value });
+            ins.Parameters.Add(new NpgsqlParameter("based", NpgsqlDbType.Bigint) { Value = basedOn is { } b ? b : DBNull.Value });
             ins.Parameters.AddWithValue("pk", (short)v.Kind); ins.Parameters.AddWithValue("ar", v.LegalNameAr); ins.Parameters.AddWithValue("en", Db(v.LegalNameEn)); ins.Parameters.AddWithValue("tax", Db(v.TaxNumber));
             ins.Parameters.AddWithValue("reg", Db(v.RegistrationNumber)); ins.Parameters.AddWithValue("ps", (short)v.Status); ins.Parameters.AddWithValue("note", Db(v.Note));
             ins.Parameters.AddWithValue("a", actor); ins.Parameters.AddWithValue("now", now);
@@ -181,7 +187,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.LocalPartyCreated, ActorUserId: actor, SubjectId: id, Detail: $"local party created code={local.Code}"), ct);
-            requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, identity, now, ct);
+            requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, null, identity, now, ct);
             return true;
         }, ct);
         if (!created.IsOk) return ConfigResult<LocalPartyView>.Fail(created.Status, created.Code!) with { Fields = created.Fields };
@@ -220,6 +226,10 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
     public async Task<ConfigResult<LocalPartyView>> ProposeAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, SharedIdentityInput? input, CancellationToken ct = default)
     {
         if (expectedRevision is null) return ConfigResult<LocalPartyView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
+        // review M1: a change records the revision of the shared identity it is based on (read through this company's own link, before the company transaction)
+        IReadOnlyDictionary<Guid, SharedIdentityView> current;
+        try { current = await registry.GetLinkedIdentitiesAsync(companyId, [id], ct); }
+        catch (NpgsqlException) { return ConfigResult<LocalPartyView>.Fail(ConfigStatus.Conflict, "registry_unavailable"); }
         Guid requestId = default;
         var r = await Mutate(companyId, async work =>
         {
@@ -229,13 +239,19 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             var change = cur.LinkState == (int)PartyLinkState.Linked;
             if (!change && cur.LinkState != (int)PartyLinkState.Rejected) throw new Abort(ConfigStatus.Conflict, "invalid_status");
             if (!PartyValidation.TryIdentity(input, change, "", out var identity, out var errors)) throw new Abort(ConfigStatus.Invalid, "validation_failed", errors);
+            long? basedOn = null;
+            if (change)
+            {
+                if (!current.TryGetValue(id, out var linkedIdentity) || linkedIdentity.GlobalPartyId != cur.GlobalPartyId) throw new Abort(ConfigStatus.Conflict, "link_missing");
+                basedOn = linkedIdentity.Revision;
+            }
             await using (var upd = new NpgsqlCommand(
                 $"UPDATE {LP.Table} SET {LP.LinkState} = @st, {LP.Revision} = {LP.Revision} + 1, {LP.UpdatedAtUtc} = @now WHERE {LP.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("st", (short)(change ? PartyLinkState.Linked : PartyLinkState.Pending)); upd.Parameters.AddWithValue("now", Now);
                 await upd.ExecuteNonQueryAsync(ct);
             }
-            requestId = await QueueRequest(work, actor, id, change ? PartyRequestKind.Change : PartyRequestKind.NewIdentity, change ? cur.GlobalPartyId : null, identity, Now, ct);
+            requestId = await QueueRequest(work, actor, id, change ? PartyRequestKind.Change : PartyRequestKind.NewIdentity, change ? cur.GlobalPartyId : null, basedOn, identity, Now, ct);
             return true;
         }, ct);
         if (!r.IsOk) return ConfigResult<LocalPartyView>.Fail(r.Status, r.Code!, r.CurrentRevision) with { Fields = r.Fields };
@@ -245,21 +261,21 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
 
     // ================================================================================================================ the cross-database protocol
 
-    private sealed record RequestRow(Guid Id, Guid LocalPartyId, PartyRequestKind Kind, Guid? Target, PartyValidation.Identity Values, PartyRequestStatus Status, Guid CreatedBy, DateTimeOffset CreatedAtUtc);
+    private sealed record RequestRow(Guid Id, Guid LocalPartyId, PartyRequestKind Kind, Guid? Target, PartyValidation.Identity Values, PartyRequestStatus Status, Guid CreatedBy, DateTimeOffset CreatedAtUtc, long? BasedOnRevision);
 
     private static async Task<RequestRow?> LoadRequest(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, CancellationToken ct)
     {
         await using var q = new NpgsqlCommand(
             $"SELECT {PR.Id}, {PR.LocalPartyId}, {PR.Kind}, {PR.TargetGlobalPartyId}, {PR.PartyKind}, {PR.LegalNameAr}, {PR.LegalNameEn}, {PR.TaxNumber}, {PR.RegistrationNumber}, {PR.ProposedStatus}, {PR.Note}, " +
-            $"{PR.Status}, {PR.CreatedBy}, {PR.CreatedAtUtc} FROM {PR.Table} WHERE {PR.Id} = @id{(forUpdate ? " FOR UPDATE" : "")}", conn, tx);
+            $"{PR.Status}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.BasedOnRevision} FROM {PR.Table} WHERE {PR.Id} = @id{(forUpdate ? " FOR UPDATE" : "")}", conn, tx);
         q.Parameters.AddWithValue("id", id);
         await using var r = await q.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         var values = new PartyValidation.Identity((PartyKind)r.GetInt16(4), r.GetString(5), Str(r, 6), Str(r, 7), Str(r, 8), (GlobalPartyStatus)r.GetInt16(9), Str(r, 10));
-        return new RequestRow(r.GetGuid(0), r.GetGuid(1), (PartyRequestKind)r.GetInt16(2), G(r, 3), values, (PartyRequestStatus)r.GetInt16(11), r.GetGuid(12), r.GetFieldValue<DateTimeOffset>(13));
+        return new RequestRow(r.GetGuid(0), r.GetGuid(1), (PartyRequestKind)r.GetInt16(2), G(r, 3), values, (PartyRequestStatus)r.GetInt16(11), r.GetGuid(12), r.GetFieldValue<DateTimeOffset>(13), r.IsDBNull(14) ? null : r.GetInt64(14));
     }
 
-    private enum Step { Nothing, Delivered, Applied, Failed, Waiting }
+    private enum Step { Nothing, Delivered, Applied, Failed, Waiting, Unavailable }
 
     /// <summary>Runs a company transaction that may find nothing to do (another caller got there first): then nothing is written and false is returned.</summary>
     private async Task<bool> TryMutate(Guid companyId, Func<CompanyAuditedWork, Task> work, CancellationToken ct)
@@ -285,7 +301,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             try
             {
                 if (Fault is { } f1) await f1("before_registry");
-                delivery = await registry.ReceiveAsync(companyId, new PartyRequestEnvelope(req.Id, req.LocalPartyId, req.Kind, req.Target, req.Values, req.CreatedBy, req.CreatedAtUtc), ct);
+                delivery = await registry.ReceiveAsync(companyId, new PartyRequestEnvelope(req.Id, req.LocalPartyId, req.Kind, req.Target, req.Values, req.CreatedBy, req.CreatedAtUtc, req.BasedOnRevision), ct);
                 if (Fault is { } f2) await f2("after_registry");
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not AuditIntegrityException)
@@ -303,7 +319,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
                     }
                     await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.DeliveryFailed, ActorUserId: actor, SubjectId: req.LocalPartyId, Detail: $"party request delivery failed request={requestId:N} code={code}"), ct);
                 }, ct);
-                return Step.Failed;
+                return code == "registry_unavailable" ? Step.Unavailable : Step.Failed;
             }
             if (delivery.Refusal is { } refusal)
             {
@@ -321,7 +337,8 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         }
         else
         {
-            proposal = await registry.GetProposalStateAsync(companyId, requestId, ct);
+            try { proposal = await registry.GetProposalStateAsync(companyId, requestId, ct); }
+            catch (NpgsqlException) { return Step.Unavailable; }        // review M2: the request stays delivered; a later attempt pulls the outcome
             if (proposal is null) return Step.Waiting;              // the registry does not know a delivered request: reported by the reconciliation, never fabricated
         }
 
@@ -355,11 +372,12 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         return step;
     }
 
-    private async Task Complete(CompanyAuditedWork work, RequestRow req, PartyRequestOutcome outcome, Guid? outcomeGlobal, string? errorCode, CancellationToken ct)
+    private async Task Complete(CompanyAuditedWork work, RequestRow req, PartyRequestOutcome outcome, Guid? outcomeGlobal, string? errorCode, CancellationToken ct, string? decisionNote = null)
     {
         await using var upd = new NpgsqlCommand(
             $"UPDATE {PR.Table} SET {PR.Status} = 3, {PR.Outcome} = @o, {PR.OutcomeGlobalPartyId} = @g, {PR.CompletedAtUtc} = @now, {PR.DeliveredAtUtc} = coalesce({PR.DeliveredAtUtc}, CASE WHEN @o = 3 THEN NULL ELSE @now END), " +
-            $"{PR.LastErrorCode} = @code, {PR.Revision} = {PR.Revision} + 1 WHERE {PR.Id} = @id", work.Connection, work.Transaction);
+            $"{PR.LastErrorCode} = @code, {PR.DecisionNote} = @dn, {PR.Revision} = {PR.Revision} + 1 WHERE {PR.Id} = @id", work.Connection, work.Transaction);
+        upd.Parameters.Add(new NpgsqlParameter("dn", NpgsqlDbType.Varchar) { Value = (object?)decisionNote ?? DBNull.Value });
         upd.Parameters.AddWithValue("id", req.Id); upd.Parameters.AddWithValue("o", (short)outcome);
         upd.Parameters.Add(new NpgsqlParameter("g", NpgsqlDbType.Uuid) { Value = outcomeGlobal is { } g ? g : DBNull.Value });
         upd.Parameters.AddWithValue("now", Now);
@@ -392,13 +410,13 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             }
             else
             {
-                await Complete(work, req, PartyRequestOutcome.Rejected, null, null, ct);
+                await Complete(work, req, PartyRequestOutcome.Rejected, null, null, ct, p.DecisionNote);      // review M3: the proposing company sees why
                 await SetLinkState(work, req.LocalPartyId, PartyLinkState.Rejected, null, ct);
                 await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.ProposalRejected, ActorUserId: actor, SubjectId: req.LocalPartyId, Detail: $"party proposal rejected request={req.Id:N}"), ct);
             }
             return;
         }
-        await Complete(work, req, approved ? PartyRequestOutcome.Approved : PartyRequestOutcome.Rejected, approved ? p.OutcomeGlobalPartyId : null, null, ct);
+        await Complete(work, req, approved ? PartyRequestOutcome.Approved : PartyRequestOutcome.Rejected, approved ? p.OutcomeGlobalPartyId : null, null, ct, approved ? null : p.DecisionNote);
         await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.ChangeCompleted, ActorUserId: actor, SubjectId: req.LocalPartyId,
             Detail: $"party change {(approved ? "approved" : "rejected")} request={req.Id:N}"), ct);
     }
@@ -414,6 +432,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         await using (var r = await q.ExecuteReaderAsync(ct))
             while (await r.ReadAsync(ct)) open.Add(r.GetGuid(0));
         int delivered = 0, applied = 0, failed = 0, waiting = 0;
+        var unavailable = false;
         foreach (var id in open)
         {
             switch (await ProcessAsync(companyId, id, actor, ct))
@@ -422,9 +441,10 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
                 case Step.Applied: applied++; break;
                 case Step.Failed: failed++; break;
                 case Step.Waiting: waiting++; break;
+                case Step.Unavailable: failed++; unavailable = true; break;
             }
         }
-        return new PartySyncResult(delivered, applied, failed, waiting);
+        return new PartySyncResult(delivered, applied, failed, waiting, unavailable);
     }
 
     /// <summary>
@@ -445,7 +465,9 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             await using (var r = await q.ExecuteReaderAsync(ct))
                 while (await r.ReadAsync(ct)) requests.Add((r.GetGuid(0), r.GetGuid(1), r.GetInt16(2), r.GetInt16(3), r.IsDBNull(4) ? null : r.GetInt16(4)));
         }
-        var snapshot = await registry.SnapshotAsync(companyId, ct);
+        PartyRegistrySnapshot snapshot;
+        try { snapshot = await registry.SnapshotAsync(companyId, ct); }
+        catch (NpgsqlException) { return new PartyReconciliationReport([new("registry_unavailable", null, null, null, false, false)], repair, true); }   // review M2
         var byKey = snapshot.Proposals.ToDictionary(p => p.RequestKey);
         var findings = new List<PartyReconciliationFinding>();
         var openLocals = new HashSet<Guid>();
@@ -479,7 +501,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             if (!locals.ContainsKey(local)) findings.Add(new("orphan_system_link", local, null, global, false, false));
         var known = requests.Select(r => r.Id).ToHashSet();
         foreach (var p in snapshot.Proposals)
-            if (!known.Contains(p.RequestKey)) findings.Add(new("proposal_unknown_locally", p.LocalPartyId, p.RequestKey, p.OutcomeGlobalPartyId, false, false));
+            if (!known.Contains(p.RequestKey)) findings.Add(new("proposal_unknown_locally", p.LocalPartyId, p.RequestKey, p.OutcomeGlobalPartyId, false, false, p.Id));
 
         if (!repair) return new PartyReconciliationReport(findings, false);
         var repaired = 0;

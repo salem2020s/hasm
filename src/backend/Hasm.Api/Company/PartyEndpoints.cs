@@ -8,6 +8,7 @@ using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Parties;
 using Microsoft.AspNetCore.Http.Metadata;
+using Npgsql;
 
 namespace Hasm.Api.Company;
 
@@ -75,7 +76,9 @@ public static class PartyEndpoints
             id = r.Id, kind = r.Kind, status = r.Status, outcome = r.Outcome, partyKind = r.PartyKind, legalNameAr = r.LegalNameAr, legalNameEn = r.LegalNameEn, taxNumber = r.TaxNumber,
             registrationNumber = r.RegistrationNumber, proposedStatus = r.ProposedStatus, note = r.Note, attempts = r.Attempts, lastAttemptAtUtc = r.LastAttemptAtUtc, lastErrorCode = r.LastErrorCode,
             createdBy = r.CreatedBy, createdAtUtc = r.CreatedAtUtc, deliveredAtUtc = r.DeliveredAtUtc, completedAtUtc = r.CompletedAtUtc,
+            basedOnRevision = r.BasedOnRevision, decisionNote = r.DecisionNote,
         }),
+        registryUnavailable = v.RegistryUnavailable,
     };
 
     private static object ProposalBody(PartyProposalView p) => new
@@ -84,8 +87,20 @@ public static class PartyEndpoints
         partyKind = p.PartyKind, legalNameAr = p.LegalNameAr, legalNameEn = p.LegalNameEn, taxNumber = p.TaxNumber, registrationNumber = p.RegistrationNumber, proposedStatus = p.ProposedStatus, note = p.Note,
         proposedBy = p.ProposedBy, proposedByName = p.ProposedByName, proposedAtUtc = p.ProposedAtUtc, status = p.Status, resolution = p.Resolution, outcomeGlobalPartyId = p.OutcomeGlobalPartyId,
         decidedBy = p.DecidedBy, decidedAtUtc = p.DecidedAtUtc, decisionNote = p.DecisionNote, revision = p.Revision,
-        target = p.Target is null ? null : Identity(p.Target), matches = p.Matches.Select(Identity),
+        target = p.Target is null ? null : Identity(p.Target), matches = p.Matches.Select(Identity), basedOnRevision = p.BasedOnRevision,
     };
+
+    /// <summary>The registry (system database) cannot be reached or the runtime account lacks its grants: a stable 503 with a code the clients translate (review M2).</summary>
+    private static IResult Unavailable() => Results.Json(new { error = "registry_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    private static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null) =>
+        r.Status == ConfigStatus.Conflict && r.Code == "registry_unavailable" ? Unavailable() : CompanyConfigurationEndpoints.Map(r, body, revision);
+
+    private static async Task<IResult> Central(Func<Task<IResult>> run)
+    {
+        try { return await run(); }
+        catch (NpgsqlException) { return Unavailable(); }
+    }
 
     private sealed class CreatedEtag(string location, long revision, object body) : IResult
     {
@@ -117,6 +132,7 @@ public static class PartyEndpoints
         {
             total = p.Total,
             parties = p.Items.Select(x => new { id = x.Id, code = x.Code, displayName = x.DisplayName, isActive = x.IsActive, linkState = x.LinkState, legalNameAr = x.LegalNameAr, legalNameEn = x.LegalNameEn, hasOpenRequest = x.HasOpenRequest, revision = x.Revision, updatedAtUtc = x.UpdatedAtUtc }),
+            registryUnavailable = p.RegistryUnavailable,
         });
     }
 
@@ -148,14 +164,14 @@ public static class PartyEndpoints
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         if (!CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
-        return CompanyConfigurationEndpoints.Map(await svc.ProposeAsync(actor!.UserId, actor.CompanyId, id, expected, body, http.RequestAborted), Body, v => v.Revision);
+        return Map(await svc.ProposeAsync(actor!.UserId, actor.CompanyId, id, expected, body, http.RequestAborted), Body, v => v.Revision);
     }
 
     private static async Task<IResult> Sync(HttpContext http, AccessService access, PartyManagementService svc)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return CompanyConfigurationEndpoints.Map(await svc.SyncAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), s => new { delivered = s.Delivered, applied = s.Applied, failed = s.Failed, waiting = s.Waiting });
+        return CompanyConfigurationEndpoints.Map(await svc.SyncAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), s => new { delivered = s.Delivered, applied = s.Applied, failed = s.Failed, waiting = s.Waiting, registryUnavailable = s.RegistryUnavailable });
     }
 
     private static async Task<IResult> Reconcile(HttpContext http, AccessService access, PartyManagementService svc, bool? repair)
@@ -164,8 +180,8 @@ public static class PartyEndpoints
         if (failure is not null) return failure;
         return CompanyConfigurationEndpoints.Map(await svc.ReconcileAsync(actor!.UserId, actor.CompanyId, repair == true, http.RequestAborted), r => new
         {
-            repairRequested = r.RepairRequested,
-            findings = r.Findings.Select(f => new { code = f.Code, localPartyId = f.LocalPartyId, requestId = f.RequestId, globalPartyId = f.GlobalPartyId, repairable = f.Repairable, repaired = f.Repaired }),
+            repairRequested = r.RepairRequested, registryUnavailable = r.RegistryUnavailable,
+            findings = r.Findings.Select(f => new { code = f.Code, localPartyId = f.LocalPartyId, requestId = f.RequestId, globalPartyId = f.GlobalPartyId, repairable = f.Repairable, repaired = f.Repaired, proposalId = f.ProposalId }),
         });
     }
 
@@ -176,36 +192,36 @@ public static class PartyEndpoints
     private static async Task<IResult> ListProposals(HttpContext http, PartyRegistryStore registry, int? status, int? offset, int? limit)
     {
         if (Actor(http) is not { } actor) return CompanyConfigurationEndpoints.Error(401, "unauthenticated");
-        return CompanyConfigurationEndpoints.Map(await registry.ListProposalsAsync(actor, status, offset ?? 0, limit ?? 50, http.RequestAborted), p => new
+        return await Central(async () => CompanyConfigurationEndpoints.Map(await registry.ListProposalsAsync(actor, status, offset ?? 0, limit ?? 50, http.RequestAborted), p => new
         {
             total = p.Total,
             proposals = p.Items.Select(x => new { id = x.Id, companyId = x.CompanyId, companyNameAr = x.CompanyNameAr, companyNameEn = x.CompanyNameEn, kind = x.Kind, legalNameAr = x.LegalNameAr, legalNameEn = x.LegalNameEn, taxNumber = x.TaxNumber, registrationNumber = x.RegistrationNumber, proposedAtUtc = x.ProposedAtUtc, status = x.Status, revision = x.Revision }),
-        });
+        }));
     }
 
     private static async Task<IResult> GetProposal(Guid id, HttpContext http, PartyRegistryStore registry)
     {
         if (Actor(http) is not { } actor) return CompanyConfigurationEndpoints.Error(401, "unauthenticated");
-        return CompanyConfigurationEndpoints.Map(await registry.GetProposalAsync(actor, id, http.RequestAborted), ProposalBody, v => v.Revision);
+        return await Central(async () => CompanyConfigurationEndpoints.Map(await registry.GetProposalAsync(actor, id, http.RequestAborted), ProposalBody, v => v.Revision));
     }
 
     private static async Task<IResult> Approve(Guid id, ApproveBody? body, HttpContext http, PartyRegistryStore registry)
     {
         if (Actor(http) is not { } actor) return CompanyConfigurationEndpoints.Error(401, "unauthenticated");
         if (!CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
-        return CompanyConfigurationEndpoints.Map(await registry.ApproveAsync(actor, id, expected, body?.LinkTo, http.RequestAborted), ProposalBody, v => v.Revision);
+        return await Central(async () => CompanyConfigurationEndpoints.Map(await registry.ApproveAsync(actor, id, expected, body?.LinkTo, http.RequestAborted), ProposalBody, v => v.Revision));
     }
 
     private static async Task<IResult> Reject(Guid id, NoteBody? body, HttpContext http, PartyRegistryStore registry)
     {
         if (Actor(http) is not { } actor) return CompanyConfigurationEndpoints.Error(401, "unauthenticated");
         if (!CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
-        return CompanyConfigurationEndpoints.Map(await registry.RejectAsync(actor, id, expected, body?.Note, http.RequestAborted), ProposalBody, v => v.Revision);
+        return await Central(async () => CompanyConfigurationEndpoints.Map(await registry.RejectAsync(actor, id, expected, body?.Note, http.RequestAborted), ProposalBody, v => v.Revision));
     }
 
     private static async Task<IResult> Search(HttpContext http, PartyRegistryStore registry, string? term)
     {
         if (Actor(http) is not { } actor) return CompanyConfigurationEndpoints.Error(401, "unauthenticated");
-        return CompanyConfigurationEndpoints.Map(await registry.SearchIdentitiesAsync(actor, term, http.RequestAborted), l => new { identities = l.Select(Identity) });
+        return await Central(async () => CompanyConfigurationEndpoints.Map(await registry.SearchIdentitiesAsync(actor, term, http.RequestAborted), l => new { identities = l.Select(Identity) }));
     }
 }

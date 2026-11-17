@@ -59,6 +59,7 @@ CREATE TABLE t_ba81b291 (
     c_66c55e86 uuid NOT NULL,
     c_0c8f01f0 smallint NOT NULL,
     c_a49afa8d uuid NULL,
+    c_cdbf638d bigint NULL,
     c_6ce5dcfb smallint NOT NULL,
     c_51c1ef2f varchar(200) NOT NULL,
     c_efa6fc18 varchar(200) NULL,
@@ -72,6 +73,7 @@ CREATE TABLE t_ba81b291 (
     c_a7b2180c integer NOT NULL DEFAULT 0,
     c_6f84193e timestamptz NULL,
     c_9aeea05e varchar(64) NULL,
+    c_4ae39049 varchar(500) NULL,
     c_284d429a uuid NOT NULL,
     c_36f6903f timestamptz NOT NULL,
     c_8c242e76 timestamptz NULL,
@@ -80,7 +82,7 @@ CREATE TABLE t_ba81b291 (
     CONSTRAINT k_1fc60f73 PRIMARY KEY (c_32333a7b),
     CONSTRAINT k_3782fac2 FOREIGN KEY (c_66c55e86) REFERENCES t_8edce6b0 (c_3f494703),
     CONSTRAINT k_dfff7486 CHECK (c_0c8f01f0 IN (1, 2) AND c_6ce5dcfb IN (1, 2) AND c_0e95693d IN (1, 2) AND c_ec870880 IN (1, 2, 3) AND c_a7b2180c >= 0 AND c_b6864ce1 > 0
-        AND ((c_0c8f01f0 = 1 AND c_a49afa8d IS NULL AND c_0e95693d = 1) OR (c_0c8f01f0 = 2 AND c_a49afa8d IS NOT NULL))
+        AND ((c_0c8f01f0 = 1 AND c_a49afa8d IS NULL AND c_cdbf638d IS NULL AND c_0e95693d = 1) OR (c_0c8f01f0 = 2 AND c_a49afa8d IS NOT NULL AND c_cdbf638d > 0))
         AND char_length(btrim(c_51c1ef2f)) >= 1 AND (c_efa6fc18 IS NULL OR char_length(btrim(c_efa6fc18)) >= 1)
         AND (c_5f57af39 IS NULL OR c_5f57af39 ~ '^[A-Z0-9./-]{1,50}$')
         AND (c_b52f0b6e IS NULL OR c_b52f0b6e ~ '^[A-Z0-9./-]{1,50}$')
@@ -88,6 +90,7 @@ CREATE TABLE t_ba81b291 (
         AND ((c_ec870880 = 3) = (c_7a8c0700 IS NOT NULL AND c_933eb4ea IS NOT NULL))
         AND (c_7a8c0700 IS NULL OR c_7a8c0700 IN (1, 2, 3))
         AND ((c_215a5e58 IS NOT NULL) = (c_7a8c0700 IS NOT DISTINCT FROM 1))
+        AND (c_4ae39049 IS NULL OR c_7a8c0700 = 2)
         AND (c_9aeea05e IS NULL OR c_9aeea05e ~ '^[a-z0-9_]{1,64}$'))
 );
 -- At most one open request (pending or delivered) per local party.
@@ -105,7 +108,7 @@ BEGIN
     IF OLD.c_ec870880 = 3 THEN RAISE EXCEPTION 'a completed party request is final'; END IF;
     IF NEW.c_ec870880 < OLD.c_ec870880 THEN RAISE EXCEPTION 'a party request never goes back'; END IF;
     IF NEW.c_32333a7b IS DISTINCT FROM OLD.c_32333a7b OR NEW.c_66c55e86 IS DISTINCT FROM OLD.c_66c55e86 OR NEW.c_0c8f01f0 IS DISTINCT FROM OLD.c_0c8f01f0
-       OR NEW.c_a49afa8d IS DISTINCT FROM OLD.c_a49afa8d OR NEW.c_6ce5dcfb IS DISTINCT FROM OLD.c_6ce5dcfb
+       OR NEW.c_a49afa8d IS DISTINCT FROM OLD.c_a49afa8d OR NEW.c_cdbf638d IS DISTINCT FROM OLD.c_cdbf638d OR NEW.c_6ce5dcfb IS DISTINCT FROM OLD.c_6ce5dcfb
        OR NEW.c_51c1ef2f IS DISTINCT FROM OLD.c_51c1ef2f OR NEW.c_efa6fc18 IS DISTINCT FROM OLD.c_efa6fc18 OR NEW.c_5f57af39 IS DISTINCT FROM OLD.c_5f57af39
        OR NEW.c_b52f0b6e IS DISTINCT FROM OLD.c_b52f0b6e OR NEW.c_0e95693d IS DISTINCT FROM OLD.c_0e95693d OR NEW.c_991403a6 IS DISTINCT FROM OLD.c_991403a6
        OR NEW.c_284d429a IS DISTINCT FROM OLD.c_284d429a OR NEW.c_36f6903f IS DISTINCT FROM OLD.c_36f6903f THEN

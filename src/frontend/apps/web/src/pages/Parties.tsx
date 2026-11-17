@@ -56,10 +56,11 @@ export function PartiesPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [report, setReport] = useState<PartyReconciliation | null>(null);
   const [busy, setBusy] = useState(false);
+  const [registryDown, setRegistryDown] = useState(false);
 
   useEffect(() => { void auth.api.getPartyCapabilities().then(setCaps).catch((e) => { if (!auth.handleError(e)) setLoadError(errRef.current(e)); }); }, [auth.api, auth.handleError]);
   const load = useCallback(async () => {
-    try { const p = await auth.api.listParties({ search: search.trim() || undefined, offset, limit: PAGE }); setRows(p.parties); setTotal(p.total); setLoadError(null); }
+    try { const p = await auth.api.listParties({ search: search.trim() || undefined, offset, limit: PAGE }); setRows(p.parties); setTotal(p.total); setRegistryDown(!!p.registryUnavailable); setLoadError(null); }
     catch (e) { if (!auth.handleError(e)) setLoadError(errRef.current(e)); }
   }, [auth.api, auth.handleError, search, offset]);
   useEffect(() => { const h = setTimeout(() => void load(), 250); return () => clearTimeout(h); }, [load]);
@@ -71,8 +72,8 @@ export function PartiesPage() {
   }
 
   async function run(f: () => Promise<void>) { setBusy(true); try { await f(); } catch (e) { if (!auth.handleError(e)) setNotice(errText(e)); } finally { setBusy(false); } }
-  const sync = () => run(async () => { const r = await auth.api.syncParties(); setNotice(t("pty.synced", { delivered: String(r.delivered), applied: String(r.applied), failed: String(r.failed), waiting: String(r.waiting) })); await load(); });
-  const reconcile = (repair: boolean) => run(async () => { setReport(await auth.api.reconcileParties(repair)); await load(); });
+  const sync = () => run(async () => { const r = await auth.api.syncParties(); if (r.registryUnavailable) setRegistryDown(true); setNotice(t("pty.synced", { delivered: String(r.delivered), applied: String(r.applied), failed: String(r.failed), waiting: String(r.waiting) })); await load(); });
+  const reconcile = (repair: boolean) => run(async () => { const rep = await auth.api.reconcileParties(repair); setReport(rep); if (rep.registryUnavailable) setRegistryDown(true); await load(); });
 
   return (
     <section aria-labelledby="page-title">
@@ -84,11 +85,12 @@ export function PartiesPage() {
           {caps.create && <button type="button" className="primary" onClick={() => guard(() => { setNotice(null); setEditor({ mode: "new" }); })}>{t("pty.new")}</button>}
         </>} />
       <Banner kind="info" testId="pty-isolation">{t("pty.isolation_note")}</Banner>
+      {registryDown && <Banner kind="warning" testId="pty-registry-down">{t("pty.registry_unavailable")}</Banner>}
       {notice && <Banner kind="success" testId="saved">{notice}</Banner>}
       {report && (
         <Card title={t("pty.findings")}>
           {report.findings.length === 0 ? <p data-testid="pty-reconciled-ok">{t("pty.reconciled_ok")}</p> : (
-            <ul data-testid="pty-findings">{report.findings.map((f, i) => <li key={i}>{t(`pty.finding.${f.code}`)} — {f.repaired ? t("pty.repaired") : f.repairable ? t("pty.repairable") : t("pty.report_only")}</li>)}</ul>
+            <ul data-testid="pty-findings">{report.findings.map((f, i) => <li key={i}>{t(`pty.finding.${f.code}`)}{f.proposalId ? <> (<bdi dir="ltr">{f.proposalId}</bdi>)</> : null} — {f.repaired ? t("pty.repaired") : f.repairable ? t("pty.repairable") : t("pty.report_only")}</li>)}</ul>
           )}
         </Card>
       )}
@@ -246,7 +248,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
             <caption className="visually-hidden">{t("pty.tab.requests")}</caption>
             <thead><tr><th scope="col">{t("ppa.kind")}</th><th scope="col">{t("pty.legal_name")}</th><th scope="col">{t("pty.request_status")}</th><th scope="col">{t("pty.attempts")}</th><th scope="col">{t("pty.last_error")}</th><th scope="col">{t("pty.created_at")}</th></tr></thead>
             <tbody>{doc.requests.map((r) => (
-              <tr key={r.id}><td>{t(`pty.request_kind.${r.kind}`)}</td><td><bdi>{r.legalNameAr}</bdi></td><td>{r.outcome ? t(`pty.outcome.${r.outcome}`) : t(`pty.request_status.${r.status}`)}</td><td className="num">{r.attempts}</td><td><bdi dir="ltr">{r.lastErrorCode ?? ""}</bdi></td><td><bdi dir="ltr">{r.createdAtUtc.slice(0, 19).replace("T", " ")}</bdi></td></tr>
+              <tr key={r.id}><td>{t(`pty.request_kind.${r.kind}`)}</td><td><bdi>{r.legalNameAr}</bdi></td><td>{r.outcome ? t(`pty.outcome.${r.outcome}`) : t(`pty.request_status.${r.status}`)}{r.decisionNote && <> — <bdi data-testid="pty-decision-note">{r.decisionNote}</bdi></>}</td><td className="num">{r.attempts}</td><td><bdi dir="ltr">{r.lastErrorCode ?? ""}</bdi></td><td><bdi dir="ltr">{r.createdAtUtc.slice(0, 19).replace("T", " ")}</bdi></td></tr>
             ))}</tbody>
           </table>
         </div>
@@ -260,6 +262,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
       <PageHeader title={doc ? `${doc.code} — ${doc.displayName}` : t("pty.new")} description={doc ? doc.identity?.legalNameAr ?? t("pty.identity_none") : t("pty.new_subtitle")}
         actions={doc && <span className={`chip ${doc.linkState === 2 ? "chip-ok" : doc.linkState === 3 ? "chip-off" : ""}`} data-testid="pty-link">{t(`pty.link.${doc.linkState}`)}</span>} />
       <Banner kind="info">{t("pty.isolation_note")}</Banner>
+      {doc?.registryUnavailable && <Banner kind="warning" testId="pty-registry-down">{t("pty.registry_unavailable")}</Banner>}
       {conflict && <Banner kind="error" testId="form-conflict">{t("pty.error.revision_conflict")} <button type="button" onClick={() => void load()}>{t("form.reload_latest")}</button></Banner>}
       {error && <Banner kind="error" testId="form-error">{error}</Banner>}
       <form onSubmit={save} noValidate>

@@ -289,9 +289,10 @@ public class PartyOutboxTests : PartyTestBase
         var pid = await Scalar<Guid>($"INSERT INTO {PP.Table} ({PP.Id}, {PP.CompanyId}, {PP.RequestKey}, {PP.LocalPartyId}, {PP.Kind}, {PP.PartyKind}, {PP.LegalNameAr}, {PP.ProposedBy}, {PP.ProposedAtUtc}) " +
                                      $"VALUES (gen_random_uuid(), '{Company.Id}', '{ghostKey}', '{ghostLocal}', 1, 1, 'ghost', '{Admin.Id}', now()) RETURNING {PP.Id}");
         await Exec($"INSERT INTO {PL.Table} ({PL.CompanyId}, {PL.LocalPartyId}, {PL.GlobalPartyId}, {PL.ProposalId}, {PL.LinkedAtUtc}) VALUES ('{Company.Id}', '{ghostLocal}', '{g}', '{pid}', now())");
-        // and the company holds a link the registry does not know (simulated by clearing the system link through a fresh identity elsewhere is impossible: links are append-only, so use a mismatch)
-        var codes = (await Parties.ReconcileAsync(Admin.Id, Company.Id, repair: true)).Findings.Select(f => (f.Code, f.Repairable, f.Repaired)).OrderBy(x => x.Code).ToList();
+        var ghostReport = (await Parties.ReconcileAsync(Admin.Id, Company.Id, repair: true)).Findings;
+        var codes = ghostReport.Select(f => (f.Code, f.Repairable, f.Repaired)).OrderBy(x => x.Code).ToList();
         Assert.Equal([("orphan_system_link", false, false), ("proposal_unknown_locally", false, false)], codes);
+        Assert.Equal(pid, ghostReport.Single(f => f.Code == "proposal_unknown_locally").ProposalId);          // review M4: the identity administrator can find and decide it
         Assert.Equal(g1, Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, p1.Id)).Identity!.GlobalPartyId);
     }
 }

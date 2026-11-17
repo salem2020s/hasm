@@ -46,6 +46,10 @@ public static partial class CompanySchema
         public const string Attempts = "c_a7b2180c";
         public const string LastAttemptAtUtc = "c_6f84193e";
         public const string LastErrorCode = "c_9aeea05e";
+        /// <summary>Revision of the shared identity a change request was based on (review M1).</summary>
+        public const string BasedOnRevision = "c_cdbf638d";
+        /// <summary>The central decision note of a rejected request (review M3).</summary>
+        public const string DecisionNote = "c_4ae39049";
         public const string CreatedBy = "c_284d429a";
         public const string CreatedAtUtc = "c_36f6903f";
         public const string DeliveredAtUtc = "c_8c242e76";
@@ -103,6 +107,8 @@ public static partial class CompanySchema
         ["PartyRequest.Attempts"] = PartyRequest.Attempts,
         ["PartyRequest.LastAttemptAtUtc"] = PartyRequest.LastAttemptAtUtc,
         ["PartyRequest.LastErrorCode"] = PartyRequest.LastErrorCode,
+        ["PartyRequest.BasedOnRevision"] = PartyRequest.BasedOnRevision,
+        ["PartyRequest.DecisionNote"] = PartyRequest.DecisionNote,
         ["PartyRequest.CreatedBy"] = PartyRequest.CreatedBy,
         ["PartyRequest.CreatedAtUtc"] = PartyRequest.CreatedAtUtc,
         ["PartyRequest.DeliveredAtUtc"] = PartyRequest.DeliveredAtUtc,

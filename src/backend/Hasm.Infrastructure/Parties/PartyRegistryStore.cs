@@ -11,10 +11,10 @@ using Co = Hasm.Infrastructure.SystemDatabase.SystemSchema.Company;
 namespace Hasm.Infrastructure.Parties;
 
 /// <summary>A request of a company's request log as delivered to the registry. <see cref="RequestKey"/> is the outbox id: the idempotency key of the delivery.</summary>
-public sealed record PartyRequestEnvelope(Guid RequestKey, Guid LocalPartyId, PartyRequestKind Kind, Guid? TargetGlobalPartyId, PartyValidation.Identity Values, Guid ProposedBy, DateTimeOffset ProposedAtUtc);
+public sealed record PartyRequestEnvelope(Guid RequestKey, Guid LocalPartyId, PartyRequestKind Kind, Guid? TargetGlobalPartyId, PartyValidation.Identity Values, Guid ProposedBy, DateTimeOffset ProposedAtUtc, long? BasedOnRevision = null);
 
 /// <summary>What the registry tells a company about one of ITS proposals.</summary>
-public sealed record PartyProposalState(Guid Id, Guid RequestKey, Guid LocalPartyId, PartyRequestKind Kind, PartyProposalStatus Status, PartyProposalResolution? Resolution, Guid? OutcomeGlobalPartyId);
+public sealed record PartyProposalState(Guid Id, Guid RequestKey, Guid LocalPartyId, PartyRequestKind Kind, PartyProposalStatus Status, PartyProposalResolution? Resolution, Guid? OutcomeGlobalPartyId, string? DecisionNote = null);
 
 /// <summary>The registry state of one company only (for its reconciliation): its proposals and its links. Never anything of another company.</summary>
 public sealed record PartyRegistrySnapshot(IReadOnlyList<PartyProposalState> Proposals, IReadOnlyDictionary<Guid, Guid> LinksByLocalParty);
@@ -54,10 +54,10 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
 
     // ======================================================================================================== company side (scoped to one company)
 
-    private const string StateCols = $"{PP.Id}, {PP.RequestKey}, {PP.LocalPartyId}, {PP.Kind}, {PP.Status}, {PP.Resolution}, {PP.OutcomeGlobalPartyId}";
+    private const string StateCols = $"{PP.Id}, {PP.RequestKey}, {PP.LocalPartyId}, {PP.Kind}, {PP.Status}, {PP.Resolution}, {PP.OutcomeGlobalPartyId}, {PP.DecisionNote}";
 
     private static PartyProposalState ReadState(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), (PartyRequestKind)r.GetInt16(3), (PartyProposalStatus)r.GetInt16(4),
-        r.IsDBNull(5) ? null : (PartyProposalResolution)r.GetInt16(5), G(r, 6));
+        r.IsDBNull(5) ? null : (PartyProposalResolution)r.GetInt16(5), G(r, 6), Str(r, 7));
 
     private static async Task<PartyProposalState?> StateByKey(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid companyId, Guid key, CancellationToken ct)
     {
@@ -104,12 +104,12 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
 
         var id = Guid.NewGuid();
         await using (var ins = new NpgsqlCommand(
-            $"INSERT INTO {PP.Table} ({PP.Id}, {PP.CompanyId}, {PP.RequestKey}, {PP.LocalPartyId}, {PP.Kind}, {PP.TargetGlobalPartyId}, {PP.PartyKind}, {PP.LegalNameAr}, {PP.LegalNameEn}, {PP.TaxNumber}, " +
+            $"INSERT INTO {PP.Table} ({PP.Id}, {PP.CompanyId}, {PP.RequestKey}, {PP.LocalPartyId}, {PP.Kind}, {PP.TargetGlobalPartyId}, {PP.BasedOnRevision}, {PP.PartyKind}, {PP.LegalNameAr}, {PP.LegalNameEn}, {PP.TaxNumber}, " +
             $"{PP.RegistrationNumber}, {PP.ProposedStatus}, {PP.Note}, {PP.ProposedBy}, {PP.ProposedAtUtc}, {PP.Status}, {PP.Revision}) " +
-            "VALUES (@id, @c, @k, @l, @kind, @t, @pk, @ar, @en, @tax, @reg, @ps, @note, @by, @at, 1, 1)", conn, tx))
+            "VALUES (@id, @c, @k, @l, @kind, @t, @based, @pk, @ar, @en, @tax, @reg, @ps, @note, @by, @at, 1, 1)", conn, tx))
         {
             ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("c", companyId); ins.Parameters.AddWithValue("k", e.RequestKey); ins.Parameters.AddWithValue("l", e.LocalPartyId);
-            ins.Parameters.AddWithValue("kind", (short)e.Kind); ins.Parameters.AddWithValue("t", e.TargetGlobalPartyId is { } t ? t : DBNull.Value); ins.Parameters.AddWithValue("pk", (short)e.Values.Kind);
+            ins.Parameters.AddWithValue("kind", (short)e.Kind); ins.Parameters.AddWithValue("t", e.TargetGlobalPartyId is { } t ? t : DBNull.Value); ins.Parameters.Add(new NpgsqlParameter("based", NpgsqlDbType.Bigint) { Value = e.BasedOnRevision is { } b ? b : DBNull.Value }); ins.Parameters.AddWithValue("pk", (short)e.Values.Kind);
             ins.Parameters.AddWithValue("ar", e.Values.LegalNameAr); ins.Parameters.AddWithValue("en", Db(e.Values.LegalNameEn)); ins.Parameters.AddWithValue("tax", Db(e.Values.TaxNumber));
             ins.Parameters.AddWithValue("reg", Db(e.Values.RegistrationNumber)); ins.Parameters.AddWithValue("ps", (short)e.Values.Status); ins.Parameters.AddWithValue("note", Db(e.Values.Note));
             ins.Parameters.AddWithValue("by", e.ProposedBy); ins.Parameters.AddWithValue("at", e.ProposedAtUtc.UtcDateTime);
@@ -211,7 +211,7 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
         await using (var q = new NpgsqlCommand(
             $"SELECT p.{PP.Id}, p.{PP.CompanyId}, c.{Co.DisplayNameAr}, c.{Co.DisplayNameEn}, p.{PP.LocalPartyId}, p.{PP.Kind}, p.{PP.TargetGlobalPartyId}, p.{PP.PartyKind}, p.{PP.LegalNameAr}, p.{PP.LegalNameEn}, " +
             $"p.{PP.TaxNumber}, p.{PP.RegistrationNumber}, p.{PP.ProposedStatus}, p.{PP.Note}, p.{PP.ProposedBy}, u.{U.DisplayName}, p.{PP.ProposedAtUtc}, p.{PP.Status}, p.{PP.Resolution}, p.{PP.OutcomeGlobalPartyId}, " +
-            $"p.{PP.DecidedBy}, p.{PP.DecidedAtUtc}, p.{PP.DecisionNote}, p.{PP.Revision} " +
+            $"p.{PP.DecidedBy}, p.{PP.DecidedAtUtc}, p.{PP.DecisionNote}, p.{PP.Revision}, p.{PP.BasedOnRevision} " +
             $"FROM {PP.Table} p JOIN {Co.Table} c ON c.{Co.Id} = p.{PP.CompanyId} JOIN {U.Table} u ON u.{U.Id} = p.{PP.ProposedBy} WHERE p.{PP.Id} = @id{(forUpdate ? " FOR UPDATE OF p" : "")}", conn, tx))
         {
             q.Parameters.AddWithValue("id", id);
@@ -219,7 +219,7 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
             v = await r.ReadAsync(ct)
                 ? new PartyProposalView(r.GetGuid(0), r.GetGuid(1), Str(r, 2), Str(r, 3), r.GetGuid(4), r.GetInt16(5), G(r, 6), r.GetInt16(7), r.GetString(8), Str(r, 9), Str(r, 10), Str(r, 11), r.GetInt16(12),
                     Str(r, 13), r.GetGuid(14), Str(r, 15), r.GetFieldValue<DateTimeOffset>(16), r.GetInt16(17), r.IsDBNull(18) ? null : r.GetInt16(18), G(r, 19), G(r, 20),
-                    r.IsDBNull(21) ? null : r.GetFieldValue<DateTimeOffset>(21), Str(r, 22), r.GetInt64(23), null, [])
+                    r.IsDBNull(21) ? null : r.GetFieldValue<DateTimeOffset>(21), Str(r, 22), r.GetInt64(23), null, [], r.IsDBNull(24) ? null : r.GetInt64(24))
                 : null;
         }
         if (v is null) return null;
@@ -260,7 +260,7 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
         await using var conn = await OpenAsync(ct);
         if (!await IsCentralApprover(conn, null, actor, ct)) return ConfigResult<IReadOnlyList<SharedIdentityView>>.Fail(ConfigStatus.Forbidden, "forbidden");
         var t = term?.Trim() ?? "";
-        if (t.Length == 0) return ConfigResult<IReadOnlyList<SharedIdentityView>>.Ok([]);
+        if (t.Length < 2) return ConfigResult<IReadOnlyList<SharedIdentityView>>.Invalid([new FieldError("term", "too_short")]);              // review M4: no registry enumeration by one character
         await using var q = new NpgsqlCommand(
             $"SELECT {IdentityCols} FROM {GP.Table} WHERE lower({GP.LegalNameAr}) LIKE @like OR lower(coalesce({GP.LegalNameEn}, '')) LIKE @like OR {GP.TaxNumber} = @id OR {GP.RegistrationNumber} = @id " +
             $"ORDER BY {GP.LegalNameAr}, {GP.Id} LIMIT 50", conn);
@@ -367,6 +367,12 @@ public sealed class PartyRegistryStore(Func<string> connectionString, AuditTrail
             {
                 q.Parameters.AddWithValue("c", p.CompanyId); q.Parameters.AddWithValue("l", p.LocalPartyId); q.Parameters.AddWithValue("g", target);
                 if (await q.ExecuteScalarAsync(ct) is null) throw new Abort(ConfigStatus.Conflict, "link_missing");
+            }
+            // review M1 (lost update): the change must be based on the CURRENT revision of the identity; another approved change in between makes it stale. The approver sees the current data and rejects.
+            await using (var q = new NpgsqlCommand($"SELECT {GP.Revision} FROM {GP.Table} WHERE {GP.Id} = @g FOR UPDATE", conn, tx))
+            {
+                q.Parameters.AddWithValue("g", target);
+                if (await q.ExecuteScalarAsync(ct) is not long current || current != p.BasedOnRevision) throw new Abort(ConfigStatus.Conflict, "identity_changed");
             }
             await using (var upd = new NpgsqlCommand(
                 $"UPDATE {GP.Table} SET {GP.PartyKind} = @k, {GP.LegalNameAr} = @ar, {GP.LegalNameEn} = @en, {GP.TaxNumber} = @tax, {GP.RegistrationNumber} = @reg, {GP.Status} = @s, " +

@@ -36,7 +36,11 @@ export const partyAr: Record<string, string> = {
   "ppa.resolution.1": "هوية جديدة", "ppa.resolution.2": "ربط بهوية قائمة", "ppa.resolution.3": "تعديل مطبَّق",
   "ppa.error.self_approval_not_allowed": "لا يمكنك اتخاذ قرار في اقتراح قدمته بنفسك.", "ppa.error.identifier_in_use": "الرقم مستخدم لهوية قائمة؛ اربط الاقتراح بها بدلاً من إنشاء هوية جديدة.",
   "ppa.error.already_linked_in_company": "هذه الشركة مرتبطة بهذه الهوية عبر طرف آخر.", "ppa.error.global_party_inactive": "الهوية موقوفة.", "ppa.error.link_missing": "لم تعد الشركة مرتبطة بهذه الهوية.",
-  "ppa.error.invalid_status": "تم البت في الاقتراح من قبل.", "ppa.error.revision_conflict": "تغيّر الاقتراح من مكان آخر.",
+  "ppa.error.invalid_status": "تم البت في الاقتراح من قبل.",
+  "ppa.error.identity_changed": "تغيّرت الهوية المشتركة منذ قُدِّم هذا الاقتراح؛ راجع البيانات الحالية وارفض الاقتراح ليُقدَّم من جديد.",
+  "ppa.error.registry_unavailable": "السجل المركزي غير متاح حالياً؛ أعد المحاولة لاحقاً.", "ppa.stale_base": "الاقتراح مبني على نسخة أقدم من الهوية؛ لا يمكن اعتماده.",
+  "pty.registry_unavailable": "السجل المركزي غير متاح حالياً: تظهر البيانات المحلية دون الهوية المشتركة، وتبقى الطلبات بانتظار المزامنة.", "pty.error.registry_unavailable": "السجل المركزي غير متاح حالياً؛ أعد المحاولة لاحقاً.", "pty.error.link_missing": "لم تعد الشركة مرتبطة بهذه الهوية.",
+  "pty.finding.registry_unavailable": "السجل المركزي غير متاح؛ تعذّر الفحص", "ppa.error.revision_conflict": "تغيّر الاقتراح من مكان آخر.",
 };
 export const partyEn: Record<string, string> = {
   "nav.parties": "Parties", "nav.party_approvals": "Shared party approvals",
@@ -74,5 +78,9 @@ export const partyEn: Record<string, string> = {
   "ppa.resolution.1": "New identity", "ppa.resolution.2": "Linked to an existing identity", "ppa.resolution.3": "Change applied",
   "ppa.error.self_approval_not_allowed": "You cannot decide a proposal you made yourself.", "ppa.error.identifier_in_use": "The number belongs to an existing identity; link the proposal to it instead of creating a new one.",
   "ppa.error.already_linked_in_company": "This company is already linked to this identity through another party.", "ppa.error.global_party_inactive": "The identity is inactive.", "ppa.error.link_missing": "The company is no longer linked to this identity.",
-  "ppa.error.invalid_status": "The proposal was already decided.", "ppa.error.revision_conflict": "The proposal changed elsewhere.",
+  "ppa.error.invalid_status": "The proposal was already decided.",
+  "ppa.error.identity_changed": "The shared identity changed since this proposal was made; review the current data and reject the proposal so it is proposed again.",
+  "ppa.error.registry_unavailable": "The central registry is not available right now; try again later.", "ppa.stale_base": "This proposal is based on an older version of the identity; it cannot be approved.",
+  "pty.registry_unavailable": "The central registry is not available right now: local data is shown without the shared identity, and requests wait for synchronization.", "pty.error.registry_unavailable": "The central registry is not available right now; try again later.", "pty.error.link_missing": "The company is no longer linked to this identity.",
+  "pty.finding.registry_unavailable": "The central registry is unavailable; the check could not run", "ppa.error.revision_conflict": "The proposal changed elsewhere.",
 };

@@ -77,6 +77,7 @@ export function PartyApprovalsPage() {
             <dt>{t("pty.proposal_note")}</dt><dd><bdi>{open.note ?? ""}</bdi></dd>
             <dt>{t("ppa.proposed_by")}</dt><dd><bdi>{open.proposedByName ?? ""}</bdi></dd>
             {open.target && <><dt>{t("ppa.target")}</dt><dd><bdi>{open.target.legalNameAr}</bdi> <bdi dir="ltr">{open.target.taxNumber ?? ""}</bdi></dd></>}
+            {open.target && open.basedOnRevision != null && open.basedOnRevision !== open.target.revision && pending && <><dt>{t("ppa.status")}</dt><dd data-testid="ppa-stale">{t("ppa.stale_base")}</dd></>}
             {open.resolution && <><dt>{t("ppa.status")}</dt><dd>{t(`ppa.resolution.${open.resolution}`)}</dd></>}
             {open.decisionNote && <><dt>{t("ppa.reject_note")}</dt><dd><bdi>{open.decisionNote}</bdi></dd></>}
           </dl>
@@ -85,7 +86,7 @@ export function PartyApprovalsPage() {
           <Card title={t("ppa.matches")}>
             <div className="toolbar">
               <Field id="ppa-search" label={t("ppa.search")} hint={t("ppa.search_hint")}>{(aria) => <input {...aria} type="search" value={term} onChange={(e) => setTerm(e.target.value)} />}</Field>
-              <button type="button" disabled={!term.trim()} onClick={() => void auth.api.searchSharedIdentities(term.trim()).then((r) => setFound(r.identities)).catch((e) => setError(errText(e)))}>{t("ppa.search")}</button>
+              <button type="button" disabled={term.trim().length < 2} onClick={() => void auth.api.searchSharedIdentities(term.trim()).then((r) => setFound(r.identities)).catch((e) => setError(errText(e)))}>{t("ppa.search")}</button>
             </div>
             {candidates.length === 0 ? <p className="hint">{t("ppa.no_matches")}</p> : (
               <ul data-testid="ppa-matches">{candidates.map((m) => (
