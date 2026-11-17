@@ -6,7 +6,7 @@ namespace Hasm.Infrastructure.SystemDatabase;
 /// they are never regenerated. Changing a value requires a new migration, not an edit here.
 /// This is obfuscation for hygiene, not a security control.
 /// </summary>
-public static class SystemSchema
+public static partial class SystemSchema
 {
     public static class Company
     {
@@ -266,7 +266,11 @@ public static class SystemSchema
     public const string MigrationJournalTable = "migration_journal";
 
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
-    public static IReadOnlyDictionary<string, string> Map { get; } = new Dictionary<string, string>
+    public static IReadOnlyDictionary<string, string> Map => map.Value;
+
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+
+    private static IReadOnlyDictionary<string, string> CoreMap { get; } = new Dictionary<string, string>
     {
         ["Company"] = Company.Table,
         ["Company.Id"] = Company.Id,

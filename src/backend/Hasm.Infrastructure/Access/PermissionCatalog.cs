@@ -144,6 +144,10 @@ public sealed partial class PermissionCatalog
         new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
         // Stocktake (3.8B-1): warehouse-scoped like stock documents; the approver is never the submitter (service AND PostgreSQL). Counting and approving create no stock movement.
         new("company.stocktake", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
+        // Party registry (3.9A, system migration 0022): company-wide. View the local parties and the shared identity they are linked to; create a local party (which proposes its shared identity);
+        // update the company-local fields; submit a proposal to change shared data (or to propose again after a rejection); configure = synchronize the request log and run the reconciliation.
+        // No company permission approves: the central approval belongs to identity administrators (docs/PHASE-3.9A.md D1).
+        new("company.parties", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -255,6 +259,11 @@ public sealed partial class PermissionCatalog
         public const string StocktakeSubmit = "company.stocktake.submit";
         public const string StocktakeApprove = "company.stocktake.approve";
         public const string StocktakeCancel = "company.stocktake.cancel";
+        public const string PartiesView = "company.parties.view";
+        public const string PartiesCreate = "company.parties.create";
+        public const string PartiesUpdate = "company.parties.update";
+        public const string PartiesSubmit = "company.parties.submit";
+        public const string PartiesConfigure = "company.parties.configure";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
