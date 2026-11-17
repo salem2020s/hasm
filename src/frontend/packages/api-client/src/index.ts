@@ -582,12 +582,16 @@ export type StocktakeStatus = 1 | 2 | 3 | 4 | 5;
 export interface StocktakeLine {
   lineNo: number; itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; unitId: string; unitCode: string; countedQuantity: number | null; factor: number;
   countedBaseQuantity: number | null; bookQuantity: number; variance: number | null; baseUnitCode: string; reason: string | null; currentBookQuantity: number; stale: boolean;
+  /** The units the line may be counted in (base first, active alternates and the saved unit) with their exact factors (Phase 3.8B-2, follow-up M2). */
+  units?: StockItemUnit[];
 }
 /** kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 approved, 6 rejected, 7 cancelled, 8 sheet generated. */
 export interface Stocktake {
   id: string; status: StocktakeStatus; branchId: string; warehouseId: string; countDate: string; reference: string | null; notes: string | null; number: string | null; fiscalYearId: string | null;
   snapshotAtUtc: string; stale: boolean; createdBy: string; createdAtUtc: string; submittedBy: string | null; submittedAtUtc: string | null; decidedBy: string | null; decidedAtUtc: string | null; decisionNote: string | null;
   cancelledBy: string | null; cancelledAtUtc: string | null; cancelReason: string | null; revision: number; updatedAtUtc: string; lines: StocktakeLine[]; events: StockDocumentEvent[];
+  /** The one adjustment generated from this approved stocktake, if any (Phase 3.8B-2). */
+  adjustmentId?: string | null; adjustmentNumber?: string | null;
 }
 export interface StocktakeSummary {
   id: string; status: StocktakeStatus; number: string | null; countDate: string; branchId: string; warehouseId: string; reference: string | null; lineCount: number; countedLines: number; varianceLines: number;
@@ -597,17 +601,36 @@ export interface StocktakeLineInput { itemId: string; unitId: string; countedQua
 export interface StocktakeInput { warehouseId: string; countDate: string; reference: string | null; notes: string | null; lines: StocktakeLineInput[] }
 export interface StocktakeQuery { status?: StocktakeStatus; warehouseId?: string; from?: string; to?: string; search?: string; offset?: number; limit?: number }
 /** For each action, the ids of the warehouses on which the caller holds the stocktake permission. */
-export interface StocktakeCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[] }
+export interface StocktakeCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[]; adjust?: string[]; post?: string[]; reverse?: string[] }
+
+// ---- Stock adjustment (Phase 3.8B-2): generated once from an approved stocktake; posted (shortages at the engine cost, surpluses at the entered amount) and reversed like a stock document.
+/** direction: -1 shortage (outflow), 1 surplus (inflow); quantity, countedQuantity and bookQuantity in the base unit; amount is the value booked once posted. */
+export interface StockAdjustmentLine {
+  lineNo: number; itemId: string; itemCode: string; itemNameAr: string | null; itemNameEn: string | null; unitId: string; unitCode: string; direction: -1 | 1; quantity: number; countedQuantity: number;
+  bookQuantity: number; reason: string | null; amount: number | null;
+}
+export interface StockAdjustmentReversal { id: string; issueOperationId: string | null; receiptOperationId: string | null; journalAction: number; journalEntryId: string | null; effectiveDate: string; reversedAtUtc: string; reversedBy: string; reason: string }
+/** accountingState as for stock documents: 1 pending, 2 no journal required, 3 posted, 4 failed, 5 reversed. */
+export interface StockAdjustmentPosting {
+  id: string; effectiveDate: string; postedAtUtc: string; postedBy: string; issueOperationId: string | null; receiptOperationId: string | null; accountingVersionId: string | null; journalEntryId: string | null;
+  journalStatus: number | null; totalValue: number; accountingState: number; reversal: StockAdjustmentReversal | null;
+}
+export interface StockAdjustment {
+  id: string; stocktakeId: string; stocktakeNumber: string | null; branchId: string; warehouseId: string; adjustmentDate: string; number: string; fiscalYearId: string; createdBy: string; createdAtUtc: string;
+  replayed: boolean; lines: StockAdjustmentLine[]; posting: StockAdjustmentPosting | null;
+}
 
 // ---- Inventory accounting configuration (Phase 3.7A): which ledger accounts hold inventory and take the other side of stock movements. Versioned and immutable; nothing is posted by it.
 export interface InventoryAccountingVersion { id: string; versionNo: number; createdAtUtc: string; createdBy: string; note: string | null; groupCount: number; contentHash: string }
 export interface InventoryAccountingConfig {
   version: InventoryAccountingVersion | null; versionNo: number; defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; groups: { groupId: string; accountId: string }[];
+  /** Phase 3.8B-2: the counter account of stock adjustments (null until configured). */
+  adjustmentCounterAccountId?: string | null;
 }
 export interface InventoryAccountingAccountRef { id: string; code: string; nameAr: string | null; nameEn: string | null; type: number }
 export interface InventoryAccountingGroupRef { id: string; code: string; nameAr: string | null; nameEn: string | null; parentId: string | null }
 export interface InventoryAccountingResponse { configuration: InventoryAccountingConfig; canConfigure: boolean; accounts: InventoryAccountingAccountRef[]; groups: InventoryAccountingGroupRef[] }
-export interface InventoryAccountingInput { defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; groups: { groupId: string; accountId: string }[]; note: string | null }
+export interface InventoryAccountingInput { defaultInventoryAccountId: string | null; receiptCounterAccountId: string | null; issueCounterAccountId: string | null; adjustmentCounterAccountId?: string | null; groups: { groupId: string; accountId: string }[]; note: string | null }
 
 export interface StatementMappingVersionInfo { id: string; versionNo: number; createdAtUtc: string; createdBy: string; source: "manual" | "template"; note: string | null; entryCount: number; contentHash: string }
 export interface StatementResponse {
@@ -868,6 +891,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveStocktake: (id: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/approve`, { ifMatch: revision }),
     rejectStocktake: (id: string, note: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    // Stock adjustment (Phase 3.8B-2). Generating carries the STOCKTAKE revision as If-Match and is idempotent; posting (surplus amounts) and reversal act once.
+    generateStockAdjustment: (stocktakeId: string, revision: number) => request<StockAdjustment>("POST", `/api/v1/company/stocktakes/${enc(stocktakeId)}/adjustment`, { ifMatch: revision }),
+    getStockAdjustment: (id: string) => get<StockAdjustment>(`/api/v1/company/stock-adjustments/${enc(id)}`),
+    postStockAdjustment: (id: string, lines: StockPostLineInput[]) => request<StockAdjustment>("POST", `/api/v1/company/stock-adjustments/${enc(id)}/posting`, { body: { lines } }),
+    reverseStockAdjustment: (id: string, effectiveDate: string, reason: string) => request<StockAdjustment>("POST", `/api/v1/company/stock-adjustments/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
     // Inventory accounting configuration (Phase 3.7A). The version number is the If-Match value (0 while nothing is configured).
     getInventoryAccounting: () => get<InventoryAccountingResponse>("/api/v1/company/inventory/accounting"),
     listInventoryAccountingVersions: () => get<{ versions: InventoryAccountingVersion[] }>("/api/v1/company/inventory/accounting/versions"),
