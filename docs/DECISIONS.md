@@ -49,6 +49,17 @@
 | D-042 | العمل الجماعي | GitHub Private، `main` مستقر، فروع منفصلة، Pull Request قبل الدمج |
 | D-043 | بدء البرمجة | **استوفي شرط الاعتماد بتاريخ 2026-11-08**؛ يبدأ التطوير بمهام صغيرة، واختبارات، وفروع Git منفصلة، وفق SRS v1.0 |
 
+## Owner-approved Phase 3.8D additions — 2026-11-17
+
+Source: the owner's explicit approval in the HASM Codex conversation on 2026-11-17. These decisions extend the approved baseline through PR #48; they do not rewrite D-009, D-010, D-017, D-018 or D-020, and do not claim implementation or phase acceptance.
+
+| ID | Subject | Approved decision and mandatory safeguards |
+|---|---|---|
+| D-044 | Back-dated accounting compensation | Restore original accounts and dimensions through separately approved, traceable compensation entries. Preserve original accounting classifications wherever valid and legally permitted. Never modify original posted journals or historical cost operations. Respect Final Closed periods, existing approvals, separation of duties and audit rules. Accounting-standard or jurisdiction-specific restrictions are explicit configuration or release-validation requirements, never assumed away. |
+| D-045 | Prospective valuation-method conversion | Conversion is prospective and preserves existing stock quantity and carrying value. The approved basis is the proposal in PHASE-3.8D-ACCOUNTING-PROPOSAL.md: remaining FIFO totals become the average basis; an average position becomes one auditable opening FIFO conversion layer. Define deterministic contracts for returns, reversals and transfers across conversion, independently review them and pass their mandatory regressions BEFORE conversion execution is activated. Original posted journals and historical cost operations remain immutable. Any separate value revaluation still needs its accounting/approval contract; this decision does not silently approve one. |
+
+The owner authorizes continuing independently safe Phase 3.8D implementation without routine approval questions. PR #48 may merge only when its full approved scope and all exact-head CI/review gates pass. The decisions approve these accounting bases, not unreviewed transition rules, unimplemented execution paths or a security-gate exemption. Numerical examples and remaining contracts: [Phase 3.8D accounting proposal](PHASE-3.8D-ACCOUNTING-PROPOSAL.md).
+
 ## توضيحات اتساق مستمدة من القرارات المعتمدة (ليست قرارات جديدة)
 
 - **D-004 وD-029:** `Hasm_System` تسمية منطقية؛ اسم قاعدة PostgreSQL الفعلي مُرمّز وغير وصفي.

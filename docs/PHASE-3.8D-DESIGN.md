@@ -52,7 +52,15 @@ Transfers, reversals, stock adjustments, tracked items and any negative-obligati
 
 Seventeen new PostgreSQL cases passed on isolated port 5433, zero skips: FIFO/average reconciliation, empty position without creation, unsupported histories, real posted-document provenance and invalid links, scope/company isolation, live revocation, concurrent writer snapshot consistency, read-only isolation, method changes and resource bounds. Registry increases from 962 to 979. Independent full-diff review confirmed the source-provenance and FIFO-work findings fixed, with no remaining Critical/High/Medium in this checkpoint. Final committed-head review and applicable CI are separate gates.
 
-Public preview, transfer/reversal/obligation replay, proposal persistence, approval/execution, method conversion/revaluation and shared UI remain unimplemented. The PR stays Draft; no broader 3.8D capability is claimed complete. Consequential accounting contracts that require owner resolution are described concretely in [PHASE-3.8D-ACCOUNTING-PROPOSAL.md](PHASE-3.8D-ACCOUNTING-PROPOSAL.md); that proposal is not an approved decision.
+Public preview, transfer/reversal/obligation replay, proposal persistence, approval/execution, method conversion/revaluation and shared UI remain unimplemented. The PR stays Draft; no broader 3.8D capability is claimed complete. The owner approved compensation by original accounts/dimensions and prospective quantity/value-preserving conversion as D-044/D-045; [PHASE-3.8D-ACCOUNTING-PROPOSAL.md](PHASE-3.8D-ACCOUNTING-PROPOSAL.md) distinguishes those bases from the still-proposed transition details.
+
+## Ordinary-history comparison and conversion-design checkpoint
+
+`CostImpactPreview` now computes internal read-only before/after trajectories for inserting one ordinary receipt/issue into the complete supported history. It preserves original same-date sequence and inserts after existing ties; revalidates baseline amounts/balances; retains original entry/operation links; includes balance changes even when an event cost is unchanged; and refuses the whole comparison if any revised event would create a shortage. It has no API, production caller, persistence, fiscal approval or execution authority. Its returned history fingerprint is baseline evidence only and does not bind or approve the proposal.
+
+Thirteen comparison unit cases and five numerical conversion-contract fixtures pass; the full unit suite is **905/905**, zero skips. Real PostgreSQL snapshot-to-comparison assertions pass for both methods (2/2), conserving total250: FIFO issue120/inventory130, average issue150/inventory100. This supplements, rather than weakens, the existing 17 snapshot cases; registry remains979. No live financial behavior changes.
+
+[PHASE-3.8D-CONVERSION-CONTRACT.md](PHASE-3.8D-CONVERSION-CONTRACT.md) proposes deterministic cross-basis restitution order, mandatory complete replay for cross-basis inflow reversals, and compensation-entitlement allocation with exact final remainders. Independent review's three Medium clarity findings were addressed with explicit rules/examples and numerical fixtures. Basis-epoch persistence, complete negative/transfer/reversal integration and the mandatory activation matrix remain incomplete. Numerical fixture success is not conversion-execution acceptance.
 
 ## Preserved boundaries
 

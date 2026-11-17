@@ -47,6 +47,13 @@ public class CostHistorySnapshotTests : CostingTestBase
         var again = Snapshot(await reader.LoadAsync(Admin.Id, Company.Id, item.Id, W1.Id));
         Assert.Equal(result.HistoryFingerprint, again.HistoryFingerprint);
         Assert.Equal(result.Entries.ToArray(), again.Entries.ToArray());
+        var comparison = CostImpactPreview.Calculate(result, new ProposedCostEvent(Guid.NewGuid(), D1, CostOperationKind.Receipt, 5, 50));
+        var repricedIssue = Assert.Single(comparison.Changes.Where(e => e.EntryId == result.Entries[^1].EntryId));
+        Assert.Equal(method == CostMethod.Fifo ? 120m : 150m, repricedIssue.ProposedAmount);
+        Assert.Equal((8m, method == CostMethod.Fifo ? 130m : 100m), (comparison.ProposedQuantity, comparison.ProposedValue));
+        Assert.Equal(250m, comparison.ProposedValue + repricedIssue.ProposedAmount);
+        Assert.Equal(result.HistoryFingerprint, comparison.HistoryFingerprint);
+        Assert.Equal(result.Entries[^1].Amount, repricedIssue.OriginalAmount);
         Assert.Equal(before, await Footprint());
         await AssertConsistent();
     }

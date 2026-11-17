@@ -1,5 +1,17 @@
 # HASM — Autonomous execution progress
 
+## Resumed comparison and owner-decision checkpoint (2026-11-17)
+
+Owner resumed development. Reconciled clean branch/main/PR #48 at shutdown head `dca9aa7dd30aed78873124c7e48040684c5cd019`, still Draft. On that exact head six applicable checks, including full PostgreSQL, passed; dependency-scan alone failed. npm confirms latest picomatch is4.0.7, the installed version; audit still reports the High advisory. No exemptions, package downgrades, verification changes or unreviewed replacements were made.
+
+Owner explicitly approved **D-044** (restore original accounts/dimensions by separately approved traceable compensation) and **D-045** (prospective method conversion preserving quantity/carrying value), recorded in DECISIONS.md. Historical cost operations/journals stay immutable; Final Closed periods, approval/audit and legal-validity safeguards remain mandatory. Cross-conversion transition contracts require independent review and all mandatory regressions before activation. No OPEN roadmap decision was silently resolved.
+
+`CostImpactPreview` implements only the internal ordinary-history before/after comparison;13 new unit cases plus5 numerical conversion-contract fixtures bring full unit regression to **905/905**, no skips. The two real snapshot-to-comparison PostgreSQL cases passed (FIFO/average), preserving all existing assertions. No API, production caller, writes, approval token or back-dated activation was added. The history hash is not an executable plan. Full phase remains incomplete.
+
+The new conversion-contract proposal defines ordered restitution, cross-basis inflow reversal requiring full replay, and compensation entitlement allocation with exact final remainders. Independent full-diff review found no Critical/High code defect; three Medium clarity prerequisites were addressed, and a Low wording correction preserves the existing average-reversal proof. Complete epoch/entitlement persistence, full replay, negative-history matrices and activation gates are NOT implemented or accepted merely by the numerical fixtures.
+
+Local environment diagnosis: the isolated5433 server was stopped after reboot; log evidence confirms the earlier full run hit a WAL **PANIC: No space left on device**, followed by recovery-mode connection errors. Started only the verified test cluster via pg_ctl restricted Windows startup; the previously failing provisioning case passed. A new complete local solution run uses Windows assets with standard output directories (`AppendRuntimeIdentifierToOutputPath=false`) and unique TRX files; unit900/900 and API69/69 have passed in that run, PostgreSQL is still running at this checkpoint. The five subsequently added numerical fixtures passed in a separate full unit905 run. Remaining full-PG outcome and new pushed-head CI/review are PENDING. Current free space is monitored; no database files or original checkouts were deleted. All caches/results/temp files stay excluded.
+
 ## Shutdown checkpoint requested by owner (2026-11-17)
 
 Owner requested stopping before the computer shuts down. Development is paused at their request. All implementation is already pushed on PR #48, branch `feature/phase-3-8d-impact-preview`, implementation head **4616cc4c9be03a99a13bd13f483e8d32a048f983**. This final documentation checkpoint is a later normal commit on the same branch; do not restart the phase or duplicate the implementation. Main remains verified at 814bd7c. PR #48 stays Draft and must not merge.
