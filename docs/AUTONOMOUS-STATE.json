@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-17",
   "main": {
-    "verifiedHead": "4b79030d1aa039a9106c5a06f0b472fe9ec1b781",
-    "note": "verify against GitHub at session start; a checkpoint never proves a merge"
+    "verifiedHead": "bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb",
+    "note": "Reviewed PR head 6f57651 exact-head CI green; merge tree equals reviewed tree and ancestry verified; main post-merge workflows still to be observed"
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -67,26 +67,32 @@
       "pr": 45,
       "phase": "3.8B-3",
       "mergeCommit": "4b79030"
+    },
+    {
+      "pr": 46,
+      "phase": "3.9A",
+      "mergeCommit": "bd56a25",
+      "reviewedHead": "6f5765173c470d8511c63d2167bb71c43c1868b5"
     }
   ],
   "active": {
-    "phase": "3.9A - PR 46 CI repair",
-    "branch": "feature/phase-3-9a-party-registry",
-    "pr": 46,
-    "state": "publishing resumed with approved Git access; five PostgreSQL cases passed five times (25/25); complete local suites, final-head CI and committed-head review pending",
+    "phase": "Roadmap/checkpoint reconciliation after 3.9A",
+    "branch": "feature/roadmap-checkpoint-3-9a",
+    "pr": 47,
+    "state": "PR46 merged; PR47 roadmap reconciliation in review; then 3.8D design",
     "knownIssues": [
-      "Full required local suites, exact-head CI and final committed-head independent review pending; no merge yet",
-      "PR-46 four Medium follow-ups recorded in review record for repair before 3.9B",
-      "Sandbox requires approved escalation for Git/network and test configuration. Earlier publishing block resolved; temporary files and caches must stay uncommitted.",
-      "Claude uncommitted changes in C:\\Projects\\Hasm-c are preserved untouched",
-      "Historical follow-ups: PR-42 L1-L6 (L6 done), PR-43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
+      "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
+      "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
+      "Main post-merge Actions must be observed; no production or release claim",
+      "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
+      "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
     ]
   },
   "next": [
-    "Complete 3.9A PR 46 exact-head gates",
-    "Reconcile generated roadmap and progress after merge",
-    "Repair PR-46 Medium findings before 3.9B",
-    "3.8C blocked by OD-11; proceed with next dependency-ready approved phase such as 3.8D"
+    "Merge reviewed roadmap reconciliation with all five always-on checks green",
+    "3.8D design and implementation (3.8C blocked by owner decision OD-11)",
+    "3.8E after 3.8D",
+    "Repair four PR46 Medium follow-ups before starting 3.9B"
   ],
   "openDecisions": [
     "OD-1",

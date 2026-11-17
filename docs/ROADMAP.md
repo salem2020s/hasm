@@ -4,7 +4,7 @@ Status of this file: authoritative, dependency-ordered plan for all remaining ap
 
 Status words: *merged* = on `main` with CI green on the pull request head (checked against GitHub); *built* = on a branch only; *planned* = nothing exists. "Verified" is reserved for Phase 5.3.
 
-## Delivered (merged to main; verified against GitHub on 2026-11-15)
+## Delivered (merged to main; reconciled against GitHub on 2026-11-17)
 | Phase | Content | PR / merge commit |
 |---|---|---|
 | 2.1-2.3C | System database, provisioning, identity, RBAC, security hardening, cryptographic audit | #4-#9 |
@@ -21,10 +21,15 @@ Status words: *merged* = on `main` with CI green on the pull request head (check
 | 3.3 | Excel/PDF export, financial statements, ledger and trial balance completion | #21 (`85035d1`) |
 | 3.4 / 3.4B | Inventory master data and tabs standard; inventory master-data import | #24 (`d4038ed`), #25 (`5f194d6`) |
 | 3.5 | Stock movement documents up to approval (non-posting) | #26 (`4ffc4ec`) |
-| 3.6 | Inventory costing engine (not wired to any document) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
+| 3.6 | Inventory costing engine foundation (wired to documents by Phase 3.7B) | #27 (`2d2f187`, head `e212a49`, 861 PostgreSQL tests) |
+| 3.7A-3.7D | Inventory accounting configuration, atomic posting, reversal/close protection, shared posting UI | #31, #33, #35, #37 |
+| 3.8A | Stock balances and item ledger | #40 (9c43fc9) |
+| 3.8B | Stocktakes, adjustments, negative-stock exception and settlement | #42 (84dbb4e), #43 (981e991), #45 (4b79030) |
+| 3.9A | Shared party identity, local records, central approval, outbox and reconciliation | #46 (bd56a25; reviewed head 6f57651) |
+| 4.0 | Verification infrastructure; full-stack E2E and desktop smoke coverage remain open | #32 (7e05052) |
 | policy docs | GitHub persistence/PR/CI-repair policies; autonomous tracker | #22, #23, #28 |
 
-Merged after the roadmap audit: **3.7A** inventory accounting configuration (PR #31, merge commit `1b27ad2`). Merged: **4.0** verification infrastructure (PR #32, merge commit `7e05052`). In review: **3.7B** (PR #33).
+All phases through 3.8B and Phase 3.9A listed above are merged. PR #46 passed all ten manifest-required checks on exact head 6f57651 and was independently reviewed before merge. Phase 3.8C remains blocked by OPEN decision OD-11; Phase 3.8D is the next dependency-ready inventory phase. The four Medium party-registry follow-ups are scheduled before 3.9B. No Release 1 completion or production-readiness claim is made.
 
 ## Remaining phases (summary)
 Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting and security risk of the phase.
@@ -36,11 +41,11 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 | 3.7C | Reversal, cancellation and period-close protection — **MERGED (PR #35, merge commit 484b4be)** | Critical | 3.7B | company (if state transitions need columns) |
 | 3.7D | Posting UI and capabilities — **MERGED (PR #37, merge commit ab60b55)** | Medium | 3.7C | none |
 | 3.8A | Stock balances and item ledger — **MERGED (PR #40, merge commit 9c43fc9)** | High | 3.7D, 4.0 | none or read models only |
-| 3.8B | Stocktaking, adjustments and the negative-stock exception — **SLICES 3.8B-1 (PR #42, 84dbb4e) and 3.8B-2 (PR #43, 981e991) MERGED; slice 3.8B-3 (negative-stock exception) DESIGNED (docs/PHASE-3.8B-3-DESIGN.md, revision 3, two independent reviews), NOT implemented** | Critical | 3.8A | company, system |
+| 3.8B | Stocktaking, adjustments and the negative-stock exception — **MERGED: 3.8B-1 stocktaking (PR #42, 84dbb4e), 3.8B-2 adjustments (PR #43, 981e991), 3.8B-3 negative-stock exception (PR #45, 4b79030)** | Critical | 3.8A | company, system |
 | 3.8C | Lots, serial numbers, expiry and reservations | High | 3.8A | company |
 | 3.8D | Back-dated movements, impact preview, recalculation, method change and revaluation | Critical | 3.7C, 3.8A | company |
 | 3.8E | Inventory reports and cost-of-sales statement | Medium | 3.8A, 3.8D | none |
-| 3.9A | Party registry (shared identity and company-local record) | Critical | 3.7D | system, company |
+| 3.9A | Party registry (shared identity and company-local record) — **MERGED (PR #46, merge commit bd56a25; exact head 6f57651, all ten required checks green, independent review recorded). Four Medium follow-ups remain before 3.9B; see docs/review-records/PR-46-final.md** | Critical | 3.7D | system, company |
 | 3.9B | Customers and suppliers (company-local accounts) | Medium | 3.9A | company, system |
 | 3.9C | Party import adapter and reusable mapping templates | Medium | 3.9B | company |
 | 3.10 | Tax engine | Critical | 3.2B | company, system |
@@ -94,7 +99,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company 0015, system 0017
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** BUILT; in review as PR #31 on branch feature/phase-3-7a-inventory-accounting. Evidence: CI on head 1df50aa passed (Backend 868 PostgreSQL tests all passed, Frontend, Desktop); two local full runs on the disposable cluster: the first had 2 failures (a test-order flaw in the new concurrent-save test, fixed, and one failure of JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied that was NOT reproduced in 12 isolated runs, nor in the second full run (912 of 912 passed), nor in CI; cause still unknown and the test stays under observation, not declared fixed). Local total 912 = 868 counted by CI + 44 SafetyGateTests excluded by the registry. Independent review (separate agent) found no Blocker/High; Medium/Low findings fixed (group error row index, note-only change recorded, configure implies view); CI count now 869.
+* **Notes:** Historical checkpoint, superseded by the merged status above: BUILT; in review as PR #31 on branch feature/phase-3-7a-inventory-accounting. Evidence: CI on head 1df50aa passed (Backend 868 PostgreSQL tests all passed, Frontend, Desktop); two local full runs on the disposable cluster: the first had 2 failures (a test-order flaw in the new concurrent-save test, fixed, and one failure of JournalAccessTests.Every_journal_operation_is_a_separate_permission_and_posting_and_approval_are_never_implied that was NOT reproduced in 12 isolated runs, nor in the second full run (912 of 912 passed), nor in CI; cause still unknown and the test stays under observation, not declared fixed). Local total 912 = 868 counted by CI + 44 SafetyGateTests excluded by the registry. Independent review (separate agent) found no Blocker/High; Medium/Low findings fixed (group error row index, note-only change recorded, configure implies view); CI count now 869.
 
 ### Phase 3.7B — Atomic inventory posting (core)
 * **Exact approved scope:** SRS 4.4, 7.4, 9.3, 9.6, 9.7, 17.4, 19.2, 19.5; ARCHITECTURE 5, 7, 8
