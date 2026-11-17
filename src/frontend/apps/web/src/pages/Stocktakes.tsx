@@ -6,6 +6,7 @@ import { Banner, Card, ConfirmDialog, Field, Loading, PageHeader } from "../comp
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 import { blankToNull, invName } from "./inventoryCommon";
 import { whName } from "./StockDocuments";
+import { StockAdjustmentPanel } from "./StockAdjustmentPanel";
 
 /**
  * Stocktake (Phase 3.8B-1): the count sheet of one warehouse with the book quantity of the costing ledger as of the count date and the exact variance per item, from draft to approval. ONE implementation for
@@ -140,7 +141,8 @@ export function StocktakesPage() {
 
 const lineOf = (l: Stocktake["lines"][number], known: Map<string, StockItemRef>): LineRow => ({
   key: ++rowKey, unitId: l.unitId, counted: l.countedQuantity === null ? "" : qty(l.countedQuantity), reason: l.reason ?? "", book: l.bookQuantity,
-  item: known.get(l.itemId) ?? { id: l.itemId, code: l.itemCode, nameAr: l.itemNameAr, nameEn: l.itemNameEn, units: [{ id: l.unitId, code: l.unitCode, nameAr: null, nameEn: null, decimals: 10, factor: l.factor, isBase: l.factor === 1 }] },
+  // the server returns the units of every line (follow-up M2 of the 3.8B-1 review), so a reloaded line can be counted in any unit of its item, not only the saved one
+  item: { id: l.itemId, code: l.itemCode, nameAr: l.itemNameAr, nameEn: l.itemNameEn, units: l.units?.length ? l.units : known.get(l.itemId)?.units ?? [{ id: l.unitId, code: l.unitCode, nameAr: null, nameEn: null, decimals: 10, factor: l.factor, isBase: l.factor === 1 }] },
 });
 const formOf = (d: Stocktake, known: Map<string, StockItemRef>): Form => ({ countDate: d.countDate, reference: d.reference ?? "", notes: d.notes ?? "", lines: d.lines.map((l) => lineOf(l, known)) });
 const TAB_OF = (field: string): "details" | "lines" => (field.startsWith("lines") || field === "itemIds" ? "lines" : "details");
@@ -163,7 +165,7 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
-  const [dialog, setDialog] = useState<null | "submit" | "reject" | "cancel">(null);
+  const [dialog, setDialog] = useState<null | "submit" | "reject" | "cancel" | "adjust">(null);
   const [reason, setReason] = useState("");
 
   const load = useCallback(async () => {
@@ -324,6 +326,11 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
         </div>
       ),
     } as TabItem] : []),
+    // Phase 3.8B-2: the one adjustment of the approved stocktake (generated with the action outside the tabs; posted and reversed here)
+    ...(doc?.adjustmentId ? [{
+      id: "adjustment", label: t("stk.tab.adjustment"),
+      content: <StockAdjustmentPanel id={doc.adjustmentId} canPost={on(caps.post ?? [])} canReverse={on(caps.reverse ?? [])} onChanged={onChanged} />,
+    } as TabItem] : []),
   ];
   const activeTab = tabs.some((x) => x.id === tab) ? tab : "details";
 
@@ -344,10 +351,13 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
           {doc && status === 2 && on(caps.update) && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawStocktake(doc.id, rev), t("stk.withdrawn"))}>{t("stk.withdraw")}</button>}
           {doc && status === 2 && on(caps.approve) && <button type="button" className="primary" data-testid="stk-approve" disabled={busy || mine} title={mine ? t("stk.self_approval") : undefined} onClick={() => void act(() => auth.api.approveStocktake(doc.id, rev), t("stk.approved"))}>{t("stk.approve")}</button>}
           {doc && status === 2 && on(caps.approve) && <button type="button" disabled={busy || mine} onClick={() => { setReason(""); setDialog("reject"); }}>{t("stk.reject")}</button>}
-          {doc && status <= 3 && on(caps.cancel) && <button type="button" className="danger" disabled={busy} onClick={() => { setReason(""); setDialog("cancel"); }}>{t("stk.cancel")}</button>}
+          {doc && status === 3 && !doc.adjustmentId && on(caps.adjust ?? []) && <button type="button" className="primary" data-testid="stk-adjust" disabled={busy} title={t("stk.adjust_message")} onClick={() => setDialog("adjust")}>{t("stk.adjust")}</button>}
+          {doc && status <= 3 && !doc.adjustmentId && on(caps.cancel) && <button type="button" className="danger" disabled={busy} onClick={() => { setReason(""); setDialog("cancel"); }}>{t("stk.cancel")}</button>}
         </div>
         {doc && status === 2 && mine && on(caps.approve) && <p className="hint" data-testid="stk-self-approval">{t("stk.self_approval")}</p>}
+        {doc?.adjustmentId && on(caps.cancel) && <p className="hint" data-testid="stk-cancel-blocked">{t("stk.adj.cancel_blocked")}</p>}
       </form>
+      {dialog === "adjust" && doc && <ConfirmDialog title={t("stk.adjust")} message={t("stk.adjust_message")} confirmLabel={t("form.confirm")} onCancel={() => setDialog(null)} onConfirm={() => void act(() => auth.api.generateStockAdjustment(doc.id, rev), t("stk.adjusted")).then(() => setTab("adjustment"))} />}
       {dialog === "submit" && doc && <ConfirmDialog title={t("stk.submit")} message={t("stk.submit_message")} confirmLabel={t("form.confirm")} onCancel={() => setDialog(null)} onConfirm={() => void act(() => auth.api.submitStocktake(doc.id, rev), t("stk.submitted"))} />}
       {(dialog === "reject" || dialog === "cancel") && doc && (
         <ConfirmDialog title={dialog === "reject" ? t("stk.reject") : t("stk.cancel")} message={dialog === "reject" ? t("stk.reject_message") : t("stk.cancel_message")} confirmLabel={t("form.confirm")}

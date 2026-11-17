@@ -87,10 +87,10 @@ public class StockDocumentValidationTests
     [Fact]
     public void The_stock_document_numbering_types_are_registered_with_their_prefixes_and_stay_out_of_the_approval_policy_engine()
     {
-        Assert.Equal(["journal_entry", "stock_receipt", "stock_issue", "stock_transfer", "stocktake"], DocumentTypes.All);
-        Assert.Equal(["JV", "SR", "SI", "ST", "STK"], DocumentTypes.All.Select(DocumentTypes.DefaultPrefix));
+        Assert.Equal(["journal_entry", "stock_receipt", "stock_issue", "stock_transfer", "stocktake", "stock_adjustment"], DocumentTypes.All);
+        Assert.Equal(["JV", "SR", "SI", "ST", "STK", "SA"], DocumentTypes.All.Select(DocumentTypes.DefaultPrefix));
         Assert.True(DocumentTypes.UsesApprovalPolicies(DocumentTypes.JournalEntry));
-        Assert.All(new[] { DocumentTypes.StockReceipt, DocumentTypes.StockIssue, DocumentTypes.StockTransfer, DocumentTypes.Stocktake }, d => Assert.False(DocumentTypes.UsesApprovalPolicies(d)));
+        Assert.All(new[] { DocumentTypes.StockReceipt, DocumentTypes.StockIssue, DocumentTypes.StockTransfer, DocumentTypes.Stocktake, DocumentTypes.StockAdjustment }, d => Assert.False(DocumentTypes.UsesApprovalPolicies(d)));
         Assert.Equal("stock_transfer", StockDocumentService.DocTypeOf(StockDocType.Transfer));
         Assert.Equal(1140, StockAuditEvents.Of(StockEventKind.Created));
         Assert.Equal(1146, StockAuditEvents.Of(StockEventKind.Cancelled));

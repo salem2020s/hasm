@@ -31,12 +31,13 @@ public sealed record StocktakeSheetInput(IReadOnlyList<Guid>? ItemIds);
 /// only if a movement dated on or before the count date was posted or reversed after the snapshot. Information only: the adjustment of 3.8B-2 uses the current book quantity.
 /// </summary>
 public sealed record StocktakeLineView(int LineNo, Guid ItemId, string ItemCode, string? ItemNameAr, string? ItemNameEn, Guid UnitId, string UnitCode, decimal? CountedQuantity, decimal Factor, decimal? CountedBaseQuantity,
-    decimal BookQuantity, decimal? Variance, string BaseUnitCode, string? Reason, decimal CurrentBookQuantity, bool Stale);
+    decimal BookQuantity, decimal? Variance, string BaseUnitCode, string? Reason, decimal CurrentBookQuantity, bool Stale, IReadOnlyList<StockUnitRef>? Units = null);
 
 public sealed record StocktakeView(
     Guid Id, int Status, Guid BranchId, Guid WarehouseId, string CountDate, string? Reference, string? Notes, string? Number, Guid? FiscalYearId, DateTimeOffset SnapshotAtUtc,
     Guid CreatedBy, DateTimeOffset CreatedAtUtc, Guid? SubmittedBy, DateTimeOffset? SubmittedAtUtc, Guid? DecidedBy, DateTimeOffset? DecidedAtUtc, string? DecisionNote,
-    Guid? CancelledBy, DateTimeOffset? CancelledAtUtc, string? CancelReason, long Revision, DateTimeOffset UpdatedAtUtc, IReadOnlyList<StocktakeLineView> Lines, IReadOnlyList<StockEventView> Events)
+    Guid? CancelledBy, DateTimeOffset? CancelledAtUtc, string? CancelReason, long Revision, DateTimeOffset UpdatedAtUtc, IReadOnlyList<StocktakeLineView> Lines, IReadOnlyList<StockEventView> Events,
+    Guid? AdjustmentId = null, string? AdjustmentNumber = null)
 {
     public bool Stale => Lines.Any(l => l.Stale);
 }
@@ -47,8 +48,10 @@ public sealed record StocktakeSummary(Guid Id, int Status, string? Number, strin
 public sealed record StocktakeFilter(int? Status, Guid? WarehouseId, string? From, string? To, string? Search, IReadOnlyCollection<Guid>? VisibleWarehouses, int Offset, int Limit);
 public sealed record StocktakePage(IReadOnlyList<StocktakeSummary> Items, long Total);
 
-/// <summary>For each action, the warehouses on which the caller holds the stocktake permission.</summary>
-public sealed record StocktakeCapabilities(IReadOnlyList<Guid> View, IReadOnlyList<Guid> Create, IReadOnlyList<Guid> Update, IReadOnlyList<Guid> Submit, IReadOnlyList<Guid> Approve, IReadOnlyList<Guid> Cancel);
+/// <summary>For each action, the warehouses on which the caller holds the stocktake permission.
+/// <see cref="Adjust"/> (Phase 3.8B-2): where the caller may generate the adjustment of an approved stocktake (stocktake view plus <c>company.stockdocs.create</c> on the warehouse); <see cref="Post"/> and <see cref="Reverse"/>: where it may post or reverse that adjustment (<c>company.stockdocs.post</c> / <c>.reverse</c>).</summary>
+public sealed record StocktakeCapabilities(IReadOnlyList<Guid> View, IReadOnlyList<Guid> Create, IReadOnlyList<Guid> Update, IReadOnlyList<Guid> Submit, IReadOnlyList<Guid> Approve, IReadOnlyList<Guid> Cancel,
+    IReadOnlyList<Guid>? Adjust = null, IReadOnlyList<Guid>? Post = null, IReadOnlyList<Guid>? Reverse = null);
 
 /// <summary>Pure validation (no database): the shape of a stocktake and its lines.</summary>
 public static class StocktakeValidation

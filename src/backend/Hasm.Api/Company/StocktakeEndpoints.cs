@@ -55,8 +55,10 @@ public static class StocktakeEndpoints
         {
             lineNo = l.LineNo, itemId = l.ItemId, itemCode = l.ItemCode, itemNameAr = l.ItemNameAr, itemNameEn = l.ItemNameEn, unitId = l.UnitId, unitCode = l.UnitCode, countedQuantity = l.CountedQuantity, factor = l.Factor,
             countedBaseQuantity = l.CountedBaseQuantity, bookQuantity = l.BookQuantity, variance = l.Variance, baseUnitCode = l.BaseUnitCode, reason = l.Reason, currentBookQuantity = l.CurrentBookQuantity, stale = l.Stale,
+            units = (l.Units ?? []).Select(u => new { id = u.Id, code = u.Code, nameAr = u.NameAr, nameEn = u.NameEn, decimals = u.Decimals, factor = u.Factor, isBase = u.IsBase }),
         }),
         events = d.Events.Select(e => new { id = e.Id, kind = e.Kind, fromStatus = e.FromStatus, toStatus = e.ToStatus, actorUserId = e.ActorUserId, atUtc = e.AtUtc, note = e.Note }),
+        adjustmentId = d.AdjustmentId, adjustmentNumber = d.AdjustmentNumber,
     };
 
     private sealed class CreatedEtag(string location, long revision, object body) : IResult
@@ -75,7 +77,7 @@ public static class StocktakeEndpoints
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         var c = await svc.CapabilitiesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted);
-        return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, approve = c.Approve, cancel = c.Cancel });
+        return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, approve = c.Approve, cancel = c.Cancel, adjust = c.Adjust, post = c.Post, reverse = c.Reverse });
     }
 
     private static async Task<IResult> Warehouses(HttpContext http, AccessService access, StocktakeManagementService svc)

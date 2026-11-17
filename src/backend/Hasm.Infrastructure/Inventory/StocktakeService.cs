@@ -106,7 +106,33 @@ public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAu
             await using var er = await ec.ExecuteReaderAsync(ct);
             while (await er.ReadAsync(ct)) events.Add(new StockEventView(er.GetInt64(0), er.GetInt16(1), er.IsDBNull(2) ? null : er.GetInt16(2), er.GetInt16(3), er.GetGuid(4), er.GetFieldValue<DateTimeOffset>(5), Str(er, 6)));
         }
-        return h with { Lines = lines, Events = events };
+        // the units each line may be counted in (follow-up M2 of the 3.8B-1 review): the base unit, the active alternate units and always the unit the line was saved in, with their exact factors
+        var units = new Dictionary<Guid, List<StockUnitRef>>();
+        if (lines.Count > 0)
+        {
+            await using var uq = new NpgsqlCommand(
+                $"SELECT i.{I.Id}, u.{U.Id}, u.{U.Code}, u.{U.NameAr}, u.{U.NameEn}, u.{U.Decimals}, 1::numeric, true, u.{U.IsActive} FROM {I.Table} i JOIN {U.Table} u ON u.{U.Id} = i.{I.BaseUnitId} WHERE i.{I.Id} = ANY(@ids) " +
+                $"UNION ALL SELECT iu.{IU.ItemId}, u.{U.Id}, u.{U.Code}, u.{U.NameAr}, u.{U.NameEn}, u.{U.Decimals}, iu.{IU.Factor}, false, u.{U.IsActive} FROM {IU.Table} iu JOIN {U.Table} u ON u.{U.Id} = iu.{IU.UnitId} WHERE iu.{IU.ItemId} = ANY(@ids) " +
+                "ORDER BY 1, 8 DESC, 3", conn, tx);
+            uq.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = lines.Select(l => l.ItemId).Distinct().ToArray() });
+            var saved = lines.ToDictionary(l => l.ItemId, l => l.UnitId);
+            await using var ur = await uq.ExecuteReaderAsync(ct);
+            while (await ur.ReadAsync(ct))
+            {
+                var item = ur.GetGuid(0); var unit = ur.GetGuid(1); var isBase = ur.GetBoolean(7);
+                if (!isBase && !ur.GetBoolean(8) && saved.GetValueOrDefault(item) != unit) continue;
+                if (!units.TryGetValue(item, out var list)) units[item] = list = [];
+                list.Add(new StockUnitRef(unit, ur.GetString(2), Str(ur, 3), Str(ur, 4), ur.GetInt16(5), ur.GetDecimal(6), isBase));
+            }
+        }
+        Guid? adjustment = null; string? adjustmentNumber = null;
+        await using (var aq = new NpgsqlCommand($"SELECT {CompanySchema.StockAdjustment.Id}, {CompanySchema.StockAdjustment.Number} FROM {CompanySchema.StockAdjustment.Table} WHERE {CompanySchema.StockAdjustment.StocktakeId} = @id", conn, tx))
+        {
+            aq.Parameters.AddWithValue("id", id);
+            await using var ar = await aq.ExecuteReaderAsync(ct);
+            if (await ar.ReadAsync(ct)) { adjustment = ar.GetGuid(0); adjustmentNumber = Str(ar, 1); }
+        }
+        return h with { Lines = [.. lines.Select(l => l with { Units = units.GetValueOrDefault(l.ItemId) ?? [] })], Events = events, AdjustmentId = adjustment, AdjustmentNumber = adjustmentNumber };
     }
 
     public async Task<StocktakeView?> GetAsync(Guid companyId, Guid id, CancellationToken ct = default)
@@ -184,7 +210,7 @@ public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAu
     }
 
     /// <summary>The book quantity (base unit) of each item in the warehouse as of the date, from the append-only costing ledger (absent = zero).</summary>
-    private static async Task<Dictionary<Guid, decimal>> BookAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid warehouseId, DateOnly asOf, IReadOnlyCollection<Guid>? items, CancellationToken ct)
+    internal static async Task<Dictionary<Guid, decimal>> BookAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid warehouseId, DateOnly asOf, IReadOnlyCollection<Guid>? items, CancellationToken ct)
     {
         var filter = items is null ? "" : $" AND {CE.ItemId} = ANY(@ids)";
         var having = items is null ? $" HAVING SUM({CE.Direction} * {CE.Quantity}) <> 0" : "";
@@ -494,6 +520,8 @@ public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAu
         return Transition(companyId, id, expectedRevision, null, async (work, cur) =>
         {
             if (cur.Status is not (1 or 2 or 3)) throw new Abort(ConfigStatus.Conflict, "invalid_status");
+            // the count is booked (or about to be booked) by its adjustment: the stocktake stays as the record of that count (PostgreSQL enforces this too)
+            if (cur.AdjustmentId is not null) throw new Abort(ConfigStatus.Conflict, "adjustment_exists");
             if (cur.Status == 3 && cur.Number is { } number)
                 await NumberingService.VoidAsync(work.Connection, work.Transaction, DocumentTypes.Stocktake, number, actor, r.Length > 200 ? r[..200] : r, Now, ct);
             await SetStatus(work, id, StocktakeStatus.Cancelled, Now, $"{S.CancelledBy} = @who, {S.CancelledAtUtc} = @now, {S.CancelReason} = @why", c => { c.Parameters.AddWithValue("who", actor); c.Parameters.AddWithValue("why", r); }, ct);
@@ -528,7 +556,10 @@ public sealed class StocktakeManagementService(AccessService access, StockDocume
         var all = (await documents.ListWarehousesAsync(company, ct)).Select(w => w.Id).ToList();
         IReadOnlyList<Guid> Of(string code) => [.. all.Where(w => eff.Has(code, ScopeTarget.Warehouse(w)))];
         return new StocktakeCapabilities(Of(PermissionCatalog.Codes.StocktakeView), Of(PermissionCatalog.Codes.StocktakeCreate), Of(PermissionCatalog.Codes.StocktakeUpdate),
-            Of(PermissionCatalog.Codes.StocktakeSubmit), Of(PermissionCatalog.Codes.StocktakeApprove), Of(PermissionCatalog.Codes.StocktakeCancel));
+            Of(PermissionCatalog.Codes.StocktakeSubmit), Of(PermissionCatalog.Codes.StocktakeApprove), Of(PermissionCatalog.Codes.StocktakeCancel),
+            // Phase 3.8B-2: the adjustment of an approved stocktake (no new permission: generating creates a stock movement document, posting and reversing are those of stock documents)
+            [.. all.Where(w => eff.Has(PermissionCatalog.Codes.StocktakeView, ScopeTarget.Warehouse(w)) && eff.Has(PermissionCatalog.Codes.StockDocsCreate, ScopeTarget.Warehouse(w)))],
+            Of(PermissionCatalog.Codes.StockDocsPost), Of(PermissionCatalog.Codes.StockDocsReverse));
     }
 
     private Task<bool> AllowedAsync(Guid user, Guid company, string code, Guid warehouse, CancellationToken ct) => access.IsAllowedAsync(user, company, code, ScopeTarget.Warehouse(warehouse), ct);

@@ -17,7 +17,7 @@ public sealed partial class StockPostingService
 {
     public static string ReversalKeyOf(Guid documentId) => $"stock_document_reversal:{documentId}";
 
-    private static async Task<Guid?> PeriodOfAsync(CompanyAuditedWork work, DateOnly date, CancellationToken ct)
+    internal static async Task<Guid?> PeriodOfAsync(CompanyAuditedWork work, DateOnly date, CancellationToken ct)
     {
         await using var q = new NpgsqlCommand($"SELECT {FP.Id} FROM {FP.Table} WHERE {FP.StartDate} <= @d AND {FP.EndDate} >= @d", work.Connection, work.Transaction);
         q.Parameters.AddWithValue("d", date);

@@ -63,7 +63,7 @@ describe("inventory accounting configuration", () => {
     expect(screen.getByLabelText("حساب المخزون الافتراضي")).toHaveValue("a2");                                   // switching tabs kept the edit
     await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
     await waitFor(() => expect(client.putInventoryAccounting).toHaveBeenCalledWith({
-      defaultInventoryAccountId: "a2", receiptCounterAccountId: "a3", issueCounterAccountId: "a4", note: null,
+      defaultInventoryAccountId: "a2", receiptCounterAccountId: "a3", issueCounterAccountId: "a4", adjustmentCounterAccountId: null, note: null,
       groups: expect.arrayContaining([{ groupId: "g1", accountId: "a2" }, { groupId: "g2", accountId: "a1" }]),
     }, 3));
   });
@@ -125,5 +125,16 @@ describe("inventory accounting configuration", () => {
       expect(document.documentElement.dir).toBe("ltr");
       expect(within(screen.getByLabelText("Default inventory account")).getByRole("option", { name: "1301 — Merchandise stock" })).toBeInTheDocument();
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+
+  it("configures the stock adjustment counter account (Phase 3.8B-2) as part of the next version", async () => {
+    const client = setup(configured);
+    await go("#/inventory/accounting");
+    await screen.findByTestId("inventory-accounting");
+    const adj = screen.getByLabelText("الحساب المقابل لتسويات الجرد");
+    expect(adj).toHaveValue("");                                                                                   // versions saved before have none
+    await userEvent.selectOptions(adj, "a4");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.putInventoryAccounting).toHaveBeenCalledWith(expect.objectContaining({ adjustmentCounterAccountId: "a4", issueCounterAccountId: "a4" }), 3));
   });
 });

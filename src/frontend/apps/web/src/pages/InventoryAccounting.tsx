@@ -11,9 +11,9 @@ import { blankToNull, groupTree, invName } from "./inventoryCommon";
  * accounts of receipts and issues. Every save is a new immutable VERSION (so a later posting is traceable to the exact configuration it used); every rule (asset accounts for inventory, active postable accounts,
  * base-currency accounts, versioning, concurrency, audit, authorization) is enforced by the server. This screen posts nothing: it only prepares the accounts a later posting slice needs.
  */
-interface Form { def: string; receipt: string; issue: string; note: string; groups: Record<string, string> }
+interface Form { def: string; receipt: string; issue: string; adjustment: string; note: string; groups: Record<string, string> }
 const toForm = (c: InventoryAccountingResponse["configuration"] | null): Form => ({
-  def: c?.defaultInventoryAccountId ?? "", receipt: c?.receiptCounterAccountId ?? "", issue: c?.issueCounterAccountId ?? "", note: "", groups: Object.fromEntries((c?.groups ?? []).map((g) => [g.groupId, g.accountId])),
+  def: c?.defaultInventoryAccountId ?? "", receipt: c?.receiptCounterAccountId ?? "", issue: c?.issueCounterAccountId ?? "", adjustment: c?.adjustmentCounterAccountId ?? "", note: "", groups: Object.fromEntries((c?.groups ?? []).map((g) => [g.groupId, g.accountId])),
 });
 const snapshot = (f: Form) => JSON.stringify({ ...f, groups: Object.entries(f.groups).sort() });
 
@@ -73,7 +73,7 @@ export function InventoryAccountingPage() {
     setBusy(true); setError(null); setConflict(false); setNotice(null);
     try {
       await auth.api.putInventoryAccounting({
-        defaultInventoryAccountId: form.def || null, receiptCounterAccountId: form.receipt || null, issueCounterAccountId: form.issue || null, note: blankToNull(form.note),
+        defaultInventoryAccountId: form.def || null, receiptCounterAccountId: form.receipt || null, issueCounterAccountId: form.issue || null, adjustmentCounterAccountId: form.adjustment || null, note: blankToNull(form.note),
         groups: Object.entries(form.groups).filter(([, a]) => a).map(([groupId, accountId]) => ({ groupId, accountId })),
       }, data!.configuration.versionNo);
       await load();
@@ -98,6 +98,7 @@ export function InventoryAccountingPage() {
           {select("ia-default", t("invacc.default_inventory"), form.def, assets, (v) => setForm((f) => ({ ...f, def: v })), errors.defaultInventoryAccountId, t("invacc.default_hint"))}
           {select("ia-receipt", t("invacc.receipt_counter"), form.receipt, data.accounts, (v) => setForm((f) => ({ ...f, receipt: v })), errors.receiptCounterAccountId, t("invacc.receipt_hint"))}
           {select("ia-issue", t("invacc.issue_counter"), form.issue, data.accounts, (v) => setForm((f) => ({ ...f, issue: v })), errors.issueCounterAccountId, t("invacc.issue_hint"))}
+          {select("ia-adjustment", t("invacc.adjustment_counter"), form.adjustment, data.accounts, (v) => setForm((f) => ({ ...f, adjustment: v })), errors.adjustmentCounterAccountId, t("invacc.adjustment_hint"))}
           <Field id="ia-note" label={t("invacc.note")}>{(aria) => <input {...aria} value={form.note} readOnly={!canEdit} maxLength={500} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />}</Field>
         </div>
       ),

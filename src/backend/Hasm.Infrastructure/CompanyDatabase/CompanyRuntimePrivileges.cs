@@ -108,6 +108,12 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.Stocktake.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.StocktakeLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
         (CompanySchema.StocktakeEvent.Table, ["SELECT", "INSERT"]),
+        // Stock adjustments (Phase 3.8B-2): the adjustment of an approved stocktake, its lines, its posting record, posting lines and reversal are all append-only.
+        (CompanySchema.StockAdjustment.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockAdjustmentLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockAdjustmentPosting.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockAdjustmentPostingLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.StockAdjustmentReversal.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

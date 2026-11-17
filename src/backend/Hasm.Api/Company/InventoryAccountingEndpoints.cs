@@ -38,7 +38,7 @@ public static class InventoryAccountingEndpoints
     {
         version = v.Version is null ? null : new { id = v.Version.Id, versionNo = v.Version.VersionNo, createdAtUtc = v.Version.CreatedAtUtc, createdBy = v.Version.CreatedBy, note = v.Version.Note, groupCount = v.Version.GroupCount, contentHash = v.Version.ContentHash },
         versionNo = v.Version?.VersionNo ?? 0,
-        defaultInventoryAccountId = v.DefaultInventoryAccountId, receiptCounterAccountId = v.ReceiptCounterAccountId, issueCounterAccountId = v.IssueCounterAccountId,
+        defaultInventoryAccountId = v.DefaultInventoryAccountId, receiptCounterAccountId = v.ReceiptCounterAccountId, issueCounterAccountId = v.IssueCounterAccountId, adjustmentCounterAccountId = v.AdjustmentCounterAccountId,
         groups = v.GroupAccounts.Select(g => new { groupId = g.Key, accountId = g.Value }),
     };
 
@@ -50,7 +50,7 @@ public static class InventoryAccountingEndpoints
         if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, Body);
         var canConfigure = await svc.CanConfigureAsync(actor.UserId, actor.CompanyId, http.RequestAborted);
         var cfg = r.Value!;
-        var used = cfg.GroupAccounts.Values.Concat(new[] { cfg.DefaultInventoryAccountId, cfg.ReceiptCounterAccountId, cfg.IssueCounterAccountId }.Where(x => x is not null).Select(x => x!.Value)).Distinct().ToList();
+        var used = cfg.GroupAccounts.Values.Concat(new[] { cfg.DefaultInventoryAccountId, cfg.ReceiptCounterAccountId, cfg.IssueCounterAccountId, cfg.AdjustmentCounterAccountId }.Where(x => x is not null).Select(x => x!.Value)).Distinct().ToList();
         var lookups = (await svc.LookupsAsync(actor.UserId, actor.CompanyId, used, http.RequestAborted)).Value;
         http.Response.Headers.ETag = $"\"{r.Value!.Version?.VersionNo ?? 0}\"";
         return Results.Json(new
