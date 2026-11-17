@@ -1,5 +1,13 @@
 # HASM — Autonomous execution progress
 
+## 3.8D-1 internal arithmetic checkpoint (PR #48, 2026-11-17)
+
+The limited internal receipt/issue replay primitive and 17 exact-value/boundary cases are implemented, reusing `CostingMath`; full local unit regression passed 885/885, no skips. It has no production caller, database/API/journal access or scheduler. Existing back-dated and method-change barriers remain. All public preview, snapshot, transfer/reversal/negative-obligation integration, persistence, approval/execution and UI work is still pending; PR #48 remains Draft.
+
+Independent design review identified a High risk of independently postable adjustment drafts; the proposal now explicitly requires non-postable proposal storage until atomic guarded execution-group materialization exists, with whole-group stale-approval invalidation. The reviewer approved only the safe internal arithmetic slice. A Medium numeric-range finding was fixed using existing engine input bounds and stable aggregate-range refusal, with boundary fixtures. Remaining reconciliation, obligation-transition, scheduler and approval-binding design contracts are explicit prerequisites before persistence/execution; no consequential accounting policy has been approved by the agent. Final committed-checkpoint review and applicable CI are still required.
+
+All post-merge Backend, Frontend, Desktop and Verification workflows passed on main merge `814bd7c` (PR #47), as well as on `bd56a25` (PR #46). The worktree cache was removed; test artifacts and scratch files remain ignored and uncommitted.
+
 ## Reconciliation merged; next approved phase started (2026-11-17)
 
 PR #47 merged as `814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb`, from reviewed head `8b1913b2dc3782312d6f1d5865956f3a448b3f37`. All five applicable exact-head checks passed; independent review and self-review were recorded in the PR description, and the final record is preserved in `review-records/PR-47-final.md`. Generator and traceability now distinguish merged functionality from incomplete acceptance scenarios; no approved requirement or OPEN owner decision changed. PR #46's post-merge Backend, Frontend, Desktop and Verification workflows all passed.

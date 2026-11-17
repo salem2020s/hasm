@@ -3,7 +3,7 @@
   "updatedAt": "2026-11-17",
   "main": {
     "verifiedHead": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
-    "note": "PR47 exact-head five-check CI/review green; merged ancestry verified. PR46 merge bd56a25 post-merge Backend/Frontend/Desktop/Verification all passed. Observe PR47 post-merge workflows separately."
+    "note": "PR47 reviewed head8b1913b merged tree/ancestry verified; post-merge Backend/Frontend/Desktop/Verification all passed on814bd7c, also on PR46 mergebd56a25."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -84,21 +84,21 @@
   "active": {
     "phase": "3.8D impact-preview design",
     "branch": "feature/phase-3-8d-impact-preview",
-    "pr": null,
-    "state": "Design proposal prepared; implementation not started; independent design review pending",
+    "pr": 48,
+    "state": "3.8D-1 internal arithmetic primitive implemented;17 new cases, full unit885/885 passed; final checkpoint review/CI pending; PR stays Draft",
     "knownIssues": [
       "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
       "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "PR47 post-merge Actions must be observed; PR46 post-merge workflows all passed",
+      "3.8D history/snapshot loader, authorization integration, complete replay and execution contracts remain unimplemented; no public backdated feature",
       "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
       "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
     ]
   },
   "next": [
-    "Review 3.8D design; implement read-only preview without enabling backdated posting",
-    "Complete replay, approved adjustments, execution and separately reviewed method-change/revaluation design",
-    "3.8C blocked by OD-11;3.8E requires3.8D",
-    "Repair four PR46 Medium follow-ups before3.9B"
+    "Review and verify current internal arithmetic checkpoint on exact pushed head",
+    "Implement authorized consistent read-only history snapshot adapter, refusing unsupported history without data leakage",
+    "Resolve/review reconciliation, negative-obligation transitions, scheduler and execution-group contracts before any persistence/execution",
+    "3.8C remains blocked by OD-11; four PR46 Medium fixes required before3.9B"
   ],
   "openDecisions": [
     "OD-1",
