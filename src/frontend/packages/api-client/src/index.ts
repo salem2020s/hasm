@@ -603,6 +603,37 @@ export interface StocktakeQuery { status?: StocktakeStatus; warehouseId?: string
 /** For each action, the ids of the warehouses on which the caller holds the stocktake permission. */
 export interface StocktakeCapabilities { view: string[]; create: string[]; update: string[]; submit: string[]; approve: string[]; cancel: string[]; adjust?: string[]; post?: string[]; reverse?: string[] }
 
+// ---- Party registry (Phase 3.9A): company-local party records linked to a shared identity of the central registry; central proposal and approval. No balance is ever part of a shared identity.
+export type PartyKind = 1 | 2;
+export type PartyLinkState = 1 | 2 | 3;
+export interface SharedIdentity { globalPartyId: string; kind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status: 1 | 2; revision: number }
+export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null }
+export interface PartyRequest {
+  id: string; kind: 1 | 2; status: 1 | 2 | 3; outcome: 1 | 2 | 3 | null; partyKind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null;
+  proposedStatus: 1 | 2; note: string | null; attempts: number; lastAttemptAtUtc: string | null; lastErrorCode: string | null; createdBy: string; createdAtUtc: string; deliveredAtUtc: string | null; completedAtUtc: string | null;
+  /** Revision of the shared identity a change was based on; the central decision note of a rejection. */
+  basedOnRevision?: number | null; decisionNote?: string | null;
+}
+export interface LocalParty {
+  id: string; code: string; displayName: string; notes: string | null; isActive: boolean; linkState: PartyLinkState; globalPartyId: string | null; revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string;
+  identity: SharedIdentity | null; requests: PartyRequest[];
+  /** The registry could not be read: the shared identity is not shown. */
+  registryUnavailable?: boolean;
+}
+export interface LocalPartySummary { id: string; code: string; displayName: string; isActive: boolean; linkState: PartyLinkState; legalNameAr: string | null; legalNameEn: string | null; hasOpenRequest: boolean; revision: number; updatedAtUtc: string }
+export interface LocalPartyInput { code: string; displayName: string; notes: string | null; isActive: boolean; identity?: SharedIdentityInput }
+export interface PartyCapabilities { view: boolean; create: boolean; update: boolean; submit: boolean; configure: boolean }
+export interface PartySyncResult { delivered: number; applied: number; failed: number; waiting: number; registryUnavailable?: boolean }
+export interface PartyReconciliationFinding { code: string; localPartyId: string | null; requestId: string | null; globalPartyId: string | null; repairable: boolean; repaired: boolean; proposalId?: string | null }
+export interface PartyReconciliation { repairRequested: boolean; registryUnavailable?: boolean; findings: PartyReconciliationFinding[] }
+export interface PartyProposalSummary { id: string; companyId: string; companyNameAr: string | null; companyNameEn: string | null; kind: 1 | 2; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; proposedAtUtc: string; status: 1 | 2 | 3; revision: number }
+export interface PartyProposal extends PartyProposalSummary {
+  localPartyId: string; targetGlobalPartyId: string | null; partyKind: PartyKind; proposedStatus: 1 | 2; note: string | null; proposedBy: string; proposedByName: string | null; resolution: 1 | 2 | 3 | null;
+  outcomeGlobalPartyId: string | null; decidedBy: string | null; decidedAtUtc: string | null; decisionNote: string | null; target: SharedIdentity | null; matches: SharedIdentity[];
+  /** Change proposals: the identity revision the change was based on (a different current revision cannot be approved). */
+  basedOnRevision?: number | null;
+}
+
 // ---- Stock adjustment (Phase 3.8B-2): generated once from an approved stocktake; posted (shortages at the engine cost, surpluses at the entered amount) and reversed like a stock document.
 /** direction: -1 shortage (outflow), 1 surplus (inflow); quantity, countedQuantity and bookQuantity in the base unit; amount is the value booked once posted. */
 export interface StockAdjustmentLine {
@@ -909,6 +940,23 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveStocktake: (id: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/approve`, { ifMatch: revision }),
     rejectStocktake: (id: string, note: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    // Party registry (Phase 3.9A). Changes carry the local party (or proposal) revision as If-Match; the company comes only from the session; the central queue is for identity administrators.
+    getPartyCapabilities: () => get<PartyCapabilities>("/api/v1/company/parties/capabilities"),
+    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number } = {}) => {
+      const qs = [q.search ? `search=${enc(q.search)}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
+      return get<{ parties: LocalPartySummary[]; total: number; registryUnavailable?: boolean }>(`/api/v1/company/parties${qs ? "?" + qs : ""}`);
+    },
+    getParty: (id: string) => get<LocalParty>(`/api/v1/company/parties/${enc(id)}`),
+    createParty: (input: LocalPartyInput) => request<LocalParty>("POST", "/api/v1/company/parties", { body: input }),
+    updateParty: (id: string, input: LocalPartyInput, revision: number) => request<LocalParty>("PUT", `/api/v1/company/parties/${enc(id)}`, { body: input, ifMatch: revision }),
+    proposeParty: (id: string, identity: SharedIdentityInput, revision: number) => request<LocalParty>("POST", `/api/v1/company/parties/${enc(id)}/propose`, { body: identity, ifMatch: revision }),
+    syncParties: () => request<PartySyncResult>("POST", "/api/v1/company/parties/sync"),
+    reconcileParties: (repair: boolean) => request<PartyReconciliation>("POST", `/api/v1/company/parties/reconcile?repair=${repair}`),
+    listPartyProposals: (status?: 1 | 2 | 3) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals${status ? `?status=${status}` : ""}`),
+    getPartyProposal: (id: string) => get<PartyProposal>(`/api/v1/admin/parties/proposals/${enc(id)}`),
+    approvePartyProposal: (id: string, linkTo: string | null, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/approve`, { body: { linkTo }, ifMatch: revision }),
+    rejectPartyProposal: (id: string, note: string, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
+    searchSharedIdentities: (term: string) => get<{ identities: SharedIdentity[] }>(`/api/v1/admin/parties/search?term=${enc(term)}`),
     // Stock adjustment (Phase 3.8B-2). Generating carries the STOCKTAKE revision as If-Match and is idempotent; posting (surplus amounts) and reversal act once.
     generateStockAdjustment: (stocktakeId: string, revision: number) => request<StockAdjustment>("POST", `/api/v1/company/stocktakes/${enc(stocktakeId)}/adjustment`, { ifMatch: revision }),
     getStockAdjustment: (id: string) => get<StockAdjustment>(`/api/v1/company/stock-adjustments/${enc(id)}`),

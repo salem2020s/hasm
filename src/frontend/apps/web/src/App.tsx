@@ -22,6 +22,8 @@ import { InventoryAccountingPage } from "./pages/InventoryAccounting";
 import { StockBalancesPage } from "./pages/StockBalances";
 import { StocktakesPage } from "./pages/Stocktakes";
 import { NegativeStockPage } from "./pages/NegativeStock";
+import { PartiesPage } from "./pages/Parties";
+import { PartyApprovalsPage } from "./pages/PartyApprovals";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
@@ -46,7 +48,7 @@ import "./visual/visual.css";
 /** The Tauri window and the shared web app run THIS build; only the session transport differs (bearer in memory vs HttpOnly cookie). */
 export { isTauri };
 
-interface RouteDef { path: string; permission?: string; /** Allowed when ANY of these is held (each section inside still enforces its own permission). */ anyOf?: string[]; /** Allowed when ANY grant (even for a single branch) holds this permission; the server still decides per branch. */ anyScope?: string; element: ReactNode }
+interface RouteDef { path: string; /** Central (cross-company) screen: identity administrators only; the server enforces it again. */ centralAdmin?: boolean; permission?: string; /** Allowed when ANY of these is held (each section inside still enforces its own permission). */ anyOf?: string[]; /** Allowed when ANY grant (even for a single branch) holds this permission; the server still decides per branch. */ anyScope?: string; element: ReactNode }
 
 /** Former pages that now live inside the unified Company Details & Settings page (old bookmarks keep working). */
 const REDIRECTS: Record<string, string> = { "/company/profile": "/company/details", "/company/settings": "/company/details/general" };
@@ -92,6 +94,8 @@ const ROUTES: RouteDef[] = [
   { path: "/accounting/statements", anyScope: "company.financialstatements.view", element: <FinancialStatementsPage /> },
   { path: "/accounting/statement-mapping", permission: "company.statementmapping.view", element: <StatementMappingPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
+  { path: "/company/parties", permission: "company.parties.view", element: <PartiesPage /> },
+  { path: "/admin/party-proposals", centralAdmin: true, element: <PartyApprovalsPage /> },
   ...(DevPreviews ? [
     { path: "/dev/preview", element: <Suspense fallback={<Loading />}><DevPreviews.gallery /></Suspense> },
     { path: "/dev/preview/warehouses", element: <Suspense fallback={<Loading />}><DevPreviews.warehouses /></Suspense> },
@@ -131,8 +135,10 @@ function Shell() {
       { id: "/company/cost-center-policies", label: t("nav.cost_center_policies"), permission: "company.costcenterpolicies.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
+      { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
+    if (auth.user?.isIdentityAdministrator) company.push({ id: "/admin/party-proposals", label: t("nav.party_approvals") });
     const accounting: MenuItem[] = [
       { id: "/accounting/journal", label: t("nav.journal"), permission: "company.journal.view" },
       { id: "/accounting/reports", label: t("nav.gl_reports"), permission: "company.ledgerreports.view" },
@@ -182,7 +188,7 @@ function Shell() {
   const def = ROUTES.find((r) => r.path === route);
   // Protected navigation: a route is rendered only when the permission is held; the server enforces the same rule independently.
   const content = !def ? <Banner kind="error" testId="not-found">{t("error.not_found")}</Banner>
-    : (def.permission && !auth.can(def.permission)) || (def.anyOf && !def.anyOf.some((p) => auth.can(p))) || (def.anyScope && !auth.canAny(def.anyScope)) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
+    : (def.permission && !auth.can(def.permission)) || (def.anyOf && !def.anyOf.some((p) => auth.can(p))) || (def.anyScope && !auth.canAny(def.anyScope)) || (def.centralAdmin && !auth.user?.isIdentityAdministrator) ? <Banner kind="error" testId="forbidden">{t("error.forbidden")}</Banner>
     : def.element;
 
   return (

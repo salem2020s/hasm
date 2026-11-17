@@ -121,6 +121,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.NegativeObligation.Table, ["SELECT", "INSERT"]),
         (CompanySchema.NegativeSettlement.Table, ["SELECT", "INSERT"]),
         (CompanySchema.NegativeObligationReversal.Table, ["SELECT", "INSERT"]),
+        // Party registry (Phase 3.9A): local parties and the request log (outbox) are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates.
+        (CompanySchema.LocalParty.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.PartyRequest.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
