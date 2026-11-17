@@ -85,22 +85,23 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE resumed: ordinary comparison implemented; unit905/905, real PG comparison2/2 passed; D044/D045 owner-approved; conversion contracts proposed/reviewed, execution disabled; full local PG running; dependency-scan High advisory blocks merge",
+    "state": "ACTIVE: internal ordinary comparison and bounded dependency scheduler implemented; unit919/919; full local PG1035/1035 andAPI69/69; ownerD044/D045 recorded; PR48Draft/incomplete; Highdependency gate blocksmerge",
     "knownIssues": [
       "High dependency advisory GHSA-fc5q-39xc-vjpf still fails CI; latest/installedpicomatch4.0.7, no published patch; no exemption/gate change",
-      "Prior full local run hit disk-full WAL panic and recovery errors;5433 restarted and provisioning case passes; new full suite standard outputpaths running",
+      "Recovered test5433 cluster; clean full local PG1035/1035,unit900/API69 in solutionrun; later fullunit919 andcomparisonPG2/2 pass; uniqueTRXs preserved; priorfailedrun remains historical",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Public preview, full transfer/reversal/negative replay, proposal persistence, guarded execution, revaluation and shared UI remain incomplete",
-      "Final exact pushed-head independent confirmation and CI pending; PR48 stays Draft; no merge",
+      "Independent exact3ba review andsix passingCIchecks recorded inPRbody; new scheduler committed-headCI/review pending; no merge",
       "Claude original work untouched; generated artifacts and secrets excluded",
-      "PR46 four Medium followups before3.9B; OD11 remainsOPEN"
+      "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
+      "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Complete full local PostgreSQL run and preserve separate TRXs; do not equate prior failures with current application defects without evidence",
-    "Push reviewed comparison/decision/contract checkpoint to existingPR48; inspect every applicable exact-head check; obtain final-head independent confirmation",
-    "Investigate safe supported dependency remediation; never exempt the High advisory or weaken gates",
-    "Continue full replay/persistence/approval design under D044/D045; pass independently reviewed transition contracts and mandatory regression matrix before conversion activation"
+    "Push reviewed internal scheduler checkpoint; verify exactheadCI and independent confirmation, preserving the known faileddependency gate honestly",
+    "Build authorized complete transfer-history snapshot/closure and incremental replay; add full financial/authorization/concurrency regression coverage before enabling publicpreview",
+    "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
+    "Investigate supported picomatch security remediation; no exemptions or force-downgrades; finish fullphase/UI/tests/reviews beforePR48merge"
   ],
   "openDecisions": [
     "OD-1",
