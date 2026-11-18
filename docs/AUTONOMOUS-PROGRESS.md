@@ -1,5 +1,11 @@
 # HASM — Autonomous execution progress
 
+## PR50 protected merge completed; PR49 reconciliation — 2026-11-18
+
+PR50 merged as `aba3e916524a22a0d422a2f44a54557ad5f584db` from reviewed head `ab7eba8ad9224946c434d4ca1b9cfc0b24505206` after all seven applicable mandatory checks, main's verifier and independent full-diff review passed. Merge tree equality and ancestry were verified. Main's post-merge Verification, Frontend and Desktop workflows passed; Backend and the additional artifact workflow are still PENDING at this checkpoint. D-046's exception accepts only the six exact development records until November24 at00:00UTC, without renewal. The actual High advisory stays disclosed; every other High/Critical and production, desktop and NuGet finding remains blocking. No release is authorized.
+
+PR48's implementation and accounting decisions are preserved. Updated main was merged normally at `676c77ebfa420e11618bbf12a100ec67e37083f8`; fresh backend and security checks passed, PostgreSQL is PENDING. The phase is incomplete and remains Draft. PR49's five existing workflow documents were preserved and updated main merged without conflicts. Full-diff review found no Critical/High/Medium; its Low readability finding is fixed in this documentation update. Fresh exact-head mandatory CI and final independent confirmation remain required before merging PR49. Historical security proposal entries below are superseded by the verified PR50 merge.
+
 ## Conditional activation after verified proof — 2026-11-18
 
 Run44267058914 succeeded on EXACT head26243de0746c123c8a3e972087b73a7c3ee48a7e: both additional jobs passed. Actual Node24.22.2/Linux CLI and full/production audits, frontend regressions,95-module/six-asset Web inventory, and actual Windows releaseNSIS extraction/integrity passed. No affected tool modules or Node runtime/dependency payload found; installer was not executed/deployed. Evidence and hashes: docs/security/picomatch-activation-evidence.json. Independent GPT-6/Codex full-diff review confirmed strict marker correction and actual binary equality;22 fixtures passed independently, no Critical/High/Medium.
