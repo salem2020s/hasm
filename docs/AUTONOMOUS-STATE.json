@@ -127,5 +127,14 @@
       "approval": "NOT APPROVED",
       "pr": 50
     }
-  ]
+  ],
+  "sessionContinuity": {
+    "automaticAfterUsageReset": "NOT CONFIRMED",
+    "lastPushedProposalHead": "3b029f40f5bc6bc47a15de373e6748fea4504865",
+    "manualResumeSupported": true,
+    "cliVersion": "0.169.0",
+    "goalsFeatureEnabled": true,
+    "restartInstruction": "docs/RESUME-CODEX.md",
+    "backgroundRestartConfigured": false
+  }
 }
