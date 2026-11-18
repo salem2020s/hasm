@@ -68,26 +68,54 @@ jobs:
     if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: npm audit (frontend)
+      - name: Install frontend dependencies
         working-directory: src/frontend
-        run: npm ci && npm audit --audit-level=high
+        run: npm ci
+      - name: Mandatory production npm audit (frontend)
+        working-directory: src/frontend
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+      - name: Dependency-policy regression tests
+        if: always()
+        run: node --test tools/verify/dependency-audit-policy.test.cjs
+      - name: Full npm audit with owner-approved exact development exception
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HASM_AUDIT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: node tools/verify/dependency-audit-policy.cjs --root .
       - name: npm audit (desktop)
+        if: always()
         working-directory: src/desktop
         run: npm ci && npm audit --audit-level=high
       - name: NuGet vulnerable packages
+        if: always()
         run: |
           dotnet restore src/backend/Hasm.slnx
           OUT="$(dotnet list src/backend/Hasm.slnx package --vulnerable --include-transitive 2>&1)"
           echo "$OUT"
           if echo "$OUT" | grep -q "has the following vulnerable packages"; then echo "::error::Vulnerable NuGet packages found"; exit 1; fi
+
+      - name: Preserve unfiltered dependency reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/hasm-dependency-audit/
+          if-no-files-found: error
+          retention-days: 30
 
   guard-selftest:
     if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}

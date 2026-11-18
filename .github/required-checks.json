@@ -86,6 +86,32 @@
       "paths": [
         "**"
       ]
+    },
+    {
+      "name": "picomatch-policy-validation",
+      "count": 1,
+      "paths": [
+        "tools/verify/**",
+        ".github/required-checks.json",
+        ".github/workflows/verification.yml",
+        ".github/workflows/picomatch-validation.yml",
+        "src/frontend/**",
+        "src/desktop/**",
+        "assets/branding/**"
+      ]
+    },
+    {
+      "name": "picomatch-artifact-inspection",
+      "count": 1,
+      "paths": [
+        "tools/verify/**",
+        ".github/required-checks.json",
+        ".github/workflows/verification.yml",
+        ".github/workflows/picomatch-validation.yml",
+        "src/frontend/**",
+        "src/desktop/**",
+        "assets/branding/**"
+      ]
     }
   ]
 }

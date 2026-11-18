@@ -1,0 +1,162 @@
+{
+  "runId": 44267058914,
+  "headSha": "26243de0746c123c8a3e972087b73a7c3ee48a7e",
+  "workflow": "picomatch-validation.yml",
+  "url": "https://github.com/salem2020s/hasm/actions/runs/44267058914",
+  "conclusion": "success",
+  "jobs": [
+    "picomatch-policy-validation",
+    "picomatch-artifact-inspection"
+  ],
+  "web": [
+    {
+      "commit": "cc0cf0b488ada9924f6f169d83c7a362f806e148",
+      "node": "v24.22.2",
+      "platform": "linux",
+      "modules": 95,
+      "assets": [
+        {
+          "file": "assets/hasm-icon-qoBHpuH5.ico",
+          "sha256": "43b6ff7c623d93374e93d1e10975709e68d52af7c79d31f9ebb8bdb80accaca2"
+        },
+        {
+          "file": "assets/hasm-mark-CkgH8Bir.png",
+          "sha256": "56ee7f61c510eca790d8ed4f69d1fd819c8abc909b6d60038ed264d2d66b2c51"
+        },
+        {
+          "file": "assets/index-BmzPbXjK.js",
+          "sha256": "dc1a0162308839c37ba755a9f8e0db6571a77027e7249770f3ed4b5fef50e59e"
+        },
+        {
+          "file": "assets/index-C-BFy3BV.css",
+          "sha256": "4cee5cd4dad6516c60ecb8d5560f5e9e0b83220f1302c27d1917e7b438db9249"
+        },
+        {
+          "file": "assets/window-CqZe0H1V.js",
+          "sha256": "ae25a18a2d3429704dfe312b9f2ed70a012bff6a64ff184be608530b301e1ab5"
+        },
+        {
+          "file": "index.html",
+          "sha256": "bb739c62ddf5a33ae50740d2ba4a4433a6979a6748bebfbefe84c2f30956b079"
+        }
+      ]
+    },
+    {
+      "commit": "cc0cf0b488ada9924f6f169d83c7a362f806e148",
+      "node": "v24.22.2",
+      "platform": "win32",
+      "modules": 95,
+      "assets": [
+        {
+          "file": "assets/hasm-icon-qoBHpuH5.ico",
+          "sha256": "43b6ff7c623d93374e93d1e10975709e68d52af7c79d31f9ebb8bdb80accaca2"
+        },
+        {
+          "file": "assets/hasm-mark-CkgH8Bir.png",
+          "sha256": "56ee7f61c510eca790d8ed4f69d1fd819c8abc909b6d60038ed264d2d66b2c51"
+        },
+        {
+          "file": "assets/index-BmzPbXjK.js",
+          "sha256": "dc1a0162308839c37ba755a9f8e0db6571a77027e7249770f3ed4b5fef50e59e"
+        },
+        {
+          "file": "assets/index-C-BFy3BV.css",
+          "sha256": "4cee5cd4dad6516c60ecb8d5560f5e9e0b83220f1302c27d1917e7b438db9249"
+        },
+        {
+          "file": "assets/window-CqZe0H1V.js",
+          "sha256": "ae25a18a2d3429704dfe312b9f2ed70a012bff6a64ff184be608530b301e1ab5"
+        },
+        {
+          "file": "index.html",
+          "sha256": "35c3fd236caffdde7ead676592ce5abe2b0d4eabb91def142a1a56909671fc5c"
+        }
+      ]
+    }
+  ],
+  "installer": {
+    "commit": "cc0cf0b488ada9924f6f169d83c7a362f806e148",
+    "node": "v24.22.2",
+    "platform": "win32",
+    "webAssets": [
+      {
+        "file": "assets/hasm-icon-qoBHpuH5.ico",
+        "sha256": "43b6ff7c623d93374e93d1e10975709e68d52af7c79d31f9ebb8bdb80accaca2"
+      },
+      {
+        "file": "assets/hasm-mark-CkgH8Bir.png",
+        "sha256": "56ee7f61c510eca790d8ed4f69d1fd819c8abc909b6d60038ed264d2d66b2c51"
+      },
+      {
+        "file": "assets/index-BmzPbXjK.js",
+        "sha256": "dc1a0162308839c37ba755a9f8e0db6571a77027e7249770f3ed4b5fef50e59e"
+      },
+      {
+        "file": "assets/index-C-BFy3BV.css",
+        "sha256": "4cee5cd4dad6516c60ecb8d5560f5e9e0b83220f1302c27d1917e7b438db9249"
+      },
+      {
+        "file": "assets/window-CqZe0H1V.js",
+        "sha256": "ae25a18a2d3429704dfe312b9f2ed70a012bff6a64ff184be608530b301e1ab5"
+      },
+      {
+        "file": "index.html",
+        "sha256": "35c3fd236caffdde7ead676592ce5abe2b0d4eabb91def142a1a56909671fc5c"
+      }
+    ],
+    "installer": "HASM_0.0.0_x64-setup.exe",
+    "installerSha256": "ba1c898e8d8d31186d01e49868aa2110d3abc52bfa59591267bdeffd810967a7",
+    "compiledApplicationSha256": "83598849f4b29b5f6b563490dd88bba4e39bde0e66e2c5231e7cda9508d0f39e",
+    "applicationSha256": "e971a75671913cf0999078ed40c812eec39674b1ff65d057a7283f817da7ff43",
+    "expectedNsisPayloadSha256": "e971a75671913cf0999078ed40c812eec39674b1ff65d057a7283f817da7ff43",
+    "bundleMarkerOffset": 6949432,
+    "archiveEntries": [
+      "$PLUGINSDIR\\System.dll",
+      "$PLUGINSDIR\\modern-wizard.bmp",
+      "$PLUGINSDIR\\nsDialogs.dll",
+      "$PLUGINSDIR\\nsis_tauri_utils.dll",
+      "$PLUGINSDIR\\StartMenu.dll",
+      "$PLUGINSDIR\\NSISdl.dll",
+      "hasm-desktop.exe",
+      "uninstall.exe"
+    ],
+    "extractedPayload": [
+      {
+        "file": "$PLUGINSDIR/modern-wizard.bmp",
+        "sha256": "3ad2dc318056d0a2024af1804ea741146cfc18cc404649a44610cbf8b2056cf2"
+      },
+      {
+        "file": "$PLUGINSDIR/nsDialogs.dll",
+        "sha256": "9c76f4d53ceee2a471c936e0899688405e1009ce962d140e9acb49ed68d114cb"
+      },
+      {
+        "file": "$PLUGINSDIR/nsis_tauri_utils.dll",
+        "sha256": "5ba143b5db4a87d32d6e7802e033330aae56cbceabe0d1e3ba41948385ad4709"
+      },
+      {
+        "file": "$PLUGINSDIR/NSISdl.dll",
+        "sha256": "d3e61c4df837625ac0503cea5b6765a04d37fc35399899a5503b53a3108bfbf6"
+      },
+      {
+        "file": "$PLUGINSDIR/StartMenu.dll",
+        "sha256": "39870682e7d1c026cd2b33ca25591db28250dde17de7eb1feec404222d534ffc"
+      },
+      {
+        "file": "$PLUGINSDIR/System.dll",
+        "sha256": "afe032f942e2ed0bf7494ec08ba813f5739fb522c640bde81d30ecaf9f894432"
+      },
+      {
+        "file": "hasm-desktop.exe",
+        "sha256": "e971a75671913cf0999078ed40c812eec39674b1ff65d057a7283f817da7ff43"
+      },
+      {
+        "file": "uninstall.exe",
+        "sha256": "dc6ff5cafd3e2139558fee9b7d3f8b3d590c92f70490e58f6a68eea7ca6dc830"
+      }
+    ],
+    "nodeRuntimeOrDependencyPayload": false,
+    "installerExecuted": false
+  },
+  "deploymentAuthorized": false,
+  "finalActivationHeadCI": "PENDING"
+}

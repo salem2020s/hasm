@@ -29,7 +29,7 @@ function check(root) {
   // the required-check manifest must mirror the path filters of the workflows that produce each check (a drift would silently drop or invent required checks)
   try {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, ".github/required-checks.json"), "utf8"));
-    const wfOf = { "backend-build-test": "backend.yml", "postgres-integration": "backend.yml", "frontend-build-test": "frontend.yml", "e2e-smoke": "frontend.yml", "desktop-build": "desktop.yml" };
+    const wfOf = { "backend-build-test": "backend.yml", "postgres-integration": "backend.yml", "frontend-build-test": "frontend.yml", "e2e-smoke": "frontend.yml", "desktop-build": "desktop.yml", "picomatch-policy-validation": "picomatch-validation.yml", "picomatch-artifact-inspection": "picomatch-validation.yml" };
     const filters = f => [...fs.readFileSync(path.join(root, ".github/workflows", f), "utf8").matchAll(/paths\s*:\s*\[([^\]]*)\]/g)].flatMap(m => m[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean));
     for (const c of manifest.checks) {
       const f = wfOf[c.name];

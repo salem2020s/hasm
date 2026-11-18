@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-17",
+  "updatedAt": "2026-11-18",
   "main": {
-    "verifiedHead": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
-    "note": "PR47 reviewed head8b1913b merged tree/ancestry verified; post-merge Backend/Frontend/Desktop/Verification all passed on814bd7c, also on PR46 mergebd56a25."
+    "verifiedHead": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+    "note": "PR50 exact reviewed headab7eba8 all7 required checks passed; merge tree/ancestry verified; postmerge mainCI PENDING"
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -79,29 +79,35 @@
       "phase": "Roadmap/checkpoint reconciliation",
       "mergeCommit": "814bd7c",
       "reviewedHead": "8b1913b2dc3782312d6f1d5865956f3a448b3f37"
+    },
+    {
+      "pr": 50,
+      "phase": "Exact temporary dev dependency policy D046",
+      "mergeCommit": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+      "reviewedHead": "ab7eba8ad9224946c434d4ca1b9cfc0b24505206"
     }
   ],
   "active": {
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE: internal ordinary comparison and bounded dependency scheduler implemented; unit919/919; full local PG1035/1035 andAPI69/69; ownerD044/D045 recorded; PR48Draft/incomplete; Highdependency gate blocksmerge",
+    "state": "ACTIVE Phase3.8D incomplete/Draft; main security-policy merge reconciled without implementation changes; fresh PR48 CI pending",
     "knownIssues": [
-      "High dependency advisory GHSA-fc5q-39xc-vjpf still fails CI; latest/installedpicomatch4.0.7, no published patch; no exemption/gate change",
+      "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
       "Recovered test5433 cluster; clean full local PG1035/1035,unit900/API69 in solutionrun; later fullunit919 andcomparisonPG2/2 pass; uniqueTRXs preserved; priorfailedrun remains historical",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Public preview, full transfer/reversal/negative replay, proposal persistence, guarded execution, revaluation and shared UI remain incomplete",
-      "Independent exact3ba review andsix passingCIchecks recorded inPRbody; new scheduler committed-headCI/review pending; no merge",
+      "Full phase incomplete; new main-merge head requires fresh mandatoryCI and later complete-phase independentreview before merge",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Push reviewed internal scheduler checkpoint; verify exactheadCI and independent confirmation, preserving the known faileddependency gate honestly",
+    "Push preserved main-merge checkpoint to existing PR48 and verify all applicable exact-head checks",
     "Build authorized complete transfer-history snapshot/closure and incremental replay; add full financial/authorization/concurrency regression coverage before enabling publicpreview",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
-    "Investigate supported picomatch security remediation; no exemptions or force-downgrades; finish fullphase/UI/tests/reviews beforePR48merge"
+    "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
   "openDecisions": [
     "OD-1",
@@ -116,5 +122,12 @@
     "runnerMode": "HASM_RUNNER_MODE=hosted (self-hosted vm-test is a disabled fallback, docs/CI-RUNNER.md)",
     "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
+  },
+  "securityPolicy": {
+    "pr": 50,
+    "merge": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+    "expiresAt": "2026-11-24T00:00:00Z",
+    "scope": "Only GHSA-fc5q-39xc-vjpf exact6 devrecords; otherHigh/Critical andproduction block",
+    "proofRun": 44267058914
   }
 }
