@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Provisional authorized operation-component snapshot — 2026-11-18
+
+Remote reconciliation confirms PR50 mergedaba3e916 and PR49 mergedfe443211; main is unchanged. PR48 remains Draft. All seven applicable checks on dec9742990c5a091f1b4ef653dd8c48281872ea5 passed, including PostgreSQL1039/1039; main's exact-head verifier passed. This earlier committed head is the latest verified feature checkpoint, not proof of the newer adapter.
+
+CostFlowSnapshotService now implements an internal read-only repeatable-snapshot adapter for common-method ordinary operation components. It retains every child, authorizes operation/document/entry/layer endpoints, reconciles all entry balances and real FIFO layer/consumption provenance, and returns immutable evidence/fingerprint. No API/DI/production caller, migrations, approval or execution activation. Original ordinary snapshot behavior is unchanged.
+
+Independent full cumulative reviews (separate GPT-6/Codex contexts) found one Medium transitive foreign-item layer quarantine gap. A bounded item-independent layer-ID frontier fixes it; the two-hop allowed-intermediate/denied-final regression passed. Both reviewers subsequently found no remaining Critical/High/Medium code findings; limited checkpoint only. Author full unit960/960 and PostgreSQL37/37 passed, zero skips. Expanded51-case run (30 new plus21 old):50 passed,1 new fixture expected-code mismatch. Corrected that assertion to the earlier provenance rejection (independent reviewer confirmed); focused1/1 rerun passed, zero skips. Original business assertions and application code unchanged. Full new-head CI is PENDING. Registry only increases983->1013; expected full suite1069 includes56 safety cases. See review-records/PR-48-flow-snapshot.md.
+
+Next: persist this reviewed checkpoint, verify exact-head full CI, then complete failure-path revocation, malformed source/date/sequence/consumption/child cases, changed-method/tracked/adjustment classification, caller cancellation and duplicate-work boundary regressions before adapter integration. Continue complete proposal comparison/scheduling, reversal/negative/conversion contracts, protected persistence/approvals/execution and shared UI. Full phase incomplete; no merge. D044/D045 and D046's exact-six-record hard expiry2026-11-24T00:00:00Z remain unchanged; no rejected remediation retried, no security gate weakened.
+
 ## Multiline entries preserved; active goal continuation — 2026-11-18
 
 Previous checkpoint95ea79975c0a01d9f8ab52a74365e35c4d5a6d32 passed all seven applicable Actions checks. Main remainsfe4432113c1c13a62c70ee98c218586d7b424b32. The owner resumed the existing native goal; get_goal now reports ACTIVE. This is concrete implementation progress, not phase completion. No duplicate session or post-quota restart scheduler was created.

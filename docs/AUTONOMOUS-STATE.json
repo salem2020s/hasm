@@ -97,21 +97,21 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: multiline operation/range model preserves all child costs; focused74/fullunit960/PGsnapshot21 passed; new-head CI pending",
+    "state": "ACTIVE incomplete Phase3.8D: provisional internal component snapshot; unit960 and PG37 passed; expanded50/51 then corrected fixture1/1 passed; full new-head CI pending",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
-      "Latest verified95ea799: all7 applicable Actions passed. Prior implementation6dd5f2f also exact-head verified with PG1035/979 registry.",
+      "Latest verifieddec9742: all7 applicable Actions and main exact-head verifier passed, PostgreSQL1039/1039; newer adapter CI pending.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
-      "Authorized transfer closure/real-layer mapping and scheduler integration, complete reversal/negative/conversion contracts, guarded persistence/execution/revaluation/shared UI remain incomplete.",
-      "Multiline model: focused74/unit960/snapshot21 passed. Registry983, expectedfull1039; new exact-head CI/review confirmation pending, no whole-phase approval.",
+      "Provisional complete ordinary component adapter implemented, not integrated; broader failure/revocation/corruption matrix, proposal comparison, reversal/negative/conversion and execution/UI remain incomplete.",
+      "Adapter: unit960/PG37 passed; expanded51 had50 pass/1 fixture expected-code mismatch, corrected and focused1/1 passed. Registry1013/full1069; new exact-head CI pending. Independent full-diff source reviews no remaining CHM after Medium fix.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Push reviewed multiline checkpoint, verify exact-head mandatory CI and independent full-diff confirmation, keep incomplete phase Draft.",
-    "Implement full authorized operation-component snapshot using child/range block mapping, endpoint quarantine, real-layer bijection and full PG regression matrix; no multiline aggregation/refusal shortcut.",
+    "Persist reviewed provisional internal adapter checkpoint, verify exact-head full mandatory CI; keep incomplete phase Draft.",
+    "Complete failure-path revocation, malformed source/date/sequence/consumption/child, changed-method/tracked/adjustment, caller cancellation and duplicate-work bounds before adapter integration.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
@@ -136,7 +136,7 @@
     "scope": "Only GHSA-fc5q-39xc-vjpf exact6 devrecords; otherHigh/Critical andproduction block",
     "proofRun": 44267058914
   },
-  "lastVerifiedFeatureHead": "95ea79975c0a01d9f8ab52a74365e35c4d5a6d32",
+  "lastVerifiedFeatureHead": "dec9742990c5a091f1b4ef653dd8c48281872ea5",
   "sessionContinuity": {
     "automaticAfterUsageReset": "NOT CONFIRMED",
     "nativeGoalStatusObserved": "active (owner resumed; get_goal verified2026-11-18)",

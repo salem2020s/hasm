@@ -21,11 +21,14 @@ internal sealed record CostHistoryEntry(long EntryId, Guid OperationId, long Seq
 {
     // An injective simulation-only identity for the company's positive bigint entry ID, not a stored cost-layer ID.
     internal ReplayEvent ToReplayEvent()
+        => new(SimulationId(EntryId), Kind, Quantity, Kind == CostOperationKind.Receipt ? Amount : null);
+
+    internal static Guid SimulationId(long entryId)
     {
         Span<byte> bytes = stackalloc byte[16];
         "HSMENTRY"u8.CopyTo(bytes);
-        BinaryPrimitives.WriteInt64BigEndian(bytes[8..], EntryId);
-        return new ReplayEvent(new Guid(bytes), Kind, Quantity, Kind == CostOperationKind.Receipt ? Amount : null);
+        BinaryPrimitives.WriteInt64BigEndian(bytes[8..], entryId);
+        return new Guid(bytes);
     }
 }
 

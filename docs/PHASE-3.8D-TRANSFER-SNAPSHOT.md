@@ -1,6 +1,6 @@
 # Proposed authorized ordinary transfer snapshot
 
-Status: next internal read-only adapter design; NOT implemented. The arithmetic helper does not establish a complete/authorized history. This adapter remains separate from the existing ordinary-only snapshot until its PostgreSQL regressions and independent review pass. It introduces no API, execution path or migrations.
+Status: internal read-only adapter implemented as a provisional checkpoint in CostFlowSnapshotService; broader mandatory regression matrix remains incomplete. It has no API, DI registration, production caller, execution path or migrations. Existing ordinary-only snapshot behavior is unchanged. Independent source review and focused PostgreSQL evidence do not establish full-phase completion or activation approval.
 
 ## Consistent authorized closure
 
