@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-18",
   "main": {
-    "verifiedHead": "aba3e916524a22a0d422a2f44a54557ad5f584db",
-    "note": "PR50 exact reviewed headab7eba8 all7 required checks passed; merge tree/ancestry verified; postmerge mainCI PENDING"
+    "verifiedHead": "fe4432113c1c13a62c70ee98c218586d7b424b32",
+    "note": "PR49 five exact-head gates/review and merge tree/ancestry passed; post-merge CI pending. PR50 ataba3e91 all checks except still-running Backend observed passed."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -85,26 +85,32 @@
       "phase": "Exact temporary dev dependency policy D046",
       "mergeCommit": "aba3e916524a22a0d422a2f44a54557ad5f584db",
       "reviewedHead": "ab7eba8ad9224946c434d4ca1b9cfc0b24505206"
+    },
+    {
+      "pr": 49,
+      "phase": "Focused Codex workflow documentation",
+      "mergeCommit": "fe4432113c1c13a62c70ee98c218586d7b424b32",
+      "reviewedHead": "513d42e6915980c27fdd66ba4c0a429ab3bf3c36"
     }
   ],
   "active": {
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE Phase3.8D incomplete/Draft; main security-policy merge reconciled without implementation changes; fresh PR48 CI pending",
+    "state": "ACTIVE incomplete Phase3.8D; PR50/49 merged main reconciled, existing code/tests preserved; fresh checkpoint-head CI pending",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
       "Recovered test5433 cluster; clean full local PG1035/1035,unit900/API69 in solutionrun; later fullunit919 andcomparisonPG2/2 pass; uniqueTRXs preserved; priorfailedrun remains historical",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Public preview, full transfer/reversal/negative replay, proposal persistence, guarded execution, revaluation and shared UI remain incomplete",
-      "Full phase incomplete; new main-merge head requires fresh mandatoryCI and later complete-phase independentreview before merge",
+      "PR48 previous676c77e backend/security checks passed; PostgreSQL still pending. New main-merge head requires fresh mandatory CI; whole phase remains incomplete.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Push preserved main-merge checkpoint to existing PR48 and verify all applicable exact-head checks",
+    "Push reviewed main-merge checkpoint to existing PR48 and verify fresh exact-head mandatory CI; record main post-merge outcomes honestly.",
     "Build authorized complete transfer-history snapshot/closure and incremental replay; add full financial/authorization/concurrency regression coverage before enabling publicpreview",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"

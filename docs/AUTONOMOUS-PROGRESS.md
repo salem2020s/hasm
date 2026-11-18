@@ -1,5 +1,18 @@
 # HASM — Autonomous execution progress
 
+## PR49 merged; Phase3.8D continuation — 2026-11-18
+
+PR49 merged as `fe4432113c1c13a62c70ee98c218586d7b424b32`, from independently reviewed head `513d42e6915980c27fdd66ba4c0a429ab3bf3c36`. All five applicable mandatory checks and main's exact-head verifier passed; merge tree equality and ancestry verified. No application or gate changes. Its focused skills supplement CLAUDE and all existing accounting/database safeguards. Main post-merge CI is PENDING.
+
+Updated main is merged into the existing Phase3.8D branch. Both checkpoint histories, all existing implementation/tests and D044/D045/D046 decisions are preserved. Nested worktrees are excluded from commits. PR48 remains incomplete/Draft; its previous head676c77e has six passing checks with PostgreSQL still PENDING. A new head requires fresh mandatory CI before any merge. Continue complete authorized history closure and incremental exact-cost replay; conversion execution remains disabled pending the reviewed contracts and full regression matrix. No repeated fork/downgrade investigation or automatic exception renewal is authorized.
+
+## PR50 protected merge completed; PR49 reconciliation — 2026-11-18
+
+PR50 merged as `aba3e916524a22a0d422a2f44a54557ad5f584db` from reviewed head `ab7eba8ad9224946c434d4ca1b9cfc0b24505206` after all seven applicable mandatory checks, main's verifier and independent full-diff review passed. Merge tree equality and ancestry were verified. Main's post-merge Verification, Frontend and Desktop workflows passed; Backend and the additional artifact workflow are still PENDING at this checkpoint. D-046's exception accepts only the six exact development records until November24 at00:00UTC, without renewal. The actual High advisory stays disclosed; every other High/Critical and production, desktop and NuGet finding remains blocking. No release is authorized.
+
+PR48's implementation and accounting decisions are preserved. Updated main was merged normally at `676c77ebfa420e11618bbf12a100ec67e37083f8`; fresh backend and security checks passed, PostgreSQL is PENDING. The phase is incomplete and remains Draft. PR49's five existing workflow documents were preserved and updated main merged without conflicts. Full-diff review found no Critical/High/Medium; its Low readability finding is fixed in this documentation update. Fresh exact-head mandatory CI and final independent confirmation remain required before merging PR49. Historical security proposal entries below are superseded by the verified PR50 merge.
+
+
 ## PR50 merged; Phase3.8D resumed — 2026-11-18
 
 Security PR50 merged asaba3e916524a22a0d422a2f44a54557ad5f584db, reviewed exactheadab7eba8ad9224946c434d4ca1b9cfc0b24505206. All seven applicable mandatory Actions checks passed, main-copy exact-head verifier passed, independent full-diff review and adversarial review recorded in PR50's final description. Merge tree equals reviewed tree and head ancestry verified. Main post-merge CI is PENDING. High advisory remains disclosed under ownerD046's exact six-record development-only exception, hardexpiry2026-11-24T00:00:00Z, no renewal; every other High/Critical and production/desktop/NuGet remain blocking.
