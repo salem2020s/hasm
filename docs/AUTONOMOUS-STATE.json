@@ -97,21 +97,21 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: internal common-method transfer arithmetic; focused42/fullunit942/PGsnapshot17 passed, independent full-diff review clear; new head CI pending",
+    "state": "ACTIVE incomplete Phase3.8D: internal transfer arithmetic fully verified at6dd5f2f; next authorized snapshot design independently reviewed; documentation-head CI pending",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
-      "Latest fully verified checkpoint025aca7dcd0785f324318eed5dd5be9c6603a146: all7 required CI checks and main verifier passed, PG1035/1035,979 registry, zero skips.",
+      "Latest verified6dd5f2f: all7 exact-head checks/main verifier passed; full CI PG1035/1035 and979 registry, zero skips.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Authorized transfer closure/real-layer mapping and scheduler integration, complete reversal/negative/conversion contracts, guarded persistence/execution/revaluation/shared UI remain incomplete.",
-      "New internal flow slice: focused42/fullunit942/PGsnapshot17 passed; independent review no Critical/High/Medium. New exact committed-head CI/review confirmation pending.",
+      "Local focused42/fullunit942/snapshot17 passed; exact6dd full27-file review clear. New snapshot design approved for implementation only; no adapter code or activation.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Push reviewed internal flow checkpoint; verify exact-head CI and independent full-diff confirmation; keep incomplete phase Draft.",
-    "Implement authorized complete transfer-history closure, real/simulated layer mapping and baseline/scheduler integration; preserve all security/financial invariants.",
+    "Verify new documentation checkpoint CI and preserve exact latest head; do not merge unfinished Phase3.8D.",
+    "Implement reviewed read-only transfer snapshot with complete endpoint quarantine/live authorization, real-layer bijection, full baseline/scheduler reconciliation and mandatory PG regression matrix.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
@@ -136,5 +136,12 @@
     "scope": "Only GHSA-fc5q-39xc-vjpf exact6 devrecords; otherHigh/Critical andproduction block",
     "proofRun": 44267058914
   },
-  "lastVerifiedFeatureHead": "025aca7dcd0785f324318eed5dd5be9c6603a146"
+  "lastVerifiedFeatureHead": "6dd5f2f18e728043b09af1f116bf0539a955f48c",
+  "sessionContinuity": {
+    "automaticAfterUsageReset": "NOT CONFIRMED",
+    "nativeGoalStatusObserved": "blocked",
+    "ownerSecurityDecision": "RESOLVED by explicit D046 conditional approval, PR50 merged",
+    "restartInstruction": "docs/RESUME-CODEX.md",
+    "backgroundRestartConfigured": false
+  }
 }
