@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-17",
+  "updatedAt": "2026-11-18",
   "main": {
-    "verifiedHead": "bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb",
-    "note": "Reviewed PR head 6f57651 exact-head CI green; merge tree equals reviewed tree and ancestry verified; main post-merge workflows still to be observed"
+    "verifiedHead": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
+    "note": "PR47 merged; remote main reconciled 2026-11-18; security implementation not merged"
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -76,23 +76,24 @@
     }
   ],
   "active": {
-    "phase": "Roadmap/checkpoint reconciliation after 3.9A",
-    "branch": "feature/roadmap-checkpoint-3-9a",
-    "pr": 47,
-    "state": "PR46 merged; PR47 roadmap reconciliation in review; then 3.8D design",
+    "phase": "Shared security-policy proposal; independent Phase3.8D development",
+    "branch": "feature/security-picomatch",
+    "pr": 50,
+    "state": "Conditional activation implemented after successful proof run44267058914 at26243de; final activation-head CI/review PENDING; no merge yet",
     "knownIssues": [
-      "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
-      "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "Main post-merge Actions must be observed; no production or release claim",
-      "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
-      "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
+      "High advisory unresolved; exact six dev records only, hard expiry2026-11-24T00:00:00Z; no renewal",
+      "Node24.22.2 actual Linux and Windows production Web/releaseNSIS validation passed together on unchanged implementation26243de",
+      "22 fixtures, independent full-diff/actual-binary review passed; final active-head review and all CI PENDING",
+      "Original manifests/lockfiles unchanged; production audit and all other High/Critical remain mandatory",
+      "PR48/49 still preserved/open; revalidate after protected security-policy merge only"
     ]
   },
   "next": [
-    "Merge reviewed roadmap reconciliation with all five always-on checks green",
-    "3.8D design and implementation (3.8C blocked by owner decision OD-11)",
-    "3.8E after 3.8D",
-    "Repair four PR46 Medium follow-ups before starting 3.9B"
+    "Commit/push activation after verified proof; preserve exact scope/expiry and unchanged validation blobs",
+    "Verify actual active CLI/API/Git proof and every applicable final-head Actions check, then independent exact-head full-diff review",
+    "Use main copy verify-head on exact final head; SHA-pinned merge only all gates green",
+    "Verify main merge tree/ancestry and postmerge CI, then reconcile PR48/49 without history rewrite",
+    "Continue full approved Phase3.8D; no release/deployment or automatic exception renewal"
   ],
   "openDecisions": [
     "OD-1",
@@ -107,5 +108,32 @@
     "runnerMode": "HASM_RUNNER_MODE=hosted (self-hosted vm-test is a disabled fallback, docs/CI-RUNNER.md)",
     "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
+  },
+  "parallelWork": [
+    {
+      "branch": "feature/phase-3-8d-impact-preview",
+      "head": "34255945dab04d8a093f7b396c39a124a585b463",
+      "pr": 48
+    },
+    {
+      "branch": "feature/codex-workflow-optimization",
+      "head": "dfe86dd2179f3d63be978d17e23554d3cb9e72bc",
+      "pr": 49
+    },
+    {
+      "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
+      "branch": "feature/security-picomatch",
+      "approval": "OWNER CONDITIONALLY APPROVED; proof44267058914 passed; final activation CI/review pending",
+      "pr": 50
+    }
+  ],
+  "sessionContinuity": {
+    "automaticAfterUsageReset": "NOT CONFIRMED",
+    "lastPushedProposalHead": "3b029f40f5bc6bc47a15de373e6748fea4504865",
+    "manualResumeSupported": true,
+    "cliVersion": "0.169.0",
+    "goalsFeatureEnabled": true,
+    "restartInstruction": "docs/RESUME-CODEX.md",
+    "backgroundRestartConfigured": false
   }
 }

@@ -1,0 +1,26 @@
+{
+  "status": "PROPOSED-NOT-APPROVED",
+  "owner": "salem2020s",
+  "approvedBy": null,
+  "approvedAt": null,
+  "approvalReference": null,
+  "expiresAt": "2026-11-24T00:00:00Z",
+  "repository": "salem2020s/hasm",
+  "advisory": "GHSA-fc5q-39xc-vjpf",
+  "source": 1247710,
+  "vulnerableRange": "<=4.0.7",
+  "advisoryUpdatedAt": "2026-11-17T15:56:44Z",
+  "trees": {
+    "src/frontend": "8c57466ed577a36a4447f7d1eb13fd19899c3607",
+    "src/desktop": "45dcefc40caaf4ff31e8c3702e6d19675967460c",
+    "assets/branding": "7b1f8314206483f443fe09a33b87f8ff2d6e709d"
+  },
+  "findings": {
+    "picomatch": { "version": "4.0.7", "nodes": ["node_modules/picomatch"] },
+    "fdir": { "version": "6.5.0", "nodes": ["node_modules/fdir"] },
+    "tinyglobby": { "version": "0.2.17", "nodes": ["node_modules/tinyglobby"] },
+    "vite": { "version": "8.3.6", "nodes": ["node_modules/vite"] },
+    "vitest": { "version": "5.1.0", "nodes": ["node_modules/vitest"] },
+    "@vitejs/plugin-react": { "version": "6.2.1", "nodes": ["node_modules/@vitejs/plugin-react"] }
+  }
+}

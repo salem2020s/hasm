@@ -48,6 +48,7 @@
 | D-041 | التشغيل والمراقبة | Logs وتشخيص وتنبيهات محلية/SMTP وحزمة دعم مع حماية الأسرار |
 | D-042 | العمل الجماعي | GitHub Private، `main` مستقر، فروع منفصلة، Pull Request قبل الدمج |
 | D-043 | بدء البرمجة | **استوفي شرط الاعتماد بتاريخ 2026-11-08**؛ يبدأ التطوير بمهام صغيرة، واختبارات، وفروع Git منفصلة، وفق SRS v1.0 |
+| D-046 | Temporary development dependency security policy | Owner conditional approval, 2026-11-18: only GHSA-fc5q-39xc-vjpf and the six exact reviewed development-only records; no activation before actual Node24/Linux CI and production Web/Tauri artifact inspection, independent review and exact-head checks pass. Production audit and every other High/Critical stay blocking; frozen inputs and fail-closed policy; automatic expiry 2026-11-24T00:00:00Z, no renewal. Implementation/review: `review-records/PR-50-conditional-activation.md`. D-044/D-045 remain reserved for the separately approved accounting decisions in open PR48. |
 
 ## توضيحات اتساق مستمدة من القرارات المعتمدة (ليست قرارات جديدة)
 
