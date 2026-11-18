@@ -20,6 +20,8 @@ Reuse normal document/posting validation. StockPostingService currently requires
 
 No ordinary journal or independently postable adjustment draft is created by preview. Original account/dimension compensation, complete reversal/negative/conversion modeling, approved atomic execution, stale-plan rejection and shared Web/Tauri UI remain mandatory unfinished scope. A history fingerprint is neither approval nor an executable plan token.
 
+Normal ResolveWarehouses/ResolveLines currently issue FOR SHARE reads through CompanyAuditedWork. Those methods cannot simply be called inside a read-only transaction. The next integration must share their validation rules through an explicitly bounded read adapter/pure validation core, while retaining the existing locking behavior for posting. Do not substitute an audited write transaction for preview or remove posting locks. Source header/line reads also need explicit SQL/row caps; the general document display loader includes an unbounded event list and is not itself the bounded evidence contract.
+
 ## Mandatory regression evidence
 
 - Both item methods in one read; canonical results unchanged by input order; no writes or empty position creation.

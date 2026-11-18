@@ -97,7 +97,7 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: multi-item same-transaction history reader implemented/design and source reviewed; PG21/unit970 passed; consolidated162 regression running; required security gate blocked by withdrawn advisory/owner-held PR51",
+    "state": "ACTIVE incomplete Phase3.8D: same-transaction multi-item history reader implemented/independently reviewed at182defe; localPG162/unit970/guard34 passed; full new-head PG CI pending and required security gate blocked by withdrawn advisory/owner-held PR51",
     "knownIssues": [
       "GHSA-fc5q-39xc-vjpf officially withdrawn2026-11-18T15:38:56Z; fullaudit0; existing exact waiver fails closed. Inert PR51 retirement awaits NEW explicit owner approval; no gate/manifests/expiry changed.",
       "Latest fully green historicalfb07fdd:7checks/PG1113. Currentcf225 backend/PG1126/unit967/API69 passed; dependency-scan fails due withdrawal. No current full green claim.",
@@ -111,7 +111,7 @@
     ]
   },
   "next": [
-    "Finish live multi-item regression20855/test-results/flow-items-regression without duplicate restart; initial21/unit970 passed. Newclass22 registry1098/full1154. Preserve checkpoint/push and verify exact-head backend/PG plus final independent confirmation; security gate remains blocked.",
+    "Local multi-item regression20855 TERMINAL162/162 passed zero skips; no restart. Exact182defe independent review no CHM; unit970/guard34 pass. Backend44387019588 fullPG still RUNNING; poll SAME handle. Registry1098/full1154. Follow-up documentation head needs new exact-head review/checks; failed security gate explicit.",
     "PR51 is INERT/awaiting owner approval already requested once. Do not apply protected retirement patch or relabel while pending; continue full source-bound consistent document/account/period/basis/entitlement design and implementation independently.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
