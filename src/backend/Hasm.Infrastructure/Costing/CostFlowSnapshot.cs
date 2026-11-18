@@ -31,6 +31,7 @@ internal sealed partial class CostFlowSnapshotService
     private readonly CostFlowSnapshotLimits limits;
     private sealed class Denied : Exception;
     internal Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task>? SnapshotEstablished { get; set; }
+    internal Func<CancellationToken, Task>? BeforeFinalAuthorization { get; set; }
 
     internal CostFlowSnapshotService(CompanyDatabaseResolver resolver, AccessService access, CostFlowSnapshotLimits? limits = null)
     {
@@ -54,6 +55,7 @@ internal sealed partial class CostFlowSnapshotService
         try { result = await ReadAsync(company, item, warehouse, scopes, w => Can(user, company, w, token), token); }
         catch (Denied) { result = Fail(ConfigStatus.Forbidden, "forbidden"); }
         catch (CostingException e) { result = Fail(ConfigStatus.Conflict, e.Code); }
+        if (BeforeFinalAuthorization is { } observe) await observe(token);
         // Includes error paths. Expired/cancelled work yields no diagnostic or partially authorized data.
         foreach (var scope in scopes)
             if (!await Can(user, company, scope, token)) return Fail(ConfigStatus.Forbidden, "forbidden");

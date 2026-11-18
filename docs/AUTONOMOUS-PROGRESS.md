@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Final authorization and malformed-history follow-up — 2026-11-18
+
+Internal snapshot checkpoint450236093c95ff4ed6c3db5a57fd4ec3bf413996 is pushed and independently confirmed across the full39-file diff. Its backend/security checks passed; PostgreSQL CI remains PENDING at this observation. Mainfe443211 and owner D046 conditional approval/expiry are unchanged; PR48 stays Draft.
+
+Follow-up deterministic tests cover final membership and peer-only assignment revocation on BOTH success/structural-failure paths while root access remains, caller cancellation, duplicate shared-operation discovery work, malformed entry/date/sequence/amount/direction/layer/consumption evidence, unsupported origins, changed-method configuration and tracked items. The only source addition is a null-default internal observer before the unchanged mandatory final authorization loop; no API/DI/caller or bypass. Independent full cumulative security review found no Critical/High/Medium, source-only limited checkpoint approval.
+
+Focused4/4,10/10 and6/6 passed, zero skips; the6 include two strengthened upstream/downstream transfer authorization cases. Consolidated69/69 snapshot cases passed, zero failures/skips, on disposable5433 (test-results/flow-reader-consolidated). Registry only increases1013->1031 (40 ordinary,6 document,2 negative new cases versus original983); full expected1087 includes56 safety cases. New exact-head full CI remains PENDING. Prior expanded51's fixture expectation correction and its independently reviewed1/1 pass remain in the historical evidence; no original application assertions changed.
+
+Next: preserve this checkpoint normally, verify exact-head full CI, then finish remaining malformed child/position/foreign-consumption variants and complete proposal endpoint read-set acceptance before comparison/scheduling integration. Whole approved phase still needs reversal/negative/conversion contracts, protected persistence/approvals/execution and shared UI; no incomplete-phase merge or conversion activation. See review-records/PR-48-flow-snapshot.md. Native goal remains active; automatic post-quota restart remains unconfirmed.
+
 ## Provisional authorized operation-component snapshot — 2026-11-18
 
 Remote reconciliation confirms PR50 mergedaba3e916 and PR49 mergedfe443211; main is unchanged. PR48 remains Draft. All seven applicable checks on dec9742990c5a091f1b4ef653dd8c48281872ea5 passed, including PostgreSQL1039/1039; main's exact-head verifier passed. This earlier committed head is the latest verified feature checkpoint, not proof of the newer adapter.

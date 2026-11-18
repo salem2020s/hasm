@@ -97,21 +97,21 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: provisional internal component snapshot; unit960 and PG37 passed; expanded50/51 then corrected fixture1/1 passed; full new-head CI pending",
+    "state": "ACTIVE incomplete Phase3.8D: internal component snapshot plus final-authorization/malformed-history regressions; consolidated PG69/69 passed, zero skips; full new-head CI pending; no production activation",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
       "Latest verifieddec9742: all7 applicable Actions and main exact-head verifier passed, PostgreSQL1039/1039; newer adapter CI pending.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Provisional complete ordinary component adapter implemented, not integrated; broader failure/revocation/corruption matrix, proposal comparison, reversal/negative/conversion and execution/UI remain incomplete.",
-      "Adapter: unit960/PG37 passed; expanded51 had50 pass/1 fixture expected-code mismatch, corrected and focused1/1 passed. Registry1013/full1069; new exact-head CI pending. Independent full-diff source reviews no remaining CHM after Medium fix.",
+      "Adapter: consolidated69/69 passed, zero failures/skips; earlier fullunit960 passed. Registry1031/full1087; independent full-diff source review no CHM. Full new-head CI pending.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Persist reviewed provisional internal adapter checkpoint, verify exact-head full mandatory CI; keep incomplete phase Draft.",
-    "Complete failure-path revocation, malformed source/date/sequence/consumption/child, changed-method/tracked/adjustment, caller cancellation and duplicate-work bounds before adapter integration.",
+    "Persist reviewed authorization/malformed-history checkpoint, verify exact-head full mandatory CI and committed-head independent confirmation; keep incomplete phase Draft.",
+    "Finish remaining malformed child/position/foreign-consumption acceptance and authorize complete proposal endpoint read-set before integrating comparison/scheduling; no public activation from baseline snapshots alone.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],

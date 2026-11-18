@@ -2,6 +2,7 @@ using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Costing;
+using Hasm.Infrastructure.Inventory;
 using Npgsql;
 using LayerTable = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostLayer;
 
@@ -92,6 +93,8 @@ public class CostFlowSnapshotTests : CostingTestBase
         var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
         Reject(await Read(Reader(), viewer.Id, item.Id), ConfigStatus.Forbidden, "forbidden");
         Reject(await Read(Reader(), viewer.Id, item.Id, W2.Id), ConfigStatus.Forbidden, "forbidden");
+        var (downstream, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W2.Id);
+        Reject(await Read(Reader(), downstream.Id, item.Id, W2.Id), ConfigStatus.Forbidden, "forbidden");
     }
 
     [PostgresFact]
@@ -220,6 +223,136 @@ public class CostFlowSnapshotTests : CostingTestBase
         await PrepareCosting(); await Receive(Fifo, 3, 9); var issue = await IssueOf(Fifo, 1); await Undo(issue.Key);
         var before = await Footprint();
         Reject(await Read(Reader()), ConfigStatus.Conflict, "impact_history_unsupported");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Final_authorization_rechecks_membership_on_success_and_structural_failure(bool corrupt)
+    {
+        await PrepareCosting(); await Receive(Fifo, 3, 9); await IssueOf(Fifo, 1);
+        if (corrupt) await Sql($"UPDATE {LayerTable.Table} SET {LayerTable.RemainingAmount}=5");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
+        var reader = Reader(); var reachedFinalCheck = false;
+        reader.BeforeFinalAuthorization = async _ =>
+        {
+            reachedFinalCheck = true;
+            Assert.True((await Rbac.RevokeMembershipAsync(Admin.Id, Company.Id, viewer.Id)).IsOk);
+        };
+        var before = await Footprint();
+        Reject(await Read(reader, viewer.Id), ConfigStatus.Forbidden, "forbidden");
+        Assert.True(reachedFinalCheck); Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresFact]
+    public async Task Caller_cancellation_before_final_authorization_cannot_return_a_snapshot()
+    {
+        await PrepareCosting(); await Receive(Fifo, 1, 2); using var cancelled = new CancellationTokenSource();
+        var reader = Reader(); reader.BeforeFinalAuthorization = _ => { cancelled.Cancel(); return Task.CompletedTask; };
+        var before = await Footprint();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.LoadAsync(Admin.Id, Company.Id, Fifo.Id, W1.Id, cancelled.Token));
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresFact]
+    public async Task Repeated_shared_group_metadata_consumes_the_cumulative_discovery_budget()
+    {
+        await PrepareCosting();
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest(Key(), D1, null,
+            Enumerable.Range(0, 10).Select(_ => new CostingReceiptLine(Fifo.Id, W1.Id, 1, 1)).ToArray()));
+        var full = Snapshot(await Read(Reader())); Assert.Equal(10, full.Entries.Length);
+        Assert.Single(full.Entries.Select(e => e.OperationId).Distinct());
+        var before = await Footprint();
+        Reject(await Read(Reader(new(Groups: 1, DiscoveryRows: 10))), ConfigStatus.Conflict, "impact_history_too_large");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresTheory]
+    [InlineData("entry-sequence")]
+    [InlineData("entry-date")]
+    [InlineData("entry-amount")]
+    [InlineData("entry-direction")]
+    [InlineData("layer-parent")]
+    [InlineData("layer-sequence")]
+    [InlineData("consumption-amount")]
+    [InlineData("consumption-restores")]
+    public async Task Malformed_history_is_refused_in_full_without_repair_or_partial_evidence(string corruption)
+    {
+        await PrepareCosting(); await Receive(Fifo, 3, 9); await IssueOf(Fifo, 1);
+        var ce = CompanySchema.CostEntry.Table; var cc = CompanySchema.CostConsumption.Table;
+        var (table, trigger, update) = corruption switch
+        {
+            "entry-sequence" => (ce, CompanySchema.CostEntry.GuardRow, $"{CompanySchema.CostEntry.Seq}={CompanySchema.CostEntry.Seq}+10"),
+            "entry-date" => (ce, CompanySchema.CostEntry.GuardRow, $"{CompanySchema.CostEntry.EffectiveDate}='2026-03-11'"),
+            "entry-amount" => (ce, CompanySchema.CostEntry.GuardRow, $"{CompanySchema.CostEntry.Amount}={CompanySchema.CostEntry.Amount}+1"),
+            "entry-direction" => (ce, CompanySchema.CostEntry.GuardRow, $"{CompanySchema.CostEntry.Direction}=-{CompanySchema.CostEntry.Direction}"),
+            "layer-parent" => (LayerTable.Table, LayerTable.GuardRow, $"{LayerTable.SourceLayerId}={LayerTable.Id}"),
+            "layer-sequence" => (LayerTable.Table, LayerTable.GuardRow, $"{LayerTable.Seq}=99"),
+            "consumption-amount" => (cc, CompanySchema.CostConsumption.GuardRow, $"{CompanySchema.CostConsumption.Amount}=2"),
+            _ => (cc, CompanySchema.CostConsumption.GuardRow, $"{CompanySchema.CostConsumption.Restores}=true")
+        };
+        await Sql($"BEGIN; ALTER TABLE {table} DISABLE TRIGGER {trigger}; UPDATE {table} SET {update}; ALTER TABLE {table} ENABLE TRIGGER {trigger}; COMMIT;");
+        var before = await Footprint();
+        Reject(await Read(Reader()), ConfigStatus.Conflict, "impact_history_inconsistent");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresTheory]
+    [InlineData("stock_adjustment")]
+    [InlineData("future_origin")]
+    public async Task Unsupported_origins_cannot_be_silently_omitted_from_an_ordinary_component(string origin)
+    {
+        await PrepareCosting(); await Receive(Fifo, 1, 1);
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest(Key(), D2, new CostingSource(origin, Guid.NewGuid()), [new(Fifo.Id, W1.Id, 1, 2)]));
+        var before = await Footprint();
+        Reject(await Read(Reader()), ConfigStatus.Conflict, "impact_history_unsupported");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresFact]
+    public async Task Changed_live_method_does_not_reprice_original_positions()
+    {
+        await PrepareCosting(); await Receive(Avg, 5, 50);
+        var group = (await Inv.ListGroupsAsync(Company.Id)).Single(g => g.Code == "AVGG");
+        Ok(await Inv.UpdateGroupAsync(Admin.Id, Company.Id, group.Id, group.Revision, new ItemGroupInput("AVGG", "x", "Avg", null, 1)));
+        var before = await Footprint();
+        Reject(await Read(Reader(), item: Avg.Id), ConfigStatus.Conflict, "valuation_method_changed");
+        var position = await Pos(Avg);
+        Assert.Equal((CostMethod.MovingAverage, 5m, 50m), (position.Method, position.Quantity, position.Value));
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresFact]
+    public async Task Tracked_item_is_not_treated_as_an_ordinary_empty_position()
+    {
+        await PrepareCosting(); var group = (await Inv.ListGroupsAsync(Company.Id)).Single(g => g.Code == "FIFOG");
+        var tracked = Ok(await Inv.CreateItemAsync(Admin.Id, Company.Id,
+            new ItemInput("TRACKED", null, "Tracked", 1, group.Id, Pcs.Id, null, null, true, false, false, null, [])));
+        var before = await Footprint();
+        Reject(await Read(Reader(), item: tracked.Id), ConfigStatus.Conflict, "impact_history_unsupported");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Revoking_only_the_peer_warehouse_hides_success_and_failure_while_root_access_remains(bool corrupt)
+    {
+        await PrepareCosting(); await Receive(Fifo, 4, 12); await Move(Fifo, 2);
+        if (corrupt) await Sql($"UPDATE {LayerTable.Table} SET {LayerTable.RemainingAmount}=5");
+        var (viewer, role) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
+        var assignment = await Rbac.AssignRoleAsync(Admin.Id, Company.Id, viewer.Id, role, ScopeKind.Warehouse, W2.Id);
+        Assert.True(assignment.IsOk, assignment.Code); var reader = Reader(); var reachedFinalCheck = false;
+        reader.BeforeFinalAuthorization = async _ =>
+        {
+            reachedFinalCheck = true;
+            Assert.True((await Rbac.RevokeAssignmentAsync(Admin.Id, Company.Id, assignment.Value!.Id)).IsOk);
+        };
+        var before = await Footprint();
+        Reject(await Read(reader, viewer.Id), ConfigStatus.Forbidden, "forbidden");
+        Assert.True(reachedFinalCheck);
+        Assert.True(await Rbac.IsAllowedAsync(viewer.Id, Company.Id, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(W1.Id)));
         Assert.Equal(before, await Footprint());
     }
 }
