@@ -97,21 +97,21 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D; PR50/49 merged main reconciled, existing code/tests preserved; fresh checkpoint-head CI pending",
+    "state": "ACTIVE incomplete Phase3.8D: private replay-state preparation; focused21/fullunit921 passed; independent full-diff review clear; new head CI pending",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
-      "Recovered test5433 cluster; clean full local PG1035/1035,unit900/API69 in solutionrun; later fullunit919 andcomparisonPG2/2 pass; uniqueTRXs preserved; priorfailedrun remains historical",
+      "Local focused replay21 and fullunit921 passed, zero skips; earlier complete PG1035/API69 runs preserved, new exact-head PG CI pending.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Public preview, full transfer/reversal/negative replay, proposal persistence, guarded execution, revaluation and shared UI remain incomplete",
-      "PR48 previous676c77e backend/security checks passed; PostgreSQL still pending. New main-merge head requires fresh mandatory CI; whole phase remains incomplete.",
+      "Private-state checkpoint reviewed without Critical/High/Medium; final pushed-head review confirmation and CI pending. Complete phase remains unfinished/Draft.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
     ]
   },
   "next": [
-    "Push reviewed main-merge checkpoint to existing PR48 and verify fresh exact-head mandatory CI; record main post-merge outcomes honestly.",
-    "Build authorized complete transfer-history snapshot/closure and incremental replay; add full financial/authorization/concurrency regression coverage before enabling publicpreview",
+    "Push private-state preparation checkpoint; confirm independent review on exact SHA and monitor all mandatory CI without merging incomplete phase.",
+    "Implement authorized complete transfer-history closure and deterministic mirrored FIFO layer/provenance model; then incremental network replay with full financial/authorization coverage.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],

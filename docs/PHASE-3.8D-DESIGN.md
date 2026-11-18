@@ -76,6 +76,12 @@ Malformed-cycle example: A orders T before U while B orders U before T, with bot
 
 Fourteen scheduler cases cover chains, same-date insertion, transfer reversals, missing/mismatched origins, cycles, chronology, ordinals/duplicates, canonical ordering across cultures, bounds and cancellation. Full unit regression passed919/919, zero skips. Independent full-diff review confirmed the three design-clarity requests implemented and found no new Critical/High/Medium code finding. No transfer costing, multi-warehouse snapshot adapter, conversion anchor, negative history or execution path is implemented merely by scheduling its identifiers.
 
+## Private position-state preparation
+
+The ordinary batch primitive now keeps its incremental quantity, value and FIFO layers in a private PositionState. The same complete-batch validation and exact CostingMath execute unchanged, with no mutable cursor or partial result exposed. This prepares reuse; it does not implement transfer replay or make unsupported history eligible. Focused replay21/21 and full unit921/921 passed locally with zero skips. Two additional cases preserve a derived issue value1.8e18 across two valid9e17 receipts and retain both FIFO components, distinguishing user receipt limits from legitimate aggregate outflow cost. Independent full-diff review found no Critical/High/Medium in this checkpoint; final committed-head CI is separate.
+
+The next transfer adapter must mirror each consumed FIFO layer in order with deterministic identity and provenance, as the existing InventoryCostingService does. A single averaged destination layer would change downstream issue costs. Chained/returning transfers need complete history closure and both source/destination reconciliation; derived transfer amounts must retain exact value even above a single receipt-input cap. No such adapter, negative-history transition or execution path is activated by this refactor.
+
 ## Preserved boundaries
 
 OD-11 remains OPEN and blocks 3.8C. This design does not decide lot/serial selection versus costing or add specific-identification costing. It also does not decide purchase-cost composition (OD-2), licensing transaction counts (OD-12/T-2), formal consolidation (OD-1), or unresolved naming (T-1). The four PR #46 Medium follow-ups remain scheduled before 3.9B. Production deployment, migrations against non-test databases, release and billing changes remain outside this work.

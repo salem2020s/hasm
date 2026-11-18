@@ -40,12 +40,29 @@ internal static class CostReplay
                 throw new CostingException("precision_exceeded");
         }
 
-        var quantity = BigInteger.Zero;
-        var value = BigInteger.Zero;
-        var layers = new LinkedList<CostingMath.LayerState>();
+        var position = new PositionState(method, moneyDecimals);
         var steps = ImmutableArray.CreateBuilder<ReplayStep>(events.Length);
-        long arrival = 0;
         foreach (var e in events)
+            steps.Add(position.AppendValidated(e, ct));
+        return new ReplayResult(steps.MoveToImmutable(), position.QuantityAfter, position.ValueAfter);
+    }
+
+    // Mutable only inside one pure calculation. A failed calculation discards its whole state;
+    // no cursor or partial trajectory escapes to a caller. Transfer replay will reuse this state
+    // only after its complete mirrored-layer and provenance input contract is implemented.
+    private sealed class PositionState(CostMethod method, int moneyDecimals)
+    {
+        private BigInteger quantity = BigInteger.Zero, value = BigInteger.Zero;
+        private readonly LinkedList<CostingMath.LayerState> layers = new();
+        private long arrival;
+
+        internal decimal QuantityAfter => CostingMath.FromUnits(quantity, CostingMath.QuantityScale);
+        internal decimal ValueAfter => CostingMath.FromUnits(value, CostingMath.AmountScale);
+
+        // Input identity, classification, precision and user-input limits were checked for the
+        // COMPLETE batch before reaching this private method. Derived outflow cost is not a new
+        // user receipt amount and must not acquire the receipt-input limit.
+        internal ReplayStep AppendValidated(ReplayEvent e, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             var q = CostingMath.ToUnits(e.Quantity, CostingMath.QuantityScale);
@@ -89,9 +106,7 @@ internal static class CostReplay
             // FromUnits converts its integer to decimal before scaling down. Refuse an unsupported aggregate
             // with a stable code, rather than leaking OverflowException or returning a partial trajectory.
             if (quantity > MaxConvertibleUnits || value > MaxConvertibleUnits) throw new CostingException("replay_total_out_of_range");
-            steps.Add(new ReplayStep(e.Id, e.Kind, CostingMath.FromUnits(amount, CostingMath.AmountScale),
-                CostingMath.FromUnits(quantity, CostingMath.QuantityScale), CostingMath.FromUnits(value, CostingMath.AmountScale), takes));
+            return new ReplayStep(e.Id, e.Kind, CostingMath.FromUnits(amount, CostingMath.AmountScale), QuantityAfter, ValueAfter, takes);
         }
-        return new ReplayResult(steps.MoveToImmutable(), CostingMath.FromUnits(quantity, CostingMath.QuantityScale), CostingMath.FromUnits(value, CostingMath.AmountScale));
     }
 }

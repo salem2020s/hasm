@@ -145,6 +145,24 @@ public class CostReplayTests
         Assert.Equal(Enumerable.Range(1, 2_000).Select(Id), issues.Select(s => Assert.Single(s.Consumptions).LayerId));
     }
 
+    [Theory]
+    [InlineData(CostMethod.Fifo)]
+    [InlineData(CostMethod.MovingAverage)]
+    public void Derived_issue_cost_can_exceed_a_single_receipt_input_limit_without_losing_value(CostMethod method)
+    {
+        const decimal receiptAmount = 900_000_000_000_000_000m;
+        var result = CostReplay.Calculate(method, 2, [Receipt(1, 0.5m, receiptAmount), Receipt(2, 0.5m, receiptAmount), Issue(3, 1)]);
+        Assert.Equal(1_800_000_000_000_000_000m, result.Steps[^1].Amount);
+        Assert.Equal((0m, 0m), (result.QuantityAfter, result.ValueAfter));
+        Assert.Equal(result.Steps.Take(2).Sum(s => s.Amount), result.Steps[^1].Amount);
+        if (method == CostMethod.Fifo)
+        {
+            Assert.Equal([Id(1), Id(2)], result.Steps[^1].Consumptions.Select(t => t.LayerId));
+            Assert.All(result.Steps[^1].Consumptions, t => Assert.Equal(receiptAmount, CostingMath.FromUnits(t.Amount, CostingMath.AmountScale)));
+        }
+        else Assert.Empty(result.Steps[^1].Consumptions);
+    }
+
     [Fact]
     public void Cancelled_replay_returns_no_partial_result()
     {

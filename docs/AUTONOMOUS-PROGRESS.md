@@ -1,5 +1,12 @@
 # HASM — Autonomous execution progress
 
+## Private replay-state checkpoint — 2026-11-18
+
+PR50 and PR49 are merged and their merge trees/ancestry verified. PR48's existing implementation and all approved decisions are preserved on main-reconciled headbbbe07b. Main post-merge PostgreSQL and PR48's fresh PostgreSQL run are still PENDING; other observed checks passed. No phase merge is claimed.
+
+A safe preparation slice extracts ordinary replay state into a private per-calculation PositionState, preserving validation, exact arithmetic, FIFO provenance, cancellation and range guards. No mutable cursor, public feature or production caller is exposed. Focused replay21/21 and full local unit921/921 passed, zero skips. Two new cases prove derived issue cost1.8e18 remains valid after separate9e17 receipts, retaining both FIFO components. Independent FULL-diff review by separate GPT-6/Codex context found no Critical/High/Medium; final pushed-head confirmation and mandatory CI remain required. Review: review-records/PR-48-position-state.md.
+
+Next: complete authorized transfer-history closure and mirrored-layer identity/provenance model before incremental network replay. Existing live transfers preserve each FIFO component; never replace them with a single averaged layer. Then complete reversal/negative/conversion entitlements and guarded persistence/execution/shared UI. Conversion execution remains disabled until all owner-approved contracts and mandatory regressions pass. Do not repeat rejected dependency attempts; D046 expires automatically November24 at00:00UTC without renewal.
 ## PR49 merged; Phase3.8D continuation — 2026-11-18
 
 PR49 merged as `fe4432113c1c13a62c70ee98c218586d7b424b32`, from independently reviewed head `513d42e6915980c27fdd66ba4c0a429ab3bf3c36`. All five applicable mandatory checks and main's exact-head verifier passed; merge tree equality and ancestry verified. No application or gate changes. Its focused skills supplement CLAUDE and all existing accounting/database safeguards. Main post-merge CI is PENDING.
