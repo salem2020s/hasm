@@ -1,0 +1,95 @@
+name: Picomatch conditional-policy validation
+
+# Additional proof only: existing dependency-scan remains mandatory and unchanged until activation.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["tools/verify/**", ".github/required-checks.json", ".github/workflows/verification.yml", ".github/workflows/picomatch-validation.yml", "src/frontend/**", "src/desktop/**", "assets/branding/**"]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: picomatch-validation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  picomatch-policy-validation:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tools/verify/dependency-audit-policy.test.cjs tools/verify/inspect-production-artifacts.test.cjs
+      - run: npm ci
+        working-directory: src/frontend
+      - name: Mandatory production audit (no exception)
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+        working-directory: src/frontend
+      - run: npm run typecheck
+        working-directory: src/frontend
+      - run: npm test
+        working-directory: src/frontend
+      - run: npm run build
+        working-directory: src/frontend
+      - name: Real Node24 Linux audit CLI and fail-closed validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HASM_AUDIT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: node tools/verify/validate-picomatch-policy.cjs --root .
+      - name: Inspect production Web bundle
+        run: node tools/verify/inspect-production-artifacts.cjs capture --root .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: picomatch-linux-validation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/hasm-dependency-audit/
+            ${{ runner.temp }}/hasm-production-inspection/
+          if-no-files-found: error
+          retention-days: 30
+
+  picomatch-artifact-inspection:
+    if: ${{ vars.HASM_RUNNER_MODE != 'self-hosted' }}
+    timeout-minutes: 60
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm ci
+        working-directory: src/desktop
+      - name: Inspect shared production Web inputs before packaging
+        run: node tools/verify/inspect-production-artifacts.cjs capture --root .
+      - name: Build actual release NSIS installer (not deployed or executed)
+        run: npx tauri build --ci --bundles nsis -- --locked
+        working-directory: src/desktop
+      - name: Inspect release installer and application payload
+        run: node tools/verify/inspect-production-artifacts.cjs installer --root .
+      - name: Confirm frozen inputs remain unchanged
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain --untracked-files=all -- src/frontend src/desktop assets/branding)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: picomatch-release-inspection-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/hasm-production-inspection/
+            src/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            src/desktop/src-tauri/target/release/hasm-desktop.exe
+          if-no-files-found: error
+          retention-days: 30

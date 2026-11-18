@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-17",
+  "updatedAt": "2026-11-18",
   "main": {
-    "verifiedHead": "bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb",
-    "note": "Reviewed PR head 6f57651 exact-head CI green; merge tree equals reviewed tree and ancestry verified; main post-merge workflows still to be observed"
+    "verifiedHead": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+    "note": "PR50 all7 exact-head gates/review passed; merge tree/ancestry verified; postmergeVerification passed, othermainCI pending"
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -73,26 +73,36 @@
       "phase": "3.9A",
       "mergeCommit": "bd56a25",
       "reviewedHead": "6f5765173c470d8511c63d2167bb71c43c1868b5"
+    },
+    {
+      "pr": 47,
+      "phase": "Roadmap checkpoint",
+      "mergeCommit": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb"
+    },
+    {
+      "pr": 50,
+      "phase": "OwnerD046 exact temporary development dependency policy",
+      "mergeCommit": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+      "reviewedHead": "ab7eba8ad9224946c434d4ca1b9cfc0b24505206"
     }
   ],
   "active": {
-    "phase": "Roadmap/checkpoint reconciliation after 3.9A",
-    "branch": "feature/roadmap-checkpoint-3-9a",
-    "pr": 47,
-    "state": "PR46 merged; PR47 roadmap reconciliation in review; then 3.8D design",
+    "phase": "Codex workflow documentation; Phase3.8D continues independently",
+    "branch": "feature/codex-workflow-optimization",
+    "pr": 49,
+    "state": "Existing5documents preserved; verifiedmainmerged; full-diffreview andnewCIpending",
     "knownIssues": [
-      "Four PR46 Medium follow-ups recorded in PR-46-final.md; repair before 3.9B",
-      "Local full RID-layout run completed: 1004 pass,14 admin-executable lookup failures,0 skipped; exact14 pass in standard-layout reruns. Full exact-head CI 1018/1018 green.",
-      "Main post-merge Actions must be observed; no production or release claim",
-      "Claude original uncommitted work preserved; caches/build outputs/test results excluded",
-      "Historical follow-ups: PR42 L1-L6 (L6 done), PR43 L1 L3 L4; JournalAccessTests one-off and dashboard flakiness remain recorded"
+      "PR50 merged; actualHighpicomatch remainsunderexactD046exception expires2026-11-24T00:00Z no renewal",
+      "PR49 docscope ready forreview/CI; no changes tobindingCLAUDE or mandatorygates",
+      "PR48 preserved at676c77ebfa420e11618bbf12a100ec67e37083f8; fullphase incomplete/Draft; freshCIpending",
+      "Postmerge main all-applicableCI stillrunning; do notclaimgreenuntilobserved"
     ]
   },
   "next": [
-    "Merge reviewed roadmap reconciliation with all five always-on checks green",
-    "3.8D design and implementation (3.8C blocked by owner decision OD-11)",
-    "3.8E after 3.8D",
-    "Repair four PR46 Medium follow-ups before starting 3.9B"
+    "Push PR49 main-merge/checkpoint toexistingbranch; runmandatorychecks andindependentfull-diffreview",
+    "Exact-headverify PR49 withmaincopy beforemergingonlywhenallgatespass",
+    "ObserveallPR50 mainpostmergegates andPR48 revalidation; fixverifiedfailures withoutweakeningchecks",
+    "Continue approvedPhase3.8D completehistoryclosure/incrementalvaluation andguardedexecution/UIcontracts; keepfullphaseDraftuntilcomplete"
   ],
   "openDecisions": [
     "OD-1",
@@ -107,5 +117,32 @@
     "runnerMode": "HASM_RUNNER_MODE=hosted (self-hosted vm-test is a disabled fallback, docs/CI-RUNNER.md)",
     "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
+  },
+  "parallelWork": [
+    {
+      "branch": "feature/phase-3-8d-impact-preview",
+      "head": "676c77ebfa420e11618bbf12a100ec67e37083f8",
+      "pr": 48
+    },
+    {
+      "branch": "feature/codex-workflow-optimization",
+      "head": "dfe86dd2179f3d63be978d17e23554d3cb9e72bc",
+      "pr": 49
+    },
+    {
+      "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
+      "branch": "feature/security-picomatch",
+      "approval": "MERGED PR50 underexplicitconditionalapproval; everyrequiredgatepassed",
+      "pr": 50
+    }
+  ],
+  "sessionContinuity": {
+    "automaticAfterUsageReset": "NOT CONFIRMED",
+    "lastPushedProposalHead": "3b029f40f5bc6bc47a15de373e6748fea4504865",
+    "manualResumeSupported": true,
+    "cliVersion": "0.169.0",
+    "goalsFeatureEnabled": true,
+    "restartInstruction": "docs/RESUME-CODEX.md",
+    "backgroundRestartConfigured": false
   }
 }
