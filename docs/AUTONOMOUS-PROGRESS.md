@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Multi-root proposal read-set and ordinary comparison — 2026-11-18
+
+Latest fully verified head8062d04421bbb776e79a3cc31dc91d92546ca9c2: ALL seven applicable Actions passed and main's exact-head verifier passed. PostgreSQL run44303737842 passed1087/1087, zero skips, registry1031 enforced. Mainfe443211/merged PR50/49 and D046's exact-six-record automatic expiry remain unchanged; no security gate weakened.
+
+The next internal slice loads all proposed endpoint components in ONE authorized repeatable-read/read-only snapshot with shared global budgets, including empty destinations. The ordinary comparison rebuilds raw baseline evidence/fingerprint, reuses the existing block scheduler/validator/CostingMath, inserts whole proposals after same-date history on every endpoint, and compares both transfer legs/all original trajectories/final positions. Deterministic synthetic child IDs and comparison fingerprints are reproducibility evidence, not real layers, journal adjustments or approval/execution authority. No API/DI/production caller, migration or conversion activation. Existing original history/journals and single-root behavior remain unchanged.
+
+Separate full cumulative design/implementation reviews found no Critical/High/Medium; limited internal checkpoint only (review-records/PR-48-flow-comparison.md). Final full infrastructure unit967/967 passed, zero skips; focused39, PostgreSQL read-set9 and comparison17 passed. A new malformed fixture's sequence collision was fixed with an unoccupied99, preserving constraints/assertions; initial constructor compilation was corrected without weakening tests. Final consolidated95/95 PostgreSQL cases passed, zero failures/skips, on disposable5433 (test-results/flow-comparison-consolidated). Registry only increases1031->1057, expected full1113 including56 safety cases. Full NEW-head CI is PENDING; earlier8062d04 checks do not prove new code.
+
+Next: persist this reviewed checkpoint and verify exact-head CI/committed-head independent confirmation. Then integrate the authorized read-set/comparison through one bounded application contract with final live authorization across both loading and comparison. Continue complete reversal/negative/conversion entitlement contracts, protected persistence/approval/execution, prospective method conversion/revaluation and shared Web/Tauri UI. Full approved Phase3.8D remains incomplete; PR48 stays Draft, no merge. Preserve D044/D045 and Final Closed/audit/SoD/legal rules; no repeated rejected dependency investigation or automatic exception renewal.
+
 ## Final authorization and malformed-history follow-up — 2026-11-18
 
 Internal snapshot checkpoint450236093c95ff4ed6c3db5a57fd4ec3bf413996 is pushed and independently confirmed across the full39-file diff. Its backend/security checks passed; PostgreSQL CI remains PENDING at this observation. Mainfe443211 and owner D046 conditional approval/expiry are unchanged; PR48 stays Draft.

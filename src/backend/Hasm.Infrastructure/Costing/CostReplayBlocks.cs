@@ -18,16 +18,30 @@ internal static partial class CostReplay
     /// </summary>
     internal static ReplayBlockResult CalculateBlocks(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
         ImmutableArray<ReplayFlowBlock> blocks, CancellationToken ct = default)
+        => CalculateBlocksCore(method, moneyDecimals, positions, blocks, null, ct);
+
+    internal static ReplayBlockResult CalculateBlocksWithInsertion(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+        ImmutableArray<ReplayFlowBlock> blocks, ReplayFlowBlock proposal, CancellationToken ct = default)
+        => CalculateBlocksCore(method, moneyDecimals, positions, blocks,
+            proposal ?? throw new CostingException("invalid_replay_input"), ct);
+
+    private static ReplayBlockResult CalculateBlocksCore(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+        ImmutableArray<ReplayFlowBlock> blocks, ReplayFlowBlock? proposal, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (method is not (CostMethod.Fifo or CostMethod.MovingAverage) || moneyDecimals is < 0 or > CostingMath.MaxMoneyDecimals ||
             positions.IsDefault || blocks.IsDefault) throw new CostingException("invalid_replay_input");
-        if (blocks.Length > 100_000 || positions.Length > 10_000) throw new CostingException("impact_history_too_large");
+        if (blocks.Length > 100_000 - (proposal is null ? 0 : 1) || positions.Length > 10_000) throw new CostingException("impact_history_too_large");
+        if (proposal is not null && (proposal.Order is null || proposal.Order.Reverses is not null ||
+            proposal.Order.Legs.IsDefaultOrEmpty || proposal.Order.Legs.Any(l => l.Ordinal != 1)))
+            throw new CostingException("invalid_replay_input");
+        var allBlocks = proposal is null ? blocks : blocks.Add(proposal);
         var groups = new Dictionary<Guid, ReplayFlowBlock>();
         var orders = ImmutableArray.CreateBuilder<ReplayOrderGroup>(blocks.Length);
         var childCount = 0;
-        foreach (var block in blocks)
+        for (var n = 0; n < allBlocks.Length; n++)
         {
+            var block = allBlocks[n];
             ct.ThrowIfCancellationRequested();
             if (block is null || block.Order is null || block.Children.IsDefaultOrEmpty || !groups.TryAdd(block.Order.Id, block))
                 throw new CostingException("impact_history_inconsistent");
@@ -36,11 +50,13 @@ internal static partial class CostReplay
             if (block.Children.Length > 500) throw new CostingException("impact_history_too_large"); // Existing costing-operation line limit.
             if (block.Children.Length > 200_000 - childCount) throw new CostingException("impact_history_too_large");
             childCount += block.Children.Length;
-            orders.Add(block.Order);
+            if (n < blocks.Length) orders.Add(block.Order);
         }
         // Proves group atomicity and every historical range before any costing is attempted.
-        var schedule = ReplaySchedule.Calculate(orders.MoveToImmutable(), ct: ct);
-        foreach (var block in blocks)
+        var insertion = proposal is null ? null : new ReplayOrderInsertion(proposal.Order.Id, proposal.Order.EffectiveDate,
+            proposal.Order.Legs.Select(l => new ReplayOrderProposalLeg(l.PositionId, l.EntryCount)).ToImmutableArray());
+        var schedule = ReplaySchedule.CalculateInsertion(orders.MoveToImmutable(), insertion, ct);
+        foreach (var block in allBlocks)
         {
             ct.ThrowIfCancellationRequested();
             var order = block.Order;

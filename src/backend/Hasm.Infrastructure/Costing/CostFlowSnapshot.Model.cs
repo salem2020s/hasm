@@ -24,19 +24,46 @@ internal sealed partial class CostFlowSnapshotService
     private static CostingException Unsupported() => new("impact_history_unsupported");
     private static CostingException TooLarge() => new("impact_history_too_large");
 
+    // Derived Blocks/LayerBindings are deliberately rebuilt, never accepted as caller authority.
+    // This verifies consistent evidence, NOT database completeness or live authorization.
+    internal static CostFlowSnapshot RebuildForComparison(CostFlowSnapshot snapshot, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.HistoryFingerprint))
+            throw new CostingException("invalid_impact_snapshot");
+        var rebuilt = Reconcile(snapshot.CompanyId, snapshot.ItemId, snapshot.Method, snapshot.CurrencyCode, snapshot.MoneyDecimals,
+            snapshot.Positions, snapshot.Entries, snapshot.Layers, snapshot.Consumptions, ct);
+        if (!StringComparer.Ordinal.Equals(snapshot.HistoryFingerprint, rebuilt.HistoryFingerprint)) throw Inconsistent();
+        return rebuilt;
+    }
+
     // Called only after full metadata quarantine/live scope checks and bounded reads in ONE snapshot.
     // This proves supported baseline arithmetic/provenance, not source approval or execution authority.
     private static CostFlowSnapshot Reconcile(Guid company, Guid item, CostMethod method, string currency, int decimals,
         ImmutableArray<CostFlowPosition> positions, ImmutableArray<CostFlowEntry> entries,
         ImmutableArray<CostFlowLayer> layers, ImmutableArray<CostFlowConsumption> consumptions, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        if (company == Guid.Empty || item == Guid.Empty || string.IsNullOrWhiteSpace(currency) ||
+            method is not (CostMethod.Fifo or CostMethod.MovingAverage) || decimals is < 0 or > CostingMath.MaxMoneyDecimals ||
+            positions.IsDefaultOrEmpty || entries.IsDefault || layers.IsDefault || consumptions.IsDefault)
+            throw new CostingException("invalid_impact_snapshot");
+        if (positions.Length > 10_000 || entries.Length > 200_000 || consumptions.Length > 400_000 || layers.Length > 400_000 - consumptions.Length)
+            throw TooLarge();
+        var warehouseIds = new HashSet<Guid>(); var positionIds = new HashSet<Guid>();
+        foreach (var position in positions)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (position is null || position.WarehouseId == Guid.Empty || !warehouseIds.Add(position.WarehouseId) ||
+                position.PositionId is { } id && (id == Guid.Empty || !positionIds.Add(id))) throw Inconsistent();
+        }
         var byWarehouse = positions.ToDictionary(p => p.WarehouseId);
         var byPosition = positions.Where(p => p.PositionId is not null).ToDictionary(p => p.PositionId!.Value);
         var byEntry = new Dictionary<long, CostFlowEntry>();
         foreach (var e in entries)
         {
             ct.ThrowIfCancellationRequested();
-            if (e.Id <= 0 || !byEntry.TryAdd(e.Id, e) || e.OperationId == Guid.Empty || e.ItemId != item ||
+            if (e is null || e.Id <= 0 || !byEntry.TryAdd(e.Id, e) || e.OperationId == Guid.Empty || e.ItemId != item ||
                 !byPosition.TryGetValue(e.PositionId, out var pos) || pos.WarehouseId != e.WarehouseId || e.Date != e.OperationDate) throw Inconsistent();
             if (e.OperationKind is not (CostOperationKind.Receipt or CostOperationKind.Issue or CostOperationKind.Transfer) || e.HasReversal ||
                 (e.SourceType is null ? e.SourceId is not null : e.SourceType != "stock_document" || e.SourceId is null || !e.DocumentProof)) throw Unsupported();
@@ -102,7 +129,7 @@ internal sealed partial class CostFlowSnapshotService
         foreach (var layer in layers)
         {
             ct.ThrowIfCancellationRequested();
-            if (layer.Id == Guid.Empty || !actualLayers.TryAdd(layer.Id, layer) || layer.ItemId != item ||
+            if (layer is null || layer.Id == Guid.Empty || !actualLayers.TryAdd(layer.Id, layer) || layer.ItemId != item ||
                 !byPosition.TryGetValue(layer.PositionId, out var position) || position.WarehouseId != layer.WarehouseId ||
                 !byEntry.TryGetValue(layer.EntryId, out var entry) || entry.PositionId != layer.PositionId ||
                 layer.Sequence <= 0 || layer.OriginalQuantity <= 0 || layer.OriginalAmount < 0 || layer.RemainingQuantity < 0 || layer.RemainingAmount < 0 ||
@@ -142,7 +169,10 @@ internal sealed partial class CostFlowSnapshotService
         }
         var consumptionIds = new HashSet<long>();
         foreach (var take in consumptions)
-            if (take.Id <= 0 || !consumptionIds.Add(take.Id) || take.Restores || !byEntry.ContainsKey(take.EntryId) || !actualLayers.ContainsKey(take.LayerId)) throw Inconsistent();
+        {
+            ct.ThrowIfCancellationRequested();
+            if (take is null || take.Id <= 0 || !consumptionIds.Add(take.Id) || take.Restores || !byEntry.ContainsKey(take.EntryId) || !actualLayers.ContainsKey(take.LayerId)) throw Inconsistent();
+        }
         var takesByEntry = consumptions.GroupBy(c => c.EntryId).ToDictionary(g => g.Key,
             g => g.OrderBy(c => actualLayers[c.LayerId].Sequence).ThenBy(c => c.Id).ToArray());
         var checkedTakes = 0;

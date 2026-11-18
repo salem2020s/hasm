@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -355,6 +356,96 @@ public class CostFlowSnapshotTests : CostingTestBase
         Assert.True(await Rbac.IsAllowedAsync(viewer.Id, Company.Id, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(W1.Id)));
         Assert.Equal(before, await Footprint());
     }
+
+    [PostgresTheory]
+    [InlineData(CostMethod.Fifo)]
+    [InlineData(CostMethod.MovingAverage)]
+    public async Task All_proposal_root_components_share_one_canonical_read_set(CostMethod method)
+    {
+        await PrepareCosting(); var item = method == CostMethod.Fifo ? Fifo : Avg; var w3 = await NewWarehouse("W3");
+        await Receive(item, 4, 4); await Receive(item, 3, 9, W2); await Move(item, 1, W2, w3);
+        var before = await Footprint(); var reader = Reader();
+        var a = Snapshot(await reader.LoadAsync(Admin.Id, Company.Id, item.Id, [W1.Id, W2.Id]));
+        var b = Snapshot(await reader.LoadAsync(Admin.Id, Company.Id, item.Id, [W2.Id, W1.Id, W2.Id]));
+        Assert.Equal(3, a.Positions.Length); Assert.Equal(4, a.Entries.Length);
+        Assert.Equal(a.HistoryFingerprint, b.HistoryFingerprint);
+        Assert.Equal((4m, 4m), (Assert.Single(a.Positions, p => p.WarehouseId == W1.Id).Quantity,
+            Assert.Single(a.Positions, p => p.WarehouseId == W1.Id).Value));
+        Assert.Equal(before, await Footprint()); await AssertConsistent();
+    }
+
+    [PostgresFact]
+    public async Task Every_proposal_root_is_authorized_before_opening_the_history_snapshot()
+    {
+        await PrepareCosting(); await Receive(Fifo, 1, 1); await Receive(Fifo, 1, 2, W2);
+        var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
+        var reader = Reader(); var opened = false;
+        reader.SnapshotEstablished = (_, _, _) => { opened = true; return Task.CompletedTask; };
+        Reject(await reader.LoadAsync(viewer.Id, Company.Id, Fifo.Id, [W1.Id, W2.Id]), ConfigStatus.Forbidden, "forbidden");
+        Assert.False(opened);
+    }
+
+    [PostgresFact]
+    public async Task Empty_proposal_destination_is_evidence_without_creating_a_position()
+    {
+        await PrepareCosting(); await Receive(Fifo, 1, 1); var before = await Footprint();
+        var snapshot = Snapshot(await Reader().LoadAsync(Admin.Id, Company.Id, Fifo.Id, [W1.Id, W2.Id]));
+        var empty = Assert.Single(snapshot.Positions, p => p.WarehouseId == W2.Id);
+        Assert.Null(empty.PositionId); Assert.Equal((0m, 0m, 0L), (empty.Quantity, empty.Value, empty.LastSequence));
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresFact]
+    public async Task Concurrent_writes_to_the_second_root_do_not_mix_snapshot_versions()
+    {
+        await PrepareCosting(); await Receive(Fifo, 1, 1); await Receive(Fifo, 2, 4, W2);
+        var reader = Reader(); reader.SnapshotEstablished = async (_, _, _) => { await Receive(Fifo, 3, 9, W2); };
+        var old = Snapshot(await reader.LoadAsync(Admin.Id, Company.Id, Fifo.Id, [W1.Id, W2.Id]));
+        Assert.Equal(2, old.Entries.Length);
+        var p = Assert.Single(old.Positions, p => p.WarehouseId == W2.Id); Assert.Equal((2m, 4m), (p.Quantity, p.Value));
+        var current = Snapshot(await Reader().LoadAsync(Admin.Id, Company.Id, Fifo.Id, [W1.Id, W2.Id]));
+        Assert.Equal(3, current.Entries.Length); Assert.NotEqual(old.HistoryFingerprint, current.HistoryFingerprint);
+    }
+
+    [PostgresFact]
+    public async Task All_roots_share_the_same_warehouse_budget_and_invalid_roots_fail_closed()
+    {
+        await PrepareCosting(); var before = await Footprint();
+        Reject(await Reader(new(Warehouses: 1)).LoadAsync(Admin.Id, Company.Id, Fifo.Id, [W1.Id, W2.Id]),
+            ConfigStatus.Conflict, "impact_history_too_large");
+        var reader = Reader();
+        foreach (var roots in new[] { default(ImmutableArray<Guid>), ImmutableArray<Guid>.Empty,
+                     ImmutableArray.Create(Guid.Empty), Enumerable.Repeat(W1.Id, 10_001).ToImmutableArray() })
+            Reject(await reader.LoadAsync(Admin.Id, Company.Id, Fifo.Id, roots), ConfigStatus.Conflict, "invalid_impact_roots");
+        Assert.Equal(before, await Footprint());
+    }
+
+    [PostgresTheory]
+    [InlineData("multiline-child-position")]
+    [InlineData("foreign-consumption-layer")]
+    [InlineData("foreign-consumption-entry")]
+    public async Task Malformed_child_and_consumption_references_authorize_hidden_foreign_positions(string corruption)
+    {
+        await PrepareCosting();
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest(Key(), D1, null,
+            [new(Fifo.Id, W1.Id, 1, 1), new(Fifo.Id, W1.Id, 2, 8)]));
+        await IssueOf(Fifo, 1); await Receive(Fifo2, 1, 3, W2); var foreign = await Pos(Fifo2, W2);
+        var ce = CompanySchema.CostEntry.Table; var cc = CompanySchema.CostConsumption.Table;
+        if (corruption == "multiline-child-position")
+            await Sql($"BEGIN; ALTER TABLE {ce} DISABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; UPDATE {ce} SET {CompanySchema.CostEntry.PositionId}='{foreign.Id}',{CompanySchema.CostEntry.Seq}=99 WHERE {CompanySchema.CostEntry.Id}=(SELECT min({CompanySchema.CostEntry.Id}) FROM {ce}); ALTER TABLE {ce} ENABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; COMMIT;");
+        else
+        {
+            var update = corruption == "foreign-consumption-layer"
+                ? $"{CompanySchema.CostConsumption.LayerId}=(SELECT {LayerTable.Id} FROM {LayerTable.Table} WHERE {LayerTable.ItemId}='{Fifo2.Id}')"
+                : $"{CompanySchema.CostConsumption.EntryId}=(SELECT {CompanySchema.CostEntry.Id} FROM {ce} WHERE {CompanySchema.CostEntry.ItemId}='{Fifo2.Id}')";
+            await Sql($"BEGIN; ALTER TABLE {cc} DISABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; UPDATE {cc} SET {update}; ALTER TABLE {cc} ENABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; COMMIT;");
+        }
+        var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
+        var before = await Footprint();
+        Reject(await Read(Reader(), viewer.Id), ConfigStatus.Forbidden, "forbidden");
+        Reject(await Read(Reader()), ConfigStatus.Conflict, "impact_history_inconsistent");
+        Assert.Equal(before, await Footprint());
+    }
 }
 
 public class StockDocumentCostFlowSnapshotTests : StockPostingTestBase
@@ -397,6 +488,11 @@ public class StockDocumentCostFlowSnapshotTests : StockPostingTestBase
         Assert.Equal(new[] { receipt.Id, transfer.Id, transfer.Id, issue.Id }, snapshot.Entries.Select(e => e.SourceId!.Value));
         Assert.Equal((2m, 20m), (Assert.Single(snapshot.Positions, p => p.WarehouseId == W2.Id).Quantity,
             Assert.Single(snapshot.Positions, p => p.WarehouseId == W2.Id).Value));
+        var comparison = CostFlowComparison.Calculate(snapshot, new(Guid.NewGuid(), D1.AddDays(-1), CostOperationKind.Receipt,
+            [new(W1.Id, 10, 300)]));
+        Assert.Equal(4, comparison.Changes.Length);
+        Assert.Equal(method == CostMethod.Fifo ? 120m : 80m, comparison.Changes.Single(c => c.EntryId == snapshot.Entries[^1].Id).ProposedAmount);
+        Assert.Equal(method == CostMethod.Fifo ? 60m : 40m, comparison.Positions.Single(p => p.WarehouseId == W2.Id).ProposedValue);
         Assert.Equal(before, await Counts());
     }
 

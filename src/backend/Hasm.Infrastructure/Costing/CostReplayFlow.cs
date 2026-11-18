@@ -30,7 +30,11 @@ internal static partial class CostReplay
 
     // Multiline blocks separately prove <=100k parent groups and <=200k individual entries.
     // The original ungrouped entry point retains its original 100k-event bound.
-    private static ReplayFlowResult CalculateFlowCore(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+    internal static void ValidateProposedFlowInputs(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+        ImmutableArray<ReplayFlowEvent> events, CancellationToken ct = default)
+        => ValidateFlowInputs(method, moneyDecimals, positions, events, 500, ct);
+
+    private static HashSet<Guid> ValidateFlowInputs(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
         ImmutableArray<ReplayFlowEvent> events, int maxEvents, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -55,6 +59,13 @@ internal static partial class CostReplay
             ValidateEvent(new ReplayEvent(e.Id, e.Kind == CostOperationKind.Transfer ? CostOperationKind.Issue : e.Kind,
                 e.Quantity, e.ReceiptAmount), eventIds, moneyDecimals);
         }
+        return eventIds;
+    }
+
+    private static ReplayFlowResult CalculateFlowCore(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+        ImmutableArray<ReplayFlowEvent> events, int maxEvents, CancellationToken ct)
+    {
+        var eventIds = ValidateFlowInputs(method, moneyDecimals, positions, events, maxEvents, ct);
 
         // Shared across ALL positions: every FIFO creation and consumption edge, even zero value,
         // reserves before allocating its state/plan and retained evidence. Average output is bounded

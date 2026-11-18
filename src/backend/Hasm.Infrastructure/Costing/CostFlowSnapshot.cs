@@ -45,14 +45,28 @@ internal sealed partial class CostFlowSnapshotService
         access.IsAllowedAsync(user, company, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(warehouse), ct);
     private static ConfigResult<CostFlowSnapshot> Fail(ConfigStatus status, string code) => ConfigResult<CostFlowSnapshot>.Fail(status, code);
 
-    internal async Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item, Guid warehouse, CancellationToken ct = default)
+    internal Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item, Guid warehouse, CancellationToken ct = default)
+        => LoadAsync(user, company, item, ImmutableArray.Create(warehouse), ct);
+
+    // A proposed operation can join previously disconnected components. All roots must be read
+    // in ONE snapshot and under ONE set of budgets, never by merging separately loaded evidence.
+    internal async Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item,
+        ImmutableArray<Guid> requested, CancellationToken ct = default)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(limits.Deadline ?? TimeSpan.FromSeconds(30)); var token = deadline.Token;
-        if (!await Can(user, company, warehouse, token)) return Fail(ConfigStatus.Forbidden, "forbidden");
-        var scopes = new HashSet<Guid> { warehouse };
+        token.ThrowIfCancellationRequested();
+        if (requested.IsDefaultOrEmpty || requested.Length > 10_000 || requested.Contains(Guid.Empty))
+            return Fail(ConfigStatus.Conflict, "invalid_impact_roots");
+        var scopes = new HashSet<Guid>();
+        foreach (var root in requested)
+            if (scopes.Add(root) && !await Can(user, company, root, token)) return Fail(ConfigStatus.Forbidden, "forbidden");
         ConfigResult<CostFlowSnapshot> result;
-        try { result = await ReadAsync(company, item, warehouse, scopes, w => Can(user, company, w, token), token); }
+        try
+        {
+            if (scopes.Count > limits.Warehouses) throw TooLarge();
+            result = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, token), token);
+        }
         catch (Denied) { result = Fail(ConfigStatus.Forbidden, "forbidden"); }
         catch (CostingException e) { result = Fail(ConfigStatus.Conflict, e.Code); }
         if (BeforeFinalAuthorization is { } observe) await observe(token);
@@ -81,17 +95,17 @@ internal sealed partial class CostFlowSnapshotService
         }
     }
 
-    private async Task<ConfigResult<CostFlowSnapshot>> ReadAsync(Guid company, Guid item, Guid requested, HashSet<Guid> scopes,
+    private async Task<ConfigResult<CostFlowSnapshot>> ReadAsync(Guid company, Guid item, Guid[] requested, HashSet<Guid> scopes,
         Func<Guid, Task<bool>> can, CancellationToken ct)
     {
         await using var conn = await resolver.OpenAsync(company, ct);
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
         var budget = new Budget(limits, ct);
         await using (var q = budget.Command("SET TRANSACTION READ ONLY", conn, tx)) await q.ExecuteNonQueryAsync(ct);
-        await using (var q = budget.Command($"SELECT 1 FROM {W.Table} WHERE {W.Id}=@w", conn, tx))
+        await using (var q = budget.Command($"SELECT count(*) FROM {W.Table} WHERE {W.Id}=ANY(@roots)", conn, tx))
         {
-            q.Parameters.AddWithValue("w", requested);
-            if (await q.ExecuteScalarAsync(ct) is null) return Fail(ConfigStatus.NotFound, "warehouse_not_found");
+            q.Parameters.AddWithValue("roots", requested);
+            if ((long)(await q.ExecuteScalarAsync(ct))! != requested.Length) return Fail(ConfigStatus.NotFound, "warehouse_not_found");
         }
         CostMethod method;
         await using (var q = budget.Command($"SELECT {I.ItemType},{I.IsLot},{I.IsSerial},{I.HasExpiry},{CompanySchema.NegativeStockGuard.ResolvedMethodFunction}({I.Id}) FROM {I.Table} WHERE {I.Id}=@i", conn, tx))
@@ -111,7 +125,7 @@ internal sealed partial class CostFlowSnapshotService
             if (decimals is < 0 or > CostingMath.MaxMoneyDecimals) throw new CostingException("unsupported_currency_precision");
         }
         if (SnapshotEstablished is { } observe) await observe(conn, tx, ct);
-        var operationIds = await Discover(conn, tx, budget, item, requested, scopes, can, ct);
+        var operationIds = await Discover(conn, tx, budget, item, scopes, can, ct);
         foreach (var scope in scopes) if (!await can(scope)) throw new Denied();
         var warehouses = scopes.OrderBy(w => w.ToString("N"), StringComparer.Ordinal).ToArray();
         var data = await ReadData(conn, tx, budget, item, method, warehouses, operationIds, ct);
@@ -125,10 +139,10 @@ internal sealed partial class CostFlowSnapshotService
         $"(({p}.{CP.ItemId}=@i AND {p}.{CP.WarehouseId}=ANY(@ws)) OR ({l}.{CL.ItemId}=@i AND {l}.{CL.WarehouseId}=ANY(@ws)) OR EXISTS(SELECT 1 FROM {CE.Table} re LEFT JOIN {CP.Table} rp ON rp.{CP.Id}=re.{CE.PositionId} WHERE re.{CE.Id}={l}.{CL.EntryId} AND {SelectedEntry("re", "rp")}))";
 
     // Identifier-only quarantine. Never filter edges through a VALID transfer/source/layer join.
-    private async Task<Guid[]> Discover(NpgsqlConnection conn, NpgsqlTransaction tx, Budget budget, Guid item, Guid requested,
+    private async Task<Guid[]> Discover(NpgsqlConnection conn, NpgsqlTransaction tx, Budget budget, Guid item,
         HashSet<Guid> scopes, Func<Guid, Task<bool>> can, CancellationToken ct)
     {
-        var warehouses = new Queue<Guid>(); warehouses.Enqueue(requested);
+        var warehouses = new Queue<Guid>(scopes);
         var pendingOperations = new Queue<Guid>(); var operations = new HashSet<Guid>();
         var pendingLayers = new Queue<Guid>(); var layers = new HashSet<Guid>();
         void Layer(Guid id)
