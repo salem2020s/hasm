@@ -41,8 +41,8 @@ internal sealed partial class CostFlowSnapshotService
             l.Components is < 1 or > 400_000 || l.DiscoveryRows is < 1 or > 400_000 || l.Commands is < 1 or > 20_000 ||
             l.Deadline is { } d && (d <= TimeSpan.Zero || d > TimeSpan.FromSeconds(30))) throw new ArgumentOutOfRangeException(nameof(limits));
     }
-    private Task<bool> Can(Guid user, Guid company, Guid warehouse, CancellationToken ct) =>
-        access.IsAllowedAsync(user, company, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(warehouse), ct);
+    private Task<bool> Can(Guid user, Guid company, Guid warehouse, ReadCommandBudget quota, CancellationToken ct) =>
+        access.IsAllowedAsync(user, company, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(warehouse), quota.Reserve, ct);
     private static ConfigResult<CostFlowSnapshot> Fail(ConfigStatus status, string code) => ConfigResult<CostFlowSnapshot>.Fail(status, code);
 
     internal Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item, Guid warehouse, CancellationToken ct = default)
@@ -62,14 +62,16 @@ internal sealed partial class CostFlowSnapshotService
         token.ThrowIfCancellationRequested();
         if (requested.IsDefaultOrEmpty || requested.Length > 10_000 || requested.Contains(Guid.Empty))
             return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invalid_impact_roots");
+        var quota = new ReadCommandBudget(limits.Commands, token);
+        var budget = new Budget(limits, token, quota);
         var scopes = new HashSet<Guid>();
-        foreach (var root in requested)
-            if (scopes.Add(root) && !await Can(user, company, root, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
         ConfigResult<T> result;
         try
         {
+            foreach (var root in requested)
+                if (scopes.Add(root) && !await Can(user, company, root, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
             if (scopes.Count > limits.Warehouses) throw TooLarge();
-            var loaded = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, token), token);
+            var loaded = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, quota, token), budget, token);
             if (!loaded.IsOk) result = ConfigResult<T>.Fail(loaded.Status, loaded.Code!);
             else
             {
@@ -77,19 +79,32 @@ internal sealed partial class CostFlowSnapshotService
                 result = ConfigResult<T>.Ok(project(loaded.Value ?? throw Inconsistent(), token));
             }
         }
+        catch (ReadCommandBudgetException e) { return BudgetFailure<T>(e, token); }
         catch (Denied) { result = ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden"); }
         catch (CostingException e) { result = ConfigResult<T>.Fail(ConfigStatus.Conflict, e.Code); }
         if (BeforeFinalAuthorization is { } observe) await observe(token);
         // Includes error paths. Expired/cancelled work yields no diagnostic or partially authorized data.
-        foreach (var scope in scopes)
-            if (!await Can(user, company, scope, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+        try
+        {
+            foreach (var scope in scopes)
+                if (!await Can(user, company, scope, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+        }
+        catch (ReadCommandBudgetException e) { return BudgetFailure<T>(e, token); }
         token.ThrowIfCancellationRequested();
         return result;
     }
 
-    private sealed class Budget(CostFlowSnapshotLimits limits, CancellationToken ct)
+    private static ConfigResult<T> BudgetFailure<T>(ReadCommandBudgetException error, CancellationToken token)
     {
-        private int commands, discoveryRows, entries, components;
+        token.ThrowIfCancellationRequested();
+        return ConfigResult<T>.Fail(ConfigStatus.Conflict, error.Failure == ReadBudgetFailure.Exhausted
+            ? "impact_history_too_large" : "impact_query_budget_unavailable");
+    }
+
+    private sealed class Budget(CostFlowSnapshotLimits limits, CancellationToken ct, ReadCommandBudget quota)
+    {
+        private int discoveryRows, entries, components;
+        internal ReadCommandBudget Sql => quota;
         internal int DiscoveryRemaining => limits.DiscoveryRows - discoveryRows;
         internal int ComponentRemaining => limits.Components - components;
         private void Take(ref int count, int maximum)
@@ -101,16 +116,16 @@ internal sealed partial class CostFlowSnapshotService
         internal void Component() => Take(ref components, limits.Components);
         internal NpgsqlCommand Command(string sql, NpgsqlConnection connection, NpgsqlTransaction transaction)
         {
-            Take(ref commands, limits.Commands); return new NpgsqlCommand(sql, connection, transaction);
+            quota.Reserve(); return new NpgsqlCommand(sql, connection, transaction);
         }
     }
 
     private async Task<ConfigResult<CostFlowSnapshot>> ReadAsync(Guid company, Guid item, Guid[] requested, HashSet<Guid> scopes,
-        Func<Guid, Task<bool>> can, CancellationToken ct)
+        Func<Guid, Task<bool>> can, Budget budget, CancellationToken ct)
     {
-        await using var conn = await resolver.OpenAsync(company, ct);
+        await using var conn = await resolver.OpenAsync(company, budget.Sql.Reserve, ct);
+        budget.Sql.Reserve(2); // BEGIN and eventual ROLLBACK/disposal are reserved before starting.
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
-        var budget = new Budget(limits, ct);
         await using (var q = budget.Command("SET TRANSACTION READ ONLY", conn, tx)) await q.ExecuteNonQueryAsync(ct);
         await using (var q = budget.Command($"SELECT count(*) FROM {W.Table} WHERE {W.Id}=ANY(@roots)", conn, tx))
         {

@@ -97,22 +97,22 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: integrated internal preview retains auth scopes/deadline across loading and math; unit967/preview13 passed; consolidated108 pending; OPEN Medium whole-operation query budget",
+    "state": "ACTIVE incomplete Phase3.8D: shared whole-operation SQL quota implemented/source reviewed; unit970 and PG6 passed; broader regression pending; required security gate blocked by withdrawn advisory/owner-held PR51",
     "knownIssues": [
-      "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
-      "Latest verifiedfb07fdd: all7 applicable Actions/main verifier passed, PostgreSQL1113/1113 registry1057, unit967/API69. New preview-head CI pending.",
+      "GHSA-fc5q-39xc-vjpf officially withdrawn2026-11-18T15:38:56Z; fullaudit0; existing exact waiver fails closed. Inert PR51 retirement awaits NEW explicit owner approval; no gate/manifests/expiry changed.",
+      "Latest fully green historicalfb07fdd:7checks/PG1113. Currentcf225 backend/PG1126/unit967/API69 passed; dependency-scan fails due withdrawal. No current full green claim.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Internal ordinary complete component snapshots/comparison implemented, not publicly integrated; full reversal/negative/conversion, guarded persistence/approvals/execution/revaluation/UI remain incomplete.",
-      "Integrated preview: fullunit967/967 and preview13/13 passed, zero skips; consolidated108 pending. Registry1070/full1126. Independent source review noCH; Medium resource-accounting finding OPEN; new exact-head CI pending.",
+      "Quota fix source-reviewed no CHM: fullunit970, focusedPG6 passed zero skips. Broad runtime/auth/snapshot regression pending session40955; registry1076/full1132. New-head CI pending and withdrawal blocker remains.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch",
-      "OPEN Medium:20k snapshot-command counter excludes live RBAC scoped-grant/resolver/schema SQL. Strict WHOLE-operation quota remains required before public integration; preserve live checks, no cross-stage permission cache."
+      "Original Medium query-accounting gap resolved at source level/shared quota; focused tests pass, broader regression/CI still required. Public source-bound plan/execution/UI remains unfinished."
     ]
   },
   "next": [
-    "Implement shared optional operation command budget through authorization/scope validation/resolver/schema/privilege SQL and snapshot, with typed exhaustion propagation, cold-cache/low-quota/many-grant/cancel/revocation tests; no unrelated caller changes.",
-    "Finish consolidated108 and verify new exact-head CI/independent committed-head review; then bind stored document revision/validated inputs/account/period/basis/entitlement under complete consistent source-bound plan contract before public API.",
+    "Complete existing live regression session40955 without duplicate restart, preserve shared-quota checkpoint, verify exact-head backend/PG CI and committed-head independent review; keep failed security gate explicit.",
+    "PR51 is INERT/awaiting owner approval already requested once. Do not apply protected retirement patch or relabel while pending; continue full source-bound consistent document/account/period/basis/entitlement design and implementation independently.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
