@@ -56,11 +56,16 @@ internal sealed partial class CostFlowSnapshotService
 
     private async Task<ConfigResult<T>> ReadAuthorizedAsync<T>(Guid user, Guid company, Guid item,
         ImmutableArray<Guid> requested, Func<CostFlowSnapshot, CancellationToken, T> project, CancellationToken ct)
+        => await ReadAuthorizedItemsAsync(user, company, [new(item, requested)],
+            (snapshots, token) => project(snapshots[0], token), ct);
+
+    private async Task<ConfigResult<T>> ReadAuthorizedItemsAsync<T>(Guid user, Guid company,
+        ImmutableArray<CostFlowItemRoots> requested, Func<ImmutableArray<CostFlowSnapshot>, CancellationToken, T> project, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(limits.Deadline ?? TimeSpan.FromSeconds(30)); var token = deadline.Token;
         token.ThrowIfCancellationRequested();
-        if (requested.IsDefaultOrEmpty || requested.Length > 10_000 || requested.Contains(Guid.Empty))
+        if (!ValidItemRoots(requested))
             return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invalid_impact_roots");
         var quota = new ReadCommandBudget(limits.Commands, token);
         var budget = new Budget(limits, token, quota);
@@ -68,15 +73,18 @@ internal sealed partial class CostFlowSnapshotService
         ConfigResult<T> result;
         try
         {
-            foreach (var root in requested)
-                if (scopes.Add(root) && !await Can(user, company, root, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
-            if (scopes.Count > limits.Warehouses) throw TooLarge();
-            var loaded = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, quota, token), budget, token);
+            foreach (var request in requested)
+                foreach (var root in request.Warehouses)
+                {
+                    if (scopes.Add(root) && !await Can(user, company, root, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+                    budget.Position(request.ItemId, root);
+                }
+            var loaded = await ReadItemsAsync(company, requested, scopes, w => Can(user, company, w, quota, token), budget, token);
             if (!loaded.IsOk) result = ConfigResult<T>.Fail(loaded.Status, loaded.Code!);
             else
             {
                 token.ThrowIfCancellationRequested();
-                result = ConfigResult<T>.Ok(project(loaded.Value ?? throw Inconsistent(), token));
+                result = ConfigResult<T>.Ok(project(loaded.Value, token));
             }
         }
         catch (ReadCommandBudgetException e) { return BudgetFailure<T>(e, token); }
@@ -104,6 +112,8 @@ internal sealed partial class CostFlowSnapshotService
     private sealed class Budget(CostFlowSnapshotLimits limits, CancellationToken ct, ReadCommandBudget quota)
     {
         private int discoveryRows, entries, components;
+        private readonly HashSet<(Guid Item, Guid Warehouse)> positions = [];
+        private readonly HashSet<Guid> groups = [];
         internal ReadCommandBudget Sql => quota;
         internal int DiscoveryRemaining => limits.DiscoveryRows - discoveryRows;
         internal int ComponentRemaining => limits.Components - components;
@@ -114,24 +124,29 @@ internal sealed partial class CostFlowSnapshotService
         internal void Discovery() => Take(ref discoveryRows, limits.DiscoveryRows);
         internal void Entry() => Take(ref entries, limits.Entries);
         internal void Component() => Take(ref components, limits.Components);
+        internal void Position(Guid item, Guid warehouse)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (positions.Contains((item, warehouse))) return;
+            if (positions.Count == limits.Warehouses) throw TooLarge();
+            positions.Add((item, warehouse));
+        }
+        internal void Group(Guid id)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (groups.Contains(id)) return;
+            if (groups.Count == limits.Groups) throw TooLarge();
+            groups.Add(id);
+        }
         internal NpgsqlCommand Command(string sql, NpgsqlConnection connection, NpgsqlTransaction transaction)
         {
             quota.Reserve(); return new NpgsqlCommand(sql, connection, transaction);
         }
     }
 
-    private async Task<ConfigResult<CostFlowSnapshot>> ReadAsync(Guid company, Guid item, Guid[] requested, HashSet<Guid> scopes,
-        Func<Guid, Task<bool>> can, Budget budget, CancellationToken ct)
+    private async Task<ConfigResult<CostFlowSnapshot>> ReadDiscoveredAsync(NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid company, Guid item, HashSet<Guid> scopes, Guid[] operationIds, Budget budget, CancellationToken ct)
     {
-        await using var conn = await resolver.OpenAsync(company, budget.Sql.Reserve, ct);
-        budget.Sql.Reserve(2); // BEGIN and eventual ROLLBACK/disposal are reserved before starting.
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
-        await using (var q = budget.Command("SET TRANSACTION READ ONLY", conn, tx)) await q.ExecuteNonQueryAsync(ct);
-        await using (var q = budget.Command($"SELECT count(*) FROM {W.Table} WHERE {W.Id}=ANY(@roots)", conn, tx))
-        {
-            q.Parameters.AddWithValue("roots", requested);
-            if ((long)(await q.ExecuteScalarAsync(ct))! != requested.Length) return Fail(ConfigStatus.NotFound, "warehouse_not_found");
-        }
         CostMethod method;
         await using (var q = budget.Command($"SELECT {I.ItemType},{I.IsLot},{I.IsSerial},{I.HasExpiry},{CompanySchema.NegativeStockGuard.ResolvedMethodFunction}({I.Id}) FROM {I.Table} WHERE {I.Id}=@i", conn, tx))
         {
@@ -149,9 +164,6 @@ internal sealed partial class CostFlowSnapshotService
             currency = r.GetString(0); decimals = Convert.ToInt32(r.GetValue(1));
             if (decimals is < 0 or > CostingMath.MaxMoneyDecimals) throw new CostingException("unsupported_currency_precision");
         }
-        if (SnapshotEstablished is { } observe) await observe(conn, tx, ct);
-        var operationIds = await Discover(conn, tx, budget, item, scopes, can, ct);
-        foreach (var scope in scopes) if (!await can(scope)) throw new Denied();
         var warehouses = scopes.OrderBy(w => w.ToString("N"), StringComparer.Ordinal).ToArray();
         var data = await ReadData(conn, tx, budget, item, method, warehouses, operationIds, ct);
         var result = Reconcile(company, item, method, currency, decimals, data.Positions, data.Entries, data.Layers, data.Consumptions, ct);
@@ -179,6 +191,7 @@ internal sealed partial class CostFlowSnapshotService
         async Task Reference(Guid id)
         {
             if (scopes.Contains(id)) return;
+            budget.Position(item, id);
             if (!await can(id)) throw new Denied();
             if (scopes.Count == limits.Warehouses) throw TooLarge();
             scopes.Add(id); warehouses.Enqueue(id);
@@ -198,7 +211,7 @@ internal sealed partial class CostFlowSnapshotService
                     if (!operations.Contains(op))
                     {
                         if (operations.Count == limits.Groups) throw TooLarge();
-                        operations.Add(op); pendingOperations.Enqueue(op);
+                        budget.Group(op); operations.Add(op); pendingOperations.Enqueue(op);
                     }
                 }
                 for (var column = 1; column < r.FieldCount; column++)
@@ -255,7 +268,7 @@ internal sealed partial class CostFlowSnapshotService
                     if (!r.IsDBNull(1) && !operations.Contains(r.GetGuid(1)))
                     {
                         if (operations.Count == limits.Groups) throw TooLarge();
-                        operations.Add(r.GetGuid(1));
+                        budget.Group(r.GetGuid(1)); operations.Add(r.GetGuid(1));
                         pendingOperations.Enqueue(r.GetGuid(1));
                     }
                 }
