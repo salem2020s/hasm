@@ -493,6 +493,8 @@ public class StockDocumentCostFlowSnapshotTests : StockPostingTestBase
         Assert.Equal(4, comparison.Changes.Length);
         Assert.Equal(method == CostMethod.Fifo ? 120m : 80m, comparison.Changes.Single(c => c.EntryId == snapshot.Entries[^1].Id).ProposedAmount);
         Assert.Equal(method == CostMethod.Fifo ? 60m : 40m, comparison.Positions.Single(p => p.WarehouseId == W2.Id).ProposedValue);
+        var integrated = await new CostFlowSnapshotService(Resolver, Rbac).PreviewAsync(Admin.Id, Company.Id, item.Id, comparison.Proposal);
+        Assert.True(integrated.IsOk, integrated.Code); Assert.Equal(comparison.ComparisonFingerprint, integrated.Value!.ComparisonFingerprint);
         Assert.Equal(before, await Counts());
     }
 

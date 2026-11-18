@@ -50,29 +50,39 @@ internal sealed partial class CostFlowSnapshotService
 
     // A proposed operation can join previously disconnected components. All roots must be read
     // in ONE snapshot and under ONE set of budgets, never by merging separately loaded evidence.
-    internal async Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item,
+    internal Task<ConfigResult<CostFlowSnapshot>> LoadAsync(Guid user, Guid company, Guid item,
         ImmutableArray<Guid> requested, CancellationToken ct = default)
+        => ReadAuthorizedAsync(user, company, item, requested, static (snapshot, _) => snapshot, ct);
+
+    private async Task<ConfigResult<T>> ReadAuthorizedAsync<T>(Guid user, Guid company, Guid item,
+        ImmutableArray<Guid> requested, Func<CostFlowSnapshot, CancellationToken, T> project, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(limits.Deadline ?? TimeSpan.FromSeconds(30)); var token = deadline.Token;
         token.ThrowIfCancellationRequested();
         if (requested.IsDefaultOrEmpty || requested.Length > 10_000 || requested.Contains(Guid.Empty))
-            return Fail(ConfigStatus.Conflict, "invalid_impact_roots");
+            return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invalid_impact_roots");
         var scopes = new HashSet<Guid>();
         foreach (var root in requested)
-            if (scopes.Add(root) && !await Can(user, company, root, token)) return Fail(ConfigStatus.Forbidden, "forbidden");
-        ConfigResult<CostFlowSnapshot> result;
+            if (scopes.Add(root) && !await Can(user, company, root, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+        ConfigResult<T> result;
         try
         {
             if (scopes.Count > limits.Warehouses) throw TooLarge();
-            result = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, token), token);
+            var loaded = await ReadAsync(company, item, scopes.ToArray(), scopes, w => Can(user, company, w, token), token);
+            if (!loaded.IsOk) result = ConfigResult<T>.Fail(loaded.Status, loaded.Code!);
+            else
+            {
+                token.ThrowIfCancellationRequested();
+                result = ConfigResult<T>.Ok(project(loaded.Value ?? throw Inconsistent(), token));
+            }
         }
-        catch (Denied) { result = Fail(ConfigStatus.Forbidden, "forbidden"); }
-        catch (CostingException e) { result = Fail(ConfigStatus.Conflict, e.Code); }
+        catch (Denied) { result = ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden"); }
+        catch (CostingException e) { result = ConfigResult<T>.Fail(ConfigStatus.Conflict, e.Code); }
         if (BeforeFinalAuthorization is { } observe) await observe(token);
         // Includes error paths. Expired/cancelled work yields no diagnostic or partially authorized data.
         foreach (var scope in scopes)
-            if (!await Can(user, company, scope, token)) return Fail(ConfigStatus.Forbidden, "forbidden");
+            if (!await Can(user, company, scope, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
         token.ThrowIfCancellationRequested();
         return result;
     }

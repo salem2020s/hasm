@@ -97,21 +97,22 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: multi-root authorized read-set and internal ordinary proposal comparison; finalunit967/consolidatedPG95 passed zero skips; new-head CI pending; no production caller",
+    "state": "ACTIVE incomplete Phase3.8D: integrated internal preview retains auth scopes/deadline across loading and math; unit967/preview13 passed; consolidated108 pending; OPEN Medium whole-operation query budget",
     "knownIssues": [
       "High advisory accepted ONLY under D046 exact6 dev records until2026-11-24T00:00Z; no renewal; every other High/Critical still blocks",
-      "Latest verified8062d04: all7 applicable Actions/main verifier passed, PostgreSQL1087/1087 registry1031. New comparison-head CI pending.",
+      "Latest verifiedfb07fdd: all7 applicable Actions/main verifier passed, PostgreSQL1113/1113 registry1057, unit967/API69. New preview-head CI pending.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Internal ordinary complete component snapshots/comparison implemented, not publicly integrated; full reversal/negative/conversion, guarded persistence/approvals/execution/revaluation/UI remain incomplete.",
-      "New slice: finalunit967/967 and consolidatedPG95/95 passed, zero failures/skips. Registry1057/full1113. Independent full-diff design/source reviews no CHM; new exact-head CI pending.",
+      "Integrated preview: fullunit967/967 and preview13/13 passed, zero skips; consolidated108 pending. Registry1070/full1126. Independent source review noCH; Medium resource-accounting finding OPEN; new exact-head CI pending.",
       "Claude original work untouched; generated artifacts and secrets excluded",
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
-      "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch"
+      "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch",
+      "OPEN Medium:20k snapshot-command counter excludes live RBAC scoped-grant/resolver/schema SQL. Strict WHOLE-operation quota remains required before public integration; preserve live checks, no cross-stage permission cache."
     ]
   },
   "next": [
-    "Persist reviewed ordinary comparison checkpoint, verify exact-head full CI/committed-head independent confirmation; keep incomplete phase Draft.",
-    "Integrate authorized multi-root read-set and ordinary comparison through one bounded application contract, including final live authorization across load plus comparison and complete regression coverage; no execution activation.",
+    "Implement shared optional operation command budget through authorization/scope validation/resolver/schema/privilege SQL and snapshot, with typed exhaustion propagation, cold-cache/low-quota/many-grant/cancel/revocation tests; no unrelated caller changes.",
+    "Finish consolidated108 and verify new exact-head CI/independent committed-head review; then bind stored document revision/validated inputs/account/period/basis/entitlement under complete consistent source-bound plan contract before public API.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
@@ -136,7 +137,7 @@
     "scope": "Only GHSA-fc5q-39xc-vjpf exact6 devrecords; otherHigh/Critical andproduction block",
     "proofRun": 44267058914
   },
-  "lastVerifiedFeatureHead": "8062d04421bbb776e79a3cc31dc91d92546ca9c2",
+  "lastVerifiedFeatureHead": "fb07fddbc99bef7418d08901aa2956280656e34d",
   "sessionContinuity": {
     "automaticAfterUsageReset": "NOT CONFIRMED",
     "nativeGoalStatusObserved": "active (owner resumed; get_goal verified2026-11-18)",

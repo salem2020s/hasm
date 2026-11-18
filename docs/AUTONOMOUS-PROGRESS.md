@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Integrated preview lifetime and resource-budget finding — 2026-11-18
+
+Latest fully verified headfb07fddbc99bef7418d08901aa2956280656e34d: ALL seven applicable Actions and main's exact-head verifier passed; actual PostgreSQL1113/1113 zero skips, unit967/API69 passed in run44308637423. Independent committed-head review confirmed the full diff. Mainfe443211/PR50/49 and owner D046 scope/expiry are unchanged.
+
+PreviewAsync now derives every proposal endpoint, loads its own evidence, then compares within the SAME retained authorization scope set. The private generic boundary also preserves LoadAsync behavior. One deadline covers loading/reconciliation/comparison/final live checks on success AND loading/calculation errors. No client snapshots, API/DI/production caller, source approval or execution activation. Final unit967/967 and focused preview13/13 passed, zero skips. Original test process resumed after the stopped disposable PostgreSQL18 cluster was verified and started explicitly on5433; primary5432 untouched, no duplicate test run. Consolidated108 cases are PENDING. Registry only increases1057->1070; full expected1126 includes56 safety cases. NEW-head full CI remains PENDING.
+
+Independent source review found no Critical/High. A subsequent adversarial security audit confirmed one OPEN Medium: the20k counter currently counts snapshot-transaction queries, but live AccessService checks validate all scoped grants and invoke company queries through scope validation/resolver/schema gates outside that counter. Deadline/cancellation still applies; no authorization bypass. Do not claim the required whole-operation command cap is met. See review-records/PR-48-integrated-preview.md and PHASE-3.8D-TRANSFER-SNAPSHOT.md. Public integration/phase acceptance remains gated on a strict fix; no new owner approval is needed.
+
+Exact next action: implement a narrow optional shared command budget propagated before SQL through AccessService, budget-aware scope validation and resolver/schema/privilege paths, sharing the snapshot quota and reserving transaction cleanup. Preserve unrelated callers and ALL live revocation checks; budget exceptions must escape catch-all scope validation/resolver mapping and fail the whole operation safely. Unknown unbudgeted validators fail closed. Cover many grants, cold cache/schema checks/retries, low quotas, cancellation and revocation. Then complete persisted source-document revision/validated-line binding and account/period/basis/entitlement read-set before a public impact-plan API; finish full approval/atomic execution/conversion/revaluation/shared UI scope. PR48 stays Draft; no incomplete-phase merge.
+
 ## Multi-root proposal read-set and ordinary comparison — 2026-11-18
 
 Latest fully verified head8062d04421bbb776e79a3cc31dc91d92546ca9c2: ALL seven applicable Actions passed and main's exact-head verifier passed. PostgreSQL run44303737842 passed1087/1087, zero skips, registry1031 enforced. Mainfe443211/merged PR50/49 and D046's exact-six-record automatic expiry remain unchanged; no security gate weakened.
