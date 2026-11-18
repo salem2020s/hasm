@@ -82,6 +82,12 @@ The ordinary batch primitive now keeps its incremental quantity, value and FIFO 
 
 The next transfer adapter must mirror each consumed FIFO layer in order with deterministic identity and provenance, as the existing InventoryCostingService does. A single averaged destination layer would change downstream issue costs. Chained/returning transfers need complete history closure and both source/destination reconciliation; derived transfer amounts must retain exact value even above a single receipt-input cap. No such adapter, negative-history transition or execution path is activated by this refactor.
 
+## Internal common-method transfer arithmetic
+
+CostReplay.CalculateFlow reuses private per-position state and exact CostingMath for already ordered, classified ordinary receipt/issue/transfer groups. It preserves every mirrored FIFO component and lineage, exact aggregate average cost, arrival order, high derived values and round-trip behavior. It bounds actual component creation/consumption evidence, detects deterministic simulation-identity collisions and exposes only immutable complete results. Contract and numerical examples: PHASE-3.8D-TRANSFER-REPLAY.md. Focused replay42/42, full unit942/942 and relevant real-PostgreSQL snapshot17/17 passed locally, zero skips; new-head CI is separate.
+
+This is arithmetic only: authorized closure, persisted-layer mapping, baseline reconciliation and scheduler integration remain unimplemented. The current snapshot adapter still refuses transfers. Reversal/negative/conversion entitlements and execution/UI requirements are unchanged; no public feature or activation exists merely because flow arithmetic passes.
+
 ## Preserved boundaries
 
 OD-11 remains OPEN and blocks 3.8C. This design does not decide lot/serial selection versus costing or add specific-identification costing. It also does not decide purchase-cost composition (OD-2), licensing transaction counts (OD-12/T-2), formal consolidation (OD-1), or unresolved naming (T-1). The four PR #46 Medium follow-ups remain scheduled before 3.9B. Production deployment, migrations against non-test databases, release and billing changes remain outside this work.

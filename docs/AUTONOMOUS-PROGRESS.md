@@ -1,5 +1,16 @@
 # HASM — Autonomous execution progress
 
+## Internal common-method transfer arithmetic — 2026-11-18
+
+Main `fe4432113c1c13a62c70ee98c218586d7b424b32` is verified: PR50/49 exact-head gates, independent reviews, merge tree/ancestry and ALL post-merge hosted workflows passed. GitHub's existing automatic branch cleanup removed their fully merged remote heads; local worktrees/evidence remain intact. Owner D046's exact six-record development-only exception still discloses the unresolved High advisory and expires2026-11-24T00:00:00Z without renewal. Other High/Critical and production/desktop/NuGet remain blocking.
+
+PR48's prior reviewed head `025aca7dcd0785f324318eed5dd5be9c6603a146` passed all seven applicable checks and main's exact-head verifier. CI PostgreSQL1035/1035 passed, zero skips, with all979 registered database cases enforced. This is the latest fully verified checkpoint; it is not phase-completion or merge approval.
+
+The next pure arithmetic slice is implemented, reusing the same private position state and CostingMath across already ordered, explicitly classified ordinary receipt/issue/transfer groups under one common method. FIFO mirrors every source component with exact value/order/lineage; average carries the exact aggregate. Round trips create new layers. Versioned simulation identity and collision refusal, complete-input validation, shared component-work bounds and cancellation preserve complete-result failure. There is no DB/API/DI/production caller, authorization shortcut or activation.
+
+Twenty-one new flow cases pass, including changed downstream costs after inserted receipts, returning transfers, high derived values, free stock, currency0/6, quantity10^-10, provenance, collisions and bounded work. Focused replay42/42 and FULL unit942/942 passed; relevant PostgreSQL snapshot17/17 passed after the shared-state extension on isolated5433, all zero skips. Separate new TRX preserved. Independent FULL-diff review by separate GPT-6/Codex found no Critical/High/Medium. Two Medium design clarifications were fixed and confirmed. New committed-head CI and review confirmation remain PENDING; do not attribute025aca7's CI proof to the new slice.
+
+Next: authorized complete transfer-history closure, real-to-simulation layer provenance mapping, baseline/scheduler integration and consistency tests; then complete reversal/negative/conversion entitlement persistence, guarded approvals/execution and shared UI. The existing snapshot still refuses unsupported transfers; the helper alone does not establish a public transfer preview. Original posted history and journals remain immutable; conversion execution remains disabled until all contracts/regressions/reviews pass. PR48 remains Draft until the entire approved phase is complete.
 ## Private replay-state checkpoint — 2026-11-18
 
 PR50 and PR49 are merged and their merge trees/ancestry verified. PR48's existing implementation and all approved decisions are preserved on main-reconciled headbbbe07b. Main post-merge PostgreSQL and PR48's fresh PostgreSQL run are still PENDING; other observed checks passed. No phase merge is claimed.
