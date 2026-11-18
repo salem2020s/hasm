@@ -1,5 +1,10 @@
 # HASM — Autonomous execution progress
 
+## Conditional activation after verified proof — 2026-11-18
+
+Run44267058914 succeeded on EXACT head26243de0746c123c8a3e972087b73a7c3ee48a7e: both additional jobs passed. Actual Node24.22.2/Linux CLI and full/production audits, frontend regressions,95-module/six-asset Web inventory, and actual Windows releaseNSIS extraction/integrity passed. No affected tool modules or Node runtime/dependency payload found; installer was not executed/deployed. Evidence and hashes: docs/security/picomatch-activation-evidence.json. Independent GPT-6/Codex full-diff review confirmed strict marker correction and actual binary equality;22 fixtures passed independently, no Critical/High/Medium.
+
+Owner conditions now permit applying the exact hosted audit integration. The policy references that successful run/head and remains restricted to the approved six dev-only records, hosted Linux own-repo heads and frozen inputs, expiring2026-11-24T00:00:00Z with no renewal. Proof checks compare validation code and source blobs; hosted checkout fetches history and uses read-only Actions API permission. Every other High/Critical, production/desktop/NuGet and all existing CI protections remain blocking, unfiltered audit reports remain visible. Self-hosted audit unchanged. Final ACTIVATION HEAD CI and independent review are PENDING; no merge yet. PR48/49 remain untouched/open. Historical inactive/failure entries below are superseded by this verified proof, not erased.
 ## Conditional owner approval and inactive validation implementation — 2026-11-18
 
 Current main814bd7c; PR50 remote ff825032d93be1f1c7a8aca8d0a7eae039dc971e before this checkpoint. Owner explicitly conditionally approved the exact six-record dev-only policy with hard expiry2026-11-24T00:00:00Z. D-046 records the conditions; D-044/045 accounting decisions remain in PR48. Historical unapproved-proposal entries below are superseded only by this explicit conditional decision.

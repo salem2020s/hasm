@@ -1,5 +1,5 @@
 {
-  "status": "CONDITIONALLY-APPROVED-INACTIVE",
+  "status": "APPROVED",
   "owner": "salem2020s",
   "approvedBy": "salem2020s",
   "approvedAt": "2026-11-18T07:53:44Z",
@@ -53,5 +53,8 @@
       ]
     }
   },
-  "activationEvidence": null
+  "activationEvidence": {
+    "runId": 44267058914,
+    "headSha": "26243de0746c123c8a3e972087b73a7c3ee48a7e"
+  }
 }

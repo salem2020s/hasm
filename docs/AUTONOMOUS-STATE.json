@@ -79,21 +79,21 @@
     "phase": "Shared security-policy proposal; independent Phase3.8D development",
     "branch": "feature/security-picomatch",
     "pr": 50,
-    "state": "INACTIVE: verified Tauri bundle marker inspection fix;22 fixtures and actual diagnostic pair match; fresh CI pending",
+    "state": "Conditional activation implemented after successful proof run44267058914 at26243de; final activation-head CI/review PENDING; no merge yet",
     "knownIssues": [
-      "No activation or merge; existing dependency-scan unchanged and failed",
-      "Actual Node24/Linux passed twice; actual Windows release built twice",
-      "Raw hash mismatch rootcause is documented Tauri UNK->NSS marker; exact expected-payload contract implemented,22 fixtures pass",
-      "Fresh unchanged-implementation actualCI and independent confirmation required before activation",
-      "Approved six-record scope and hard expiry unchanged"
+      "High advisory unresolved; exact six dev records only, hard expiry2026-11-24T00:00:00Z; no renewal",
+      "Node24.22.2 actual Linux and Windows production Web/releaseNSIS validation passed together on unchanged implementation26243de",
+      "22 fixtures, independent full-diff/actual-binary review passed; final active-head review and all CI PENDING",
+      "Original manifests/lockfiles unchanged; production audit and all other High/Critical remain mandatory",
+      "PR48/49 still preserved/open; revalidate after protected security-policy merge only"
     ]
   },
   "next": [
-    "Commit/push inactive validation implementation to existing PR50 branch; no force push",
-    "Run actual additional Node24/Linux and Windows production installer jobs; fix verified defects without weakening assertions",
-    "Complete independent full-diff review; activate ONLY after successful validation run/head is bound to unchanged inspected sources and implementation",
-    "After activation rerun every exact-head gate and review before protected SHA-pinned merge; reconcile PR48/49 normally",
-    "Continue incomplete approved Phase3.8D; do not repeat rejected dependency experiments"
+    "Commit/push activation after verified proof; preserve exact scope/expiry and unchanged validation blobs",
+    "Verify actual active CLI/API/Git proof and every applicable final-head Actions check, then independent exact-head full-diff review",
+    "Use main copy verify-head on exact final head; SHA-pinned merge only all gates green",
+    "Verify main merge tree/ancestry and postmerge CI, then reconcile PR48/49 without history rewrite",
+    "Continue full approved Phase3.8D; no release/deployment or automatic exception renewal"
   ],
   "openDecisions": [
     "OD-1",
@@ -123,7 +123,7 @@
     {
       "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
       "branch": "feature/security-picomatch",
-      "approval": "OWNER CONDITIONALLY APPROVED 2026-11-18; INACTIVE pending all mandatory verification",
+      "approval": "OWNER CONDITIONALLY APPROVED; proof44267058914 passed; final activation CI/review pending",
       "pr": 50
     }
   ],

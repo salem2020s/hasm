@@ -1,6 +1,6 @@
 {
   "updatedAt": "2026-11-18",
-  "status": "conditionally-approved-INACTIVE-artifact-verification-blocked",
+  "status": "conditionally-approved-activation-final-head-verification-pending",
   "advisory": "GHSA-fc5q-39xc-vjpf",
   "severity": "High",
   "baseMain": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
@@ -20,8 +20,8 @@
     "zeromatch1.0.0:incompatible-API-unvalidated"
   ],
   "revisitOnlyOn": "new official patched release or new independently validated safe replacement",
-  "next": "Diagnose release installer/executable hash mismatch in run44265284615; no activation until both validation jobs pass unchanged implementation. Existing mandatory audit remains unchanged and failing; PR48/49 cannot merge yet.",
-  "auditExceptionActive": false,
-  "changeDetails": "No manifest or lockfile changes; protected checker and additional mandatory validation jobs added; existing required audit unchanged",
+  "next": "Final active-head independent review and all mandatory Actions must pass before merge; evidence docs/security/picomatch-activation-evidence.json",
+  "auditExceptionActive": true,
+  "changeDetails": "Hosted audit integration now applied after successful actual proof; manifests/lockfiles unchanged; other High/Critical, production/desktop/NuGet, self-hosted checks remain blocking",
   "conditionalApproval": "D-046, owner2026-11-18; exact six dev records only; expires2026-11-24T00:00:00Z; no renewal"
 }
