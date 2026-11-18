@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-18",
   "main": {
-    "verifiedHead": "bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb",
-    "note": "Reviewed PR head 6f57651 exact-head CI green; merge tree equals reviewed tree and ancestry verified; main post-merge workflows still to be observed"
+    "verifiedHead": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
+    "note": "PR47 merged; remote main reconciled 2026-11-18; security implementation not merged"
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -79,22 +79,21 @@
     "phase": "Shared security-policy proposal; independent Phase3.8D development",
     "branch": "feature/security-picomatch",
     "pr": 50,
-    "state": "INERT proposal ready to preserve; owner approval REQUIRED before activation;14 fixture tests pass; current security gate remains failed; no merge",
+    "state": "Conditionally approved INACTIVE implementation; existing dependency-scan unchanged; actual Node24/Linux and release installer verification pending",
     "knownIssues": [
-      "Actual High picomatch advisory unresolved; no active exception, gate, manifest or lockfile changes",
-      "Proposal owner salem2020s; approval fields null; expiry2026-11-24T00:00Z; complete scope in risk assessment",
-      "Node24/Linux live integration, final copied paths/CI and Windows installer inventory NOT VERIFIED",
-      "PR48 at3425594 Draft; unit919/PG1035/API69 documented, full phase unfinished; PR49 atdfe86dd Draft; preserve both",
-      "Automatic post-limit continuation NOT CONFIRMED; no restart scheduler configured; see RESUME-CODEX.md",
-      "Rejected dependency attempts must not be repeated without a legitimate new remediation signal"
+      "Actual High picomatch unresolved; only exact six dev records conditionally approved, hard expiry2026-11-24T00:00:00Z",
+      "New validation jobs and protected checker implementation present; activationEvidence null; mandatory audit remains unchanged",
+      "21 benign policy/artifact fixtures pass; independent review Medium proof-input binding fixed, confirmation pending",
+      "Actual Node24/Linux CI and Windows release NSIS payload inspection NOT VERIFIED",
+      "PR48 and PR49 preserved; no merge while required gates fail"
     ]
   },
   "next": [
-    "Read this checkpoint and reconcile GitHub/each worktree; query exact latest commit SHA and never overwrite newer work",
-    "Confirm final proposal-head independent review and observe required CI honestly; no green claim for failed dependency-scan",
-    "Wait for explicit owner approval before applying any proposed protected tools/workflow changes; continuation does not imply approval",
-    "Continue safe PR48 authorized multi-warehouse history and incremental valuation work; current code head34255945dab04d8a093f7b396c39a124a585b463",
-    "If usage reset does not resume the client, use the precise restart instruction in docs/RESUME-CODEX.md"
+    "Commit/push inactive validation implementation to existing PR50 branch; no force push",
+    "Run actual additional Node24/Linux and Windows production installer jobs; fix verified defects without weakening assertions",
+    "Complete independent full-diff review; activate ONLY after successful validation run/head is bound to unchanged inspected sources and implementation",
+    "After activation rerun every exact-head gate and review before protected SHA-pinned merge; reconcile PR48/49 normally",
+    "Continue incomplete approved Phase3.8D; do not repeat rejected dependency experiments"
   ],
   "openDecisions": [
     "OD-1",
@@ -124,7 +123,7 @@
     {
       "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
       "branch": "feature/security-picomatch",
-      "approval": "NOT APPROVED",
+      "approval": "OWNER CONDITIONALLY APPROVED 2026-11-18; INACTIVE pending all mandatory verification",
       "pr": 50
     }
   ],

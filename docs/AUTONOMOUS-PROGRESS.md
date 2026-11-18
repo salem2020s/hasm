@@ -1,5 +1,14 @@
 # HASM — Autonomous execution progress
 
+## Conditional owner approval and inactive validation implementation — 2026-11-18
+
+Current main814bd7c; PR50 remote ff825032d93be1f1c7a8aca8d0a7eae039dc971e before this checkpoint. Owner explicitly conditionally approved the exact six-record dev-only policy with hard expiry2026-11-24T00:00:00Z. D-046 records the conditions; D-044/045 accounting decisions remain in PR48. Historical unapproved-proposal entries below are superseded only by this explicit conditional decision.
+
+Implementation is **INACTIVE**, activationEvidence null. Existing verification.yml audit remains byte-for-byte unchanged. New hosted Node24/Linux and Windows release-installer jobs add mandatory evidence gates; no installer execution/deployment. Twenty-one benign fixture tests pass. Independent full-diff review found no Critical/High; Medium proof-input binding fixed with regression, reviewer confirmation pending. Actual Node24/Linux live CLI/API and release NSIS payload inspection NOT VERIFIED. No activation or merge until those succeed, then every final-head gate and independent review must pass again. See review-records/PR-50-conditional-activation.md.
+
+PR48 head34255945dab04d8a093f7b396c39a124a585b463 and PR49 headdfe86dd2179f3d63be978d17e23554d3cb9e72bc remain preserved. Next: push this safe inactive checkpoint and run actual validation; record run/head/artifact evidence; never claim the existing failed dependency-scan is green. No production DB, dependency graph or branch protections changed.
+
+
 ## Security-policy proposal checkpoint — 2026-11-18
 
 PR50, `feature/security-picomatch`, preserves the shared dependency investigation and the complete **INERT, NOT APPROVED** proposal under `docs/security/proposals/picomatch/`. The previously pushed report head is e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12; this checkpoint is a later normal commit, whose exact SHA is recorded in the PR body after pushing. No live workflow/verifier, manifest, lockfile or gate has changed. No fork or temporary dependency is committed.
