@@ -45,7 +45,18 @@ function assertWindowsExecutable(bytes) {
   assert.equal(bytes.subarray(pe, pe + 4).toString("binary"), "PE\0\0");
   assert.equal(bytes.readUInt16LE(pe + 4), 0x8664, "Expected x64 application payload");
 }
-module.exports = { forbiddenModule, archivePaths, assertWindowsExecutable, snapshot };
+function expectedNsisPayload(compiled) {
+  // Tauri bundle.rs patches this exact marker for NSIS, then restores the on-disk binary.
+  // Predict every packaged byte; do not normalize/ignore any arbitrary byte differences.
+  const token = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK"), replacement = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_NSS");
+  const offset = compiled.indexOf(token);
+  assert.ok(offset >= 0, "Compiled Tauri bundle marker is missing");
+  assert.equal(compiled.indexOf(token, offset + 1), -1, "Compiled Tauri bundle marker is ambiguous");
+  assert.equal(compiled.indexOf(replacement), -1, "Compiled executable was already patched unexpectedly");
+  const expected = Buffer.from(compiled); replacement.copy(expected, offset);
+  return { bytes: expected, markerOffset: offset };
+}
+module.exports = { forbiddenModule, archivePaths, assertWindowsExecutable, snapshot, expectedNsisPayload };
 
 async function main() {
   assert.equal(process.argv.length, 5, "Usage: node inspect-production-artifacts.cjs <capture|installer> --root <repo>");
@@ -107,13 +118,18 @@ async function main() {
   const payload = filesUnder(extraction);
   const application = payload.filter(file => path.basename(file).toLowerCase() === "hasm-desktop.exe");
   assert.equal(application.length, 1, "Installer application payload is missing or ambiguous");
+  const compiled = fs.readFileSync(executable), packaged = fs.readFileSync(application[0]);
+  assertWindowsExecutable(packaged);
+  const expected = expectedNsisPayload(compiled);
   fs.writeFileSync(path.join(reportDir, "binary-comparison.json"), JSON.stringify({
-    compiled: { sha256: digest(fs.readFileSync(executable)), size: fs.statSync(executable).size },
-    extracted: { sha256: digest(fs.readFileSync(application[0])), size: fs.statSync(application[0]).size }
+    compiled: { sha256: digest(compiled), size: compiled.length },
+    extracted: { sha256: digest(packaged), size: packaged.length },
+    expectedNsis: { sha256: digest(expected.bytes), markerOffset: expected.markerOffset, transformation: "__TAURI_BUNDLE_TYPE_VAR_UNK -> __TAURI_BUNDLE_TYPE_VAR_NSS only" }
   }, null, 2));
-  assert.equal(digest(fs.readFileSync(application[0])), digest(fs.readFileSync(executable)), "Installer does not contain the inspected release executable");
+  assert.equal(digest(packaged), digest(expected.bytes), "Installer does not contain the exact expected NSIS-patched release executable");
   const result = { commit: process.env.GITHUB_SHA, node: process.version, platform: process.platform, webAssets: inventory.assets,
-    installer: path.basename(installers[0]), installerSha256: installerHash, applicationSha256: digest(fs.readFileSync(executable)),
+    installer: path.basename(installers[0]), installerSha256: installerHash, compiledApplicationSha256: digest(compiled), applicationSha256: digest(packaged),
+    expectedNsisPayloadSha256: digest(expected.bytes), bundleMarkerOffset: expected.markerOffset,
     archiveEntries: entries, extractedPayload: snapshot(extraction), nodeRuntimeOrDependencyPayload: false, installerExecuted: false };
   fs.writeFileSync(path.join(reportDir, "tauri-installer.json"), JSON.stringify(result, null, 2));
   console.log("Release NSIS payload verified against the compiled application and inspected Web inputs; installer was not executed.");

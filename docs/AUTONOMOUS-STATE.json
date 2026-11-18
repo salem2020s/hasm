@@ -79,13 +79,13 @@
     "phase": "Shared security-policy proposal; independent Phase3.8D development",
     "branch": "feature/security-picomatch",
     "pr": 50,
-    "state": "INACTIVE: actual Linux Node24 validation passed at4d93568; Windows NSIS built but payload integrity assertion FAILED; diagnostic WIP",
+    "state": "INACTIVE: verified Tauri bundle marker inspection fix;22 fixtures and actual diagnostic pair match; fresh CI pending",
     "knownIssues": [
-      "No activation or merge; existing dependency-scan remains unchanged and failed",
-      "Run44264261626 Windows extracted payload SHA differs from compiled EXE; strict assertion preserved",
-      "Node24.22.2/Linux real CLI, production audit and95-module/six-asset Web inventory passed",
-      "Independent review confirmed proof-input binding fix;21 fixtures and34 existing selftests pass",
-      "Next run retains compiled executable and comparison manifest for byte-level diagnosis; no production execution"
+      "No activation or merge; existing dependency-scan unchanged and failed",
+      "Actual Node24/Linux passed twice; actual Windows release built twice",
+      "Raw hash mismatch rootcause is documented Tauri UNK->NSS marker; exact expected-payload contract implemented,22 fixtures pass",
+      "Fresh unchanged-implementation actualCI and independent confirmation required before activation",
+      "Approved six-record scope and hard expiry unchanged"
     ]
   },
   "next": [

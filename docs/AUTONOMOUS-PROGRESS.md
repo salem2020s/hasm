@@ -12,6 +12,10 @@ PR48 head34255945dab04d8a093f7b396c39a124a585b463 and PR49 headdfe86dd2179f3d63b
 ### Actual validation result and diagnostic checkpoint
 
 Inactive implementation4d9356856e91acb6773821368e65be78ddd268ba is pushed. Run44264261626: Node24.22.2/Linux policy job PASSED, frontend production audit/typecheck/tests/build and95-module/six-asset Web inspection passed. Windows release NSIS build PASSED, but installer payload hash did not equal compiled release EXE hash; inspection FAILED. No activation, no merge. Keep the strict assertion. Next diagnostic run also retains the compiled executable and a comparison manifest so the byte mismatch can be explained; original run retained only installer/extracted payload. Independent full-diff review confirmed the Medium proof-input binding fix,21/21 fixtures, no remaining Critical/High/Medium for the inactive implementation. Existing34 verification self-tests pass. New diagnostic commit is an unverified WIP; both validation jobs must pass together on the final unchanged implementation before activation.
+### Installer root cause corrected; activation still pending
+
+Run44265284615 diagnostic pair differs ONLY in Tauri's documented3-byte bundle marker UNK->NSS. Exact CLI2.12.4 official source blob e6709eb590ac17925a50e5393215d020269c6f59 confirms packaging patches then restores compiledEXE. Inspector now predicts that one unique full-token transformation and verifies ALL payload bytes; no generic normalization.22 fixtures pass and actualCIpair matchesbyte-for-byte. Fresh actualCI and independent confirmation pending; policy remainsINACTIVE. See conditional-activation reviewrecord.
+
 ## Security-policy proposal checkpoint — 2026-11-18
 
 PR50, `feature/security-picomatch`, preserves the shared dependency investigation and the complete **INERT, NOT APPROVED** proposal under `docs/security/proposals/picomatch/`. The previously pushed report head is e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12; this checkpoint is a later normal commit, whose exact SHA is recorded in the PR body after pushing. No live workflow/verifier, manifest, lockfile or gate has changed. No fork or temporary dependency is committed.

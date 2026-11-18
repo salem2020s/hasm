@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { forbiddenModule, archivePaths, assertWindowsExecutable } = require("./inspect-production-artifacts.cjs");
+const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload } = require("./inspect-production-artifacts.cjs");
 test("production inventory rejects each reviewed tool including nested and Windows paths", () => {
   for (const name of ["picomatch", "fdir", "tinyglobby", "vite", "vitest", "@vitejs/plugin-react"])
     for (const prefix of ["/workspace/node_modules/", "C:\\app\\node_modules\\vite\\node_modules\\"])
@@ -22,4 +22,15 @@ test("release application must be an x64 PE executable", () => {
   assertWindowsExecutable(bytes);
   bytes.writeUInt16LE(0x14c, 84); assert.throws(() => assertWindowsExecutable(bytes));
   assert.throws(() => assertWindowsExecutable(Buffer.from("not an executable")));
+});
+test("NSIS integrity predicts only Tauri's unique bundle marker and preserves every other byte", () => {
+  const compiled = Buffer.from("prefix\0__TAURI_BUNDLE_TYPE_VAR_UNK\0suffix"), before = Buffer.from(compiled);
+  const { bytes, markerOffset } = expectedNsisPayload(compiled);
+  assert.equal(markerOffset, 7); assert.deepEqual(compiled, before);
+  assert.deepEqual(bytes, Buffer.from("prefix\0__TAURI_BUNDLE_TYPE_VAR_NSS\0suffix"));
+  for (const offset of [0, 6, markerOffset, markerOffset + 23, bytes.length - 1]) {
+    const tampered = Buffer.from(bytes); tampered[offset] ^= 1; assert.notDeepEqual(tampered, expectedNsisPayload(compiled).bytes);
+  }
+  for (const input of [Buffer.from("no marker"), Buffer.concat([compiled, compiled]), bytes, Buffer.concat([compiled, bytes])])
+    assert.throws(() => expectedNsisPayload(input));
 });

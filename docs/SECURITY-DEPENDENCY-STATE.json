@@ -1,16 +1,27 @@
 {
-  "updatedAt": "2026-11-17",
-  "status": "blocked-no-verified-safe-remediation",
+  "updatedAt": "2026-11-18",
+  "status": "conditionally-approved-INACTIVE-artifact-verification-blocked",
   "advisory": "GHSA-fc5q-39xc-vjpf",
   "severity": "High",
   "baseMain": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
   "branch": "feature/security-picomatch",
-  "affectedPRs": [48, 49],
+  "affectedPRs": [
+    48,
+    49
+  ],
   "latestOfficialVersionChecked": "4.0.7",
   "advisoryUpdatedAt": "2026-11-17T15:56:44Z",
   "officialPatchedVersion": null,
-  "changesToManifestsLockfilesOrGates": false,
-  "rejected": ["ryotsu4.0.7-a:High-ReDoS-bypass", "older-toolchain:Critical-vulnerabilities", "flupke1.3.0:missing-required-API", "zeromatch1.0.0:incompatible-API-unvalidated"],
+  "changesToManifestsLockfilesOrGates": true,
+  "rejected": [
+    "ryotsu4.0.7-a:High-ReDoS-bypass",
+    "older-toolchain:Critical-vulnerabilities",
+    "flupke1.3.0:missing-required-API",
+    "zeromatch1.0.0:incompatible-API-unvalidated"
+  ],
   "revisitOnlyOn": "new official patched release or new independently validated safe replacement",
-  "next": "Continue approved independent Release1 development; no PR merge with failed required security gates. Preserve PR48/49 heads and unfinished work."
+  "next": "Diagnose release installer/executable hash mismatch in run44265284615; no activation until both validation jobs pass unchanged implementation. Existing mandatory audit remains unchanged and failing; PR48/49 cannot merge yet.",
+  "auditExceptionActive": false,
+  "changeDetails": "No manifest or lockfile changes; protected checker and additional mandatory validation jobs added; existing required audit unchanged",
+  "conditionalApproval": "D-046, owner2026-11-18; exact six dev records only; expires2026-11-24T00:00:00Z; no renewal"
 }
