@@ -90,5 +90,6 @@ jobs:
           path: |
             ${{ runner.temp }}/hasm-production-inspection/
             src/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            src/desktop/src-tauri/target/release/hasm-desktop.exe
           if-no-files-found: error
           retention-days: 30

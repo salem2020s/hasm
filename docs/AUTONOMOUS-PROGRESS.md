@@ -9,6 +9,9 @@ Implementation is **INACTIVE**, activationEvidence null. Existing verification.y
 PR48 head34255945dab04d8a093f7b396c39a124a585b463 and PR49 headdfe86dd2179f3d63be978d17e23554d3cb9e72bc remain preserved. Next: push this safe inactive checkpoint and run actual validation; record run/head/artifact evidence; never claim the existing failed dependency-scan is green. No production DB, dependency graph or branch protections changed.
 
 
+### Actual validation result and diagnostic checkpoint
+
+Inactive implementation4d9356856e91acb6773821368e65be78ddd268ba is pushed. Run44264261626: Node24.22.2/Linux policy job PASSED, frontend production audit/typecheck/tests/build and95-module/six-asset Web inspection passed. Windows release NSIS build PASSED, but installer payload hash did not equal compiled release EXE hash; inspection FAILED. No activation, no merge. Keep the strict assertion. Next diagnostic run also retains the compiled executable and a comparison manifest so the byte mismatch can be explained; original run retained only installer/extracted payload. Independent full-diff review confirmed the Medium proof-input binding fix,21/21 fixtures, no remaining Critical/High/Medium for the inactive implementation. Existing34 verification self-tests pass. New diagnostic commit is an unverified WIP; both validation jobs must pass together on the final unchanged implementation before activation.
 ## Security-policy proposal checkpoint — 2026-11-18
 
 PR50, `feature/security-picomatch`, preserves the shared dependency investigation and the complete **INERT, NOT APPROVED** proposal under `docs/security/proposals/picomatch/`. The previously pushed report head is e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12; this checkpoint is a later normal commit, whose exact SHA is recorded in the PR body after pushing. No live workflow/verifier, manifest, lockfile or gate has changed. No fork or temporary dependency is committed.

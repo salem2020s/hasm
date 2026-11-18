@@ -107,6 +107,10 @@ async function main() {
   const payload = filesUnder(extraction);
   const application = payload.filter(file => path.basename(file).toLowerCase() === "hasm-desktop.exe");
   assert.equal(application.length, 1, "Installer application payload is missing or ambiguous");
+  fs.writeFileSync(path.join(reportDir, "binary-comparison.json"), JSON.stringify({
+    compiled: { sha256: digest(fs.readFileSync(executable)), size: fs.statSync(executable).size },
+    extracted: { sha256: digest(fs.readFileSync(application[0])), size: fs.statSync(application[0]).size }
+  }, null, 2));
   assert.equal(digest(fs.readFileSync(application[0])), digest(fs.readFileSync(executable)), "Installer does not contain the inspected release executable");
   const result = { commit: process.env.GITHUB_SHA, node: process.version, platform: process.platform, webAssets: inventory.assets,
     installer: path.basename(installers[0]), installerSha256: installerHash, applicationSha256: digest(fs.readFileSync(executable)),

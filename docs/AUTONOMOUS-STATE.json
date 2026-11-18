@@ -79,13 +79,13 @@
     "phase": "Shared security-policy proposal; independent Phase3.8D development",
     "branch": "feature/security-picomatch",
     "pr": 50,
-    "state": "Conditionally approved INACTIVE implementation; existing dependency-scan unchanged; actual Node24/Linux and release installer verification pending",
+    "state": "INACTIVE: actual Linux Node24 validation passed at4d93568; Windows NSIS built but payload integrity assertion FAILED; diagnostic WIP",
     "knownIssues": [
-      "Actual High picomatch unresolved; only exact six dev records conditionally approved, hard expiry2026-11-24T00:00:00Z",
-      "New validation jobs and protected checker implementation present; activationEvidence null; mandatory audit remains unchanged",
-      "21 benign policy/artifact fixtures pass; independent review Medium proof-input binding fixed, confirmation pending",
-      "Actual Node24/Linux CI and Windows release NSIS payload inspection NOT VERIFIED",
-      "PR48 and PR49 preserved; no merge while required gates fail"
+      "No activation or merge; existing dependency-scan remains unchanged and failed",
+      "Run44264261626 Windows extracted payload SHA differs from compiled EXE; strict assertion preserved",
+      "Node24.22.2/Linux real CLI, production audit and95-module/six-asset Web inventory passed",
+      "Independent review confirmed proof-input binding fix;21 fixtures and34 existing selftests pass",
+      "Next run retains compiled executable and comparison manifest for byte-level diagnosis; no production execution"
     ]
   },
   "next": [
