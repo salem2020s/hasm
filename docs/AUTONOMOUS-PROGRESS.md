@@ -1,5 +1,14 @@
 # HASM — Autonomous execution progress
 
+## Multiline entries preserved; active goal continuation — 2026-11-18
+
+Previous checkpoint95ea79975c0a01d9f8ab52a74365e35c4d5a6d32 passed all seven applicable Actions checks. Main remainsfe4432113c1c13a62c70ee98c218586d7b424b32. The owner resumed the existing native goal; get_goal now reports ACTIVE. This is concrete implementation progress, not phase completion. No duplicate session or post-quota restart scheduler was created.
+
+Before the general loader, completed the multiline prerequisite instead of relying on a temporary refusal: per-position ordinal ranges keep whole operations indivisible, and CalculateBlocks preserves every ordered child entry, FIFO layer and per-line issue rounding. It validates parent/kind/ordinal/count and paired-transfer shape before shared arithmetic. Original scalar100k-event bound stays unchanged; validated blocks prove parent/entry/500-line limits and retain the same component budget. Snapshot proposal now requires complete multiline mapping and shared-operation closure; no general adapter is claimed implemented.
+
+Focused74/74 and FULL local unit960/960 passed, zero skips. Real PostgreSQL snapshot21/21 passed on5433, including four new live-engine multiline comparisons and unchanged-row footprints. Registry only increases979->983; expected full suite1039 includes56 safety cases. The stopped disposable cluster was verified and started, preserving the original live test process, which then passed. About650MB of obsolete ignored RID outputs were safely removed; no databases/source/results/current binaries deleted. Full new-head CI is PENDING. Separate full-diff review found no Critical/High/Medium; final committed-head confirmation recorded in PR body after pushing.
+
+Next: implement the reviewed full read-only operation-component snapshot, live authorization quarantine of document/entry/layer endpoints, child/range and actual-layer/consumption reconciliation, and mandatory PostgreSQL failure/isolation/concurrency/bounds matrix. Retain every line; never net costs or omit history. Then complete full reversal/negative/conversion contracts and guarded proposal/approval/execution/shared UI. All immutability, Final Closed, audit/SoD/legal and D046 expiry restrictions remain binding; PR48 remains Draft until the full phase is complete.
 ## Fully verified transfer arithmetic and reviewed adapter handoff — 2026-11-18
 
 Latest fully verified implementation: `6dd5f2f18e728043b09af1f116bf0539a955f48c`. All seven applicable checks passed and main's verifier confirmed this exact SHA. Full CI PostgreSQL1035/1035 passed, zero skips, all979 registered database cases enforced. Independent separate-context full27-file review is bound to this head, no Critical/High/Medium; limited-checkpoint approval only. Local focused42/full unit942/snapshot17 passed. Mainfe44321 and both PR50/49 post-merge hosted pipelines are also fully green. No incomplete phase is merged.

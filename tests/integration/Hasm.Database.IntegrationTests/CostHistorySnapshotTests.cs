@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -23,6 +24,72 @@ public class CostHistorySnapshotTests : CostingTestBase
     private async Task<(long Positions, long Operations, long Entries, long Layers, long Audit)> Footprint() =>
         (await Count(CompanySchema.CostPosition.Table), await Count(CompanySchema.CostOperation.Table), await Count(CompanySchema.CostEntry.Table),
             await Count(CompanySchema.CostLayer.Table), await Count(CompanySchema.BusinessAudit.Table));
+
+    // Test mapping of already authorized ordinary evidence, not the future general transfer loader.
+    private static ReplayBlockResult ReplayBlocks(CostHistorySnapshot snapshot)
+    {
+        var blocks = snapshot.Entries.GroupBy(e => e.OperationId).Select(group => {
+            var first = group.First();
+            var order = new ReplayOrderGroup(group.Key, first.EffectiveDate, first.Kind,
+                [new(snapshot.WarehouseId, first.Sequence, group.LongCount())]);
+            var children = group.Select(e => {
+                var input = e.ToReplayEvent();
+                return new ReplayFlowChild(group.Key, e.EntryId, e.Sequence,
+                    new(input.Id, input.Kind, snapshot.WarehouseId, input.Quantity, input.ReceiptAmount));
+            }).ToImmutableArray();
+            return new ReplayFlowBlock(order, children);
+        }).ToImmutableArray();
+        return CostReplay.CalculateBlocks(snapshot.Method, snapshot.MoneyDecimals, [snapshot.WarehouseId], blocks);
+    }
+
+    [PostgresTheory]
+    [InlineData(CostMethod.Fifo)]
+    [InlineData(CostMethod.MovingAverage)]
+    public async Task Existing_multiline_issue_costs_match_individual_replay_rounding_without_changing_original_rows(CostMethod method)
+    {
+        await PrepareCosting();
+        var item = method == CostMethod.Fifo ? Fifo : Avg;
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest(Key(), D1, null, [new(item.Id, W1.Id, 6, 0.02m)]));
+        var issued = await Cost.IssueAsync(Company.Id, Admin.Id,
+            new CostingIssueRequest(Key(), D2, null, [new(item.Id, W1.Id, 1), new(item.Id, W1.Id, 1)]));
+        Assert.Equal([0m, 0m], issued.Lines.Select(l => l.Amount));
+        var footprint = await Footprint();
+        var snapshot = Snapshot(await Reader().LoadAsync(Admin.Id, Company.Id, item.Id, W1.Id));
+        Assert.Equal(3, snapshot.Entries.Length);
+        Assert.Equal([issued.OperationId, issued.OperationId], snapshot.Entries.Skip(1).Select(e => e.OperationId));
+        var replay = ReplayBlocks(snapshot);
+        Assert.Equal(snapshot.Entries.Select(e => (e.Amount, e.QuantityAfter, e.ValueAfter)),
+            replay.Flow.Steps.Select(s => (s.Legs[0].Step.Amount, s.Legs[0].Step.QuantityAfter, s.Legs[0].Step.ValueAfter)));
+        Assert.Equal((4m, 0.02m), (Assert.Single(replay.Flow.Positions).Quantity, Assert.Single(replay.Flow.Positions).Value));
+        Assert.Equal(snapshot.Entries.Select(e => e.OperationId), replay.Bindings.Select(b => b.GroupId));
+        Assert.Equal(footprint, await Footprint());
+        await AssertConsistent();
+    }
+
+    [PostgresTheory]
+    [InlineData(CostMethod.Fifo)]
+    [InlineData(CostMethod.MovingAverage)]
+    public async Task Existing_multiline_receipts_keep_distinct_entries_and_layers_when_replayed_as_atomic_groups(CostMethod method)
+    {
+        await PrepareCosting();
+        var item = method == CostMethod.Fifo ? Fifo : Avg;
+        var received = await Cost.ReceiveAsync(Company.Id, Admin.Id,
+            new CostingReceiptRequest(Key(), D1, null, [new(item.Id, W1.Id, 1, 1), new(item.Id, W1.Id, 2, 100)]));
+        var issued = await IssueOf(item, 2, date: D2);
+        var footprint = await Footprint();
+        var snapshot = Snapshot(await Reader().LoadAsync(Admin.Id, Company.Id, item.Id, W1.Id));
+        Assert.Equal([received.OperationId, received.OperationId], snapshot.Entries.Take(2).Select(e => e.OperationId));
+        var replay = ReplayBlocks(snapshot);
+        Assert.Equal(method == CostMethod.Fifo ? 51m : 67.33m, replay.Flow.Steps[^1].Legs[0].Step.Amount);
+        Assert.Equal(issued.Lines[0].Amount, replay.Flow.Steps[^1].Legs[0].Step.Amount);
+        Assert.Equal(snapshot.Entries.Select(e => (e.Amount, e.QuantityAfter, e.ValueAfter)),
+            replay.Flow.Steps.Select(s => (s.Legs[0].Step.Amount, s.Legs[0].Step.QuantityAfter, s.Legs[0].Step.ValueAfter)));
+        if (method == CostMethod.Fifo)
+            Assert.Equal(snapshot.Entries.Take(2).Select(e => e.ToReplayEvent().Id),
+                replay.Flow.Steps[^1].Legs[0].Step.Consumptions.Select(t => t.LayerId));
+        Assert.Equal(footprint, await Footprint());
+        await AssertConsistent();
+    }
 
     [PostgresTheory]
     [InlineData(CostMethod.Fifo)]

@@ -18,4 +18,4 @@ When usage is available, resume this existing session if the installed client of
 
 Use local git rev-parse HEAD and the current PR body to obtain the exact latest checkpoint commit; a file cannot contain its own eventual commit SHA. Open PRs and branch heads above are observations, never permission to overwrite a newer remote or another worktree.
 
-Native goal status still reported `blocked` when inspected after the owner decision was resolved; foreground work resumed under the explicit authorization. The goal tool cannot set that status back to active. No duplicate goal/session or background restart was created, and no automatic continuation after this foreground turn or a quota reset is claimed. Use the existing client's resume controls or the fallback above when necessary.
+The owner resumed the existing native goal and get_goal now reports `active` (2026-11-18). Continue the same objective across active turns; no duplicate goal/session or background restart was created. This observation does not establish automatic restart after a quota reset. Reconcile the latest checkpoint/PR before using the historical fallback head above.

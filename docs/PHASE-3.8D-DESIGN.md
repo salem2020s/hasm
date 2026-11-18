@@ -88,6 +88,12 @@ CostReplay.CalculateFlow reuses private per-position state and exact CostingMath
 
 This is arithmetic only: authorized closure, persisted-layer mapping, baseline reconciliation and scheduler integration remain unimplemented. The current snapshot adapter still refuses transfers. Reversal/negative/conversion entitlements and execution/UI requirements are unchanged; no public feature or activation exists merely because flow arithmetic passes.
 
+## Multiline operation/range checkpoint
+
+The scheduler now represents each operation's contiguous entry range per position, preserving atomic groups across multiple positions and enforcing bounds per individual entry. CalculateBlocks validates parent links, explicit numeric child order, position ordinals/counts and transfer pairs, then flattens unchanged child events into the existing exact arithmetic. This preserves every FIFO receipt layer and per-line issue rounding, rather than rejecting or summing valid multiline operations. Common-method arithmetic only; no general snapshot adapter or execution authority.
+
+Focused74/74, full unit960/960 and relevant real-PostgreSQL snapshot21/21 passed locally with zero skips. Four new PostgreSQL cases compare multiline costs/trajectories with the live engine without changing original rows. The CI registry rises979->983; full new-head CI is separate. Independent full-diff review found no Critical/High/Medium in the limited checkpoint. Contracts: PHASE-3.8D-MULTILINE-CONTRACT.md and updated transfer snapshot proposal. General authorization/provenance mapping and the full remainder of the phase still require implementation and verification.
+
 ## Preserved boundaries
 
 OD-11 remains OPEN and blocks 3.8C. This design does not decide lot/serial selection versus costing or add specific-identification costing. It also does not decide purchase-cost composition (OD-2), licensing transaction counts (OD-12/T-2), formal consolidation (OD-1), or unresolved naming (T-1). The four PR #46 Medium follow-ups remain scheduled before 3.9B. Production deployment, migrations against non-test databases, release and billing changes remain outside this work.

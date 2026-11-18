@@ -106,7 +106,8 @@ public class ReplayScheduleTests
         var receipt = Receipt(10, A, 1);
         Inconsistent([receipt with { Reverses = Id(99) }]);
         Inconsistent([receipt with { Kind = CostOperationKind.Transfer }]);
-        Inconsistent([receipt with { Legs = [new(A, 1), new(B, 1)] }]);
+        // Ordinary operations legitimately span positions; transfers still have exactly two legs.
+        Inconsistent([receipt with { Kind = CostOperationKind.Transfer, Legs = [new(A, 1), new(B, 1), new(C, 1)] }]);
         Assert.Equal("impact_history_unsupported", Assert.Throws<CostingException>(() => ReplaySchedule.Calculate([receipt with { Kind = (CostOperationKind)99 }])).Code);
     }
 
@@ -146,5 +147,67 @@ public class ReplayScheduleTests
         var tooManyPositions = Enumerable.Range(1, 10_001).Select(n => Receipt(n, Id(n + 100_000), 1)).ToImmutableArray();
         Assert.Equal("impact_history_too_large", Assert.Throws<CostingException>(() => ReplaySchedule.Calculate(tooManyPositions)).Code);
         Assert.Throws<OperationCanceledException>(() => ReplaySchedule.Calculate([receipt], ct: new CancellationToken(true)));
+    }
+
+    [Theory]
+    [InlineData(CostOperationKind.Receipt)]
+    [InlineData(CostOperationKind.Issue)]
+    public void Multiline_ranges_and_multiposition_proposals_are_indivisible(CostOperationKind kind)
+    {
+        var block = new ReplayOrderGroup(Id(20), Day, kind, [new(A, 1, 3), new(B, 1, 2)]);
+        var transfer = Transfer(30, A, 4, B, 3, 1);
+        var proposal = new ReplayOrderInsertion(Id(1), Day, [new(A, 2), new(B, 1)]);
+        Assert.Equal([block.Id, proposal.Id, transfer.Id], ReplaySchedule.CalculateInsertion([transfer, block], proposal).ToArray());
+        Assert.Equal([block.Id, transfer.Id], ReplaySchedule.Calculate([transfer, block]).ToArray());
+        Assert.Equal([new ReplayOrderLeg(A, 1, 3), new ReplayOrderLeg(B, 1, 2)], block.Legs.ToArray());
+    }
+
+    [Fact]
+    public void Ranges_cannot_overlap_have_gaps_or_interleave_another_group()
+    {
+        var block = Receipt(10, A, 1) with { Legs = [new(A, 1, 3)] };
+        Inconsistent([block, Receipt(20, A, 3)]);
+        Inconsistent([block, Receipt(20, A, 5)]);
+        Inconsistent([block with { Legs = [new(A, 1, 0)] }]);
+        Inconsistent([block with { Legs = [new(A, 1, -1)] }]);
+        Inconsistent([block with { Legs = [new(A, long.MaxValue, 2)] }]);
+        Inconsistent([block with { Legs = [new(A, long.MaxValue, 1)] }]);
+        Inconsistent([block with { Legs = [new(A, 1, 2), new(B, 3, 2)] },
+            new(Id(20), Day, CostOperationKind.Issue, [new(A, 3, 2), new(B, 1, 2)])]);
+        Inconsistent([Transfer(10, A, 1, B, 1) with { Legs = [new(A, 1, 2), new(B, 1)] }]);
+    }
+
+    [Fact]
+    public void A_whole_multiline_reversal_matches_every_original_position_and_entry_count()
+    {
+        var original = Receipt(10, A, 1) with { Legs = [new(A, 1, 3), new(B, 1, 2), new(C, 1)] };
+        var reversal = new ReplayOrderGroup(Id(20), Day, CostOperationKind.Reversal, [new(C, 2), new(B, 3, 2), new(A, 4, 3)], original.Id);
+        Assert.Equal([original.Id, reversal.Id], ReplaySchedule.Calculate([reversal, original]).ToArray());
+        Inconsistent([original, reversal with { Legs = [new(A, 4, 2), new(B, 3, 2), new(C, 2)] }]);
+    }
+
+    [Fact]
+    public void Bounds_count_individual_entries_including_proposed_ranges()
+    {
+        var block = Receipt(10, A, 1) with { Legs = [new(A, 1, 200_000)] };
+        Assert.Equal([block.Id], ReplaySchedule.Calculate([block]).ToArray());
+        Assert.Equal("impact_history_too_large", Assert.Throws<CostingException>(() => ReplaySchedule.Calculate([block with { Legs = [new(A, 1, 200_001)] }])).Code);
+        Assert.Equal("impact_history_too_large", Assert.Throws<CostingException>(() => ReplaySchedule.Calculate([block with { Legs = [new(A, 1, long.MaxValue)] }])).Code);
+        var proposal = new ReplayOrderInsertion(Id(1), Day, [new(A)]);
+        var smaller = block with { Legs = [new(A, 1, 199_999)] };
+        Assert.Equal([smaller.Id, proposal.Id], ReplaySchedule.CalculateInsertion([smaller], proposal).ToArray());
+        Assert.Equal("impact_history_too_large", Assert.Throws<CostingException>(() => ReplaySchedule.CalculateInsertion([smaller], proposal with { Legs = [new(A, 2)] })).Code);
+    }
+
+    [Fact]
+    public void Proposal_positions_and_counts_must_be_complete_distinct_and_bounded()
+    {
+        var proposal = new ReplayOrderInsertion(Id(1), Day, [new(A), new(B)]);
+        Assert.Equal([proposal.Id], ReplaySchedule.CalculateInsertion([], proposal).ToArray());
+        foreach (var legs in new ImmutableArray<ReplayOrderProposalLeg>[] { [], default, [new(A), new(A)], [new(A, 0)], [new(Guid.Empty)] })
+            Assert.Equal("invalid_replay_input", Assert.Throws<CostingException>(() => ReplaySchedule.CalculateInsertion([], proposal with { Legs = legs })).Code);
+        var positions = Enumerable.Range(1, 10_001).Select(n => new ReplayOrderProposalLeg(Id(n + 100_000))).ToImmutableArray();
+        Assert.Equal("impact_history_too_large", Assert.Throws<CostingException>(() => ReplaySchedule.CalculateInsertion([], proposal with { Legs = positions })).Code);
+        Assert.Throws<OperationCanceledException>(() => ReplaySchedule.CalculateInsertion([], proposal, new CancellationToken(true)));
     }
 }

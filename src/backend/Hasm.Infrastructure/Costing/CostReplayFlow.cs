@@ -26,11 +26,17 @@ internal static partial class CostReplay
     /// </summary>
     internal static ReplayFlowResult CalculateFlow(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
         ImmutableArray<ReplayFlowEvent> events, CancellationToken ct = default)
+        => CalculateFlowCore(method, moneyDecimals, positions, events, 100_000, ct);
+
+    // Multiline blocks separately prove <=100k parent groups and <=200k individual entries.
+    // The original ungrouped entry point retains its original 100k-event bound.
+    private static ReplayFlowResult CalculateFlowCore(CostMethod method, int moneyDecimals, ImmutableArray<Guid> positions,
+        ImmutableArray<ReplayFlowEvent> events, int maxEvents, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (method is not (CostMethod.Fifo or CostMethod.MovingAverage) || moneyDecimals is < 0 or > CostingMath.MaxMoneyDecimals ||
             positions.IsDefault || events.IsDefault) throw new CostingException("invalid_replay_input");
-        if (positions.Length > 10_000 || events.Length > 100_000) throw new CostingException("impact_history_too_large");
+        if (positions.Length > 10_000 || events.Length > maxEvents) throw new CostingException("impact_history_too_large");
         if (events.Any(e => e is null || e.Kind is not (CostOperationKind.Receipt or CostOperationKind.Issue or CostOperationKind.Transfer)))
             throw new CostingException("impact_history_unsupported");
         var positionIds = new HashSet<Guid>();
