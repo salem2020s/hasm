@@ -66,11 +66,11 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         token.ThrowIfCancellationRequested();
         var quota = new ReadCommandBudget(limits.Commands, token);
         ConfigResult<ClassificationEvidence> result;
-        Loaded? loaded = null; EffectivePermissions? boot = null; var authorized = false;
+        Loaded? loaded = null; EffectivePermissions? boot = null, latest = null; var authorized = false;
         // Until EVERY closure member is authorized no diagnostic may depend on the contents of the closure: a caller who cannot see all of it gets the
         // single indistinguishable forbidden; only a caller holding every permission company-wide may see a specific code.
         ConfigResult<ClassificationEvidence> Masked(string code) =>
-            boot is not null && FullyVisible(boot) ? ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, code)
+            (latest ?? boot) is { } basis && FullyVisible(basis) ? ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, code)
                 : ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden");
         try
         {
@@ -96,7 +96,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         try
         {
             // Final live recheck on success AND failure: a revocation during the read wins.
-            var fresh = await access.GetEffectivePermissionsAsync(user, company, quota.Reserve, token);
+            var fresh = await access.GetEffectivePermissionsAsync(user, company, quota.Reserve, token); latest = fresh;
             if (!Bootstrap(fresh)) return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden");
             // A specific diagnostic produced before authorization is only allowed while the caller is STILL fully visible.
             if (!authorized && !result.IsOk && result.Status == ConfigStatus.Conflict && !FullyVisible(fresh))
@@ -424,7 +424,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
                 var journal = Journal(sj);
                 // A zero-value receipt has no recorded version (nothing to configure); its settlement journal then only uses the obligation's own accounts.
                 // The receipt's version is required exactly when the journal needs an account beyond them (the receipt counter account G).
-                if (journal.Lines.Any(l => !allowed.Contains(l.AccountId))) allowed.UnionWith(VersionOf(d.Postings[s.ReceiptPostingId]));
+                if (journal.Lines.Any(l => !allowed.Contains(l.AccountId))) allowed.UnionWith(VersionOf(d.Postings.GetValueOrDefault(s.ReceiptPostingId) ?? throw new Refusal("classification_inconsistent")));
                 CrossCheck(journal, allowed);
             }
             if (s.ReversesSettlementId is { } reversed)

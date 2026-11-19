@@ -191,6 +191,25 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     }
 
     [PostgresFact]
+    public async Task A_partially_visible_caller_sees_a_specific_refusal_only_after_every_member_is_authorized_and_duplicate_request_ids_change_nothing()
+    {
+        await PreparePosting();
+        await ReceiveDocPosted(Avg, 10m, 100m, "2026-03-10");
+        var transfer = Ok(await Post(await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 3)))));
+        var receipt = await ReceiveDocPosted(Avg, 5m, 50m, "2026-03-12");
+        var branch = Value(await Read(Svc(), null, receipt)).Journals.Single().BranchId;
+        var partial = (await Member([PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null)).User;
+        var ledger = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "ledger-branch-2", [PermissionCatalog.Codes.JournalView]); Assert.True(ledger.IsOk, ledger.Code);
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, partial.Id, ledger.Value!.Id, ScopeKind.Branch, branch)).IsOk);
+        // every member (the transfer's two warehouses) is visible to this caller, so the specific refusal is allowed
+        Reject(await Read(Svc(), partial.Id, transfer), ConfigStatus.Conflict, "classification_unavailable");
+        var once = Value(await Read(Svc(), null, receipt));
+        var twice = Value(await Svc().LoadAsync(Admin.Id, Company.Id, [receipt.Id, receipt.Id]));
+        Assert.Equal(once.EvidenceFingerprint, twice.EvidenceFingerprint);
+        Assert.Equal(once.Postings.Select(p => p.Id), twice.Postings.Select(p => p.Id));
+    }
+
+    [PostgresFact]
     public async Task Callers_without_ledger_account_or_stock_visibility_get_one_indistinguishable_forbidden_without_diagnostics()
     {
         await PreparePosting();
