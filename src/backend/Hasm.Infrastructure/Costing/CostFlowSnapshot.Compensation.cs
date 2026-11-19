@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
+using Hasm.Infrastructure.CompanyDatabase;
 using Npgsql;
 using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 
@@ -54,25 +55,32 @@ internal sealed partial class CostFlowSnapshotService
             // The postings of every operation whose cost changed (a change without its posting is refused by the calculator as unavailable).
             var operations = comparison.Changes.Select(c => c.OperationId).Distinct().ToArray();
             var postingIds = new List<Guid>();
+            // A diagnostic that depends on the posting table is only specific for a caller who can see everything; otherwise it is the single forbidden.
+            Exception Masked(Exception specific) => ClassificationEvidenceService.FullyVisible(permissions) ? specific : new Denied();
             if (operations.Length > 0)
             {
+                try
+                {
                 await using var q = budget.Command($"SELECT {SP.Id} FROM {SP.Table} WHERE {SP.CostOperationId}=ANY(@ops) LIMIT @limit", conn, tx);
                 q.Parameters.AddWithValue("ops", operations); q.Parameters.AddWithValue("limit", operations.Length + 1);
                 await using var r = await q.ExecuteReaderAsync(token);
                 while (await r.ReadAsync(token))
                 {
-                    if (postingIds.Count == operations.Length) throw Inconsistent();   // one posting per cost operation
+                    if (postingIds.Count == operations.Length) throw Masked(Inconsistent());   // one posting per cost operation
                     postingIds.Add(r.GetGuid(0));
                 }
+                }
+                catch (ReadCommandBudgetException) when (!ClassificationEvidenceService.FullyVisible(permissions)) { throw new Denied(); }
+                if (postingIds.Count == 0) throw Masked(new CostingException("classification_unavailable"));   // changed operations without any posting
             }
             ClassificationEvidence evidence;
-            if (postingIds.Count == 0) evidence = new([], [], [], [], [], "no-postings");
+            if (postingIds.Count == 0) evidence = new([], [], [], [], [], "no-postings");   // only when nothing changed at all
             else
             {
                 try
                 {
-                    var read = await evidenceService.ReadInTransactionAsync(conn, tx, company, [.. postingIds], permissions, budget.Sql, token);
-                    (loaded, evidence) = (read.Loaded, read.Evidence);
+                    var read = await evidenceService.ReadInTransactionAsync(conn, tx, company, [.. postingIds], permissions, budget.Sql, l => loaded = l, token);
+                    evidence = read.Evidence;
                 }
                 catch (ClassificationEvidenceService.Denied) { throw new Denied(); }
                 catch (ClassificationEvidenceService.Refusal refusal) { throw new CostingException(refusal.Code); }
@@ -81,13 +89,14 @@ internal sealed partial class CostFlowSnapshotService
 
             // Dates that must lie in an Open period: the proposed event, EVERY changed history entry (even without a ledger line, even if only its
             // trajectory changed) and every compensation line. Nothing is moved to another date.
-            var entryDates = snapshots.Value[0].Entries.ToDictionary(e => e.Id, e => e.Date);
+            var entryDates = new Dictionary<long, DateOnly>();
+            foreach (var entry in snapshots.Value[0].Entries) if (!entryDates.TryAdd(entry.Id, entry.Date)) throw Inconsistent();
             var dateSet = new HashSet<DateOnly>(plan.Lines.Select(l => l.Date)) { proposal.EffectiveDate };
             foreach (var change in comparison.Changes) dateSet.Add(entryDates.TryGetValue(change.EntryId, out var changed) ? changed : throw Inconsistent());
             var dates = dateSet.Order().ToArray();
             var periods = await ReadPeriodRows(conn, tx, dates, budget, token);
+            CompensationDateGuard.Validate(plan, periods);   // includes ValidateDates for the compensation dates
             CompensationDateGuard.ValidateDates(dates, periods);
-            CompensationDateGuard.Validate(plan, periods);
             var used = periods.Where(p => dates.Any(d => p.Start <= d && d <= p.End)).OrderBy(p => p.Start).ToImmutableArray();
 
             var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new

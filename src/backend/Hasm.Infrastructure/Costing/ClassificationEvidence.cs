@@ -126,15 +126,17 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
     /// Everything closure-dependent that fails BEFORE authorization is masked as <see cref="Denied"/> unless the caller is <see cref="FullyVisible"/>.
     /// </summary>
     internal async Task<(Loaded Loaded, ClassificationEvidence Evidence)> ReadInTransactionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid company,
-        ImmutableArray<Guid> postingIds, EffectivePermissions permissions, ReadCommandBudget quota, CancellationToken ct)
+        ImmutableArray<Guid> postingIds, EffectivePermissions permissions, ReadCommandBudget quota, Action<Loaded> onLoaded, CancellationToken ct)
     {
-        if (postingIds.IsDefaultOrEmpty || postingIds.Length > limits.Postings || postingIds.Any(i => i == Guid.Empty)) throw new Refusal("invalid_classification_request");
+        if (postingIds.IsDefaultOrEmpty || postingIds.Length > limits.Postings || postingIds.Any(i => i == Guid.Empty))
+            throw FullyVisible(permissions) ? new Refusal("invalid_classification_request") : new Denied();   // the request size here derives from the closure
         postingIds = [.. postingIds.Distinct()];
         if (!Bootstrap(permissions)) throw new Denied();
         Loaded loaded;
         try { loaded = await LoadClosure(conn, tx, postingIds, quota, ct); }
         catch (Refusal) when (!FullyVisible(permissions)) { throw new Denied(); }
         catch (ReadCommandBudgetException) when (!FullyVisible(permissions)) { throw new Denied(); }
+        onLoaded(loaded);   // visible to the caller BEFORE Authorize/Evaluate so its final live recheck covers every outcome
         Authorize(permissions, loaded);
         return (loaded, Evaluate(company, postingIds, loaded));
     }

@@ -113,4 +113,76 @@ public class CompensationPlanServiceTests : StockReversalTestBase
         var result = Value(await Plan(Service(), Backdated("2026-03-11", W1, 5m, 80m)));      // no later issue: nothing is re-costed
         Assert.Empty(result.Plan.Lines); Assert.Empty(result.Comparison.Changes);
     }
+
+    private int scopedUsers;
+    /// <summary>A member with every non-ledger permission company-wide and JournalView ONLY at the given branches; returns the assignment ids of the branch grants.</summary>
+    private async Task<(Hasm.Infrastructure.Identity.UserRecord User, List<Guid> BranchAssignments)> BranchScopedMember(params Guid[] branches)
+    {
+        var user = await NewUser($"scoped{Interlocked.Increment(ref scopedUsers)}");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, user.Login)).IsOk);
+        var broad = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, $"broad{scopedUsers}", [PermissionCatalog.Codes.StockBalanceView, PermissionCatalog.Codes.StockDocsView,
+            PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.CostCentersView]);
+        Assert.True(broad.IsOk, broad.Code);
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, user.Id, broad.Value!.Id, ScopeKind.Company, null)).IsOk);
+        var ledger = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, $"ledger{scopedUsers}", [PermissionCatalog.Codes.JournalView]);
+        Assert.True(ledger.IsOk, ledger.Code);
+        var ids = new List<Guid>();
+        foreach (var branch in branches)
+        {
+            var assigned = await Rbac.AssignRoleAsync(Admin.Id, Company.Id, user.Id, ledger.Value!.Id, ScopeKind.Branch, branch);
+            Assert.True(assigned.IsOk, assigned.Code); ids.Add(assigned.Value!.Id);
+        }
+        return (user, ids);
+    }
+    private async Task<Guid> OtherBranch() =>
+        Ok(await Domain.CreateAsync(Admin.Id, Company.Id, new BranchInput("B2", "فرع", "Second", null, null, null, null, null, null, null, null))).Id;
+
+    [PostgresFact]
+    public async Task A_scoped_revocation_during_the_read_is_caught_by_the_live_member_recheck_not_only_by_the_bootstrap()
+    {
+        await Prepare();
+        var proposal = Backdated("2026-03-11", W1, 5m, 80m);
+        var mainBranch = Value(await Plan(Service(), proposal)).Evidence.Journals.First().BranchId;
+        var (user, assignments) = await BranchScopedMember(mainBranch, await OtherBranch());
+        Assert.True((await Plan(Service(), proposal, user.Id)).IsOk);
+        var service = Service();
+        // revoking only the main-branch grant keeps the bootstrap true (the other branch grant remains) but the journal member is no longer visible
+        service.BeforeFinalAuthorization = async _ => Assert.True((await Rbac.RevokeAssignmentAsync(Admin.Id, Company.Id, assignments[0])).IsOk);
+        Reject(await Plan(service, proposal, user.Id), ConfigStatus.Forbidden, "forbidden");
+    }
+
+    [PostgresFact]
+    public async Task A_caller_who_cannot_see_the_closure_gets_forbidden_never_a_diagnostic()
+    {
+        await PreparePosting();
+        await Posted(Receipt(W1, "2026-03-10", L(Avg, Pcs, 10)), Amounts(100m));
+        Ok(await Post(await Approved(Issue(W1, "2026-03-12", L(Avg, Pcs, 4)))));          // draft journal: an authorized caller would see unposted_effect
+        var proposal = Backdated("2026-03-11", W1, 5m, 80m);
+        Reject(await Plan(Service(), proposal), ConfigStatus.Conflict, "unposted_effect");
+        var (blind, _) = await BranchScopedMember(await OtherBranch());                      // ledger visibility only at ANOTHER branch
+        Reject(await Plan(Service(), proposal, blind.Id), ConfigStatus.Forbidden, "forbidden");
+    }
+
+    [PostgresFact]
+    public async Task The_plan_fingerprint_changes_with_the_proposal_and_with_a_period_revision()
+    {
+        await Prepare();
+        var proposal = Backdated("2026-03-11", W1, 5m, 80m);
+        var baseline = Value(await Plan(Service(), proposal)).PlanFingerprint;
+        Assert.NotEqual(baseline, Value(await Plan(Service(), proposal with { Lines = [new ProposedFlowLine(W1.Id, 5m, 85m)] })).PlanFingerprint);
+        await Sql($"UPDATE {P.Table} SET {P.Revision}={P.Revision}+1 WHERE {P.Id}='{(await Period(3)).Id}'");
+        Assert.NotEqual(baseline, Value(await Plan(Service(), proposal)).PlanFingerprint);   // a period revision after the snapshot makes a stale plan detectable
+    }
+
+    [PostgresFact]
+    public async Task A_trajectory_only_change_still_brings_its_posting_into_the_evidence()
+    {
+        await Prepare();
+        // the back-dated receipt has the same unit cost (10), so the issue keeps its cost 40 but its quantity/value trajectory changes
+        var result = Value(await Plan(Service(), Backdated("2026-03-11", W1, 5m, 50m)));
+        Assert.Empty(result.Plan.Lines);
+        Assert.NotEmpty(result.Comparison.Changes);
+        Assert.All(result.Comparison.Changes, c => Assert.Equal(c.OriginalAmount, c.ProposedAmount));
+        Assert.Contains(result.Evidence.Postings, p => p.DocType == 2);                   // the issue's evidence (obligations/reversals would be seen) is loaded
+    }
 }
