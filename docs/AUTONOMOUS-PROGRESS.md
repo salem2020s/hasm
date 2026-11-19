@@ -1,5 +1,14 @@
 # HASM — Autonomous execution progress
 
+## Transition matrix and consolidated owner decisions (proposal, no implementation) — 2026-11-19
+
+`PHASE-3.8D-TRANSITION-MATRIX-DECISIONS.md` (revision 2) consolidates the four owner decisions, the cancelled-manual-reversal case and further consequential dependencies (TM-D1..D14, conversion C-D1..C-D4) with approved/existing/proposed rules separated, a transition matrix and seven worked examples (single- and two-period). One consolidated independent design review found 2 High / 8 Medium; all resolved in the document (`review-records/PR-48-transition-matrix-design.md`); revision 2 is not re-reviewed. NOTHING depending on these decisions is implemented; every cell stays fail-closed. The owner must decide before the replay/compensation work starts; section 8 lists recommendations and a minimal first increment (ordinary receipts/issues/transfers only).
+
+Also done: independent review of the last classification-evidence fix (no Critical/High/Medium; two Low fixed; PostgreSQL class 16, registry 1186) and of PR #52 (no findings; review record on its branch). PR #52: all checks green except the known dependency-scan; not merged. PR #48 stays Draft; PR #51 untouched.
+
+Independent work remaining without owner decisions: none that is large; next code work starts after the decisions (TM-D11 first).
+
+
 ## Classification evidence service (first read-only slice) — 2026-11-19
 
 `Costing/ClassificationEvidence.cs` (internal; no API/DI/caller, no posting change) reads what the ORIGINAL issue/receipt postings and the negative-stock chain booked: stored journal lines are the classification, versions are only a cross-check. Contract: `PHASE-3.8D-CLASSIFICATION-CONTRACT.md` revision 4 (three independent design reviews). Every closure member must be visible (stock warehouse, ledger branch, accounts, cost centres) else one indistinguishable `forbidden`; transfers, stock adjustments, adjusting entries, pending/cancelled reversals and invalid accounts fail closed (`classification_unavailable` / `open_decision`, etc.). The owner decisions stay OPEN (cancelled journal on a live effect; reversed stock with cancelled draft; non-posted reversing journal; account remap) plus one extra undefined case (cancelled manual reversal) that is REFUSED, not decided.
