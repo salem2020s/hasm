@@ -75,12 +75,14 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     }
 
     [PostgresFact]
-    public async Task Transfers_have_no_journal_by_design_and_are_refused_not_treated_as_no_change_needed()
+    public async Task Transfers_have_no_journal_by_design_and_are_accepted_as_journal_less_evidence()
     {
         await PreparePosting();
         await ReceiveDocPosted(Avg, 10m, 100m, "2026-03-10");
         var transfer = Ok(await Post(await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 3)))));
-        Reject(await Read(Svc(), null, transfer), ConfigStatus.Conflict, "classification_unavailable");
+        var evidence = Value(await Read(Svc(), null, transfer));
+        Assert.Equal(transfer.Id, Assert.Single(evidence.Postings).Id);
+        Assert.Empty(evidence.Journals);
     }
 
     [PostgresFact]
@@ -195,18 +197,18 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     {
         await PreparePosting();
         await ReceiveDocPosted(Avg, 10m, 100m, "2026-03-10");
-        var transfer = Ok(await Post(await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 3)))));
         var receipt = await ReceiveDocPosted(Avg, 5m, 50m, "2026-03-12");
         var branch = Value(await Read(Svc(), null, receipt)).Journals.Single().BranchId;
         var partial = (await Member([PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null)).User;
         var ledger = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "ledger-branch-2", [PermissionCatalog.Codes.JournalView]); Assert.True(ledger.IsOk, ledger.Code);
         Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, partial.Id, ledger.Value!.Id, ScopeKind.Branch, branch)).IsOk);
-        // every member (the transfer's two warehouses) is visible to this caller, so the specific refusal is allowed
-        Reject(await Read(Svc(), partial.Id, transfer), ConfigStatus.Conflict, "classification_unavailable");
         var once = Value(await Read(Svc(), null, receipt));
         var twice = Value(await Svc().LoadAsync(Admin.Id, Company.Id, [receipt.Id, receipt.Id]));
         Assert.Equal(once.EvidenceFingerprint, twice.EvidenceFingerprint);
         Assert.Equal(once.Postings.Select(p => p.Id), twice.Postings.Select(p => p.Id));
+        // an account that is no longer valid: every member is visible to this caller, so the specific refusal is allowed
+        Assert.Null(await RawMessage($"UPDATE {AC.Table} SET {AC.IsActive} = false, {AC.Revision} = {AC.Revision} + 1 WHERE {AC.Id} = '{GoodsAcc.Id}'"));
+        Reject(await Read(Svc(), partial.Id, receipt), ConfigStatus.Conflict, "open_decision");
     }
 
     [PostgresFact]
@@ -214,17 +216,18 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     {
         await PreparePosting();
         await ReceiveDocPosted(Avg, 10m, 100m, "2026-03-10");
-        var transfer = Ok(await Post(await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 3)))));   // would be classification_unavailable for an authorized caller
         var receipt = Ok(await Post(await Approved(Receipt(W1, "2026-03-12", L(Avg, Pcs, 1))), Amounts(10m)));
+        Assert.True((await Read(Svc(), null, receipt)).IsOk);
+        Assert.Null(await RawMessage($"UPDATE {AC.Table} SET {AC.IsActive} = false, {AC.Revision} = {AC.Revision} + 1 WHERE {AC.Id} = '{GoodsAcc.Id}'"));
+        Reject(await Read(Svc(), null, receipt), ConfigStatus.Conflict, "open_decision");   // an authorized caller sees the specific refusal
         var stockOnly = (await Member([PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null)).User;
         var noAccounts = (await Member([PermissionCatalog.Codes.StockDocsView, PermissionCatalog.Codes.JournalView], ScopeKind.Company, null)).User;
         var noStock = (await Member([PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.JournalView], ScopeKind.Company, null)).User;
         foreach (var user in new[] { stockOnly, noAccounts, noStock })
-            Reject(await Read(Svc(), user.Id, transfer), ConfigStatus.Forbidden, "forbidden");
+            Reject(await Read(Svc(), user.Id, receipt), ConfigStatus.Forbidden, "forbidden");
         var missing = await Svc().LoadAsync(Admin.Id, Company.Id, [Guid.NewGuid()]);
         Reject(missing, ConfigStatus.Forbidden, "forbidden");               // missing is indistinguishable from invisible
         Reject(await Svc().LoadAsync(Admin.Id, Company.Id, [Guid.Empty]), ConfigStatus.Conflict, "invalid_classification_request");
-        Assert.True((await Read(Svc(), null, receipt)).IsOk);
     }
 
     [PostgresFact]

@@ -46,7 +46,18 @@ public class ClassificationEvidenceRulesTests
         Assert.NotEqual(one.EvidenceFingerprint, Run(Base(accounts: [Account(A1), Account(A2) with { Revision = 2 }])).EvidenceFingerprint); // current account state is bound
     }
 
-    [Fact] public void Transfers_have_no_stored_classification_and_are_refused() => Refuses("classification_unavailable", Base(Posting(none: true, docType: 3, value: 0)));
+    private static ClassifiedPosting Transfer() => Posting(none: true, docType: 3, value: 40) with { VersionId = null, SourceWarehouse = Guid.NewGuid(), TargetWarehouse = Guid.NewGuid() };
+
+    [Fact] public void A_journal_less_transfer_is_accepted_because_its_effect_reaches_the_ledger_only_through_downstream_issues() =>
+        Assert.Single(Run(Base(Transfer(), journals: [])).Postings);
+
+    [Fact]
+    public void A_transfer_with_a_journal_a_version_or_a_missing_leg_is_inconsistent()
+    {
+        Refuses("classification_inconsistent", Base(Transfer() with { JournalId = J }));
+        Refuses("classification_inconsistent", Base(Transfer() with { VersionId = V }, journals: []));
+        Refuses("classification_inconsistent", Base(Transfer() with { TargetWarehouse = null }, journals: []));
+    }
 
     [Theory]
     [InlineData(true, "USD")]

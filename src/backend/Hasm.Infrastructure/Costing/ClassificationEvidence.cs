@@ -32,7 +32,8 @@ internal sealed record ClassifiedJournal(Guid Id, short Status, short Type, long
     DateTimeOffset? PostedAt, Guid? PeriodId, Guid? Reverses, Guid? Adjusts, ImmutableArray<ClassifiedLine> Lines);
 internal sealed record ClassifiedAccount(Guid Id, bool Active, bool Group, short CurrencyPolicy, long Revision);
 internal sealed record ClassifiedPosting(Guid Id, Guid DocumentId, int DocType, DateOnly Date, decimal TotalValue, Guid? VersionId, Guid? JournalId,
-    Guid? SourceWarehouse, Guid? TargetWarehouse, Guid? ReversalId, short? ReversalAction, Guid? ReversalJournalId);
+    Guid? SourceWarehouse, Guid? TargetWarehouse, Guid? ReversalId, short? ReversalAction, Guid? ReversalJournalId,
+    Guid? CostOperationId = null, Guid? ReversalOperationId = null);
 internal sealed record ClassifiedObligation(Guid Id, Guid PostingId, Guid? JournalId, Guid? ObligationAccountId, Guid? VarianceAccountId, Guid? CounterAccountId);
 internal sealed record ClassifiedSettlement(Guid Id, Guid ObligationId, Guid ReceiptPostingId, Guid? JournalId, Guid? ReversesSettlementId, Guid? ReversalId, bool InNetChain);
 internal sealed record ClassifiedObligationReversal(Guid Id, Guid ObligationId, Guid StockReversalId);
@@ -182,23 +183,23 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             }
         }
 
-        var reversals = new Dictionary<Guid, (Guid Id, short Action, Guid? Journal)>();
+        var reversals = new Dictionary<Guid, (Guid Id, short Action, Guid? Journal, Guid? Operation)>();
         var reversalRowOfPosting = new Dictionary<Guid, Guid>();
-        await using (var q = Cmd($"SELECT {RV.Id},{RV.PostingId},{RV.JournalAction},{RV.JournalEntryId} FROM {RV.Table} WHERE {RV.PostingId}=ANY(@p) LIMIT @l", conn, tx, quota))
+        await using (var q = Cmd($"SELECT {RV.Id},{RV.PostingId},{RV.JournalAction},{RV.JournalEntryId},{RV.CostOperationId} FROM {RV.Table} WHERE {RV.PostingId}=ANY(@p) LIMIT @l", conn, tx, quota))
         {
             q.Parameters.AddWithValue("p", postingSet.ToArray()); q.Parameters.AddWithValue("l", limits.Postings + 1);
             await using var r = await q.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
             {
                 if (reversals.Count >= limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
-                if (!reversals.TryAdd(r.GetGuid(1), (r.GetGuid(0), r.GetInt16(2), N(r, 3)))) throw new Refusal("classification_inconsistent");
+                if (!reversals.TryAdd(r.GetGuid(1), (r.GetGuid(0), r.GetInt16(2), N(r, 3), N(r, 4)))) throw new Refusal("classification_inconsistent");
                 reversalRowOfPosting[r.GetGuid(1)] = r.GetGuid(0);
             }
         }
 
         var postings = new Dictionary<Guid, ClassifiedPosting>();
         await using (var q = Cmd($"SELECT p.{SP.Id},p.{SP.DocumentId},p.{SP.DocType},p.{SP.EffectiveDate},p.{SP.TotalValue},p.{SP.AccountingVersionId},p.{SP.JournalEntryId}," +
-            $"d.{SD.SourceWarehouseId},d.{SD.TargetWarehouseId} FROM {SP.Table} p JOIN {SD.Table} d ON d.{SD.Id}=p.{SP.DocumentId} WHERE p.{SP.Id}=ANY(@p) LIMIT @l", conn, tx, quota))
+            $"d.{SD.SourceWarehouseId},d.{SD.TargetWarehouseId},p.{SP.CostOperationId} FROM {SP.Table} p JOIN {SD.Table} d ON d.{SD.Id}=p.{SP.DocumentId} WHERE p.{SP.Id}=ANY(@p) LIMIT @l", conn, tx, quota))
         {
             q.Parameters.AddWithValue("p", postingSet.ToArray()); q.Parameters.AddWithValue("l", limits.Postings + 1);
             await using var r = await q.ExecuteReaderAsync(ct);
@@ -206,7 +207,8 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             {
                 var id = r.GetGuid(0); reversals.TryGetValue(id, out var rv);
                 postings[id] = new(id, r.GetGuid(1), r.GetInt16(2), DateOnly.FromDateTime(r.GetDateTime(3)), r.GetDecimal(4), N(r, 5), N(r, 6), N(r, 7), N(r, 8),
-                    reversals.ContainsKey(id) ? rv.Id : null, reversals.ContainsKey(id) ? rv.Action : null, reversals.ContainsKey(id) ? rv.Journal : null);
+                    reversals.ContainsKey(id) ? rv.Id : null, reversals.ContainsKey(id) ? rv.Action : null, reversals.ContainsKey(id) ? rv.Journal : null,
+                    N(r, 9), reversals.ContainsKey(id) ? rv.Operation : null);
             }
         }
         // A requested id that is not a stock posting (missing, adjustment, foreign) is indistinguishable from a denied one.
@@ -341,8 +343,12 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
 
     internal static ClassificationEvidence Evaluate(Guid company, ImmutableArray<Guid> requested, Loaded d)
     {
-        // Unsupported kinds first: transfers have no journal by design (NOT "no change needed").
-        if (d.Postings.Values.Any(p => p.DocType == (int)StockDocType.Transfer)) throw new Refusal("classification_unavailable");
+        // Transfers (TM-D7, working baseline): no journal and no accounting version by design, one item, same inventory account on both legs, same branch
+        // (cross-branch transfers are refused at validation). Their effect reaches the ledger only through downstream issues. A transfer WITH a journal or version
+        // is inconsistent; a transfer is never "classified", it is journal-less by construction.
+        foreach (var t in d.Postings.Values.Where(p => p.DocType == (int)StockDocType.Transfer))
+            if (t.JournalId is not null || t.VersionId is not null || t.ReversalJournalId is not null || t.SourceWarehouse is null || t.TargetWarehouse is null)
+                throw new Refusal("classification_inconsistent");
         if (d.Journals.Keys.Any(d.AdjustedJournals.Contains)) throw new Refusal("open_decision");
         foreach (var j in d.Journals.Values)
         {
@@ -387,7 +393,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         HashSet<Guid> VersionOf(ClassifiedPosting posting) =>
             posting.VersionId is { } v && d.VersionAccounts.TryGetValue(v, out var set) ? set : throw new Refusal("classification_inconsistent");
 
-        foreach (var p in d.Postings.Values)
+        foreach (var p in d.Postings.Values.Where(x => x.DocType != (int)StockDocType.Transfer))
         {
             if (p.ReversalId is null)
                 // A receipt fully matched against negative obligations books nothing of its own: its value sits in the settlement journals.
@@ -452,7 +458,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
     }
 
     // decimal is written without its scale so 1.0 and 1.00 are the same evidence.
-    private static readonly JsonSerializerOptions Canonical = new() { Converters = { new CanonicalDecimal() } };
+    internal static readonly JsonSerializerOptions Canonical = new() { Converters = { new CanonicalDecimal() } };
     private sealed class CanonicalDecimal : System.Text.Json.Serialization.JsonConverter<decimal>
     {
         public override decimal Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options) => reader.GetDecimal();
