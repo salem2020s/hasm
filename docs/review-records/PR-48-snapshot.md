@@ -1,0 +1,16 @@
+# Phase 3.8D internal snapshot checkpoint review
+
+* **Pull request:** #48 (Draft; phase incomplete)
+* **Reviewed baseline:** HEAD 2344d4fc18360e712e1427ff6d1febac2e0f662d plus the full working diff against origin/main 814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb, including both new snapshot source/test files. Final committed-head confirmation is required separately.
+* **Reviewer context:** separate Codex/GPT-6 agent (`pr46_review`), independent of the author.
+* **Prompt/scope:** adversarial full PR diff, never a selected slice; review source provenance, authorization/revocation, cross-company isolation, repeatable-read/read-only semantics, costing reconciliation, unsupported-history completeness, numeric/resource bounds and tests. No edits by reviewer.
+* **Checks run by reviewer:** source/Git inspection and git diff --check passed. No application tests run by reviewer.
+* **Medium finding, fixed:** stock-document source metadata alone did not prove an authentic posting. Require matching document type and exact StockPosting.CostOperationId, with real posted receipt/issue and unposted/wrong-operation/wrong-type regression cases.
+* **Medium finding, fixed:** FIFO replay repeatedly scanned/sorted every open layer and lacked cancellation. Use ordered linked-list layers and only the consumed prefix in existing arithmetic; propagate cancellation. Add long-history allocation/conservation and canceled-run cases.
+* **Reviewer follow-up:** both findings resolved; no remaining Critical, High or Medium identified in this limited internal checkpoint. The 17 additional PostgreSQL registry cases are correctly registered (962 -> 979).
+* **Proposal review:** a second full-diff pass confirmed the negative-stock compensation and method-conversion examples mathematically consistent and genuinely material policy choices. A Medium prerequisite is recorded explicitly in the proposal: define pre-conversion reversal/return and linked-transfer accounting before implementing conversion. This is unresolved future design, not an enabled code path or approval. No Critical/High finding was identified.
+* **Adversarial self-review:** checked permission checks on both sides of the snapshot, no writes/locks or missing-position creation, settled obligations refused rather than omitted, source provenance, sequence/date completeness, every historical amount and final balance reconciled, hash explicitly not executable authority, bounds and cancellation. Existing costing/posting implementation and financial assertions remain intact.
+* **Author validation:** snapshot PostgreSQL 17/17; full unit 887/887; shared frontend 450/450, typecheck and build passed, zero skips. Full backend/PostgreSQL regression and exact committed-head CI pending at record creation.
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** entire 3.8D phase is incomplete. No public preview, transfer/reversal/negative-history replay, proposal/execution persistence, method conversion/revaluation or new UI. Accounting proposals remain unapproved. Final committed-head review/CI are separate gates; this record cannot authorize a merge of the unfinished phase.
+* **Verdict:** approve the limited internal checkpoint; keep PR #48 Draft.

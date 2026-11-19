@@ -196,8 +196,13 @@ public static class CompanyRuntimePrivileges
     /// Reports every way <paramref name="roleName"/> holds more than the catalog allows in the connected company database
     /// (codes only; empty = least privilege). Run by the grant command with the owner account, and by the API gate with the runtime role itself.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+    public static Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+        => FindViolationsCoreAsync(conn, roleName, ct, null);
+    internal static Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, Action reserveCommand, CancellationToken ct)
+        => FindViolationsCoreAsync(conn, roleName, ct, reserveCommand);
+    private static async Task<IReadOnlyList<string>> FindViolationsCoreAsync(NpgsqlConnection conn, string roleName, CancellationToken ct, Action? reserveCommand)
     {
+        reserveCommand?.Invoke();
         await using var cmd = new NpgsqlCommand(ViolationSql, conn);
         cmd.Parameters.AddWithValue("r", roleName);
         cmd.Parameters.AddWithValue("audit", BizAudit.Table);
@@ -227,10 +232,15 @@ public static class CompanyRuntimePrivileges
     }
 
     /// <summary>True when the role holds every privilege of the catalog on every table that exists (what the API needs to work at all).</summary>
-    public static async Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+    public static Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+        => HasRequiredAccessCoreAsync(conn, roleName, ct, null);
+    internal static Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, Action reserveCommand, CancellationToken ct)
+        => HasRequiredAccessCoreAsync(conn, roleName, ct, reserveCommand);
+    private static async Task<bool> HasRequiredAccessCoreAsync(NpgsqlConnection conn, string roleName, CancellationToken ct, Action? reserveCommand)
     {
         foreach (var (table, privileges) in Tables)
         {
+            reserveCommand?.Invoke();
             await using var cmd = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL AND bool_and(has_table_privilege(@r::name, to_regclass(@t), p)) FROM unnest(@p::text[]) p", conn);
             cmd.Parameters.AddWithValue("r", roleName);
             cmd.Parameters.AddWithValue("t", table);

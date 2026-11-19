@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-18",
+  "updatedAt": "2026-11-19",
   "main": {
-    "verifiedHead": "aba3e916524a22a0d422a2f44a54557ad5f584db",
-    "note": "PR50 all seven exact-head gates and review passed; merge tree/ancestry verified. Post-merge Verification, Frontend and Desktop passed; Backend and artifact workflow pending."
+    "verifiedHead": "fe4432113c1c13a62c70ee98c218586d7b424b32",
+    "note": "PR50/49 reviewed heads, exact-head gates and merge tree/ancestry verified; ALL post-merge hosted workflows passed on fe4432113c1c13a62c70ee98c218586d7b424b32."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -76,33 +76,46 @@
     },
     {
       "pr": 47,
-      "phase": "Roadmap checkpoint",
-      "mergeCommit": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb"
+      "phase": "Roadmap/checkpoint reconciliation",
+      "mergeCommit": "814bd7c",
+      "reviewedHead": "8b1913b2dc3782312d6f1d5865956f3a448b3f37"
     },
     {
       "pr": 50,
-      "phase": "OwnerD046 exact temporary development dependency policy",
+      "phase": "Exact temporary dev dependency policy D046",
       "mergeCommit": "aba3e916524a22a0d422a2f44a54557ad5f584db",
       "reviewedHead": "ab7eba8ad9224946c434d4ca1b9cfc0b24505206"
+    },
+    {
+      "pr": 49,
+      "phase": "Focused Codex workflow documentation",
+      "mergeCommit": "fe4432113c1c13a62c70ee98c218586d7b424b32",
+      "reviewedHead": "513d42e6915980c27fdd66ba4c0a429ab3bf3c36"
     }
   ],
   "active": {
-    "phase": "Codex workflow documentation; Phase 3.8D continues independently",
-    "branch": "feature/codex-workflow-optimization",
-    "pr": 49,
-    "state": "Five existing documents preserved; verified main merged; independent review clear except fixed Low prose issue; new exact-head CI pending",
+    "phase": "3.8D impact preview and recalculation",
+    "branch": "feature/phase-3-8d-impact-preview",
+    "pr": 48,
+    "state": "ACTIVE incomplete Phase3.8D: source/changed-history fiscal evidence bound, normal posting locks retained; PG17/unit977 passed; existingregression45540 live; newheadCI pending; security gate remains blocked pending PR51ownerdecision",
     "knownIssues": [
-      "PR50 merged. Actual High picomatch advisory remains under exact D046 exception until2026-11-24T00:00:00Z, without renewal.",
-      "PR49 document scope reviewed; no changes to binding CLAUDE or mandatory gates. Final updated-head confirmation and CI pending.",
-      "PR48 preserved at676c77ebfa420e11618bbf12a100ec67e37083f8; complete phase remains unfinished/Draft; PostgreSQL CI pending.",
-      "Post-merge main Backend and artifact workflow still running; do not claim green until observed."
+      "GHSA-fc5q-39xc-vjpf officially withdrawn2026-11-18T15:38:56Z; fullaudit0; existing exact waiver fails closed. Inert PR51 retirement awaits NEW explicit owner approval; no gate/manifests/expiry changed.",
+      "Exactc85de43 backend/PG44486468531 succeeded, independent review no CHM; local source40+existing264/unit970 passed. No current all-green security claim; last fully green historicalfb07fdd only.",
+      "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
+      "Internal ordinary complete component snapshots/comparison implemented, not publicly integrated; full reversal/negative/conversion, guarded persistence/approvals/execution/revaluation/UI remain incomplete.",
+      "Quota14ee8f3 exact-head backend/PG1132/unit970/API69 passed; broad local140 passed zero skips; independent committed-head review no CHM. Security gate still fails closed.",
+      "Claude original work untouched; generated artifacts and secrets excluded",
+      "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
+      "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch",
+      "Original Medium query-accounting gap resolved; new multi-item history read has shared transaction/budgets/all-item quarantine, not actual source binding or execution.",
+      "Source source/changed-history periods now bound; adjustment dates/accounts/basis/entitlement/approval still NOT bound, no API/DI/caller/execution. Retained-output component cap is not peak-allocation guarantee."
     ]
   },
   "next": [
-    "Push PR49 readability correction; obtain final exact-head CI and independent full-diff confirmation.",
-    "Verify PR49 with main copy of verify-head before merging only when every gate passes.",
-    "Observe all main post-merge gates and PR48 revalidation; fix verified failures without weakening checks.",
-    "Continue Phase3.8D complete history closure, incremental valuation and guarded execution/UI contracts; keep Draft until complete."
+    "Finish SAME existing fiscal/journal/stock/source regression45540/test-results/source-fiscal-regression; corrected17 and fullunit977 passed zero skips. First17 fixturefailures corrected without weakening guards/assertions. Registry1170/full1226; full design/source review noCHML. Preserve/push exact-head confirmation/CI; security still blocked.",
+    "PR51 is INERT/awaiting owner approval already requested once. Do not apply protected retirement patch or relabel while pending; continue full source-bound consistent document/account/period/basis/entitlement design and implementation independently.",
+    "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
+    "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"
   ],
   "openDecisions": [
     "OD-1",
@@ -118,30 +131,18 @@
     "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
   },
-  "parallelWork": [
-    {
-      "branch": "feature/phase-3-8d-impact-preview",
-      "head": "676c77ebfa420e11618bbf12a100ec67e37083f8",
-      "pr": 48
-    },
-    {
-      "branch": "feature/codex-workflow-optimization",
-      "head": "dfe86dd2179f3d63be978d17e23554d3cb9e72bc",
-      "pr": 49
-    },
-    {
-      "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
-      "branch": "feature/security-picomatch",
-      "approval": "PR50 merged under explicit conditional approval; all required pre-merge gates passed",
-      "pr": 50
-    }
-  ],
+  "securityPolicy": {
+    "pr": 50,
+    "merge": "aba3e916524a22a0d422a2f44a54557ad5f584db",
+    "expiresAt": "2026-11-24T00:00:00Z",
+    "scope": "Only GHSA-fc5q-39xc-vjpf exact6 devrecords; otherHigh/Critical andproduction block",
+    "proofRun": 44267058914
+  },
+  "lastVerifiedFeatureHead": "fb07fddbc99bef7418d08901aa2956280656e34d",
   "sessionContinuity": {
     "automaticAfterUsageReset": "NOT CONFIRMED",
-    "lastPushedProposalHead": "3b029f40f5bc6bc47a15de373e6748fea4504865",
-    "manualResumeSupported": true,
-    "cliVersion": "0.169.0",
-    "goalsFeatureEnabled": true,
+    "nativeGoalStatusObserved": "active (owner resumed; get_goal verified2026-11-18)",
+    "ownerSecurityDecision": "RESOLVED by explicit D046 conditional approval, PR50 merged",
     "restartInstruction": "docs/RESUME-CODEX.md",
     "backgroundRestartConfigured": false
   }

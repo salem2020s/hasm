@@ -393,6 +393,11 @@ public interface IScopeTargetValidator
 /// <summary>The current state of a branch or warehouse as far as access control is concerned. <paramref name="Epoch"/> is its activation epoch.</summary>
 public sealed record ScopeTargetState(bool Active, long Epoch);
 
+internal interface IBudgetedScopeTargetValidator
+{
+    Task<ScopeTargetState?> GetStateAsync(Guid companyId, ScopeKind kind, Guid id, Action reserveCommand, CancellationToken ct);
+}
+
 public sealed class DenyAllScopeTargetValidator : IScopeTargetValidator
 {
     public static DenyAllScopeTargetValidator Instance { get; } = new();

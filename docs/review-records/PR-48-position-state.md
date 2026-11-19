@@ -1,0 +1,11 @@
+# Phase3.8D private replay-state preparation
+
+Independent reviewer: separate Codex/GPT-6 context `pr46_review`, applying hasm-pr. Prompt: read-only FULL PR48 diff against current main `fe4432113c1c13a62c70ee98c218586d7b424b32`, including current source/tests, accounting invariants and phase boundaries; check preserved assertions, exact arithmetic and cancellation. Nested worktrees excluded. Reviewed HEAD `bbbe07b08bbbec29c6aa7aa71b2d7080d8a99900` plus the two source/test changes; final committed-head confirmation is separate.
+
+Verdict: approve this limited preparation checkpoint, no Critical/High/Medium finding. No test removed or weakened. Reviewer inspected Git/source and passed diff whitespace check; did not run tests, databases, network or vulnerability probes. No whole-phase, conversion-activation or merge approval.
+
+The extracted PositionState remains private to a single pure batch calculation. Complete input classification, identities, receipt limits and precision are validated before arithmetic; FIFO allocations, cancellation and aggregate range refusal remain unchanged. No external mutable cursor, partial result, production caller, API or persistence exists. Existing backdated/method-change guards stay in force.
+
+Author checks: focused replay21/21 and full unit921/921 passed locally, zero skips. Two new cases assert a valid derived issue amount1.8e18 from two separate9e17 receipts, retaining exact value and both FIFO components. Existing accounting and authorization assertions remain intact. Author adversarial review checked failure-state confinement and unchanged validation before entering private state.
+
+Remaining work: authorized complete transfer-history closure, deterministic mirrored-layer/provenance contracts and incremental transfer replay, then complete reversal/negative/conversion entitlements, persistence, guarded approvals/execution and shared UI. A FIFO transfer must retain each consumed layer in order; merging them into one average-valued receipt would violate the live engine. Derived transfer value must not be treated as a new receipt-input limit. These are prerequisites, not implemented capabilities. Final committed-head CI/full-phase review and PostgreSQL regression remain required; PR48 stays Draft.

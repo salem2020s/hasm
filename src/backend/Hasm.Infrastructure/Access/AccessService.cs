@@ -1,5 +1,6 @@
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Companies;
+using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Identity;
 using Npgsql;
 using System.Runtime.CompilerServices;
@@ -146,8 +147,18 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     public async Task<bool> IsAllowedAsync(Guid userId, Guid companyId, string permissionCode, ScopeTarget target, CancellationToken ct = default) =>
         (await GetEffectivePermissionsAsync(userId, companyId, ct)).Has(permissionCode, target);
 
-    private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct)
+    internal async Task<bool> IsAllowedAsync(Guid userId, Guid companyId, string permissionCode, ScopeTarget target, Action reserveCommand, CancellationToken ct)
+        => (await GetEffectivePermissionsAsync(userId, companyId, reserveCommand, ct)).Has(permissionCode, target);
+
+    internal async Task<EffectivePermissions> GetEffectivePermissionsAsync(Guid userId, Guid companyId, Action reserveCommand, CancellationToken ct)
     {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        return await LoadEffectiveAsync(conn, null, userId, companyId, true, ct, reserveCommand);
+    }
+
+    private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct, Action? reserveCommand = null)
+    {
+        reserveCommand?.Invoke();
         await using var cmd = new NpgsqlCommand(
             $"SELECT a.{A.Id}, a.{A.RoleId}, a.{A.ScopeKind}, a.{A.ScopeId}, rp.{RP.Permission}, COALESCE(a.{A.ScopeEpoch}, a.{A.WarehouseScopeEpoch}) " +
             $"FROM {A.Table} a " +
@@ -173,6 +184,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             }
         }
         // Cost-center-scoped grants (own table: the scope check of the main assignment table cannot be extended without a DROP).
+        reserveCommand?.Invoke();
         await using (var ccCmd = new NpgsqlCommand(
             $"SELECT a.{CCA.Id}, a.{CCA.RoleId}, a.{CCA.CostCenterId}, rp.{RP.Permission}, a.{CCA.Epoch} " +
             $"FROM {CCA.Table} a " +
@@ -199,19 +211,22 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         // assignment recorded. Anything else (deactivated, reactivated since, unknown, company database unavailable) drops the grant:
         // fail closed, never reinterpreted as company-wide access. Company-wide grants are unaffected. Evaluated on every call (no cache).
         foreach (var (grantId, g) in grants.Where(kv => kv.Value.Scope is ScopeKind.Branch or ScopeKind.Warehouse or ScopeKind.CostCenter).ToList())
-            if (!await ScopedGrantIsLiveAsync(companyId, g.Scope, g.ScopeId, g.Epoch, ct)) grants.Remove(grantId);
+            if (!await ScopedGrantIsLiveAsync(companyId, g.Scope, g.ScopeId, g.Epoch, ct, reserveCommand)) grants.Remove(grantId);
         return new EffectivePermissions(catalog, [.. grants.Select(kv => new GrantedRole(kv.Key, kv.Value.Role, kv.Value.Scope, kv.Value.ScopeId, kv.Value.Permissions))]);
     }
 
-    private async Task<bool> ScopedGrantIsLiveAsync(Guid companyId, ScopeKind kind, Guid? targetId, long? recordedEpoch, CancellationToken ct)
+    private async Task<bool> ScopedGrantIsLiveAsync(Guid companyId, ScopeKind kind, Guid? targetId, long? recordedEpoch, CancellationToken ct, Action? reserveCommand = null)
     {
         if (targetId is not { } id || recordedEpoch is not { } epoch) return false;
         try
         {
-            var state = await scopeValidator.GetStateAsync(companyId, kind, id, ct);
+            var state = reserveCommand is null ? await scopeValidator.GetStateAsync(companyId, kind, id, ct)
+                : scopeValidator is IBudgetedScopeTargetValidator counted
+                    ? await counted.GetStateAsync(companyId, kind, id, reserveCommand, ct)
+                    : throw new ReadCommandBudgetException(ReadBudgetFailure.UnsupportedValidator);
             return state is { Active: true } && state.Epoch == epoch;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ReadCommandBudgetException) { return false; }
     }
 
     private static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)

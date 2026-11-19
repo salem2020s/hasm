@@ -45,10 +45,13 @@ public sealed class CompanyRegistry(string connectionString, Func<string>? nameG
         }
     }
 
-    public async Task<CompanyRecord?> GetAsync(Guid id, CancellationToken ct = default)
+    public Task<CompanyRecord?> GetAsync(Guid id, CancellationToken ct = default) => GetCoreAsync(id, ct, null);
+    internal Task<CompanyRecord?> GetAsync(Guid id, Action reserveCommand, CancellationToken ct) => GetCoreAsync(id, ct, reserveCommand);
+    private async Task<CompanyRecord?> GetCoreAsync(Guid id, CancellationToken ct, Action? reserveCommand)
     {
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(ct);
+        reserveCommand?.Invoke();
         await using var cmd = new NpgsqlCommand($"SELECT {Columns} FROM {S.Table} WHERE {S.Id} = @id", conn);
         cmd.Parameters.AddWithValue("id", id);
         await using var reader = await cmd.ExecuteReaderAsync(ct);

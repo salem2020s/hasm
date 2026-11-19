@@ -33,12 +33,19 @@ public sealed class CompanyDatabaseException(string code) : Exception("The compa
 /// </summary>
 public static class CompanySchemaGate
 {
-    public static async Task EnsureCompatibleAsync(NpgsqlConnection conn, Guid companyId, IReadOnlyList<MigrationScript> scripts,
+    public static Task EnsureCompatibleAsync(NpgsqlConnection conn, Guid companyId, IReadOnlyList<MigrationScript> scripts,
         bool allowOverprivileged, CancellationToken ct = default)
+        => EnsureCompatibleCoreAsync(conn, companyId, scripts, allowOverprivileged, ct, null);
+    internal static Task EnsureCompatibleAsync(NpgsqlConnection conn, Guid companyId, IReadOnlyList<MigrationScript> scripts,
+        bool allowOverprivileged, Action reserveCommand, CancellationToken ct)
+        => EnsureCompatibleCoreAsync(conn, companyId, scripts, allowOverprivileged, ct, reserveCommand);
+    private static async Task EnsureCompatibleCoreAsync(NpgsqlConnection conn, Guid companyId, IReadOnlyList<MigrationScript> scripts,
+        bool allowOverprivileged, CancellationToken ct, Action? reserveCommand)
     {
         var applied = new Dictionary<int, string>();
         try
         {
+            reserveCommand?.Invoke();
             await using (var cmd = new NpgsqlCommand($"SELECT version, checksum FROM {SystemSchema.MigrationJournalTable}", conn))
             await using (var r = await cmd.ExecuteReaderAsync(ct))
                 while (await r.ReadAsync(ct)) applied[r.GetInt32(0)] = r.GetString(1);
@@ -56,6 +63,7 @@ public static class CompanySchemaGate
         Guid? stored;
         try
         {
+            reserveCommand?.Invoke();
             await using var cmd = new NpgsqlCommand($"SELECT {CoIdentity.CompanyId} FROM {CoIdentity.Table}", conn);
             stored = await cmd.ExecuteScalarAsync(ct) as Guid?;
         }
@@ -64,18 +72,27 @@ public static class CompanySchemaGate
 
         // The principal actually connected (not a name the caller expects) is what gets checked.
         string principal;
+        reserveCommand?.Invoke();
         await using (var who = new NpgsqlCommand("SELECT current_user::text", conn)) principal = (string)(await who.ExecuteScalarAsync(ct))!;
-        if (!await CompanyRuntimePrivileges.HasRequiredAccessAsync(conn, principal, ct))
+        var required = reserveCommand is null ? await CompanyRuntimePrivileges.HasRequiredAccessAsync(conn, principal, ct)
+            : await CompanyRuntimePrivileges.HasRequiredAccessAsync(conn, principal, reserveCommand, ct);
+        if (!required)
             throw new CompanyDatabaseException(CompanyDatabaseException.RuntimeNotProvisioned);
-        if (!allowOverprivileged && (await CompanyRuntimePrivileges.FindViolationsAsync(conn, principal, ct)).Count > 0)
-            throw new CompanyDatabaseException(CompanyDatabaseException.RuntimeOverprivileged);
+        if (!allowOverprivileged)
+        {
+            var violations = reserveCommand is null ? await CompanyRuntimePrivileges.FindViolationsAsync(conn, principal, ct)
+                : await CompanyRuntimePrivileges.FindViolationsAsync(conn, principal, reserveCommand, ct);
+            if (violations.Count > 0) throw new CompanyDatabaseException(CompanyDatabaseException.RuntimeOverprivileged);
+        }
 
         // Branch invariant (migration 0004): a company is operational only with exactly one active main branch. PostgreSQL enforces this at
         // every commit; the gate is the last, fail-closed line (a database altered outside the application is refused, never repaired here).
+        reserveCommand?.Invoke();
         await using var exists = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL", conn);
         exists.Parameters.AddWithValue("t", CompanySchema.Branch.Table);
         if (await exists.ExecuteScalarAsync(ct) is true)   // absent only for a database/scripts pair that predates migration 0004
         {
+            reserveCommand?.Invoke();
             await using var count = new NpgsqlCommand(
                 $"SELECT count(*) FROM {CompanySchema.Branch.Table} WHERE {CompanySchema.Branch.IsMain} AND {CompanySchema.Branch.IsActive}", conn);
             if (Convert.ToInt64(await count.ExecuteScalarAsync(ct)) != 1)
@@ -124,18 +141,24 @@ public sealed class CompanyDatabaseResolver
     }
 
     /// <summary>Opens a pooled connection to the company's database after all checks. Dispose it to return it to the pool.</summary>
-    public async Task<NpgsqlConnection> OpenAsync(Guid companyId, CancellationToken ct = default)
+    public Task<NpgsqlConnection> OpenAsync(Guid companyId, CancellationToken ct = default) => OpenCoreAsync(companyId, ct, null);
+    internal Task<NpgsqlConnection> OpenAsync(Guid companyId, Action reserveCommand, CancellationToken ct)
+        => OpenCoreAsync(companyId, ct, reserveCommand);
+    private async Task<NpgsqlConnection> OpenCoreAsync(Guid companyId, CancellationToken ct, Action? reserveCommand)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var target = await ResolveAsync(companyId, ct);
+            var target = await ResolveAsync(companyId, ct, reserveCommand);
             var conn = new NpgsqlConnection(target.ConnectionString);
             try
             {
                 await conn.OpenAsync(ct);
                 if (!verifiedUntil.TryGetValue(companyId, out var until) || until <= clock.GetUtcNow())
                 {
-                    await CompanySchemaGate.EnsureCompatibleAsync(conn, companyId, scripts, options.AllowOverprivilegedCompanyRuntime, ct);
+                    if (reserveCommand is null)
+                        await CompanySchemaGate.EnsureCompatibleAsync(conn, companyId, scripts, options.AllowOverprivilegedCompanyRuntime, ct);
+                    else
+                        await CompanySchemaGate.EnsureCompatibleAsync(conn, companyId, scripts, options.AllowOverprivilegedCompanyRuntime, reserveCommand, ct);
                     verifiedUntil[companyId] = clock.GetUtcNow() + SchemaCheckLifetime;
                 }
                 return conn;
@@ -143,7 +166,7 @@ public sealed class CompanyDatabaseResolver
             catch (Exception ex)
             {
                 await conn.DisposeAsync();
-                if (ex is OperationCanceledException) throw;
+                if (ex is OperationCanceledException or ReadCommandBudgetException) throw;
                 // Rotated or removed credentials: forget the cached resolution once and retry with a fresh read.
                 if (ex is PostgresException { SqlState: PostgresErrorCodes.InvalidPassword or PostgresErrorCodes.InvalidAuthorizationSpecification } && attempt == 0)
                 {
@@ -167,12 +190,13 @@ public sealed class CompanyDatabaseResolver
         verifiedUntil.TryRemove(companyId, out _);
     }
 
-    private async Task<Resolved> ResolveAsync(Guid companyId, CancellationToken ct)
+    private async Task<Resolved> ResolveAsync(Guid companyId, CancellationToken ct, Action? reserveCommand)
     {
         if (resolved.TryGetValue(companyId, out var cached) && cached.ExpiresAt > clock.GetUtcNow()) return cached;
         try
         {
-            var company = await registry.GetAsync(companyId, ct) ?? throw new CompanyDatabaseException(CompanyDatabaseException.NotFound);
+            var company = (reserveCommand is null ? await registry.GetAsync(companyId, ct)
+                : await registry.GetAsync(companyId, reserveCommand, ct)) ?? throw new CompanyDatabaseException(CompanyDatabaseException.NotFound);
             if (company.State != ProvisioningState.Ready) throw new CompanyDatabaseException(CompanyDatabaseException.NotReady);
 
             var credential = await credentials.GetAsync(companyId, ct);
@@ -186,7 +210,7 @@ public sealed class CompanyDatabaseResolver
             resolved[companyId] = result;
             return result;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not ReadCommandBudgetException)
         {
             var mapped = Map(ex);
             logger?.LogError("company.database_unavailable company={CompanyId} code={Code}", companyId, (mapped as CompanyDatabaseException)?.Code ?? CompanyDatabaseException.Unavailable);

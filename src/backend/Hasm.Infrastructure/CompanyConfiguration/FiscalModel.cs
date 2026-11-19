@@ -95,13 +95,19 @@ public static class FiscalPeriodGate
             $"SELECT {CompanyDatabase.CompanySchema.FiscalPeriod.Id}, {CompanyDatabase.CompanySchema.FiscalPeriod.Status} FROM {CompanyDatabase.CompanySchema.FiscalPeriod.Table} WHERE @d BETWEEN {CompanyDatabase.CompanySchema.FiscalPeriod.StartDate} AND {CompanyDatabase.CompanySchema.FiscalPeriod.EndDate} FOR SHARE", connection, transaction);
         cmd.Parameters.AddWithValue("d", postingDate);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        if (!await r.ReadAsync(ct)) return new(false, PostingPeriodCheck.NoPeriod, null, null);
+        if (!await r.ReadAsync(ct)) return Evaluate(null, null, allowSoftClosed);
         var state = (FiscalPeriodState)r.GetInt16(1);
+        return Evaluate(r.GetGuid(0), state, allowSoftClosed);
+    }
+
+    internal static PostingPeriodCheck Evaluate(Guid? periodId, FiscalPeriodState? state, bool allowSoftClosed)
+    {
+        if (periodId is null || state is null) return new(false, PostingPeriodCheck.NoPeriod, null, null);
         return state switch
         {
-            FiscalPeriodState.FinalClosed => new(false, PostingPeriodCheck.FinalClosed, r.GetGuid(0), state),
-            FiscalPeriodState.SoftClosed when !allowSoftClosed => new(false, PostingPeriodCheck.SoftClosed, r.GetGuid(0), state),
-            _ => new(true, null, r.GetGuid(0), state),
+            FiscalPeriodState.FinalClosed => new(false, PostingPeriodCheck.FinalClosed, periodId, state),
+            FiscalPeriodState.SoftClosed when !allowSoftClosed => new(false, PostingPeriodCheck.SoftClosed, periodId, state),
+            _ => new(true, null, periodId, state),
         };
     }
 }
