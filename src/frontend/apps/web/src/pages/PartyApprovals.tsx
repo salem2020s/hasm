@@ -24,12 +24,16 @@ function useErrorText() {
 const companyName = (p: { companyNameAr: string | null; companyNameEn: string | null; companyId: string }, locale: string) =>
   (locale === "ar" ? p.companyNameAr ?? p.companyNameEn : p.companyNameEn ?? p.companyNameAr) ?? p.companyId;
 
+const PAGE = 25;
+
 export function PartyApprovalsPage() {
   const { t, locale } = useI18n();
   const auth = useAuth();
   const errText = useErrorText();
   const [status, setStatus] = useState<"" | "1" | "2" | "3">("1");
   const [rows, setRows] = useState<PartyProposalSummary[] | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
   const [open, setOpen] = useState<PartyProposal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -42,9 +46,9 @@ export function PartyApprovalsPage() {
   const admin = !!auth.user?.isIdentityAdministrator;
   const load = useCallback(async () => {
     if (!admin) return;
-    try { setRows((await auth.api.listPartyProposals(status ? (Number(status) as 1 | 2 | 3) : undefined)).proposals); setError(null); }
+    try { const page = await auth.api.listPartyProposals(status ? (Number(status) as 1 | 2 | 3) : undefined, offset, PAGE); setRows(page.proposals); setTotal(page.total); setError(null); }
     catch (e) { if (!auth.handleError(e)) setError(errText(e)); }
-  }, [auth.api, auth.handleError, status, errText, admin]);
+  }, [auth.api, auth.handleError, status, offset, errText, admin]);
   useEffect(() => { void load(); }, [load]);
 
   if (!admin) return <Banner kind="error" testId="forbidden">{t("ppa.only_admins")}</Banner>;
@@ -118,7 +122,7 @@ export function PartyApprovalsPage() {
       {error && <Banner kind="error">{error}</Banner>}
       <Card title={t("ppa.title")}>
         <div className="toolbar">
-          <Field id="ppa-status" label={t("ppa.status")}>{(aria) => <select {...aria} value={status} onChange={(e) => setStatus(e.target.value as typeof status)}><option value="">{t("inv.filter_all")}</option>{(["1", "2", "3"] as const).map((s) => <option key={s} value={s}>{t(`ppa.status.${s}`)}</option>)}</select>}</Field>
+          <Field id="ppa-status" label={t("ppa.status")}>{(aria) => <select {...aria} value={status} onChange={(e) => { setOffset(0); setStatus(e.target.value as typeof status); }}><option value="">{t("inv.filter_all")}</option>{(["1", "2", "3"] as const).map((s) => <option key={s} value={s}>{t(`ppa.status.${s}`)}</option>)}</select>}</Field>
         </div>
         <div className="table-wrap">
           <table className="data-table">
@@ -135,6 +139,11 @@ export function PartyApprovalsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="pager" data-testid="ppa-pager">
+          <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>{t("inv.items.previous")}</button>
+          <span aria-live="polite">{t("inv.items.paging", { from: String(total === 0 ? 0 : offset + 1), to: String(offset + rows.length), total: String(total) })}</span>
+          <button type="button" disabled={offset + PAGE >= total} onClick={() => setOffset(offset + PAGE)}>{t("inv.items.next")}</button>
         </div>
       </Card>
     </section>

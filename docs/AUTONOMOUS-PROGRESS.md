@@ -1,5 +1,10 @@
 # HASM — Autonomous execution progress
 
+## Phase 3.9A follow-ups before 3.9B (branch fix/phase-3-9a-followups) — 2026-11-19
+
+The four Medium follow-ups recorded in `review-records/PR-46-final.md` are implemented on a separate branch from main: (1) a change proposal carries the shared identity revision the user VIEWED (`viewedSharedRevision`) and the server requires it and refuses a stale one (`shared_revision_required` 428 / `shared_revision_conflict` 412 with the current revision) instead of silently basing the change on newer data; (2) Save refreshes only the local data and Propose only the identity, so unrelated edits are preserved; (3) the central proposal queue is paged (25 per page, total shown); (4) per-tab unsaved markers on the party editor (shared `Tabs` `dirty`). Tests: PostgreSQL party classes 16/16 (one new test, registry 962 -> 963), frontend 395 web tests + typecheck + production build, unit 868/868. Independent review and hosted CI on the exact head are PENDING. Not merged; merging needs explicit owner approval.
+
+
 ## PR50 protected merge completed; PR49 reconciliation — 2026-11-18
 
 PR50 merged as `aba3e916524a22a0d422a2f44a54557ad5f584db` from reviewed head `ab7eba8ad9224946c434d4ca1b9cfc0b24505206` after all seven applicable mandatory checks, main's verifier and independent full-diff review passed. Merge tree equality and ancestry were verified. Main's post-merge Verification, Frontend and Desktop workflows passed; Backend and the additional artifact workflow are still PENDING at this checkpoint. D-046's exception accepts only the six exact development records until November24 at00:00UTC, without renewal. The actual High advisory stays disclosed; every other High/Critical and production, desktop and NuGet finding remains blocking. No release is authorized.
