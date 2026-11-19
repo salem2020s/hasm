@@ -32,3 +32,7 @@ Normal ResolveWarehouses/ResolveLines currently issue FOR SHARE reads through Co
 - Source integration subsequently proves revision/line/amount/status/posting changes, changed conversion, period/basis/mapping changes and source/approval binding before persistence or execution is enabled.
 
 Independent full-diff design review is required before implementing this contract. Actual execution evidence must be recorded separately; this document claims no new runtime capability.
+
+## Shared validation adapter checkpoint
+
+The internal StockDocumentService.ValidateReadOnlyAsync prerequisite now shares normalization, warehouse/item/unit and exact-conversion validation with normal posting. Normal callers keep their FOR SHARE locks and original query shapes. The adapter uses a caller-owned read-only transaction and bounded referenced rows, with explicit command/row reservations. Initial15 PostgreSQL cases and full unit970 passed zero skips; separate full-diff review found no CHM. Source header/revision/ordered-line loading, authorization, history integration and plan/policy binding are STILL unimplemented. See review-records/PR-48-source-validation.md for current verification; this helper is not public preview or posting authority.

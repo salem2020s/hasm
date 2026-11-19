@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-18",
+  "updatedAt": "2026-11-19",
   "main": {
     "verifiedHead": "fe4432113c1c13a62c70ee98c218586d7b424b32",
     "note": "PR50/49 reviewed heads, exact-head gates and merge tree/ancestry verified; ALL post-merge hosted workflows passed on fe4432113c1c13a62c70ee98c218586d7b424b32."
@@ -97,10 +97,10 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: same-transaction multi-item history reader implemented/independently reviewed at182defe; localPG162/unit970/guard34 passed; full new-head PG CI pending and required security gate blocked by withdrawn advisory/owner-held PR51",
+    "state": "ACTIVE incomplete Phase3.8D: bounded read-only validation shares posting rules/retains normal locks; PG15/unit970 passed; broad regression97015 running, new-head CI pending; security gate remains blocked pending owner-held PR51",
     "knownIssues": [
       "GHSA-fc5q-39xc-vjpf officially withdrawn2026-11-18T15:38:56Z; fullaudit0; existing exact waiver fails closed. Inert PR51 retirement awaits NEW explicit owner approval; no gate/manifests/expiry changed.",
-      "Latest fully green historicalfb07fdd:7checks/PG1113. Currentcf225 backend/PG1126/unit967/API69 passed; dependency-scan fails due withdrawal. No current full green claim.",
+      "Exact59335e1 fullPG1154/unit970/API69 and backend passed, independent review no CHM. Last fully green historicalfb07fdd only; withdrawal-policy security gate remains failing.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Internal ordinary complete component snapshots/comparison implemented, not publicly integrated; full reversal/negative/conversion, guarded persistence/approvals/execution/revaluation/UI remain incomplete.",
       "Quota14ee8f3 exact-head backend/PG1132/unit970/API69 passed; broad local140 passed zero skips; independent committed-head review no CHM. Security gate still fails closed.",
@@ -111,7 +111,7 @@
     ]
   },
   "next": [
-    "Local multi-item regression20855 TERMINAL162/162 passed zero skips; no restart. Exact182defe independent review no CHM; unit970/guard34 pass. Backend44387019588 fullPG still RUNNING; poll SAME handle. Registry1098/full1154. Follow-up documentation head needs new exact-head review/checks; failed security gate explicit.",
+    "Finish SAME live source-validation regression97015/test-results/source-validation-regression, not a duplicate. New15/unit970 passed; shared cores reviewed noCHML. Registry1113/full1169. Persist/push checkpoint and exact-head independent confirmation/CI; security gate stays blocked.",
     "PR51 is INERT/awaiting owner approval already requested once. Do not apply protected retirement patch or relabel while pending; continue full source-bound consistent document/account/period/basis/entitlement design and implementation independently.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"

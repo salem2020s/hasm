@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Bounded read-only validation shared with posting — 2026-11-19
+
+Reconciled exact59335e162c355c78ff3a1e930456cb1b1d647916: full cumulative independent review no CHM; actual backend/PostgreSQL1154/1154 zero skips passed44388903035; other always-on checks passed except dependency-scan withdrawal-policy failure44388903009. Mainfe443211/PR51fe2ee06 unchanged; PR51 remains inert awaiting the already-requested owner decision, no repeated approval request or protected policy change.
+
+Normal warehouse/line validation now delegates to shared private cores retaining original SQL shapes, codes and FOR SHARE locks. Internal ValidateReadOnlyAsync uses identical rules in a caller-owned read-only transaction, at most500 lines, bounded referenced units/exact item-unit pairs and explicit five-command/per-row reservations. No authorization/source-revision/fiscal authority, API/DI/production caller or execution activation. It prepares actual source binding without duplicating business validation or removing posting locks.
+
+Separate GPT-6/Codex FULL cumulative source review found no CHML. Builds0errors, focused PostgreSQL15/15 and full unit970/970 passed zero skips. Real NOWAIT probes prove normal warehouse/branch/item locks retained and readonly takes none. Broad affected document/posting/reversal/adjustment/negative-stock/multi-item regression RUNNING (test-results/source-validation-regression; exec97015). Registry1113/full1169; new-head CI/final confirmation pending. Disposable5433 was verified/stopped and safely started after machine restart; primary5432 untouched. See review-records/PR-48-source-validation.md.
+
+Next: finish SAME live regression, persist/push and exact-head review/CI; then integrate bounded source header/revision/ordered lines/posting facts, source visibility and full cost closure with shared validation/comparisons in ONE read-only session. Complete fiscal/account/basis/entitlement binding, full reversal/negative/conversion/persistence/approvals/atomic execution/revaluation/shared UI. PR48 stays Draft; no scope reduction or failed-gate merge.
+
 ## Consistent multi-item history read — 2026-11-18
 
 Starting head14ee8f3d2e9440b0a0a35f266618445bce8e08b0 passed backend/PostgreSQL1132/1132 zero skips, unit970/API69; dependency-scan still fails closed after advisory withdrawal. Mainfe443211 and PR51/inert pending owner decision are unchanged. No new security policy changes or repeated approval request.
