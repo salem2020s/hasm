@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Costing;
 using Loaded = Hasm.Infrastructure.Costing.ClassificationEvidenceService.Loaded;
 
@@ -25,7 +26,7 @@ public class ClassificationEvidenceRulesTests
 
     private static Loaded Base(ClassifiedPosting? posting = null, IEnumerable<ClassifiedJournal>? journals = null, IEnumerable<ClassifiedAccount>? accounts = null,
         IEnumerable<ClassifiedObligation>? obligations = null, IEnumerable<ClassifiedSettlement>? settlements = null,
-        IEnumerable<(Guid, Guid, Guid)>? obligationReversals = null, HashSet<Guid>? adjusted = null)
+        IEnumerable<ClassifiedObligationReversal>? obligationReversals = null, HashSet<Guid>? adjusted = null)
     {
         posting ??= Posting();
         return new Loaded(new() { [posting.Id] = posting }, [.. obligations ?? []], [.. settlements ?? []], [.. obligationReversals ?? []],
@@ -82,13 +83,113 @@ public class ClassificationEvidenceRulesTests
     [Fact] public void A_missing_journal_with_value_is_inconsistent() => Refuses("classification_inconsistent", Base(Posting(none: true)));
     [Fact] public void A_zero_value_posting_without_journal_is_not_required() => Assert.Empty(Run(Base(Posting(none: true, value: 0), journals: [])).Journals);
 
-    [Fact]
-    public void A_receipt_fully_matched_against_obligations_may_have_no_journal_of_its_own()
+    private static readonly Guid Issue = Guid.Parse("00000000-0000-0000-0000-000000000002"), Obl = Guid.Parse("00000000-0000-0000-0000-0000000000a0");
+    private static readonly Guid S1 = Guid.Parse("00000000-0000-0000-0000-0000000000c1"), S2 = Guid.Parse("00000000-0000-0000-0000-0000000000c2"), S3 = Guid.Parse("00000000-0000-0000-0000-0000000000c3");
+    private static readonly Guid Rj = Guid.Parse("00000000-0000-0000-0000-0000000000f3"), Sj = Guid.Parse("00000000-0000-0000-0000-0000000000f4");
+
+    /// <summary>An issue posting with an obligation (journal J) and a receipt posting P that books nothing of its own and settles it.</summary>
+    private static Loaded Chain(IEnumerable<ClassifiedSettlement>? settlements = null, IEnumerable<ClassifiedJournal>? extra = null, ClassifiedPosting? issue = null,
+        IEnumerable<ClassifiedObligationReversal>? reversals = null)
     {
-        var settlement = new ClassifiedSettlement(Guid.NewGuid(), Guid.NewGuid(), P, null, null, true);
-        // only the receipt rule is exercised here; the obligation side has its own tests
-        var loaded = Base(Posting(none: true), journals: [], settlements: [settlement]);
-        Assert.Single(Run(loaded).Settlements);
+        issue ??= new ClassifiedPosting(Issue, Doc, 2, Day, 50, V, J, null, null, null, null, null);
+        var receipt = new ClassifiedPosting(P, Doc, 1, Day, 24, V, null, null, null, null, null, null);
+        var obligation = new ClassifiedObligation(Obl, Issue, J, A1, A2, A2);
+        var journals = (extra ?? []).ToDictionary(j => j.Id);
+        journals.TryAdd(J, Journal(J)); journals.TryAdd(Sj, Journal(Sj));
+        return new Loaded(new() { [Issue] = issue, [P] = receipt }, [obligation], [.. settlements ?? [new ClassifiedSettlement(S1, Obl, P, Sj, null, null, true)]],
+            [.. reversals ?? []], journals, new[] { A1, A2 }.ToDictionary(x => x, x => Account(x)), [], new(), new() { [V] = [A1, A2] }, new());
+    }
+
+    [Fact]
+    public void A_receipt_fully_matched_against_an_obligation_may_have_no_journal_of_its_own_but_its_settlement_journal_is_evidence()
+    {
+        var evidence = Run(Chain());
+        Assert.Equal(2, evidence.Postings.Length); Assert.Single(evidence.Settlements); Assert.Contains(evidence.Journals, j => j.Id == Sj);
+    }
+
+    [Fact]
+    public void A_settlement_journal_with_an_account_outside_the_obligation_and_the_receipt_version_is_ambiguous()
+    {
+        var stray = Guid.Parse("00000000-0000-0000-0000-0000000000a9");
+        Refuses("classification_ambiguous", Chain(extra: [Journal(Sj, lines: [Line(1, stray, 5, 0), Line(2, A2, 0, 5)])]));
+    }
+
+    [Fact]
+    public void A_reversed_issue_needs_its_obligation_reversal_row_and_an_empty_net_settlement_chain()
+    {
+        var reversedIssue = new ClassifiedPosting(Issue, Doc, 2, Day, 50, V, J, null, null, RV, 2, R);
+        var reversing = Journal(R, status: 4, reverses: J, lines: [Line(1, A1, 0, 50), Line(2, A2, 50, 0)]);
+        var reversedOriginal = Journal(J, status: 5);
+        var reversedSettlements = new[] { new ClassifiedSettlement(S1, Obl, P, Sj, null, null, false), new ClassifiedSettlement(S2, Obl, P, Sj, S1, null, false) };
+        // no obligation reversal row
+        Refuses("classification_inconsistent", Chain(reversedSettlements, [reversing, reversedOriginal], reversedIssue));
+        // the row exists but a forward settlement is still in the net chain
+        Refuses("classification_inconsistent", Chain([new ClassifiedSettlement(S1, Obl, P, Sj, null, null, true)], [reversing, reversedOriginal], reversedIssue,
+            [new ClassifiedObligationReversal(Guid.NewGuid(), Obl, RV)]));
+    }
+
+    [Fact]
+    public void A_settlement_cannot_be_reversed_twice_and_a_negating_row_is_never_itself_reversed()
+    {
+        var reversing = Journal(Rj, status: 4, reverses: Sj, lines: [Line(1, A1, 0, 5), Line(2, A2, 5, 0)]);
+        var original = Journal(Sj, status: 5, lines: [Line(1, A1, 5, 0), Line(2, A2, 0, 5)]);
+        var twice = new[] { new ClassifiedSettlement(S1, Obl, P, Sj, null, null, false), new ClassifiedSettlement(S2, Obl, P, Rj, S1, null, false), new ClassifiedSettlement(S3, Obl, P, Rj, S1, null, false) };
+        Refuses("classification_inconsistent", Chain(twice, [reversing, original]));
+        var ofNegating = new[] { new ClassifiedSettlement(S1, Obl, P, Sj, null, null, false), new ClassifiedSettlement(S2, Obl, P, Rj, S1, null, false), new ClassifiedSettlement(S3, Obl, P, Rj, S2, null, false) };
+        Refuses("classification_inconsistent", Chain(ofNegating, [reversing, original]));
+    }
+
+    [Fact]
+    public void A_journal_that_reverses_a_closure_journal_but_belongs_to_nothing_is_an_open_decision()
+    {
+        var manual = Journal(Guid.Parse("00000000-0000-0000-0000-0000000000f9"), status: 1, reverses: J, lines: [Line(1, A1, 0, 50), Line(2, A2, 50, 0)]);
+        Refuses("open_decision", Base(journals: [Journal(J), manual]));
+    }
+
+    [Fact] public void A_journal_without_a_recorded_accounting_version_is_inconsistent() =>
+        Refuses("classification_inconsistent", Base(Posting() with { VersionId = null }));
+
+    [Fact]
+    public void The_fingerprint_binds_obligation_reversals_event_kinds_and_every_settlement_column_and_ignores_decimal_scale()
+    {
+        var reversing = Journal(R, status: 4, reverses: J, lines: [Line(1, A1, 0, 50), Line(2, A2, 50, 0)]);
+        var reversedIssue = new ClassifiedPosting(Issue, Doc, 2, Day, 50, V, J, null, null, RV, 2, R);
+        var settled = new[] { new ClassifiedSettlement(S1, Obl, P, Sj, null, null, false), new ClassifiedSettlement(S2, Obl, P, Rj, S1, Guid.Parse("00000000-0000-0000-0000-0000000000a5"), false) };
+        var sReversing = Journal(Rj, status: 4, reverses: Sj, lines: [Line(1, A1, 0, 50), Line(2, A2, 50, 0)]);
+        ClassificationEvidence With(Guid obligationReversalId, Guid reversalRow, Guid? settlementReversal = null)
+        {
+            var rows = new[] { settled[0], settled[1] with { ReversalId = settlementReversal ?? settled[1].ReversalId } };
+            return Run(Chain(rows, [reversing, Journal(J, status: 5), Journal(Sj, status: 5), sReversing], reversedIssue, [new ClassifiedObligationReversal(obligationReversalId, Obl, reversalRow)]));
+        }
+        var id = Guid.Parse("00000000-0000-0000-0000-0000000000b9");
+        var baseline = With(id, RV).EvidenceFingerprint;
+        Assert.Equal(baseline, With(id, RV).EvidenceFingerprint);
+        Assert.NotEqual(baseline, With(Guid.Parse("00000000-0000-0000-0000-0000000000ba"), RV).EvidenceFingerprint);   // the reversal row identity is bound
+        Assert.NotEqual(baseline, With(id, RV, Guid.NewGuid()).EvidenceFingerprint);                                 // NX.ReversalId is bound
+        var one = Run(Base(journals: [Journal(J, lines: [Line(1, A1, 50.0m, 0), Line(2, A2, 0, 50.00m)])]));
+        Assert.Equal(Run(Base()).EvidenceFingerprint, one.EvidenceFingerprint);                                      // 50.0 and 50.00 are the same evidence
+        var withEvent = new Loaded(Base().Postings, [], [], [], Base().Journals, Base().Accounts, [], new() { new ClassifiedEvent(P, 1, J) }, Base().VersionAccounts, new());
+        var otherKind = new Loaded(Base().Postings, [], [], [], Base().Journals, Base().Accounts, [], new() { new ClassifiedEvent(P, 2, J) }, Base().VersionAccounts, new());
+        Assert.NotEqual(Run(withEvent).EvidenceFingerprint, Run(otherKind).EvidenceFingerprint);                    // the event kind is bound
+    }
+
+    private static EffectivePermissions Perms(params (ScopeKind Scope, Guid? Id, string[] Codes)[] grants) =>
+        new(PermissionCatalog.Default, [.. grants.Select(g => new GrantedRole(Guid.NewGuid(), Guid.NewGuid(), g.Scope, g.Id, new HashSet<string>(g.Codes)))]);
+    private static readonly string[] All = [PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.StockDocsView, PermissionCatalog.Codes.CostCentersView];
+
+    [Fact]
+    public void The_bootstrap_needs_each_specific_permission_and_unrelated_branch_or_warehouse_grants_open_nothing()
+    {
+        Assert.True(ClassificationEvidenceService.Bootstrap(Perms((ScopeKind.Company, null, All))));
+        // accounts company-wide, but the branch and warehouse grants carry OTHER permissions only
+        Assert.False(ClassificationEvidenceService.Bootstrap(Perms((ScopeKind.Company, null, [PermissionCatalog.Codes.AccountsView]),
+            (ScopeKind.Branch, Guid.NewGuid(), [PermissionCatalog.Codes.BranchesView]), (ScopeKind.Warehouse, Guid.NewGuid(), [PermissionCatalog.Codes.StockBalanceView]))));
+        // the right permissions at branch and warehouse scope pass the bootstrap but are NOT fully visible
+        var scoped = Perms((ScopeKind.Company, null, [PermissionCatalog.Codes.AccountsView]), (ScopeKind.Branch, Guid.NewGuid(), [PermissionCatalog.Codes.JournalView]),
+            (ScopeKind.Warehouse, Guid.NewGuid(), [PermissionCatalog.Codes.StockDocsView]));
+        Assert.True(ClassificationEvidenceService.Bootstrap(scoped)); Assert.False(ClassificationEvidenceService.FullyVisible(scoped));
+        Assert.True(ClassificationEvidenceService.FullyVisible(Perms((ScopeKind.Company, null, All))));
+        Assert.False(ClassificationEvidenceService.Bootstrap(Perms((ScopeKind.Company, null, [PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.StockDocsView]))));   // no accounts
     }
 
     private static readonly Guid R = Guid.Parse("00000000-0000-0000-0000-0000000000f2"), RV = Guid.Parse("00000000-0000-0000-0000-0000000000d1");
@@ -126,13 +227,13 @@ public class ClassificationEvidenceRulesTests
         var wrong = new ClassifiedObligation(Guid.NewGuid(), P, Guid.NewGuid(), null, null, null);
         Refuses("classification_inconsistent", Base(obligations: [wrong]));
         var right = new ClassifiedObligation(Guid.NewGuid(), P, J, null, null, null);
-        Refuses("classification_unavailable", Base(obligations: [right], obligationReversals: [(Guid.NewGuid(), right.Id, Guid.NewGuid())]));
+        Refuses("classification_unavailable", Base(obligations: [right], obligationReversals: [new ClassifiedObligationReversal(Guid.NewGuid(), right.Id, Guid.NewGuid())]));
     }
 
     [Fact]
     public void A_negating_settlement_without_its_original_is_inconsistent()
     {
-        var negating = new ClassifiedSettlement(Guid.NewGuid(), Guid.NewGuid(), P, null, Guid.NewGuid(), false);
+        var negating = new ClassifiedSettlement(Guid.NewGuid(), Guid.NewGuid(), P, null, Guid.NewGuid(), null, false);
         Refuses("classification_inconsistent", Base(settlements: [negating]));
     }
 }

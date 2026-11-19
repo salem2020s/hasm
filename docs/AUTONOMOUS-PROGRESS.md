@@ -1,5 +1,14 @@
 # HASM — Autonomous execution progress
 
+## Classification evidence service (first read-only slice) — 2026-11-19
+
+`Costing/ClassificationEvidence.cs` (internal; no API/DI/caller, no posting change) reads what the ORIGINAL issue/receipt postings and the negative-stock chain booked: stored journal lines are the classification, versions are only a cross-check. Contract: `PHASE-3.8D-CLASSIFICATION-CONTRACT.md` revision 4 (three independent design reviews). Every closure member must be visible (stock warehouse, ledger branch, accounts, cost centres) else one indistinguishable `forbidden`; transfers, stock adjustments, adjusting entries, pending/cancelled reversals and invalid accounts fail closed (`classification_unavailable` / `open_decision`, etc.). The owner decisions stay OPEN (cancelled journal on a live effect; reversed stock with cancelled draft; non-posted reversing journal; account remap) plus one extra undefined case (cancelled manual reversal) that is REFUSED, not decided.
+
+Verification (local, disposable 5433 cluster): new PostgreSQL class 15/15, new unit rules 34/34, full unit 1011/1011, zero skips. Registry 1170 -> 1185 in `backend.yml`. Independent implementation review of `1f987c6` found 3 High / 6 Medium, all fixed with tests (see `review-records/PR-48-classification-evidence.md`); the fix commit is NOT independently re-reviewed. Existing posting/reversal/negative-stock PostgreSQL suites were NOT re-run locally (no change to them); hosted CI on the exact head is pending at the time of writing. PR #48 stays Draft; security gate (dependency-scan) still fails separately; PR #51 untouched; PR #52 CI: all green except the same dependency-scan.
+
+Next: independent re-review of the fix commit; then item/dimension provenance and basis/entitlement/compensation binding (needs the transition matrix), complete reversal/negative/conversion replay, guarded proposals/approvals/atomic execution/revaluation/shared UI.
+
+
 ## Original-classification evidence contract (design only) — 2026-11-19
 
 Claude Code took over from Codex. Reconciled: PR48 head `125b3be` (hosted checks green except the separate dependency-scan policy failure), main `fe44321`, PR51 untouched, CostingMath tests on PR52 (`test/costingmath-negative-guards`, own worktree `C:\Projects\Hasm-tests`; hosted checks green except dependency-scan, postgres-integration pending when last seen). D-044/D-045 are owner-approved; they do not block this slice.

@@ -143,7 +143,8 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     {
         await PrepareNegative();
         await ReceiveDoc(Avg, 3m, 15m, "2026-03-10");
-        var issue = Ok(await Post(await Exceptional(Avg, 10m, "2026-03-12")));
+        var issueDoc = await Exceptional(Avg, 10m, "2026-03-12");
+        var issue = Ok(await Post(issueDoc));
         await PostJournal(issue);
         var receiptDoc = await Approved(Receipt(W1, "2026-03-15", L(Avg, Pcs, 4m)));
         var receipt = Ok(await Post(receiptDoc, Amounts(24m)));
@@ -160,6 +161,33 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
         Assert.DoesNotContain(evidence.Settlements, x => x.InNetChain);                 // the reversed settlement AND its negating row are both out of the net chain
         Assert.Equal(2, evidence.Settlements.Length);
         Assert.Contains(evidence.Journals, j => j.Reverses is not null);               // the reversing journals stay evidence
+        // The issue itself is reversed afterwards: its obligation reversal row must exist and its reversing journal must be posted before the plan accepts it.
+        var issueReversed = Ok(await Posting.ReverseAsync(Admin.Id, Company.Id, issueDoc.Id, new StockReverseInput("2026-03-21", "cancelled dispatch")));
+        Reject(await Read(Svc(), null, issue), ConfigStatus.Conflict, "open_decision");
+        await PostJournalEntry(issueReversed.Reversal!.JournalEntryId!.Value);
+        Assert.Equal(issue.Id, Assert.Single(Value(await Read(Svc(), null, issue)).Obligations).PostingId);
+    }
+
+    [PostgresFact]
+    public async Task Row_limits_and_budgets_are_masked_for_a_partially_visible_caller_and_a_closure_exactly_at_the_limit_is_accepted()
+    {
+        await PrepareNegative();
+        await ReceiveDoc(Avg, 3m, 15m, "2026-03-10");
+        var issue = Ok(await Post(await Exceptional(Avg, 10m, "2026-03-12")));
+        await PostJournal(issue);
+        var receipt = Ok(await Post(await Approved(Receipt(W1, "2026-03-15", L(Avg, Pcs, 4m))), Amounts(24m)));
+        var branch = Value(await Read(Svc(), null, receipt)).Journals.First().BranchId;
+        // a caller whose ledger visibility is branch-scoped passes the bootstrap but is not fully visible: limits must not reveal the size of the chain
+        var partial = (await Member([PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null)).User;
+        var ledger = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "ledger-branch", [PermissionCatalog.Codes.JournalView]); Assert.True(ledger.IsOk, ledger.Code);
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, partial.Id, ledger.Value!.Id, ScopeKind.Branch, branch)).IsOk);
+        Assert.True((await Read(Svc(), partial.Id, receipt)).IsOk);
+        var tight = Svc(new ClassificationLimits(Lines: 1));
+        Reject(await Read(tight, partial.Id, receipt), ConfigStatus.Forbidden, "forbidden");
+        Reject(await Read(tight, null, receipt), ConfigStatus.Conflict, "classification_history_too_large");   // a fully visible caller may see the specific code
+        // exactly at the limit: two postings, one obligation, one settlement
+        Assert.True((await Read(Svc(new ClassificationLimits(Postings: 2)), null, receipt)).IsOk);
+        Reject(await Read(Svc(new ClassificationLimits(Postings: 1)), null, receipt), ConfigStatus.Conflict, "classification_history_too_large");
     }
 
     [PostgresFact]

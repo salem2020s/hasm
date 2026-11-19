@@ -34,7 +34,9 @@ internal sealed record ClassifiedAccount(Guid Id, bool Active, bool Group, short
 internal sealed record ClassifiedPosting(Guid Id, Guid DocumentId, int DocType, DateOnly Date, decimal TotalValue, Guid? VersionId, Guid? JournalId,
     Guid? SourceWarehouse, Guid? TargetWarehouse, Guid? ReversalId, short? ReversalAction, Guid? ReversalJournalId);
 internal sealed record ClassifiedObligation(Guid Id, Guid PostingId, Guid? JournalId, Guid? ObligationAccountId, Guid? VarianceAccountId, Guid? CounterAccountId);
-internal sealed record ClassifiedSettlement(Guid Id, Guid ObligationId, Guid ReceiptPostingId, Guid? JournalId, Guid? ReversesSettlementId, bool InNetChain);
+internal sealed record ClassifiedSettlement(Guid Id, Guid ObligationId, Guid ReceiptPostingId, Guid? JournalId, Guid? ReversesSettlementId, Guid? ReversalId, bool InNetChain);
+internal sealed record ClassifiedObligationReversal(Guid Id, Guid ObligationId, Guid StockReversalId);
+internal sealed record ClassifiedEvent(Guid PostingId, short Kind, Guid JournalId);
 internal sealed record ClassificationEvidence(ImmutableArray<ClassifiedPosting> Postings, ImmutableArray<ClassifiedObligation> Obligations,
     ImmutableArray<ClassifiedSettlement> Settlements, ImmutableArray<ClassifiedJournal> Journals, ImmutableArray<ClassifiedAccount> Accounts,
     string EvidenceFingerprint);
@@ -64,12 +66,18 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         token.ThrowIfCancellationRequested();
         var quota = new ReadCommandBudget(limits.Commands, token);
         ConfigResult<ClassificationEvidence> result;
-        Loaded? loaded = null;
+        Loaded? loaded = null; EffectivePermissions? boot = null; var authorized = false;
+        // Until EVERY closure member is authorized no diagnostic may depend on the contents of the closure: a caller who cannot see all of it gets the
+        // single indistinguishable forbidden; only a caller holding every permission company-wide may see a specific code.
+        ConfigResult<ClassificationEvidence> Masked(string code) =>
+            boot is not null && FullyVisible(boot) ? ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, code)
+                : ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden");
         try
         {
             if (postingIds.IsDefaultOrEmpty || postingIds.Length > limits.Postings || postingIds.Any(i => i == Guid.Empty))
                 return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, "invalid_classification_request");
-            var boot = await access.GetEffectivePermissionsAsync(user, company, quota.Reserve, token);
+            postingIds = [.. postingIds.Distinct()];
+            boot = await access.GetEffectivePermissionsAsync(user, company, quota.Reserve, token);
             if (!Bootstrap(boot)) throw new Denied();
             await using var conn = await resolver.OpenAsync(company, quota.Reserve, token);
             quota.Reserve(2);
@@ -77,13 +85,13 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             await using (var q = Cmd("SET TRANSACTION READ ONLY", conn, tx, quota)) await q.ExecuteNonQueryAsync(token);
             if (SnapshotEstablished is { } observe) await observe(conn, tx, token);
             loaded = await LoadClosure(conn, tx, postingIds, quota, token);
-            // Authorization of EVERY member precedes any diagnostic: refusals must not reveal ledger facts to an unauthorized caller.
             Authorize(boot, loaded);
+            authorized = true;
             result = ConfigResult<ClassificationEvidence>.Ok(Evaluate(company, postingIds, loaded));
         }
-        catch (ReadCommandBudgetException) { token.ThrowIfCancellationRequested(); return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, "classification_history_too_large"); }
+        catch (ReadCommandBudgetException) when (!authorized) { token.ThrowIfCancellationRequested(); result = Masked("classification_history_too_large"); }
         catch (Denied) { result = ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden"); }
-        catch (Refusal r) { result = ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, r.Code); }
+        catch (Refusal r) { result = authorized ? ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, r.Code) : Masked(r.Code); }
         if (BeforeFinalAuthorization is { } hook) await hook(token);
         try
         {
@@ -93,43 +101,48 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             if (loaded is not null) Authorize(fresh, loaded);
         }
         catch (Denied) { return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden"); }
-        catch (ReadCommandBudgetException) { token.ThrowIfCancellationRequested(); return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Conflict, "classification_query_budget_unavailable"); }
+        catch (ReadCommandBudgetException e) { token.ThrowIfCancellationRequested(); return Masked(e.Failure == ReadBudgetFailure.Exhausted ? "classification_history_too_large" : "classification_query_budget_unavailable"); }
         token.ThrowIfCancellationRequested();
         return result;
     }
 
-    private static bool Bootstrap(EffectivePermissions p) =>
+    internal static bool Bootstrap(EffectivePermissions p) =>
         p.Has(PermissionCatalog.Codes.AccountsView, ScopeTarget.Company)
-        && (p.HasCompanyWide(PermissionCatalog.Codes.JournalView) || p.Grants.Any(g => g.Scope == ScopeKind.Branch))
-        && (p.HasCompanyWide(PermissionCatalog.Codes.StockDocsView) || p.Grants.Any(g => g.Scope == ScopeKind.Warehouse));
+        && (p.HasCompanyWide(PermissionCatalog.Codes.JournalView) || p.Grants.Any(g => g.Scope == ScopeKind.Branch && g.Permissions.Contains(PermissionCatalog.Codes.JournalView)))
+        && (p.HasCompanyWide(PermissionCatalog.Codes.StockDocsView) || p.Grants.Any(g => g.Scope == ScopeKind.Warehouse && g.Permissions.Contains(PermissionCatalog.Codes.StockDocsView)));
+
+    /// <summary>Every member of any closure is visible: all permissions held company-wide, so a specific diagnostic cannot reveal anything the caller may not see.</summary>
+    internal static bool FullyVisible(EffectivePermissions p) =>
+        p.HasCompanyWide(PermissionCatalog.Codes.AccountsView) && p.HasCompanyWide(PermissionCatalog.Codes.JournalView)
+        && p.HasCompanyWide(PermissionCatalog.Codes.StockDocsView) && p.HasCompanyWide(PermissionCatalog.Codes.CostCentersView);
 
     private static NpgsqlCommand Cmd(string sql, NpgsqlConnection conn, NpgsqlTransaction tx, ReadCommandBudget quota)
     { quota.Reserve(); return new NpgsqlCommand(sql, conn, tx); }
 
     internal sealed record Loaded(Dictionary<Guid, ClassifiedPosting> Postings, List<ClassifiedObligation> Obligations,
-        List<ClassifiedSettlement> Settlements, List<(Guid Id, Guid ObligationId, Guid StockReversalId)> ObligationReversals,
+        List<ClassifiedSettlement> Settlements, List<ClassifiedObligationReversal> ObligationReversals,
         Dictionary<Guid, ClassifiedJournal> Journals, Dictionary<Guid, ClassifiedAccount> Accounts, HashSet<Guid> AdjustedJournals,
-        Dictionary<Guid, HashSet<Guid>> EventJournals, Dictionary<Guid, HashSet<Guid>> VersionAccounts, Dictionary<Guid, Guid> ReversalRowOfPosting);
+        HashSet<ClassifiedEvent> Events, Dictionary<Guid, HashSet<Guid>> VersionAccounts, Dictionary<Guid, Guid> ReversalRowOfPosting);
 
     private async Task<Loaded> LoadClosure(NpgsqlConnection conn, NpgsqlTransaction tx, ImmutableArray<Guid> requested, ReadCommandBudget quota, CancellationToken ct)
     {
         var postingSet = requested.ToHashSet();
         var obligationSet = new HashSet<Guid>();
         var obligations = new Dictionary<Guid, ClassifiedObligation>();
-        var settlements = new Dictionary<Guid, (ClassifiedSettlement S, Guid? ReversalId)>();
+        var settlements = new Dictionary<Guid, ClassifiedSettlement>();
         // Bounded fixpoint: postings -> obligations -> settlements -> receipt postings -> ... Every iteration reserves its commands.
         while (true)
         {
-            token(ct);
+            ct.ThrowIfCancellationRequested();
             var before = (postingSet.Count, obligationSet.Count, settlements.Count);
             await using (var q = Cmd($"SELECT {NO.Id},{NO.PostingId},{NO.JournalEntryId},{NO.ObligationAccountId},{NO.VarianceAccountId},{NO.CounterAccountId} FROM {NO.Table} " +
                 $"WHERE {NO.PostingId}=ANY(@p) OR {NO.Id}=ANY(@o) LIMIT @l", conn, tx, quota))
             {
                 q.Parameters.AddWithValue("p", postingSet.ToArray()); q.Parameters.AddWithValue("o", obligationSet.ToArray()); q.Parameters.AddWithValue("l", limits.Postings + 1);
-                await using var r = await q.ExecuteReaderAsync(ct);
+                await using var r = await q.ExecuteReaderAsync(ct); var rows = 0;
                 while (await r.ReadAsync(ct))
                 {
-                    if (obligations.Count >= limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
+                    if (++rows > limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);   // rows of THIS read, so a closure exactly at the limit is accepted
                     var o = new ClassifiedObligation(r.GetGuid(0), r.GetGuid(1), N(r, 2), N(r, 3), N(r, 4), N(r, 5));
                     obligations[o.Id] = o; obligationSet.Add(o.Id); postingSet.Add(o.PostingId);
                 }
@@ -138,23 +151,23 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
                 $"WHERE {NX.ObligationId}=ANY(@o) OR {NX.ReceiptPostingId}=ANY(@p) LIMIT @l", conn, tx, quota))
             {
                 q.Parameters.AddWithValue("o", obligationSet.ToArray()); q.Parameters.AddWithValue("p", postingSet.ToArray()); q.Parameters.AddWithValue("l", limits.Postings + 1);
-                await using var r = await q.ExecuteReaderAsync(ct);
+                await using var r = await q.ExecuteReaderAsync(ct); var rows = 0;
                 while (await r.ReadAsync(ct))
                 {
-                    if (settlements.Count >= limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
-                    var s = new ClassifiedSettlement(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), N(r, 3), N(r, 4), true);
-                    settlements[s.Id] = (s, N(r, 5)); obligationSet.Add(s.ObligationId); postingSet.Add(s.ReceiptPostingId);
+                    if (++rows > limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
+                    var s = new ClassifiedSettlement(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2), N(r, 3), N(r, 4), N(r, 5), true);
+                    settlements[s.Id] = s; obligationSet.Add(s.ObligationId); postingSet.Add(s.ReceiptPostingId);
                 }
             }
             if (postingSet.Count > limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
             if (before == (postingSet.Count, obligationSet.Count, settlements.Count)) break;
         }
         // Net chain exactly as ForwardSettlementsAsync: both the reversed settlement and the negating row leave the NET chain (journals stay evidence).
-        var reversedIds = settlements.Values.Where(x => x.S.ReversesSettlementId is not null).Select(x => x.S.ReversesSettlementId!.Value).ToHashSet();
-        var settlementList = settlements.Values.Select(x => x.S with { InNetChain = x.S.ReversesSettlementId is null && !reversedIds.Contains(x.S.Id) })
+        var reversedIds = settlements.Values.Where(x => x.ReversesSettlementId is not null).Select(x => x.ReversesSettlementId!.Value).ToHashSet();
+        var settlementList = settlements.Values.Select(x => x with { InNetChain = x.ReversesSettlementId is null && !reversedIds.Contains(x.Id) })
             .OrderBy(s => s.Id).ToList();
 
-        var obligationReversals = new List<(Guid, Guid, Guid)>();
+        var obligationReversals = new List<ClassifiedObligationReversal>();
         await using (var q = Cmd($"SELECT {NR.Id},{NR.ObligationId},{NR.StockReversalId} FROM {NR.Table} WHERE {NR.ObligationId}=ANY(@o) LIMIT @l", conn, tx, quota))
         {
             q.Parameters.AddWithValue("o", obligationSet.ToArray()); q.Parameters.AddWithValue("l", limits.Postings + 1);
@@ -162,7 +175,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             while (await r.ReadAsync(ct))
             {
                 if (obligationReversals.Count >= limits.Postings) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
-                obligationReversals.Add((r.GetGuid(0), r.GetGuid(1), r.GetGuid(2)));
+                obligationReversals.Add(new(r.GetGuid(0), r.GetGuid(1), r.GetGuid(2)));
             }
         }
 
@@ -196,16 +209,15 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         // A requested id that is not a stock posting (missing, adjustment, foreign) is indistinguishable from a denied one.
         if (requested.Any(id => !postings.ContainsKey(id)) || postingSet.Any(id => !postings.ContainsKey(id))) throw new Denied();
 
-        var eventJournals = new Dictionary<Guid, HashSet<Guid>>();
-        await using (var q = Cmd($"SELECT {PE.PostingId},{PE.JournalEntryId} FROM {PE.Table} WHERE {PE.PostingId}=ANY(@p) AND {PE.JournalEntryId} IS NOT NULL LIMIT @l", conn, tx, quota))
+        var events = new HashSet<ClassifiedEvent>();
+        await using (var q = Cmd($"SELECT {PE.PostingId},{PE.Kind},{PE.JournalEntryId} FROM {PE.Table} WHERE {PE.PostingId}=ANY(@p) AND {PE.JournalEntryId} IS NOT NULL LIMIT @l", conn, tx, quota))
         {
             q.Parameters.AddWithValue("p", postingSet.ToArray()); q.Parameters.AddWithValue("l", limits.Journals * 4 + 1);
             await using var r = await q.ExecuteReaderAsync(ct); var n = 0;
             while (await r.ReadAsync(ct))
             {
                 if (++n > limits.Journals * 4) throw new ReadCommandBudgetException(ReadBudgetFailure.Exhausted);
-                if (!eventJournals.TryGetValue(r.GetGuid(0), out var set)) eventJournals[r.GetGuid(0)] = set = [];
-                set.Add(r.GetGuid(1));
+                events.Add(new(r.GetGuid(0), r.GetInt16(1), r.GetGuid(2)));
             }
         }
 
@@ -213,7 +225,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         foreach (var p in postings.Values) { if (p.JournalId is { } a) journalIds.Add(a); if (p.ReversalJournalId is { } b) journalIds.Add(b); }
         foreach (var o in obligations.Values) if (o.JournalId is { } j) journalIds.Add(j);
         foreach (var s in settlementList) if (s.JournalId is { } j) journalIds.Add(j);
-        foreach (var set in eventJournals.Values) journalIds.UnionWith(set);
+        foreach (var e in events) journalIds.Add(e.JournalId);
 
         // Mandatory reverse lookups: reversing journals and adjusting journals of every journal in the closure.
         var adjusted = new HashSet<Guid>();
@@ -273,7 +285,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
         }
         foreach (var (id, journal) in journals.ToArray())
             journals[id] = journal with { Lines = [.. lines[id].OrderBy(l => l.No).Select(l => l with
-                { Allocations = [.. allocations[lineIds[(id, l.No)]].OrderBy(a => a.CostCenterId).ThenBy(a => a.Amount)] })] };
+                { Allocations = [.. allocations[lineIds[(id, l.No)]].OrderBy(a => a.CostCenterId).ThenBy(a => a.Amount).ThenBy(a => a.Base)] })] };
 
         var accountIds = journals.Values.SelectMany(j => j.Lines.Select(l => l.AccountId))
             .Concat(obligations.Values.SelectMany(o => new[] { o.ObligationAccountId, o.VarianceAccountId, o.CounterAccountId }.Where(a => a.HasValue).Select(a => a!.Value))).Distinct().ToArray();
@@ -302,10 +314,9 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
                 while (await r.ReadAsync(ct)) if (versionAccounts.TryGetValue(r.GetGuid(0), out var set)) set.Add(r.GetGuid(1));
             }
         }
-        return new(postings, [.. obligations.Values.OrderBy(o => o.Id)], settlementList, obligationReversals, journals, accounts, adjusted, eventJournals, versionAccounts, reversalRowOfPosting);
+        return new(postings, [.. obligations.Values.OrderBy(o => o.Id)], settlementList, obligationReversals, journals, accounts, adjusted, events, versionAccounts, reversalRowOfPosting);
     }
 
-    private static void token(CancellationToken ct) => ct.ThrowIfCancellationRequested();
     private static Guid? N(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetGuid(i);
 
     private static void Authorize(EffectivePermissions p, Loaded d)
@@ -329,7 +340,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
     {
         // Unsupported kinds first: transfers have no journal by design (NOT "no change needed").
         if (d.Postings.Values.Any(p => p.DocType == (int)StockDocType.Transfer)) throw new Refusal("classification_unavailable");
-        if (d.Journals.Values.Any(j => j.Id is var id && d.AdjustedJournals.Contains(id))) throw new Refusal("open_decision");
+        if (d.Journals.Keys.Any(d.AdjustedJournals.Contains)) throw new Refusal("open_decision");
         foreach (var j in d.Journals.Values)
         {
             if (j.Lines.Any(l => l.IsRounding || l.Currency != j.BaseCurrency)) throw new Refusal("classification_unexpected_line");
@@ -356,50 +367,90 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             if (r.Reverses != original) throw new Refusal("classification_inconsistent");
             if (r.Status != Posted || o.Status != Reversed) throw new Refusal("open_decision");   // reversing journal not posted / cancelled by hand
         }
+        // A journal that reverses a closure journal but that no posting, obligation, settlement or event references is a manual reversal in progress
+        // (the effect is still live while a reversal is pending): an owner decision, never silently ignored.
+        var referenced = new HashSet<Guid>();
+        foreach (var p in d.Postings.Values) { if (p.JournalId is { } x) referenced.Add(x); if (p.ReversalJournalId is { } y) referenced.Add(y); }
+        foreach (var o in d.Obligations) if (o.JournalId is { } x) referenced.Add(x);
+        foreach (var x in d.Settlements) if (x.JournalId is { } y) referenced.Add(y);
+        foreach (var e in d.Events) referenced.Add(e.JournalId);
+        if (d.Journals.Values.Any(j => j.Reverses is not null && !referenced.Contains(j.Id))) throw new Refusal("open_decision");
+
+        // Cross-check only: a journal whose accounts the accounting version could not have produced is AMBIGUOUS, never silently resolved.
+        void CrossCheck(ClassifiedJournal journal, HashSet<Guid> allowed)
+        {
+            if (journal.Lines.Any(l => !allowed.Contains(l.AccountId))) throw new Refusal("classification_ambiguous");
+        }
+        HashSet<Guid> VersionOf(ClassifiedPosting posting) =>
+            posting.VersionId is { } v && d.VersionAccounts.TryGetValue(v, out var set) ? set : throw new Refusal("classification_inconsistent");
+
         foreach (var p in d.Postings.Values)
         {
-            if (p.ReversalId is null) // A receipt fully matched against negative obligations books nothing of its own: its value sits in the settlement journals.
-            LiveJournal(p.JournalId, p.TotalValue == 0 || d.Settlements.Any(x => x.ReceiptPostingId == p.Id));
+            if (p.ReversalId is null)
+                // A receipt fully matched against negative obligations books nothing of its own: its value sits in the settlement journals.
+                LiveJournal(p.JournalId, p.TotalValue == 0 || d.Settlements.Any(x => x.ReceiptPostingId == p.Id && x.ReversesSettlementId is null));
             else ReversedJournal(p.JournalId, p.ReversalJournalId, p.ReversalAction);
-            // Cross-check only: a posted journal whose accounts its own version could not have produced is AMBIGUOUS, never silently resolved.
-            if (p.ReversalId is null && p.JournalId is { } jid && p.VersionId is { } vid && Journal(jid).Status == Posted)
-            {
-                if (!d.VersionAccounts.TryGetValue(vid, out var allowed)) throw new Refusal("classification_inconsistent");
-                if (Journal(jid).Lines.Any(l => !allowed.Contains(l.AccountId))) throw new Refusal("classification_ambiguous");
-            }
+            if (p.JournalId is { } jid) CrossCheck(Journal(jid), VersionOf(p));   // a journal without a recorded version is inconsistent
         }
         foreach (var o in d.Obligations)
         {
-            var issuePosting = d.Postings[o.PostingId];
-            if (o.JournalId != issuePosting.JournalId) throw new Refusal("classification_inconsistent"); // obligation journal IS the issue posting journal
+            var issue = d.Postings[o.PostingId];
+            if (o.JournalId != issue.JournalId) throw new Refusal("classification_inconsistent"); // obligation journal IS the issue posting journal
+            if (issue.ReversalId is { } reversal)
+            {
+                // A reversed issue needs its obligation reversal row, and nothing may remain in the net settlement chain.
+                if (!d.ObligationReversals.Any(x => x.ObligationId == o.Id && x.StockReversalId == reversal)) throw new Refusal("classification_inconsistent");
+                if (d.Settlements.Any(x => x.ObligationId == o.Id && x.InNetChain)) throw new Refusal("classification_inconsistent");
+            }
         }
-        foreach (var (_, obligationId, reversalRow) in d.ObligationReversals)
+        foreach (var r in d.ObligationReversals)
         {
-            var o = d.Obligations.FirstOrDefault(x => x.Id == obligationId) ?? throw new Refusal("classification_inconsistent");
-            if (d.Postings[o.PostingId].ReversalId != reversalRow) throw new Refusal("classification_unavailable"); // path not traceable: fail closed
+            var o = d.Obligations.FirstOrDefault(x => x.Id == r.ObligationId) ?? throw new Refusal("classification_inconsistent");
+            if (d.Postings[o.PostingId].ReversalId != r.StockReversalId) throw new Refusal("classification_unavailable"); // path not traceable: fail closed
         }
-        var byId = d.Settlements.ToDictionary(s => s.Id);
+        var byId = d.Settlements.ToDictionary(x => x.Id);
+        var negating = d.Settlements.Where(x => x.ReversesSettlementId is not null).ToList();
+        if (negating.GroupBy(x => x.ReversesSettlementId).Any(g => g.Count() > 1)) throw new Refusal("classification_inconsistent");   // reversed twice
         foreach (var s in d.Settlements)
         {
+            var obligation = d.Obligations.FirstOrDefault(x => x.Id == s.ObligationId) ?? throw new Refusal("classification_inconsistent");
+            if (s.JournalId is { } sj)
+            {
+                // Settlement accounts: O and V (and the counter) are stored on the obligation, G only in the journal lines (the receipt's version).
+                var allowed = new HashSet<Guid>(new[] { obligation.ObligationAccountId, obligation.VarianceAccountId, obligation.CounterAccountId }.Where(a => a.HasValue).Select(a => a!.Value));
+                allowed.UnionWith(VersionOf(d.Postings[s.ReceiptPostingId]));
+                CrossCheck(Journal(sj), allowed);
+            }
             if (s.ReversesSettlementId is { } reversed)
             {
                 var original = byId.GetValueOrDefault(reversed) ?? throw new Refusal("classification_inconsistent");
+                if (original.ReversesSettlementId is not null) throw new Refusal("classification_inconsistent");   // a negating row is never itself reversed
+                // The settlement rows store no JournalAction; the Reverses link is the proof (see ReversedJournal).
                 ReversedJournal(original.JournalId, s.JournalId, original.JournalId is null ? (short)0 : (short)2);
                 if (original.JournalId is null && s.JournalId is not null) throw new Refusal("classification_inconsistent");
             }
             else if (!byId.Values.Any(x => x.ReversesSettlementId == s.Id)) LiveJournal(s.JournalId, true);
             // A reversed original settlement is covered by its negating row above.
         }
-        var postings = d.Postings.Values.OrderBy(p => p.Id).ToImmutableArray();
-        var journals = d.Journals.Values.OrderBy(j => j.Id).ToImmutableArray();
-        var accounts = d.Accounts.Values.OrderBy(a => a.Id).ToImmutableArray();
+        var postings = d.Postings.Values.OrderBy(x => x.Id).ToImmutableArray();
+        var journals = d.Journals.Values.OrderBy(x => x.Id).ToImmutableArray();
+        var accounts = d.Accounts.Values.OrderBy(x => x.Id).ToImmutableArray();
         var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            Contract = "stock-classification-evidence-v1", Company = company, Requested = requested.OrderBy(i => i).ToArray(), Postings = postings,
-            Obligations = d.Obligations, Settlements = d.Settlements, ObligationReversals = d.ObligationReversals.OrderBy(x => x.Id).ToArray(),
-            Journals = journals, Accounts = accounts,
-            Events = d.EventJournals.OrderBy(k => k.Key).Select(k => new { Posting = k.Key, Journals = k.Value.OrderBy(i => i).ToArray() }).ToArray()
-        }))).ToLowerInvariant();
+            Contract = "stock-classification-evidence-v1", Company = company, Requested = requested.Distinct().OrderBy(i => i).ToArray(), Postings = postings,
+            Obligations = d.Obligations.OrderBy(x => x.Id).ToArray(), Settlements = d.Settlements.OrderBy(x => x.Id).ToArray(),
+            ObligationReversals = d.ObligationReversals.OrderBy(x => x.Id).ToArray(), Journals = journals, Accounts = accounts,
+            Events = d.Events.OrderBy(e => e.PostingId).ThenBy(e => e.Kind).ThenBy(e => e.JournalId).ToArray()
+        }, Canonical))).ToLowerInvariant();
         return new(postings, [.. d.Obligations], [.. d.Settlements], journals, accounts, fingerprint);
+    }
+
+    // decimal is written without its scale so 1.0 and 1.00 are the same evidence.
+    private static readonly JsonSerializerOptions Canonical = new() { Converters = { new CanonicalDecimal() } };
+    private sealed class CanonicalDecimal : System.Text.Json.Serialization.JsonConverter<decimal>
+    {
+        public override decimal Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options) => reader.GetDecimal();
+        public override void Write(Utf8JsonWriter writer, decimal value, JsonSerializerOptions options) =>
+            writer.WriteStringValue((value / 1.0000000000000000000000000000m).ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 }
