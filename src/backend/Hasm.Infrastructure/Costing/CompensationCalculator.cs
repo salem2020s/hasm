@@ -33,15 +33,24 @@ internal static class CompensationCalculator
         if (!evidence.Obligations.IsEmpty || !evidence.Settlements.IsEmpty) throw Refuse("compensation_obligation_unsupported");   // TM-D13
         if (evidence.Postings.Any(p => p.ReversalId is not null)) throw Refuse("compensation_reversal_unsupported");
 
-        var deltaByOperation = new Dictionary<Guid, decimal>();
+        // Net delta per operation AND whether any entry of it changed cost: entries of one operation can offset (item A +5, item B -5). A net of zero must
+        // not skip the provenance checks, otherwise two inventory accounts would silently keep wrong balances (a partial plan that looks complete).
+        var deltaByOperation = new Dictionary<Guid, (decimal Net, bool AnyChange)>();
         foreach (var change in changes)
-            deltaByOperation[change.OperationId] = deltaByOperation.GetValueOrDefault(change.OperationId) + (change.ProposedAmount - change.OriginalAmount);
+        {
+            var step = change.ProposedAmount - change.OriginalAmount;
+            var (net, any) = deltaByOperation.GetValueOrDefault(change.OperationId);
+            deltaByOperation[change.OperationId] = (net + step, any || step != 0m);
+        }
+        // A re-costed reversal operation is refused explicitly (its replay does not exist yet), not reported as an unknown operation.
+        if (changes.Any(c => c.ProposedAmount != c.OriginalAmount && evidence.Postings.Any(p => p.ReversalOperationId == c.OperationId)))
+            throw Refuse("compensation_reversal_unsupported");
 
         var lines = ImmutableArray.CreateBuilder<CompensationLine>();
         var affected = new List<Guid>();
-        foreach (var (operation, delta) in deltaByOperation.OrderBy(x => x.Key))
+        foreach (var (operation, (delta, anyChange)) in deltaByOperation.OrderBy(x => x.Key))
         {
-            if (delta == 0m) continue;   // a trajectory change whose own cost did not change needs no ledger line
+            if (!anyChange) continue;   // a trajectory change whose own cost did not change needs no ledger line
             var posting = evidence.Postings.FirstOrDefault(p => p.CostOperationId == operation) ?? throw Refuse("classification_unavailable");
             switch (posting.DocType)
             {
@@ -61,6 +70,7 @@ internal static class CompensationCalculator
             var (k, i) = (debits[0], credits[0]);
             if (k.BaseDebit != posting.TotalValue || i.BaseCredit != posting.TotalValue) throw Refuse("compensation_inconsistent");
             if (k.Allocations.Length != 0 || i.Allocations.Length != 0) throw Refuse("classification_unexpected_line");
+            if (delta == 0m) continue;   // offsetting entries on the single K/I pair net to nothing: provenance was still proven above
             var amount = Math.Abs(delta);
             // Positive delta: the goods cost more than booked, K rises and I falls. Negative delta mirrors.
             var (debit, credit) = delta > 0m ? (k, i) : (i, k);

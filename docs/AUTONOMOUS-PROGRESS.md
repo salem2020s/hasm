@@ -1,5 +1,14 @@
 # HASM — Autonomous execution progress
 
+## Compensation calculation, date guard and transfer acceptance (read-only) — 2026-11-19
+
+Owner authorized the conservative recommendations of the transition matrix as the working baseline. Implemented, all internal/read-only (no persistence, journal creation, API or execution): `CompensationCalculator` (matrix M1 re-costed ordinary issues -> Dr K / Cr I from the ORIGINAL posted journal, original period/branch/date; M2 transfers -> no line), `CompensationDateGuard` (every date in an Open period, no silent fallback; stock side has no soft-close override), journal-less transfers accepted by the classification evidence (TM-D7). Fail-closed: obligations/settlements (TM-D13), reversals (replay not available), unposted journals, several debit/credit accounts (TM-D6), user allocations. Real-ledger PostgreSQL checks reproduce E1 (132), E2 (120), E6 (156). Independent review: no Critical/High, 2 Medium fixed (`review-records/PR-48-compensation-calculator.md`).
+
+Tests: unit 1039/1039 local; PostgreSQL ClassificationEvidence 16 + CompensationPlan 4 local; registry 1190. Hosted CI on the final head: see the PR (pending at time of writing). PR #48 Draft; PR #51 untouched; PR #52 unmerged.
+
+Next: a composed read-only plan service (snapshot + comparison + evidence + calculator + date guard in ONE snapshot with final authorization), then proposal storage/approval/execution design with its company migration, reversal replay (M6), later negative-stock replay (needs TM-D13(b)), stocktake/adjustments, conversion, shared UI.
+
+
 ## Transition matrix and consolidated owner decisions (proposal, no implementation) — 2026-11-19
 
 `PHASE-3.8D-TRANSITION-MATRIX-DECISIONS.md` (revision 2) consolidates the four owner decisions, the cancelled-manual-reversal case and further consequential dependencies (TM-D1..D14, conversion C-D1..C-D4) with approved/existing/proposed rules separated, a transition matrix and seven worked examples (single- and two-period). One consolidated independent design review found 2 High / 8 Medium; all resolved in the document (`review-records/PR-48-transition-matrix-design.md`); revision 2 is not re-reviewed. NOTHING depending on these decisions is implemented; every cell stays fail-closed. The owner must decide before the replay/compensation work starts; section 8 lists recommendations and a minimal first increment (ordinary receipts/issues/transfers only).

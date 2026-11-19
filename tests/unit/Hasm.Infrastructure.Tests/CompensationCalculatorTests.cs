@@ -63,6 +63,26 @@ public class CompensationCalculatorTests
         Assert.Equal(plan.Lines.Sum(l => l.Debit), plan.Lines.Sum(l => l.Credit));
     }
 
+    [Fact]
+    public void Offsetting_entries_never_skip_the_provenance_checks()
+    {
+        // item A +5 and item B -5 net to zero, but the journal credits two inventory accounts: that is ambiguous, not "nothing to do"
+        var mixed = One(40m, 4, Line(1, K, 40m, 0), Line(2, I, 0, 25m), Line(3, I2, 0, 15m));
+        Refuses("classification_ambiguous", mixed, Change(Op1, 25m, 30m, 1), Change(Op1, 15m, 10m, 2));
+        // the same offsetting entries on the single K/I pair are fine and need no line
+        Assert.Empty(Plan(One(), Change(Op1, 25m, 30m, 1), Change(Op1, 15m, 10m, 2)).Lines);
+        // an unposted journal is refused even when the net is zero
+        Refuses("unposted_effect", One(status: 1), Change(Op1, 25m, 30m, 1), Change(Op1, 15m, 10m, 2));
+    }
+
+    [Fact]
+    public void A_re_costed_reversal_operation_is_refused_explicitly()
+    {
+        var reversalOperation = Guid.NewGuid();
+        var posting = Issue(P1, J1, Op1, Mar, 40m) with { ReversalOperationId = reversalOperation };
+        Refuses("compensation_reversal_unsupported", Evidence([posting], [Journal(J1, Period1, 40m)]), Change(reversalOperation, 40m, 48m));
+    }
+
     [Fact] public void A_trajectory_change_without_a_cost_change_needs_no_line() => Assert.Empty(Plan(One(), Change(Op1, 40m, 40m)).Lines);
     [Fact] public void No_change_at_all_is_an_empty_balanced_plan() => Assert.Empty(CompensationCalculator.Calculate(Company, "c", [], One()).Lines);
 
