@@ -89,10 +89,10 @@ public class ClassificationEvidenceRulesTests
 
     /// <summary>An issue posting with an obligation (journal J) and a receipt posting P that books nothing of its own and settles it.</summary>
     private static Loaded Chain(IEnumerable<ClassifiedSettlement>? settlements = null, IEnumerable<ClassifiedJournal>? extra = null, ClassifiedPosting? issue = null,
-        IEnumerable<ClassifiedObligationReversal>? reversals = null)
+        IEnumerable<ClassifiedObligationReversal>? reversals = null, bool receiptWithoutVersion = false)
     {
         issue ??= new ClassifiedPosting(Issue, Doc, 2, Day, 50, V, J, null, null, null, null, null);
-        var receipt = new ClassifiedPosting(P, Doc, 1, Day, 24, V, null, null, null, null, null, null);
+        var receipt = new ClassifiedPosting(P, Doc, 1, Day, 24, receiptWithoutVersion ? null : V, null, null, null, null, null, null);
         var obligation = new ClassifiedObligation(Obl, Issue, J, A1, A2, A2);
         var journals = (extra ?? []).ToDictionary(j => j.Id);
         journals.TryAdd(J, Journal(J)); journals.TryAdd(Sj, Journal(Sj));
@@ -112,6 +112,16 @@ public class ClassificationEvidenceRulesTests
     {
         var stray = Guid.Parse("00000000-0000-0000-0000-0000000000a9");
         Refuses("classification_ambiguous", Chain(extra: [Journal(Sj, lines: [Line(1, stray, 5, 0), Line(2, A2, 0, 5)])]));
+    }
+
+    [Fact]
+    public void A_zero_value_receipt_without_version_may_settle_with_a_journal_that_only_uses_the_obligation_accounts()
+    {
+        var obligationOnly = Journal(Sj, lines: [Line(1, A1, 5, 0), Line(2, A2, 0, 5)]);          // O and V only: no receipt counter account involved
+        Assert.Contains(Run(Chain(extra: [obligationOnly], receiptWithoutVersion: true)).Journals, j => j.Id == Sj);
+        var stray = Guid.Parse("00000000-0000-0000-0000-0000000000a9");
+        var needsCounter = Journal(Sj, lines: [Line(1, stray, 5, 0), Line(2, A2, 0, 5)]);          // an account beyond O/V needs the receipt version, which is missing
+        Refuses("classification_inconsistent", Chain(extra: [needsCounter], receiptWithoutVersion: true));
     }
 
     [Fact]

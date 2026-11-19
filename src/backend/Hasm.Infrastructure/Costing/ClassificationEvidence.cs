@@ -98,6 +98,9 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             // Final live recheck on success AND failure: a revocation during the read wins.
             var fresh = await access.GetEffectivePermissionsAsync(user, company, quota.Reserve, token);
             if (!Bootstrap(fresh)) return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden");
+            // A specific diagnostic produced before authorization is only allowed while the caller is STILL fully visible.
+            if (!authorized && !result.IsOk && result.Status == ConfigStatus.Conflict && !FullyVisible(fresh))
+                return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden");
             if (loaded is not null) Authorize(fresh, loaded);
         }
         catch (Denied) { return ConfigResult<ClassificationEvidence>.Fail(ConfigStatus.Forbidden, "forbidden"); }
@@ -418,8 +421,11 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
             {
                 // Settlement accounts: O and V (and the counter) are stored on the obligation, G only in the journal lines (the receipt's version).
                 var allowed = new HashSet<Guid>(new[] { obligation.ObligationAccountId, obligation.VarianceAccountId, obligation.CounterAccountId }.Where(a => a.HasValue).Select(a => a!.Value));
-                allowed.UnionWith(VersionOf(d.Postings[s.ReceiptPostingId]));
-                CrossCheck(Journal(sj), allowed);
+                var journal = Journal(sj);
+                // A zero-value receipt has no recorded version (nothing to configure); its settlement journal then only uses the obligation's own accounts.
+                // The receipt's version is required exactly when the journal needs an account beyond them (the receipt counter account G).
+                if (journal.Lines.Any(l => !allowed.Contains(l.AccountId))) allowed.UnionWith(VersionOf(d.Postings[s.ReceiptPostingId]));
+                CrossCheck(journal, allowed);
             }
             if (s.ReversesSettlementId is { } reversed)
             {
