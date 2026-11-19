@@ -8,3 +8,6 @@ Resolution: all addressed in revision 2 of the contract; the cancelled-journal, 
 
 ## Re-review of revision 2
 Separate subagent, same prompt shape plus verification of table/column names. Prior H1, H2 resolved; H3 partly (wrong table claims). New High: H-A obligation-reversal has no journal column and settlement reversals are NegativeSettlement rows (netting excludes both, journals remain evidence); H-B missing StockPostingEvent and adjustment coverage. Medium: M-A G only in journal lines, M-B stock reversed with non-posted reversing journal (new OPEN case), M-C pinned permissions, M-D keep transfers as refusal. Claims verified against schema constants by the author. Resolved in revision 3. Revision 3 has NOT been re-reviewed; the implementation itself needs a code review.
+
+## Third review (revision 3), revision 4 response
+Independent subagent: no Critical/High; prior H-A/H-B resolved. Medium M1 reversal journal-id semantics (JournalAction 0/1/2, dedupe), M2 adjusting entries and cancelled manual reversal (reverse lookups for Adjusts/Reverses; fifth refused case), M3 per-member visibility across closure (all-or-nothing). Low L1 pin status codes, L2 journal-less reversal, L3 existing `issue_accounting_failed`. All addressed in revision 4; the four owner decisions are preserved and one extra undefined case is REFUSED, not decided.
