@@ -1,5 +1,12 @@
 # HASM — Autonomous execution progress
 
+## Composed planner fixes and execution design (BLOCKED on owner decisions X1-X8) — 2026-11-19
+
+Read-only composed planning service (`LoadCompensationPlanAsync`) reviewed and fixed (masking, final live recheck covers every outcome, trajectory-only evidence test, scoped revocation, fingerprint sensitivity; PostgreSQL registry 1202). Execution design (`PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` revision 2) was reviewed at row level and found revision 1 not implementable: PostgreSQL rejects back-dated entries (position trigger), the reversal primitive is per operation, the operation CHECK blocks a many-originals epoch. Option R (storno / event / rebook, original dates, lineage table, plan tables, locks) remains the recommendation but REQUIRES relaxing database safeguards. The owner must decide X1-X8 (section 8 of the design) before any migration or executor is written. Until then the planner is read-only and the barrier stays. No financial behavior was enabled.
+
+Next independent work: the next dependency-ready roadmap phases that do not depend on X1-X8.
+
+
 ## Compensation calculation, date guard and transfer acceptance (read-only) — 2026-11-19
 
 Owner authorized the conservative recommendations of the transition matrix as the working baseline. Implemented, all internal/read-only (no persistence, journal creation, API or execution): `CompensationCalculator` (matrix M1 re-costed ordinary issues -> Dr K / Cr I from the ORIGINAL posted journal, original period/branch/date; M2 transfers -> no line), `CompensationDateGuard` (every date in an Open period, no silent fallback; stock side has no soft-close override), journal-less transfers accepted by the classification evidence (TM-D7). Fail-closed: obligations/settlements (TM-D13), reversals (replay not available), unposted journals, several debit/credit accounts (TM-D6), user allocations. Real-ledger PostgreSQL checks reproduce E1 (132), E2 (120), E6 (156). Independent review: no Critical/High, 2 Medium fixed (`review-records/PR-48-compensation-calculator.md`).
