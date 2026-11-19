@@ -1,5 +1,12 @@
 # HASM — Autonomous execution progress
 
+## Original-classification evidence contract (design only) — 2026-11-19
+
+Claude Code took over from Codex. Reconciled: PR48 head `125b3be` (hosted checks green except the separate dependency-scan policy failure), main `fe44321`, PR51 untouched, CostingMath tests on PR52 (`test/costingmath-negative-guards`, own worktree `C:\Projects\Hasm-tests`; hosted checks green except dependency-scan, postgres-integration pending when last seen). D-044/D-045 are owner-approved; they do not block this slice.
+
+Added `PHASE-3.8D-CLASSIFICATION-CONTRACT.md`: proposal for read-only evidence of what each original posting booked (accounting version, journal, accounts/branch/currency), fail-closed `RemapRequired`, fingerprint v1. NOT implemented, NOT yet independently reviewed. Next: independent design review, then implement with PostgreSQL tests and run the existing posting/reversal/negative-stock regression. PR48 stays Draft.
+
+
 ## Source and changed-history fiscal read set — 2026-11-19
 
 Reconciledc85de4333dbd6647a87427278aa384f423458295: full independent confirmation no CHM, local source40+existing264/unit970 passed and actual hosted backend/PostgreSQL44486468531 completed successfully. Security gate still fails separately after advisory withdrawal; PR51 remains inert awaiting already-requested approval. Mainfe443211 unchanged; no repeated investigation/approval request or protected policy changes.
