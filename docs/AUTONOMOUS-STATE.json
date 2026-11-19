@@ -97,10 +97,10 @@
     "phase": "3.8D impact preview and recalculation",
     "branch": "feature/phase-3-8d-impact-preview",
     "pr": 48,
-    "state": "ACTIVE incomplete Phase3.8D: stored-source ordinary evidence implemented in one authorized read-only snapshot; newPG40/unit970 passed; existing-suite union78826 running; newheadCI pending; security gate remains blocked pending owner-held PR51",
+    "state": "ACTIVE incomplete Phase3.8D: source/changed-history fiscal evidence bound, normal posting locks retained; PG17/unit977 passed; existingregression45540 live; newheadCI pending; security gate remains blocked pending PR51ownerdecision",
     "knownIssues": [
       "GHSA-fc5q-39xc-vjpf officially withdrawn2026-11-18T15:38:56Z; fullaudit0; existing exact waiver fails closed. Inert PR51 retirement awaits NEW explicit owner approval; no gate/manifests/expiry changed.",
-      "Exact0094970 backend/PG44481250760 succeeded; independent review no CHM, local15/unit970/broad134 passed. Last fully green historicalfb07fdd only; withdrawal-policy security gate still fails.",
+      "Exactc85de43 backend/PG44486468531 succeeded, independent review no CHM; local source40+existing264/unit970 passed. No current all-green security claim; last fully green historicalfb07fdd only.",
       "D044/D045 approved by owner2026-11-17 and recorded inDECISIONS; detailed epoch/entitlement persistence and complete activation matrix still incomplete",
       "Internal ordinary complete component snapshots/comparison implemented, not publicly integrated; full reversal/negative/conversion, guarded persistence/approvals/execution/revaluation/UI remain incomplete.",
       "Quota14ee8f3 exact-head backend/PG1132/unit970/API69 passed; broad local140 passed zero skips; independent committed-head review no CHM. Security gate still fails closed.",
@@ -108,11 +108,11 @@
       "PR46 four Medium followups before3.9B; OD11 remainsOPEN",
       "Separate nestedworkflow-optimization worktree is unrelated and excluded; no otherworktree usesPR48branch",
       "Original Medium query-accounting gap resolved; new multi-item history read has shared transaction/budgets/all-item quarantine, not actual source binding or execution.",
-      "Source evidence is not fiscal/account/basis/entitlement/adjustment/approval bound and has NO public API/DI/caller/execution; retained-output component cap is not peak-allocation guarantee."
+      "Source source/changed-history periods now bound; adjustment dates/accounts/basis/entitlement/approval still NOT bound, no API/DI/caller/execution. Retained-output component cap is not peak-allocation guarantee."
     ]
   },
   "next": [
-    "Finish SAME live existing-suite union78826/test-results/source-evidence-regression; new40 and fullunit970 already passed zero skips. Registry1153/full1209; design/source reviewed noCHML after Low parity fix. Preserve/push and exact-head review/CI; security remains blocked.",
+    "Finish SAME existing fiscal/journal/stock/source regression45540/test-results/source-fiscal-regression; corrected17 and fullunit977 passed zero skips. First17 fixturefailures corrected without weakening guards/assertions. Registry1170/full1226; full design/source review noCHML. Preserve/push exact-head confirmation/CI; security still blocked.",
     "PR51 is INERT/awaiting owner approval already requested once. Do not apply protected retirement patch or relabel while pending; continue full source-bound consistent document/account/period/basis/entitlement design and implementation independently.",
     "Implement reviewed conversion/negative-history/entitlement contracts and protected proposal/approval/execution path underD044/D045; never activate on numericalfixtures alone",
     "Preserve D046 scope/expiry and finish complete approved phase/UI/tests/reviews before PR48merge; never repeat rejected fork/downgrade"

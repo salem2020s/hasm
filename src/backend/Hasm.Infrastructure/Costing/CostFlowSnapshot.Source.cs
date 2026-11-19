@@ -21,7 +21,7 @@ internal sealed record CostSourceHeader(Guid Id, int Type, int Status, Guid Bran
 internal sealed record CostSourceLine(int LineNo, Guid ItemId, Guid UnitId, decimal Quantity, decimal Factor,
     decimal BaseQuantity, string? Notes, decimal? ReceiptAmount = null);
 internal sealed record CostSourceEvidence(CostSourceHeader Header, ImmutableArray<CostSourceLine> Lines,
-    ImmutableArray<CostFlowComparisonResult> Comparisons, string EvidenceFingerprint);
+    ImmutableArray<CostFlowComparisonResult> Comparisons, ImmutableArray<CostFiscalPeriodEvidence> Periods, string EvidenceFingerprint);
 
 internal sealed partial class CostFlowSnapshotService
 {
@@ -106,11 +106,12 @@ internal sealed partial class CostFlowSnapshotService
                 comparisons.Add(comparison);
             }
             var complete = comparisons.ToImmutable();
+            var periods = await ReadFiscalEvidence(conn, tx, header, snapshots.Value, complete, budget, token);
             var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
-                { Contract = "stock-source-evidence-v1", Company = company, Header = header, Lines = pricedLines,
+                { Contract = "stock-source-evidence-v2", Company = company, Header = header, Lines = pricedLines, Periods = periods,
                     Comparisons = complete.Select(c => c.ComparisonFingerprint).ToArray() }))).ToLowerInvariant();
             token.ThrowIfCancellationRequested();
-            return ConfigResult<CostSourceEvidence>.Ok(new(header, pricedLines, complete, fingerprint));
+            return ConfigResult<CostSourceEvidence>.Ok(new(header, pricedLines, complete, periods, fingerprint));
         }, (budget, token) => sourceScopes.IsEmpty ? Task.FromResult(true) : SourceVisible(user, company, sourceScopes, budget, token), ct);
     }
 

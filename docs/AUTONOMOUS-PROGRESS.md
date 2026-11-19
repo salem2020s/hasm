@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Source and changed-history fiscal read set — 2026-11-19
+
+Reconciledc85de4333dbd6647a87427278aa384f423458295: full independent confirmation no CHM, local source40+existing264/unit970 passed and actual hosted backend/PostgreSQL44486468531 completed successfully. Security gate still fails separately after advisory withdrawal; PR51 remains inert awaiting already-requested approval. Mainfe443211 unchanged; no repeated investigation/approval request or protected policy changes.
+
+Internal source evidence now binds source/changed-entry dates to used period/year identities, ranges, states and revisions in the SAME read-only snapshot/global quota/final authorization boundary. Balance-only changes and both transfer legs count; unchanged earlier closed history and unrelated intervening periods do not block. Normal Open policy/reasons reused; original posting FOR SHARE retained. Batch range/interval matching has shared row sentinel/cancellation, no per-date queries/cross product. v2 evidence is STILL NOT a complete account/basis/entitlement/compensation/approval/execution plan; no public API/DI/caller.
+
+Separate GPT-6/Codex FULL cumulative design/source review no CHML. Builds0errors, full unit977/977 and corrected new PostgreSQL17/17 passed zero skips. First17 had9pass/8fixturefail: invalid Open->Final transitions and immutable year-name mutation; fixtures now respect two-step closing and actual independent approved reopening, assertions/guards intact. EXISTING fiscal/journal/stock/source regression RUNNING (test-results/source-fiscal-regression; exec45540). Registry1170/full1226; new-head CI/final confirmation pending. See review-records/PR-48-source-fiscal.md and PHASE-3.8D-FISCAL-READ-CONTRACT.md.
+
+Next: finish SAME regression45540 without restart, persist/push and verify exact-head review/CI; then original/current accounting-classification/version and item/dimension provenance contracts, basis/entitlement/legal and compensation content/date binding. Complete reversal/negative/conversion, guarded proposals/approvals/atomic execution/revaluation/shared UI. Keep PR48 Draft; no scope reduction or failed-gate merge.
+
 ## Stored-source ordinary evidence in one snapshot — 2026-11-19
 
 Starting0094970691688ba44c357d755283826c21460219 independently confirmed/no CHM; local15/unit970/broad134 passed. Hosted backend/PostgreSQL44481250760 completed successfully. Required security gate still fails for withdrawn-advisory policy; PR51fe2ee06 remains inert/pending already-requested owner decision. Mainfe443211 unchanged. No new approval request, dependency experiment or protected gate change.
