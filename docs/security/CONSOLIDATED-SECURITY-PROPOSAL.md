@@ -21,8 +21,14 @@ Why this is sufficient and safe: once the exception is retired the pins protect 
 ## Evidence (all local, scratch copy outside the repository, Node 26)
 
 * PR #51's patch applies cleanly to `main`; the second patch applies cleanly on top of it.
-* Policy and inspector fixtures: 27/27 pass with both patches (22 policy cases including the retired-mode ones, 4 existing inspector cases and 1 new case that proves the pins are lifted only by the exact retirement status and enforced for `APPROVED`, `CONDITIONALLY-APPROVED-INACTIVE`, a lower-case spelling, `RETIRED`, empty, undefined and null; a mismatch of each of the three trees is refused in every enforcing state).
+* Policy and inspector fixtures: 28/28 pass with both patches (22 policy cases including the retired-mode ones, 4 existing inspector cases and 2 new cases: one proves the pins are lifted only by the exact retirement status and enforced for `APPROVED`, `CONDITIONALLY-APPROVED-INACTIVE`, a lower-case spelling, `RETIRED`, empty, undefined and null; a mismatch of each of the three trees is refused in every enforcing state).
 * **UNVERIFIED and mandatory after approval:** the actual Node 24/Linux CLI run, the hosted Web/Tauri inspections on the patched head, and the independent full-diff review of the applied change.
+
+## Residual risk (from the independent review of this proposal; none Critical/High)
+
+* **The retired status is guarded by review, not by a hash.** `scopeHash` deliberately excludes `status`. Editing the status to the exact retired value lifts the pin check, but it also turns the waiver off (zero exceptions, every High/Critical blocks), so it cannot create an exception; any other value restores the pins. The only controls on that edit are review of `tools/verify/**` (ci-guard flags it as protected, CODEOWNERS once a ruleset enforces it, and the rule that such a PR is never self-merged). This is stated here so the owner approves it knowingly.
+* **Audit-to-artifact binding becomes implicit.** The inspection job and the strict audit are separate jobs; after the pin lift the binding between them rests on the existing exact-head verification (every required check green on the SAME commit, `verify-head`), not on a cross-check inside the inspection job. Both jobs must therefore stay mandatory (they do; nothing here changes that). A stronger variant (record the three tree hashes and HEAD in the web manifest and have the installer step assert them, and have the audit job write the HEAD it audited) is possible but needs a cross-job artifact and a larger protected change; it is offered as an optional follow-up, not required for this approval.
+* Fixed after the review: an explicit "pins are missing" refusal instead of an accidental TypeError, a test that main() still delegates to the helper (no accidental unconditional loop or dropped call), and a code comment that pointed at a document absent from main.
 
 ## What I am asking the owner to approve (one decision)
 
