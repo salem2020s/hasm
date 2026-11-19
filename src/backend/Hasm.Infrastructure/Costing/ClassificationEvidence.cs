@@ -52,7 +52,7 @@ internal sealed record ClassificationEvidence(ImmutableArray<ClassifiedPosting> 
 internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver resolver, AccessService access, ClassificationLimits? limitsOverride = null)
 {
     private readonly ClassificationLimits limits = limitsOverride ?? new();
-    private sealed class Denied : Exception;
+    internal sealed class Denied : Exception;
     internal sealed class Refusal(string code) : Exception(code) { internal string Code { get; } = code; }
     internal Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task>? SnapshotEstablished { get; set; }
     internal Func<CancellationToken, Task>? BeforeFinalAuthorization { get; set; }
@@ -119,6 +119,25 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
     internal static bool FullyVisible(EffectivePermissions p) =>
         p.HasCompanyWide(PermissionCatalog.Codes.AccountsView) && p.HasCompanyWide(PermissionCatalog.Codes.JournalView)
         && p.HasCompanyWide(PermissionCatalog.Codes.StockDocsView) && p.HasCompanyWide(PermissionCatalog.Codes.CostCentersView);
+
+    /// <summary>
+    /// Loads, authorizes and evaluates inside a transaction the CALLER owns (one read-only snapshot shared with other readers). The caller supplies the
+    /// permissions and the shared command quota, and must repeat <see cref="Bootstrap"/> and <see cref="Authorize"/> with fresh permissions at the end.
+    /// Everything closure-dependent that fails BEFORE authorization is masked as <see cref="Denied"/> unless the caller is <see cref="FullyVisible"/>.
+    /// </summary>
+    internal async Task<(Loaded Loaded, ClassificationEvidence Evidence)> ReadInTransactionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid company,
+        ImmutableArray<Guid> postingIds, EffectivePermissions permissions, ReadCommandBudget quota, CancellationToken ct)
+    {
+        if (postingIds.IsDefaultOrEmpty || postingIds.Length > limits.Postings || postingIds.Any(i => i == Guid.Empty)) throw new Refusal("invalid_classification_request");
+        postingIds = [.. postingIds.Distinct()];
+        if (!Bootstrap(permissions)) throw new Denied();
+        Loaded loaded;
+        try { loaded = await LoadClosure(conn, tx, postingIds, quota, ct); }
+        catch (Refusal) when (!FullyVisible(permissions)) { throw new Denied(); }
+        catch (ReadCommandBudgetException) when (!FullyVisible(permissions)) { throw new Denied(); }
+        Authorize(permissions, loaded);
+        return (loaded, Evaluate(company, postingIds, loaded));
+    }
 
     private static NpgsqlCommand Cmd(string sql, NpgsqlConnection conn, NpgsqlTransaction tx, ReadCommandBudget quota)
     { quota.Reserve(); return new NpgsqlCommand(sql, conn, tx); }
@@ -324,7 +343,7 @@ internal sealed class ClassificationEvidenceService(CompanyDatabaseResolver reso
 
     private static Guid? N(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetGuid(i);
 
-    private static void Authorize(EffectivePermissions p, Loaded d)
+    internal static void Authorize(EffectivePermissions p, Loaded d)
     {
         foreach (var posting in d.Postings.Values)
             foreach (var w in new[] { posting.SourceWarehouse, posting.TargetWarehouse })

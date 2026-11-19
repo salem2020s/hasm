@@ -33,6 +33,27 @@ internal sealed partial class CostFlowSnapshotService
             }
         }
         var orderedDates = dates.Order().ToArray();
+        var periods = await ReadPeriodRows(conn, tx, orderedDates, budget, ct);
+        var used = ImmutableArray.CreateBuilder<CostFiscalPeriodEvidence>();
+        var cursor = 0; Guid? previous = null;
+        foreach (var date in orderedDates)
+        {
+            ct.ThrowIfCancellationRequested();
+            while (cursor < periods.Count && periods[cursor].End < date) { ct.ThrowIfCancellationRequested(); cursor++; }
+            var period = cursor < periods.Count && periods[cursor].Start <= date ? periods[cursor] : null;
+            var gate = FiscalPeriodGate.Evaluate(period?.Id, period?.State, false);
+            if (!gate.Allowed) throw new CostingException(gate.Reason!);
+            if (period is null || period.YearClosed) throw Inconsistent();
+            if (date == source.Date && period.YearId != source.FiscalYearId) throw new CostingException("source_fiscal_year_changed");
+            if (previous != period.Id) { used.Add(period); previous = period.Id; }
+        }
+        ct.ThrowIfCancellationRequested();
+        return used.ToImmutable();
+    }
+
+    /// <summary>Bounded read of every fiscal period row across the min/max of the given ascending dates (one query, shared discovery budget). Shape/overlap are validated; the gate is NOT applied.</summary>
+    private static async Task<List<CostFiscalPeriodEvidence>> ReadPeriodRows(NpgsqlConnection conn, NpgsqlTransaction tx, DateOnly[] orderedDates, Budget budget, CancellationToken ct)
+    {
         var periods = new List<CostFiscalPeriodEvidence>();
         await using (var q = budget.Command($"SELECT p.{P.Id},p.{P.YearId},p.{P.StartDate},p.{P.EndDate},p.{P.Status},p.{P.Revision},y.{Y.Status},y.{Y.Revision} FROM {P.Table} p LEFT JOIN {Y.Table} y ON y.{Y.Id}=p.{P.YearId} WHERE p.{P.StartDate}<=@last AND p.{P.EndDate}>=@first ORDER BY p.{P.StartDate},p.{P.Id} LIMIT @limit", conn, tx))
         {
@@ -51,20 +72,6 @@ internal sealed partial class CostFlowSnapshotService
                 periods.Add(period);
             }
         }
-        var used = ImmutableArray.CreateBuilder<CostFiscalPeriodEvidence>();
-        var cursor = 0; Guid? previous = null;
-        foreach (var date in orderedDates)
-        {
-            ct.ThrowIfCancellationRequested();
-            while (cursor < periods.Count && periods[cursor].End < date) { ct.ThrowIfCancellationRequested(); cursor++; }
-            var period = cursor < periods.Count && periods[cursor].Start <= date ? periods[cursor] : null;
-            var gate = FiscalPeriodGate.Evaluate(period?.Id, period?.State, false);
-            if (!gate.Allowed) throw new CostingException(gate.Reason!);
-            if (period is null || period.YearClosed) throw Inconsistent();
-            if (date == source.Date && period.YearId != source.FiscalYearId) throw new CostingException("source_fiscal_year_changed");
-            if (previous != period.Id) { used.Add(period); previous = period.Id; }
-        }
-        ct.ThrowIfCancellationRequested();
-        return used.ToImmutable();
+        return periods;
     }
 }
