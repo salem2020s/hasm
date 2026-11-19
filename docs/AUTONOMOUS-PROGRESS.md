@@ -1,5 +1,15 @@
 # HASM — Autonomous execution progress
 
+## Stored-source ordinary evidence in one snapshot — 2026-11-19
+
+Starting0094970691688ba44c357d755283826c21460219 independently confirmed/no CHM; local15/unit970/broad134 passed. Hosted backend/PostgreSQL44481250760 completed successfully. Required security gate still fails for withdrawn-advisory policy; PR51fe2ee06 remains inert/pending already-requested owner decision. Mainfe443211 unchanged. No new approval request, dependency experiment or protected gate change.
+
+Internal LoadSourceEvidenceAsync now binds actual stored header/revision/approval identities/posting-existence, ordered lines/amounts and comparisons for all items in ONE read-only RR transaction/global deadline/quota. Counted bootstrap permission is not source authority: actual AnyView plus all-header/closure cost permission and final live source/cost checks remain mandatory on success/caught failures. All quarantine precedes diagnostics. Reuses normal amount/reference/conversion rules, immutable evidence and deterministic source/item proposals; no fiscal/account/approval/execution authority, API/DI or production caller. Component counter caps retained loaded+revised output after one per-replay-bounded allocation; no false peak-memory claim.
+
+Independent separate GPT-6/Codex FULL cumulative design/source reviews found one Low amount-error parity gap, fixed via unchanged normal engine validator; no remaining CHML. New40/40 PostgreSQL and full unit970/970 passed zero skips. Existing affected-suite union RUNNING (test-results/source-evidence-regression; exec78826); new40 not repeated unnecessarily. Registry1153/full1209. New-head CI/final confirmation pending. See review-records/PR-48-source-evidence.md and source-read contract.
+
+Next: finish SAME union regression, preserve/push/review exact head and verify CI; finish malformed source/branch variants where guards permit, then source fiscal/account/basis/entitlement/compensation binding. Complete full reversal/negative/conversion, guarded proposals/approvals/atomic execution/revaluation/shared UI. PR48 remains Draft; no incomplete phase or failed security gate is merged.
+
 ## Bounded read-only validation shared with posting — 2026-11-19
 
 Reconciled exact59335e162c355c78ff3a1e930456cb1b1d647916: full cumulative independent review no CHM; actual backend/PostgreSQL1154/1154 zero skips passed44388903035; other always-on checks passed except dependency-scan withdrawal-policy failure44388903009. Mainfe443211/PR51fe2ee06 unchanged; PR51 remains inert awaiting the already-requested owner decision, no repeated approval request or protected policy change.

@@ -45,6 +45,14 @@ internal sealed partial class CostFlowSnapshotService
                 return ConfigResult<ImmutableArray<CostFlowSnapshot>>.Fail(ConfigStatus.NotFound, "warehouse_not_found");
         }
         if (SnapshotEstablished is { } observe) await observe(conn, tx, ct);
+        return await ReadItemsInTransactionAsync(conn, tx, company, requested, allScopes, can, budget, null, ct);
+    }
+
+    private async Task<ConfigResult<ImmutableArray<CostFlowSnapshot>>> ReadItemsInTransactionAsync(
+        Npgsql.NpgsqlConnection conn, Npgsql.NpgsqlTransaction tx, Guid company,
+        ImmutableArray<CostFlowItemRoots> requested, HashSet<Guid> allScopes, Func<Guid, Task<bool>> can,
+        Budget budget, Func<CancellationToken, Task>? afterDiscovery, CancellationToken ct)
+    {
         var components = new List<(Guid Item, HashSet<Guid> Scopes, Guid[] Operations)>();
         // ALL identifier closures precede ANY policy/valuation read or history diagnostic.
         foreach (var request in requested.OrderBy(r => r.ItemId.ToString("N"), StringComparer.Ordinal))
@@ -59,6 +67,7 @@ internal sealed partial class CostFlowSnapshotService
             components.Add((request.ItemId, scopes, operations));
         }
         foreach (var scope in allScopes) if (!await can(scope)) throw new Denied();
+        if (afterDiscovery is not null) await afterDiscovery(ct);
         var results = ImmutableArray.CreateBuilder<CostFlowSnapshot>(components.Count);
         foreach (var component in components)
         {

@@ -108,9 +108,12 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
 
     /// <summary>Validates the entered receipt amounts against the document lines: every line exactly once for a receipt, none otherwise.</summary>
     private static Dictionary<int, decimal> ReadAmounts(StockDocumentView doc, StockPostInput? input)
+        => ReadSourceAmounts(doc.DocType, doc.Lines.Select(l => l.LineNo).ToArray(), input);
+
+    internal static Dictionary<int, decimal> ReadSourceAmounts(int docType, IReadOnlyList<int> lineNumbers, StockPostInput? input)
     {
         var supplied = input?.Lines ?? [];
-        if (doc.DocType != (int)StockDocType.Receipt)
+        if (docType != (int)StockDocType.Receipt)
         {
             if (supplied.Count > 0) throw StockDocumentService.Invalid("lines", "amounts_not_allowed");
             return [];
@@ -119,12 +122,13 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         for (var i = 0; i < supplied.Count; i++)
         {
             var l = supplied[i];
-            if (l.LineNo is not { } no || doc.Lines.All(x => x.LineNo != no)) throw StockDocumentService.Invalid($"lines[{i}].lineNo", "line_not_found");
+            if (l is null) throw StockDocumentService.Invalid($"lines[{i}]", "required");
+            if (l.LineNo is not { } no || !lineNumbers.Contains(no)) throw StockDocumentService.Invalid($"lines[{i}].lineNo", "line_not_found");
             if (l.Amount is not { } amount) throw StockDocumentService.Invalid($"lines[{i}].amount", "required");
             if (amount < 0) throw StockDocumentService.Invalid($"lines[{i}].amount", "negative_amount");
             if (!map.TryAdd(no, amount)) throw StockDocumentService.Invalid($"lines[{i}].lineNo", "duplicate_line");
         }
-        foreach (var l in doc.Lines) if (!map.ContainsKey(l.LineNo)) throw StockDocumentService.Invalid("lines", "amount_required_for_every_line");
+        foreach (var number in lineNumbers) if (!map.ContainsKey(number)) throw StockDocumentService.Invalid("lines", "amount_required_for_every_line");
         return map;
     }
 

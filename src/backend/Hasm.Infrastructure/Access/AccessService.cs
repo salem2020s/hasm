@@ -148,9 +148,12 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         (await GetEffectivePermissionsAsync(userId, companyId, ct)).Has(permissionCode, target);
 
     internal async Task<bool> IsAllowedAsync(Guid userId, Guid companyId, string permissionCode, ScopeTarget target, Action reserveCommand, CancellationToken ct)
+        => (await GetEffectivePermissionsAsync(userId, companyId, reserveCommand, ct)).Has(permissionCode, target);
+
+    internal async Task<EffectivePermissions> GetEffectivePermissionsAsync(Guid userId, Guid companyId, Action reserveCommand, CancellationToken ct)
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        return (await LoadEffectiveAsync(conn, null, userId, companyId, true, ct, reserveCommand)).Has(permissionCode, target);
+        return await LoadEffectiveAsync(conn, null, userId, companyId, true, ct, reserveCommand);
     }
 
     private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct, Action? reserveCommand = null)

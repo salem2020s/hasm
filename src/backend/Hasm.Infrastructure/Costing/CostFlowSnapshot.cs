@@ -61,41 +61,47 @@ internal sealed partial class CostFlowSnapshotService
 
     private async Task<ConfigResult<T>> ReadAuthorizedItemsAsync<T>(Guid user, Guid company,
         ImmutableArray<CostFlowItemRoots> requested, Func<ImmutableArray<CostFlowSnapshot>, CancellationToken, T> project, CancellationToken ct)
+        => await RunBoundedReadAsync(user, company, async (budget, scopes, token) =>
+        {
+            if (!ValidItemRoots(requested)) return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invalid_impact_roots");
+            foreach (var request in requested)
+                foreach (var root in request.Warehouses)
+                {
+                    if (scopes.Add(root) && !await Can(user, company, root, budget.Sql, token)) throw new Denied();
+                    budget.Position(request.ItemId, root);
+                }
+            var loaded = await ReadItemsAsync(company, requested, scopes, w => Can(user, company, w, budget.Sql, token), budget, token);
+            if (!loaded.IsOk) return ConfigResult<T>.Fail(loaded.Status, loaded.Code!);
+            token.ThrowIfCancellationRequested();
+            return ConfigResult<T>.Ok(project(loaded.Value, token));
+        }, null, ct);
+
+    private async Task<ConfigResult<T>> RunBoundedReadAsync<T>(Guid user, Guid company,
+        Func<Budget, HashSet<Guid>, CancellationToken, Task<ConfigResult<T>>> read,
+        Func<Budget, CancellationToken, Task<bool>>? finalExtra, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(limits.Deadline ?? TimeSpan.FromSeconds(30)); var token = deadline.Token;
         token.ThrowIfCancellationRequested();
-        if (!ValidItemRoots(requested))
-            return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invalid_impact_roots");
         var quota = new ReadCommandBudget(limits.Commands, token);
         var budget = new Budget(limits, token, quota);
         var scopes = new HashSet<Guid>();
         ConfigResult<T> result;
         try
         {
-            foreach (var request in requested)
-                foreach (var root in request.Warehouses)
-                {
-                    if (scopes.Add(root) && !await Can(user, company, root, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
-                    budget.Position(request.ItemId, root);
-                }
-            var loaded = await ReadItemsAsync(company, requested, scopes, w => Can(user, company, w, quota, token), budget, token);
-            if (!loaded.IsOk) result = ConfigResult<T>.Fail(loaded.Status, loaded.Code!);
-            else
-            {
-                token.ThrowIfCancellationRequested();
-                result = ConfigResult<T>.Ok(project(loaded.Value, token));
-            }
+            result = await read(budget, scopes, token);
         }
         catch (ReadCommandBudgetException e) { return BudgetFailure<T>(e, token); }
         catch (Denied) { result = ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden"); }
         catch (CostingException e) { result = ConfigResult<T>.Fail(ConfigStatus.Conflict, e.Code); }
+        catch (Hasm.Infrastructure.Inventory.StockDocumentService.Abort e) { result = e.To<T>(); }
         if (BeforeFinalAuthorization is { } observe) await observe(token);
         // Includes error paths. Expired/cancelled work yields no diagnostic or partially authorized data.
         try
         {
             foreach (var scope in scopes)
                 if (!await Can(user, company, scope, quota, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+            if (finalExtra is not null && !await finalExtra(budget, token)) return ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
         }
         catch (ReadCommandBudgetException e) { return BudgetFailure<T>(e, token); }
         token.ThrowIfCancellationRequested();
