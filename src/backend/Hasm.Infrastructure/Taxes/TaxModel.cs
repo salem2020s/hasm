@@ -29,5 +29,6 @@ public sealed record TaxPolicy(int MoneyDecimals, TaxRoundingMode Mode, TaxRound
 
 public sealed record TaxAmount(Guid TaxId, string Code, TaxTreatment Treatment, decimal RatePercent, decimal Base, decimal Amount);
 public sealed record TaxLineResult(int LineNo, decimal Net, decimal TaxTotal, decimal Gross, IReadOnlyList<TaxAmount> Taxes);
-public sealed record TaxTotal(Guid TaxId, string Code, TaxTreatment Treatment, decimal Base, decimal Amount);
+/// <summary>Totals are keyed by (tax, treatment, rate): a Standard line and an Exempt line of the same tax, or two rates of one tax, are never merged under one label.</summary>
+public sealed record TaxTotal(Guid TaxId, string Code, TaxTreatment Treatment, decimal RatePercent, decimal Base, decimal Amount);
 public sealed record TaxDocumentResult(IReadOnlyList<TaxLineResult> Lines, IReadOnlyList<TaxTotal> TotalsByTax, decimal TotalNet, decimal TotalTax, decimal TotalGross);

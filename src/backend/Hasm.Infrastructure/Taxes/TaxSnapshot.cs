@@ -8,7 +8,8 @@ namespace Hasm.Infrastructure.Taxes;
 /// <summary>
 /// The immutable snapshot of a tax calculation (SRS 6.3): it stores VALUES - the policy, the resolved components with their opaque rule/rate references, the inputs and the
 /// results - never live references, so a later change of a rule or rate cannot alter an existing snapshot. <see cref="ContentHash"/> is a SHA-256 over the canonical
-/// (scale-normalized, culture-independent) JSON of everything else.
+/// (scale-normalized, culture-independent) JSON of everything else. It is TAMPER-EVIDENCE (an unkeyed digest that Verify also cross-checks by recalculation), not authentication:
+/// the authenticity of a stored snapshot is the job of the document store and its audit chain.
 /// </summary>
 public sealed record TaxSnapshot(string Version, TaxPolicy Policy, IReadOnlyList<TaxLineInput> Lines, TaxDocumentResult Result, string ContentHash);
 
@@ -28,11 +29,12 @@ public static class TaxSnapshots
     private static string Hash(string version, TaxPolicy policy, IReadOnlyList<TaxLineInput> lines, TaxDocumentResult result) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { Version = version, Policy = policy, Lines = lines, Result = result }, Canonical))).ToLowerInvariant();
 
-    /// <summary>Calculates and seals. The snapshot holds exactly what produced the result.</summary>
+    /// <summary>Calculates and seals. The snapshot holds exactly what produced the result, in defensive read-only copies (a later change to the caller's arrays cannot alter it); a missing base list is normalized to empty.</summary>
     public static TaxSnapshot Create(TaxPolicy policy, IReadOnlyList<TaxLineInput> lines, CancellationToken ct = default)
     {
         var result = TaxEngine.Calculate(policy, lines, ct);
-        return new(CurrentVersion, policy, lines, result, Hash(CurrentVersion, policy, lines, result));
+        var copy = lines.Select(l => l with { Taxes = l.Taxes.Select(t => t with { IncludesInBase = (t.IncludesInBase ?? []).ToArray().AsReadOnly() }).ToArray().AsReadOnly() }).ToArray().AsReadOnly();
+        return new(CurrentVersion, policy, copy, result, Hash(CurrentVersion, policy, copy, result));
     }
 
     /// <summary>True only when the version is known, the stored hash matches the stored content AND recalculating the engine from the stored inputs reproduces the stored results exactly.</summary>

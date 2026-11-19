@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Hasm.Infrastructure.Taxes;
 
@@ -54,7 +55,7 @@ public class TaxEngineTests
     [Theory]
     [InlineData(0, 50, 3, 2)]        // 2.5 at zero decimals
     [InlineData(0, 30, 2, 2)]        // 1.5
-    [InlineData(3, 1, 0.050, 0.050)] // 5 % of 1.000
+    [InlineData(3, 0.010, 0.001, 0.000)] // 5 % of 0.010 = 0.0005: a tie at three decimals
     public void The_money_decimals_of_the_policy_drive_the_unit(int decimals, double net, double halfAway, double halfEven)
     {
         var tax = Std(A, "VAT", 5m, 1);
@@ -253,5 +254,110 @@ public class TaxEngineTests
         var original = CultureInfo.CurrentCulture;
         try { CultureInfo.CurrentCulture = new CultureInfo("de-DE"); Assert.Equal(one.ContentHash, TaxSnapshots.Create(Pol(), [Excl(100m, Std(A, "A", 15m, 1))]).ContentHash); }
         finally { CultureInfo.CurrentCulture = original; }
+    }
+
+    [Fact]
+    public void Per_document_mode_scales_to_the_maximum_document_size()
+    {
+        // review H1: unreduced fractions made 5000 lines x 8 compound taxes unusable; the result must now arrive in seconds
+        var ids = Enumerable.Range(1, 8).Select(i => Guid.Parse($"00000000-0000-0000-0000-0000000001{i:00}")).ToArray();
+        var taxes = ids.Select((id, i) => Std(id, "T" + i, 15.123456m, i + 1, ids.Take(i).ToArray())).ToArray();
+        var lines = Enumerable.Range(1, 5000).Select(i => Line(i, 1m, (i % 1000 + 1) / 100m, 0m, false, taxes)).ToArray();
+        var watch = Stopwatch.StartNew();
+        var d = Calc(Pol(2, TaxRoundingMode.HalfEven, TaxRoundingLevel.PerDocument), lines);
+        watch.Stop();
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30), $"took {watch.Elapsed}");
+        Assert.Equal(d.TotalTax, d.Lines.Sum(l => l.TaxTotal)); Assert.Equal(d.TotalTax, d.TotalsByTax.Sum(t => t.Amount));
+        Assert.Equal(5000, d.Lines.Count);
+    }
+
+    [Fact]
+    public void The_inclusive_residual_never_makes_an_amount_negative()
+    {
+        // review M1: gross 0.02 with three 100 % taxes rounds net and every tax up to one unit (residual -2): taken from the last taxes first
+        var tax = new[] { Std(A, "A", 100m, 1), Std(B, "B", 100m, 2), Std(C, "C", 100m, 3) };
+        var d = Calc(Pol(), Incl(0.02m, tax));
+        Assert.Equal(0.01m, d.Lines[0].Net);
+        Assert.Equal(new[] { 0.01m, 0m, 0m }, Amounts(d.Lines[0]));
+        Assert.Equal(0.02m, d.Lines[0].Gross);
+        // half-even and half-away decide the tie 0.01 at 100 % differently but both keep the gross and stay non-negative
+        var away = Calc(Pol(), Incl(0.01m, Std(A, "A", 100m, 1))).Lines[0];
+        var even = Calc(Pol(2, TaxRoundingMode.HalfEven), Incl(0.01m, Std(A, "A", 100m, 1))).Lines[0];
+        Assert.Equal((0.01m, 0.00m), (away.Net, away.TaxTotal));
+        Assert.Equal((0.00m, 0.01m), (even.Net, even.TaxTotal));
+    }
+
+    [Fact]
+    public void Results_beyond_the_decimal_range_are_a_refusal_not_an_overflow()
+    {
+        var ids = Enumerable.Range(1, 8).Select(i => Guid.Parse($"00000000-0000-0000-0000-0000000002{i:00}")).ToArray();
+        var taxes = ids.Select((id, i) => Std(id, "T" + i, 1000m, i + 1, ids.Take(i).ToArray())).ToArray();
+        Assert.Equal("amount_too_large", Refusal(Pol(6), Line(1, 1m, 999_999_999_999_999m, 0m, false, taxes)));
+        Assert.False(TaxSnapshots.Verify(new TaxSnapshot(TaxSnapshots.CurrentVersion, Pol(6), [Line(1, 1m, 999_999_999_999_999m, 0m, false, taxes)], new TaxDocumentResult([], [], 0, 0, 0), new string('0', 64))));
+    }
+
+    [Fact]
+    public void A_tax_id_keeps_its_code_and_totals_are_never_merged_across_treatments_or_rates()
+    {
+        Assert.Equal("inconsistent_tax", Refusal(Pol(), Line(1, 1m, 10m, 0m, false, Std(A, "VAT", 15m, 1)), Line(2, 1m, 10m, 0m, false, Std(A, "OTHER", 15m, 1))));
+        var d = Calc(Pol(), Line(1, 1m, 100m, 0m, false, Std(A, "VAT", 15m, 1)), Line(2, 1m, 50m, 0m, false, new TaxComponent(A, "VAT", TaxTreatment.Exempt, 0m, 1)),
+            Line(3, 1m, 10m, 0m, false, Std(A, "VAT", 5m, 1)));
+        Assert.Equal(3, d.TotalsByTax.Count);                                                          // standard 15, exempt, standard 5: three distinct totals
+        Assert.Equal((100m, 15m), (d.TotalsByTax.Single(t => t.RatePercent == 15m).Base, d.TotalsByTax.Single(t => t.RatePercent == 15m).Amount));
+        Assert.Equal((50m, 0m), (d.TotalsByTax.Single(t => t.Treatment == TaxTreatment.Exempt).Base, d.TotalsByTax.Single(t => t.Treatment == TaxTreatment.Exempt).Amount));
+    }
+
+    [Fact]
+    public void A_base_reference_is_unique_and_a_null_tax_is_refused_before_anything_is_sorted()
+    {
+        Assert.Equal("invalid_base_reference", Refusal(Pol(), Excl(100m, Std(A, "A", 10m, 1), Std(B, "B", 10m, 2, A, A))));
+        Assert.Equal("invalid_base_reference", Refusal(Pol(), Excl(100m, Std(A, "A", 10m, 1, A))));         // a tax cannot include itself
+        Assert.Equal("invalid_tax", Refusal(Pol(), Line(1, 1m, 1m, 0m, false, Std(A, "A", 10m, 1), null!, Std(B, "B", 5m, 2))));
+    }
+
+    [Fact]
+    public void Zero_quantity_zero_price_and_a_discount_equal_to_the_gross_give_zero_lines()
+    {
+        var tax = Std(A, "A", 10m, 1);
+        foreach (var line in new[] { Line(1, 0m, 10m, 0m, false, tax), Line(1, 5m, 0m, 0m, false, tax), Line(1, 1m, 10m, 10m, false, tax), Line(1, 1m, 10m, 10m, true, tax) })
+            Assert.Equal((0m, 0m), (Calc(Pol(), line).Lines[0].Net, Calc(Pol(), line).Lines[0].TaxTotal));
+    }
+
+    [Fact]
+    public void Per_document_rounding_handles_compound_taxes_and_half_even_sum_ties()
+    {
+        var compound = new[] { Std(A, "A", 10m, 1), Std(B, "B", 100m, 2, A) };
+        var d = Calc(Pol(2, TaxRoundingMode.HalfAwayFromZero, TaxRoundingLevel.PerDocument), Line(1, 1m, 0.15m, 0m, false, compound), Line(2, 1m, 0.15m, 0m, false, compound));
+        Assert.Equal(new[] { 0.03m, 0.33m }, d.TotalsByTax.Select(t => t.Amount));                           // exact A 0.030, B 0.330
+        Assert.Equal(new[] { 0.02m, 0.17m }, Amounts(d.Lines[0])); Assert.Equal(new[] { 0.01m, 0.16m }, Amounts(d.Lines[1]));
+        Assert.Equal(0.17m, d.Lines[0].Taxes[1].Base);                                                       // informational base: net + the ALLOCATED earlier amount
+        // five lines of exact 0.5 unit: the sum 2.5 units is a tie
+        var tax = Std(A, "A", 10m, 1);
+        var five = Enumerable.Range(1, 5).Select(i => Line(i, 1m, 0.05m, 0m, false, tax)).ToArray();
+        Assert.Equal(new[] { 0.01m, 0.01m, 0.01m, 0m, 0m }, Calc(Pol(2, TaxRoundingMode.HalfAwayFromZero, TaxRoundingLevel.PerDocument), five).Lines.Select(l => l.TaxTotal));
+        Assert.Equal(new[] { 0.01m, 0.01m, 0m, 0m, 0m }, Calc(Pol(2, TaxRoundingMode.HalfEven, TaxRoundingLevel.PerDocument), five).Lines.Select(l => l.TaxTotal));
+    }
+
+    [Fact]
+    public void A_snapshot_is_independent_of_the_callers_arrays_and_treats_a_missing_base_list_as_empty()
+    {
+        var lines = new[] { Line(1, 1m, 100m, 0m, false, Std(A, "A", 15m, 1)) };
+        var snapshot = TaxSnapshots.Create(Pol(), lines);
+        lines[0] = Line(1, 1m, 999m, 0m, false, Std(A, "A", 15m, 1));                                      // the caller mutates its own array afterwards
+        Assert.True(TaxSnapshots.Verify(snapshot)); Assert.Equal(100m, snapshot.Lines[0].UnitPrice);
+        Assert.Equal(snapshot.ContentHash, TaxSnapshots.Create(Pol(), [Line(1, 1m, 100m, 0m, false, new TaxComponent(A, "A", TaxTreatment.Standard, 15m, 1, null))]).ContentHash);
+        Assert.Equal(snapshot.ContentHash, TaxSnapshots.Create(Pol(), [Line(1, 1m, 100m, 0m, false, new TaxComponent(A, "A", TaxTreatment.Standard, 15m, 1, []))]).ContentHash);
+        Assert.Throws<NotSupportedException>(() => ((IList<TaxLineInput>)snapshot.Lines)[0] = lines[0]);   // read-only
+    }
+
+    [Fact]
+    public void A_snapshot_of_a_per_document_calculation_verifies_and_every_content_field_is_covered_by_the_hash()
+    {
+        var policy = Pol(2, TaxRoundingMode.HalfEven, TaxRoundingLevel.PerDocument);
+        var snapshot = TaxSnapshots.Create(policy, [Line(1, 1m, 0.05m, 0m, false, Std(A, "A", 10m, 1) with { RuleRef = "r1" }), Line(2, 1m, 0.05m, 0m, false, Std(A, "A", 10m, 1) with { RuleRef = "r1" })]);
+        Assert.True(TaxSnapshots.Verify(snapshot));
+        var first = snapshot.Lines[0];
+        Assert.False(TaxSnapshots.Verify(snapshot with { Lines = [first with { Taxes = [first.Taxes[0] with { RuleRef = "r2" }] }, snapshot.Lines[1]] }));   // the traceability reference is sealed too
+        Assert.False(TaxSnapshots.Verify(snapshot with { Lines = [first with { Taxes = [first.Taxes[0] with { Code = "X" }] }, snapshot.Lines[1]] }));
     }
 }

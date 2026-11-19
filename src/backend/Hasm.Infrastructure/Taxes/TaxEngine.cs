@@ -27,10 +27,11 @@ public static class TaxEngine
             return new Rat((bits[3] & int.MinValue) != 0 ? -magnitude : magnitude, BigInteger.Pow(10, scale)).Reduce();
         }
         internal Rat Reduce() { var g = BigInteger.GreatestCommonDivisor(N, D); return g.IsOne || g.IsZero ? this : new(N / g, D / g); }
-        public static Rat operator +(Rat a, Rat b) => new(a.N * b.D + b.N * a.D, a.D * b.D);
-        public static Rat operator -(Rat a, Rat b) => new(a.N * b.D - b.N * a.D, a.D * b.D);
-        public static Rat operator *(Rat a, Rat b) => new(a.N * b.N, a.D * b.D);
-        public static Rat operator /(Rat a, Rat b) => new(a.N * b.D, a.D * b.N);
+        // every operation reduces: without it denominators multiply across lines and per-document mode does not scale
+        public static Rat operator +(Rat a, Rat b) => new Rat(a.N * b.D + b.N * a.D, a.D * b.D).Reduce();
+        public static Rat operator -(Rat a, Rat b) => new Rat(a.N * b.D - b.N * a.D, a.D * b.D).Reduce();
+        public static Rat operator *(Rat a, Rat b) => new Rat(a.N * b.N, a.D * b.D).Reduce();
+        public static Rat operator /(Rat a, Rat b) => new Rat(a.N * b.D, a.D * b.N).Reduce();
         internal int CompareTo(Rat o) => (N * o.D).CompareTo(o.N * D);
         internal bool IsNegative => N.Sign < 0;
     }
@@ -48,7 +49,12 @@ public static class TaxEngine
         return mode == TaxRoundingMode.HalfAwayFromZero || !quotient.IsEven ? quotient + 1 : quotient;
     }
 
-    private static decimal FromUnits(BigInteger units, int decimals) => (decimal)units / (decimal)Pow10(decimals);
+    private static readonly BigInteger MaxResultUnits = BigInteger.Pow(10, 28) - 1;
+    private static decimal FromUnits(BigInteger units, int decimals)
+    {
+        if (BigInteger.Abs(units) > MaxResultUnits) throw Refuse("amount_too_large");   // beyond decimal range: a refusal, never an OverflowException
+        return (decimal)units / (decimal)Pow10(decimals);
+    }
 
     private static int ScaleOf(decimal value)
     {
@@ -65,6 +71,7 @@ public static class TaxEngine
         if (policy.MoneyDecimals is < 0 or > MaxMoneyDecimals || !Enum.IsDefined(policy.Mode) || !Enum.IsDefined(policy.Level)) throw Refuse("invalid_tax_policy");
         if (lines.Count == 0 || lines.Count > MaxLines) throw Refuse("invalid_tax_lines");
         var numbers = new HashSet<int>();
+        var codeOf = new Dictionary<Guid, string>();                       // a tax id keeps ONE code across all lines
         var prepared = new List<Prepared>(lines.Count);
         foreach (var line in lines)
         {
@@ -74,16 +81,20 @@ public static class TaxEngine
             if (ScaleOf(line.Quantity) > QuantityDecimals || ScaleOf(line.UnitPrice) > PriceDecimals || ScaleOf(line.Discount) > policy.MoneyDecimals) throw Refuse("precision_exceeded");
             if (line.PriceIncludesTax && policy.Level != TaxRoundingLevel.PerLine) throw Refuse("inclusive_requires_line_rounding");
             if (line.Taxes.Count > MaxTaxesPerLine) throw Refuse("too_many_taxes");
+            if (line.Taxes.Any(t => t is null)) throw Refuse("invalid_tax");
             var taxes = line.Taxes.OrderBy(t => t.Priority).ToArray();
             var seenIds = new HashSet<Guid>(); var priorities = new HashSet<int>();
             foreach (var tax in taxes)
             {
-                if (tax is null || tax.TaxId == Guid.Empty || string.IsNullOrWhiteSpace(tax.Code) || !Enum.IsDefined(tax.Treatment)) throw Refuse("invalid_tax");
+                if (tax.TaxId == Guid.Empty || string.IsNullOrWhiteSpace(tax.Code) || !Enum.IsDefined(tax.Treatment)) throw Refuse("invalid_tax");
                 if (!seenIds.Add(tax.TaxId)) throw Refuse("duplicate_tax");
+                if (codeOf.TryGetValue(tax.TaxId, out var knownCode) ? knownCode != tax.Code : !codeOf.TryAdd(tax.TaxId, tax.Code)) throw Refuse("inconsistent_tax");
                 if (!priorities.Add(tax.Priority)) throw Refuse("duplicate_priority");
                 if (tax.RatePercent < 0 || tax.RatePercent > 1000 || ScaleOf(tax.RatePercent) > RateDecimals) throw Refuse("invalid_rate");
                 if (tax.Treatment != TaxTreatment.Standard && tax.RatePercent != 0) throw Refuse("treatment_rate_mismatch");
-                foreach (var included in tax.IncludesInBase ?? [])
+                var includes = tax.IncludesInBase ?? [];
+                if (includes.Distinct().Count() != includes.Count) throw Refuse("invalid_base_reference");              // a tax is added to the base at most once
+                foreach (var included in includes)
                     if (!taxes.TakeWhile(t => t != tax).Any(t => t.TaxId == included)) throw Refuse("invalid_base_reference");   // only EARLIER taxes of this line
             }
             var quantity = Rat.Of(line.Quantity); var price = Rat.Of(line.UnitPrice); var discount = Rat.Of(line.Discount);
@@ -165,12 +176,23 @@ public static class TaxEngine
         var net = RoundUnits(net0, policy.Mode);
         foreach (var tax in w.P.Taxes) exactTax[tax.TaxId] = Taxable(tax) ? net0 * Fraction(tax.RatePercent) * multiplier[tax.TaxId] : Rat.Int(BigInteger.Zero);
         foreach (var tax in w.P.Taxes) w.Amounts[tax.TaxId] = RoundUnits(exactTax[tax.TaxId], policy.Mode);
-        // the GROSS is authoritative: the last taxable tax absorbs the residual; if that would make it negative the net absorbs it
+        // the GROSS is authoritative. A positive residual goes to the LAST taxable tax; a negative one is taken from the last taxable tax first, then from the earlier
+        // taxable taxes (last to first), then from the net, so no amount ever becomes negative (the pool net + taxes always exceeds the residual)
         var residual = gross - net - w.Amounts.Values.Aggregate(BigInteger.Zero, (a, b) => a + b);
-        var last = w.P.Taxes.LastOrDefault(Taxable);
-        if (last is null) net = gross;
-        else if (w.Amounts[last.TaxId] + residual >= 0) w.Amounts[last.TaxId] += residual;
-        else net += residual;
+        var taxable = w.P.Taxes.Where(Taxable).ToArray();
+        if (taxable.Length == 0) net = gross;
+        else if (residual.Sign >= 0) w.Amounts[taxable[^1].TaxId] += residual;
+        else
+        {
+            var need = -residual;
+            foreach (var tax in taxable.Reverse())
+            {
+                var take = BigInteger.Min(need, w.Amounts[tax.TaxId]);
+                w.Amounts[tax.TaxId] -= take; need -= take;
+                if (need.IsZero) break;
+            }
+            net -= need;
+        }
         w.Net = net;
         foreach (var tax in w.P.Taxes)
             w.Bases[tax.TaxId] = net + (tax.IncludesInBase ?? []).Aggregate(BigInteger.Zero, (sum, id) => sum + w.Amounts[id]);
@@ -208,7 +230,7 @@ public static class TaxEngine
     {
         var d = policy.MoneyDecimals;
         var lineResults = new List<TaxLineResult>(work.Length);
-        var totals = new Dictionary<Guid, (TaxComponent Tax, BigInteger Base, BigInteger Amount)>();
+        var totals = new Dictionary<(Guid Tax, TaxTreatment Treatment, decimal Rate), (TaxComponent Tax, BigInteger Base, BigInteger Amount)>();
         BigInteger totalNet = 0, totalTax = 0;
         foreach (var w in work)
         {
@@ -218,14 +240,15 @@ public static class TaxEngine
                 var amount = w.Amounts[tax.TaxId]; var baseUnits = w.Bases.TryGetValue(tax.TaxId, out var b) ? b : w.Net;
                 lineTax += amount;
                 amounts.Add(new(tax.TaxId, tax.Code, tax.Treatment, tax.RatePercent, FromUnits(baseUnits, d), FromUnits(amount, d)));
-                (TaxComponent Tax, BigInteger Base, BigInteger Amount) current = totals.TryGetValue(tax.TaxId, out var t) ? t : (tax, BigInteger.Zero, BigInteger.Zero);
-                totals[tax.TaxId] = (current.Tax, current.Base + baseUnits, current.Amount + amount);
+                var key = (tax.TaxId, tax.Treatment, tax.RatePercent);
+                (TaxComponent Tax, BigInteger Base, BigInteger Amount) current = totals.TryGetValue(key, out var t) ? t : (tax, BigInteger.Zero, BigInteger.Zero);
+                totals[key] = (current.Tax, current.Base + baseUnits, current.Amount + amount);
             }
             totalNet += w.Net; totalTax += lineTax;
-            lineResults.Add(new(w.P.Line.LineNo, FromUnits(w.Net, d), FromUnits(lineTax, d), FromUnits(w.Net + lineTax, d), amounts));
+            lineResults.Add(new(w.P.Line.LineNo, FromUnits(w.Net, d), FromUnits(lineTax, d), FromUnits(w.Net + lineTax, d), amounts.AsReadOnly()));
         }
-        var byTax = totals.OrderBy(t => t.Value.Tax.Priority).ThenBy(t => t.Key)
-            .Select(t => new TaxTotal(t.Key, t.Value.Tax.Code, t.Value.Tax.Treatment, FromUnits(t.Value.Base, d), FromUnits(t.Value.Amount, d))).ToList();
-        return new(lineResults, byTax, FromUnits(totalNet, d), FromUnits(totalTax, d), FromUnits(totalNet + totalTax, d));
+        var byTax = totals.OrderBy(t => t.Value.Tax.Priority).ThenBy(t => t.Key.Tax).ThenBy(t => (short)t.Key.Treatment).ThenBy(t => t.Key.Rate)
+            .Select(t => new TaxTotal(t.Key.Tax, t.Value.Tax.Code, t.Key.Treatment, t.Key.Rate, FromUnits(t.Value.Base, d), FromUnits(t.Value.Amount, d))).ToList();
+        return new(lineResults.AsReadOnly(), byTax.AsReadOnly(), FromUnits(totalNet, d), FromUnits(totalTax, d), FromUnits(totalNet + totalTax, d));
     }
 }
