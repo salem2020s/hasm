@@ -1,6 +1,6 @@
 import { ApiError, type PartyProposal, type PartyProposalSummary, type SharedIdentity } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, Field, Loading, PageHeader } from "../components";
 
@@ -33,6 +33,7 @@ export function PartyApprovalsPage() {
   const [status, setStatus] = useState<"" | "1" | "2" | "3">("1");
   const [rows, setRows] = useState<PartyProposalSummary[] | null>(null);
   const [offset, setOffset] = useState(0);
+  const seq = useRef(0);
   const [total, setTotal] = useState(0);
   const [open, setOpen] = useState<PartyProposal | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +47,14 @@ export function PartyApprovalsPage() {
   const admin = !!auth.user?.isIdentityAdministrator;
   const load = useCallback(async () => {
     if (!admin) return;
-    try { const page = await auth.api.listPartyProposals(status ? (Number(status) as 1 | 2 | 3) : undefined, offset, PAGE); setRows(page.proposals); setTotal(page.total); setError(null); }
+    const mine = ++seq.current;
+    try {
+      const page = await auth.api.listPartyProposals(status ? (Number(status) as 1 | 2 | 3) : undefined, offset, PAGE);
+      if (mine !== seq.current) return;                                   // a slower, older response never overwrites a newer one
+      const last = Math.max(0, Math.floor((page.total - 1) / PAGE) * PAGE);
+      if (offset > last) { setOffset(last); return; }                     // the page emptied (the last row was decided): step back
+      setRows(page.proposals); setTotal(page.total); setError(null);
+    }
     catch (e) { if (!auth.handleError(e)) setError(errText(e)); }
   }, [auth.api, auth.handleError, status, offset, errText, admin]);
   useEffect(() => { void load(); }, [load]);

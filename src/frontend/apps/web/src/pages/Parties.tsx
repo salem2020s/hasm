@@ -156,7 +156,10 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
   const [baseIdentity, setBaseIdentity] = useState(() => snapIdentity(form));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [conflict, setConflict] = useState(false);
+  const [conflict, setConflict] = useState<null | "local" | "shared">(null);
+  // the shared identity revision the user was LOOKING AT: set only when the identity was loaded for display, never by a local Save reload
+  const [viewedRevision, setViewedRevision] = useState<number | undefined>(undefined);
+  const [identityStale, setIdentityStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
 
@@ -169,17 +172,21 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
       const identity: IdentityForm = i ? { kind: String(i.kind), legalNameAr: i.legalNameAr, legalNameEn: i.legalNameEn ?? "", taxNumber: i.taxNumber ?? "", registrationNumber: i.registrationNumber ?? "", status: String(i.status), note: "" } : emptyIdentity;
       const fresh: Form = { code: d.code, displayName: d.displayName, notes: d.notes ?? "", isActive: d.isActive, identity };
       setDoc(d);
+      if (scope !== "local") { setViewedRevision(i?.revision); setIdentityStale(false); }
+      else setIdentityStale(i?.revision !== viewedRevisionRef.current);
       setForm((cur) => ({
         ...(scope === "identity" ? { code: cur.code, displayName: cur.displayName, notes: cur.notes, isActive: cur.isActive } : { code: fresh.code, displayName: fresh.displayName, notes: fresh.notes, isActive: fresh.isActive }),
         identity: scope === "local" ? cur.identity : identity,
       }));
       if (scope !== "identity") setBaseLocal(snapLocal(fresh));
       if (scope !== "local") setBaseIdentity(snapIdentity(fresh));
-      setErrors({}); setConflict(false); setLoading(false);
+      setErrors({}); setConflict(null); setLoading(false);
     } catch (e) { if (!auth.handleError(e)) { setError(errText(e)); setLoading(false); } }
   }, [auth.api, auth.handleError, editor, errText]);
   useEffect(() => { void load("all"); }, [load]);
 
+  const viewedRevisionRef = useRef<number | undefined>(undefined);
+  viewedRevisionRef.current = viewedRevision;
   const dirtyLocal = snapLocal(form) !== baseLocal;
   const dirtyIdentity = snapIdentity(form) !== baseIdentity;
   const dirty = dirtyLocal || dirtyIdentity;
@@ -191,7 +198,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
 
   function showServerError(err: unknown) {
     if (auth.handleError(err)) return;
-    if (err instanceof ApiError && err.status === 412) { setConflict(true); return; }
+    if (err instanceof ApiError && err.status === 412) { setConflict(err.code === "shared_revision_conflict" ? "shared" : "local"); return; }
     if (err instanceof ApiError && err.status === 400) {
       const out: Record<string, string> = {};
       // a proposal reports bare identity field names; the form keys them under "identity."
@@ -215,7 +222,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
     if (isNew && !form.identity.legalNameAr.trim()) v["identity.legalNameAr"] = t("field.required");
     setErrors(v);
     if (Object.keys(v).length) { setError(t("form.fix_errors")); const first = (["details", "identity"] as const).find((id) => Object.keys(v).some((k) => tabOf(k) === id)); if (first) setTab(first); return; }
-    setBusy(true); setError(null); setConflict(false);
+    setBusy(true); setError(null); setConflict(null);
     try {
       if (editor.mode === "new") { const d = await auth.api.createParty(localInput()); setBaseLocal(snapLocal(form)); setBaseIdentity(snapIdentity(form)); onChanged(t("pty.created")); onSwitch(d.id); }
       else { await auth.api.updateParty(editor.id, localInput(), doc!.revision); onChanged(t("pty.saved")); await load("local"); }
@@ -224,8 +231,8 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
 
   async function propose() {
     if (!doc) return;
-    setBusy(true); setError(null); setConflict(false);
-    try { await auth.api.proposeParty(doc.id, identityInput(form.identity, change, doc.identity?.revision), doc.revision); onChanged(t("pty.proposed")); await load("identity"); }
+    setBusy(true); setError(null); setConflict(null);
+    try { await auth.api.proposeParty(doc.id, identityInput(form.identity, change, viewedRevision), doc.revision); onChanged(t("pty.proposed")); await load("identity"); }
     catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
@@ -277,7 +284,9 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
         actions={doc && <span className={`chip ${doc.linkState === 2 ? "chip-ok" : doc.linkState === 3 ? "chip-off" : ""}`} data-testid="pty-link">{t(`pty.link.${doc.linkState}`)}</span>} />
       <Banner kind="info">{t("pty.isolation_note")}</Banner>
       {doc?.registryUnavailable && <Banner kind="warning" testId="pty-registry-down">{t("pty.registry_unavailable")}</Banner>}
-      {conflict && <Banner kind="error" testId="form-conflict">{t("pty.error.revision_conflict")} <button type="button" onClick={() => void load("all")}>{t("form.reload_latest")}</button></Banner>}
+      {conflict === "local" && <Banner kind="error" testId="form-conflict">{t("pty.error.revision_conflict")} <button type="button" onClick={() => void load("local")}>{t("form.reload_latest")}</button></Banner>}
+      {conflict === "shared" && <Banner kind="error" testId="form-conflict-shared">{t("pty.error.shared_revision_conflict")} <button type="button" onClick={() => void load("identity")}>{t("pty.reload_identity")}</button></Banner>}
+      {identityStale && !conflict && dirtyIdentity && <Banner kind="warning" testId="pty-identity-stale">{t("pty.identity_changed_elsewhere")} <button type="button" onClick={() => void load("identity")}>{t("pty.reload_identity")}</button></Banner>}
       {error && <Banner kind="error" testId="form-error">{error}</Banner>}
       <form onSubmit={save} noValidate>
         <Tabs label={t("pty.tabs_label")} tabs={tabs} value={activeTab} onChange={setTab} testId="pty-tabs" />

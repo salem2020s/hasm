@@ -96,6 +96,23 @@ describe("parties", () => {
     await waitFor(() => expect(client.proposeParty).toHaveBeenCalledWith("p1", expect.objectContaining({ viewedSharedRevision: 1 }), 3));
   });
 
+  it("never lets a local Save adopt a newer shared revision: the proposal still names the revision the user viewed and a notice appears", async () => {
+    const newer = party({ identity: { globalPartyId: "g1", kind: 1, legalNameAr: "شركة النور", legalNameEn: "Al Noor", taxNumber: "300-111", registrationNumber: null, status: 1, revision: 2 } });
+    const client = setup({ getParty: vi.fn().mockResolvedValueOnce(party()).mockResolvedValue(newer) });
+    await go("#/company/parties");
+    await userEvent.click(within(await screen.findByTestId("pty-p1")).getByRole("button", { name: "عرض" }));
+    await screen.findByTestId("pty-editor");
+    await userEvent.click(tab("الهوية المشتركة"));
+    await userEvent.type(screen.getByLabelText(/^مبرر الاقتراح/), "تحديث");
+    await userEvent.click(tab("البيانات المحلية"));
+    await userEvent.type(screen.getByLabelText(/^ملاحظات/), "ملاحظة");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));                                     // reloads r2 behind the user's back
+    expect(await screen.findByTestId("pty-identity-stale")).toBeInTheDocument();
+    await userEvent.click(tab("الهوية المشتركة"));
+    await userEvent.click(screen.getByTestId("pty-propose"));
+    await waitFor(() => expect(client.proposeParty).toHaveBeenCalledWith("p1", expect.objectContaining({ viewedSharedRevision: 1 }), expect.any(Number)));
+  });
+
   it("keeps unrelated edits and shows a per-tab unsaved marker: Save refreshes only the local data, Propose only the identity", async () => {
     const client = setup();
     await go("#/company/parties");
@@ -179,6 +196,25 @@ describe("party approvals", () => {
     expect(within(screen.getByTestId("ppa-pager")).getByRole("button", { name: "السابق" })).toBeDisabled();
     await userEvent.click(within(screen.getByTestId("ppa-pager")).getByRole("button", { name: "التالي" }));
     await waitFor(() => expect(listPartyProposals).toHaveBeenLastCalledWith(1, 25, 25));
+    // changing the status filter returns to the first page
+    await userEvent.selectOptions(screen.getByLabelText(/^الحالة/), "");
+    await waitFor(() => expect(listPartyProposals).toHaveBeenLastCalledWith(undefined, 0, 25));
+  });
+
+  it("steps back when the last row of a later page was decided and the page emptied", async () => {
+    let emptied = false;                                                                                      // the queue shrinks to 25 once the later page was served empty
+    const listPartyProposals = vi.fn().mockImplementation(async (_status: unknown, offset: number) => {
+      if (offset === 25) { emptied = true; return { proposals: [], total: 25 }; }
+      return { proposals: [proposal()], total: emptied ? 25 : 60 };
+    });
+    setup({ listPartyProposals }, caps(), ADMIN);
+    await go("#/admin/party-proposals");
+    await screen.findByTestId("ppa-pp1");
+    await userEvent.click(within(screen.getByTestId("ppa-pager")).getByRole("button", { name: "التالي" }));
+    await waitFor(() => expect(listPartyProposals).toHaveBeenCalledWith(1, 25, 25));
+    await waitFor(() => expect(listPartyProposals).toHaveBeenLastCalledWith(1, 0, 25));                    // clamped back to the last existing page
+    expect(await screen.findByTestId("ppa-pp1")).toBeInTheDocument();
+    expect(screen.getByTestId("ppa-pager")).toHaveTextContent("1–1 من 25");
   });
 
   it("links a proposal to an existing identity or approves it as new", async () => {

@@ -428,6 +428,12 @@ public class PartyApiTests : PartyTestBase
         // the shared identity exposes identifying data only: no balance, company list or other company's data
         Assert.Equal(["globalPartyId", "kind", "legalNameAr", "legalNameEn", "registrationNumber", "revision", "status", "taxNumber"], identity.EnumerateObject().Select(x => x.Name).Order());
         Assert.DoesNotContain("balance", read.Body, StringComparison.OrdinalIgnoreCase);
+        // a CHANGE must name the shared revision the user viewed: absent -> 428 shared_revision_required, stale -> 412 shared_revision_conflict naming the CURRENT SHARED revision
+        var local = Etag(read);
+        var missing = await Send(HttpMethod.Post, $"/api/v1/company/parties/{id}/propose", new { kind = 1, legalNameAr = "تغيير", status = 1 }, cookie, ifMatch: local);
+        Assert.Equal((HttpStatusCode.PreconditionRequired, "shared_revision_required"), (missing.Status, missing.Json.GetProperty("error").GetString()));
+        var outdated = await Send(HttpMethod.Post, $"/api/v1/company/parties/{id}/propose", new { kind = 1, legalNameAr = "تغيير", status = 1, viewedSharedRevision = 9 }, cookie, ifMatch: local);
+        Assert.Equal((HttpStatusCode.PreconditionFailed, "shared_revision_conflict", 1), (outdated.Status, outdated.Json.GetProperty("error").GetString(), outdated.Json.GetProperty("currentSharedRevision").GetInt32()));
         var list = await Send(HttpMethod.Get, "/api/v1/company/parties?search=API", cookie: cookie);
         Assert.Equal(1, list.Json.GetProperty("total").GetInt32());
         var rec = await Send(HttpMethod.Post, "/api/v1/company/parties/reconcile?repair=false", null, cookie);
