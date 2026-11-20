@@ -24,25 +24,31 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 
 Migrations on `main`: **company 0001-0026, system 0001-0027** (contiguous). PostgreSQL registry: 1022 tests on `main` (1025 on the 3.11 slice 2c branch) (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0027, system 0028. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0027 / system 0028 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
 
-## Cloud team handoff (2026-11-20, lead = Claude Cloud; recover from here after a reset or usage limit)
+## Cloud team handoff (reconciled 2026-11-20 22:40 UTC against GitHub; lead = Claude Cloud; recover from here after a reset or usage limit)
 
-Local CLI handed leadership to the cloud lead after PR #69 (merge `3bbf66a`). No PR below is merged; every one needs: independent full-diff review of the EXACT head recorded in `docs/review-records/`, all required checks green on that head (REST check-runs; GraphQL is blocked in the cloud), merge with the head SHA pinned. Cloud sandbox has no .NET SDK: CI is the compiler, so push early and fix from job logs.
+`main` = `3bbf66a` (PR #69 merged; leadership passed from the local CLI to the cloud lead). The cloud sandbox has no .NET SDK, so CI is the compiler. GitHub GraphQL is blocked there, so `gh pr view`-based tooling fails: exact-head verification is done by running the UNMODIFIED `main` copy of `tools/verify/verify-head.js` with `--input` built from REST data (PR files and check-runs of the exact head SHA, GitHub Actions app id), and merges use the REST merge endpoint with the head SHA pinned. No PR below is merged yet. Every merge needs the Autonomous merge policy gates on the exact head: independent full-diff review recorded for that head, `verify-head` green, mergeable, no Critical/High.
 
-| Agent | Task | Branch / PR | Next step |
-|-------|------|-------------|-----------|
-| A | 3.11 customer groups (company 0027, no system migration) | `feature/phase-3-11-customer-groups`, #75 | finish service/API/screens/tests; address C's schema review (new generated name for the tie index, service-side customer-role and active-group checks, 0027 `--check` CI step, server-derived group in quotes) |
-| B | 4.3 backup/restore (no migration) | `feature/phase-4-3-backup-restore`, #70 | CI on `4c95366`; pg_dump/restore coordination; import-file keys (covered or documented); re-review by C |
-| C | independent QA/review | `docs/qa-release1-test-plan`, #71 (docs) | review final heads of #72, #74, #73, #70, #75 |
-| D | 4.1 TOTP primitive (#72) and backend follow-ups (#74) | `feature/phase-4-1-identity` `6a8df7c`, `feature/backend-followups-1` `eb0106d` | CI, then C re-review of those heads; refresh review records to the final heads |
-| E | frontend follow-ups | `feature/frontend-followups-1`, #73 | apply C's Medium fixes and the Arabic wording decision in one push; then review record |
+| PR | Branch (owner agent) | Head | CI on that head | Remaining before merge |
+|----|----------------------|------|-----------------|------------------------|
+| #72 | `feature/phase-4-1-identity` (D) | `6a8df7c` | all required green (verify-head) | independent review of this head (C), review record names it |
+| #74 | `feature/backend-followups-1` (D) | `85feef1` | all green (an earlier head failed with a compile error, fixed) | same |
+| #73 | `feature/frontend-followups-1` (E) | `0ea1522` | green | same; owner-decided Arabic wording is APPLIED (commit `0ea1522`), pending review of the head |
+| #70 | `feature/phase-4-3-backup-restore` (B) | `ca6a45f` | green | same |
+| #75 | `feature/phase-3-11-customer-groups` (A) | `03d530b` | backend-build-test and postgres-integration FAILING | agent A fixing; company migration 0027 |
+| #71 | `docs/qa-release1-test-plan` (C) | `2d11cd7` | docs only | review, merge |
+| #76 | `docs/handoff-cloud-team` (lead) | this file | docs only | review, merge |
 
-Migration reservations: company 0027 = A (confirmed); company 0028 unassigned; system 0028 reserved for 4.1 enrolment (needs owner decisions below). Shared `backend.yml` PostgreSQL registry: each PR raises it by its own new test count; the lead recomputes after each merge (raise-only).
+Agent C (independent QA/review) reviews the final head of each PR, read-only. Migration reservations: company 0027 = #75 (A, confirmed); company 0028 unassigned; system 0028 reserved for Phase 4.1 enrolment (blocked by the decisions below). The shared `backend.yml` PostgreSQL registry is raised per PR by its own new test count (#74 takes 1025 to 1029); the lead recomputes it after each merge (raise-only) and merges `main` into the remaining branches.
 
-Owner decisions recorded: **Arabic label for retiring an import template = "إيقاف استخدام القالب"** (owner, PR #73). OPEN (owner, Phase 4.1; fail-closed, nothing implemented beyond the TOTP primitive): (1) MFA enforcement scope and whether it can be disabled; (2) key protecting TOTP secrets (file-encryption ring or a dedicated key); (3) lost-authenticator recovery (recovery codes vs administrative reset) and its audit/approval; (4) emergency account (creation, use, custody, alerting, relation to MFA); (5) second approval (which operations, approver, expiry); (6) optional AD/Kerberos (environment, no test infrastructure).
+Superseded or inert (do not merge, do not reopen): #51 and #55 (security proposals) are SUPERSEDED by the merged, owner-approved #61 (merge `215da56`); #62 is validation only. #48 (`feature/phase-3-8d-impact-preview`, head `1e8f477`) stays BLOCKED on owner decisions X1-X8, implementation preserved, no execution; any migration it adds is numbered from the next free numbers on rebase.
 
-Review findings still to close: #74 (gate/deadline/memory/tests fixed in `eb0106d`, re-review pending; 403 to 404 and the 100 MB cap are behaviour changes); #72 (CAS replay, throttling, key-ring storage tests required by the enforcement slice); #73 (SearchPicker reload/a11y; PR-69 M2 pricing pickers NOT closed until a screen adopts SearchPicker); #70 (company-id bound on restore fixed; import-file keys); #75 (see above). Pricing follow-ups recorded: quote must not trust client `itemGroupId`/`unitCost` when 3.13 seals documents; customer/unit/group pickers lack truncation notices.
+Owner decisions recorded: Arabic label for retiring an import template = "إيقاف استخدام القالب" (applied in #73). OPEN, Phase 4.1 (fail-closed; only the TOTP primitive exists): (1) MFA enforcement scope and whether it can be disabled; (2) key protecting TOTP secrets; (3) lost-authenticator recovery and its audit; (4) emergency account (creation, use, custody, alerting, relation to MFA); (5) second approval (operations, approver, expiry); (6) optional AD/Kerberos.
 
-Next after merges (approved, unblocked): A pricing follow-ups then 3.13 once 3.11 is complete; B import-file rewrap retirability report, then 4.4 (needs 4.3); D backend follow-ups; E adopt SearchPicker on non-pricing screens when a screen needs it. Blocked: 3.8C (OD-11), 3.8D (X1-X8), 4.1 enforcement (above).
+Known behaviour changes in #74 (reversible, flagged): attachment size ceiling 512 MB to 100 MB; a caller who cannot see an attachment's owning record gets 404 instead of 403; uploads beyond the gate get 503 `upload_busy`/408 `upload_timeout`.
+
+Recorded follow-ups: quote must not trust client `itemGroupId`/`unitCost` when 3.13 seals documents; pricing customer/unit/group pickers lack truncation notices and PR-69 M2 stays open until a screen adopts the shared `SearchPicker`; enforcement slice of 4.1 must have CAS replay, throttling/lockout, key-ring secret and no-URI-logging tests.
+
+Next tasks after merges (approved, unblocked): A pricing follow-ups, then 3.13 once 3.11 is complete; B import-file rewrap retirability report, then 4.4 (needs 4.3); D further backend follow-ups; E adopt `SearchPicker` where a non-pricing screen needs it. Blocked: 3.8C (OD-11), 3.8D (X1-X8), 4.1 enforcement.
 
 ## Open pull requests
 
