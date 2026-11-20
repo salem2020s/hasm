@@ -14,8 +14,8 @@ public class SystemDatabaseTests : PostgresTestBase
     {
         var result = await Init();
         Assert.True(result.DatabaseCreated);
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], result.AppliedMigrations);
-        Assert.Equal(26L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], result.AppliedMigrations);
+        Assert.Equal(27L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
@@ -28,17 +28,17 @@ public class SystemDatabaseTests : PostgresTestBase
 
         Assert.False(second.DatabaseCreated);
         Assert.Empty(second.AppliedMigrations);
-        Assert.Equal(26, second.AlreadyApplied);
+        Assert.Equal(27, second.AlreadyApplied);
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table}")); // data preserved
-        Assert.Equal(26L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(27L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
     public async Task Concurrent_initializations_apply_each_migration_once()
     {
         var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Init()));
-        Assert.Equal(26, results.Sum(r => r.AppliedMigrations.Count)); // each migration applied exactly once overall
-        Assert.Equal(26L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(27, results.Sum(r => r.AppliedMigrations.Count)); // each migration applied exactly once overall
+        Assert.Equal(27L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
@@ -83,7 +83,7 @@ public class SystemDatabaseTests : PostgresTestBase
         await Assert.ThrowsAsync<PostgresException>(() => runner.ApplyAsync(scripts));
 
         Assert.Equal(0L, await Scalar<long>("SELECT count(*) FROM information_schema.tables WHERE table_name='zz_partial'"));
-        Assert.Equal(26L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(27L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]
