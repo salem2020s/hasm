@@ -36,12 +36,26 @@ public class BackupRestoreDrillTests : PostgresTestBase
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task<string> Digest(string name)
+    private Task<string> Digest(string name) => DigestOf(Options.BuildCompanyAdminConnectionString(name));
+
+    private string SystemConnection() => new NpgsqlConnectionStringBuilder(Options.BuildMaintenanceConnectionString()) { Database = Options.SystemDatabaseName }.ConnectionString;
+
+    /// <summary>A catalog and content digest: every public table with its exact row count and a hash of its rows, so any change to tables or data shows.</summary>
+    private static async Task<string> DigestOf(string connectionString)
     {
-        await using var conn = new NpgsqlConnection(Options.BuildCompanyAdminConnectionString(name));
+        await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT coalesce(string_agg(id::text || ':' || v, ',' ORDER BY id), '') FROM t", conn);
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes((string)(await cmd.ExecuteScalarAsync())!)));
+        var tables = new List<string>();
+        await using (var list = new NpgsqlCommand("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY 1", conn))
+        await using (var r = await list.ExecuteReaderAsync()) while (await r.ReadAsync()) tables.Add(r.GetString(0));
+        var sb = new StringBuilder();
+        foreach (var table in tables)
+        {
+            var q = new NpgsqlCommandBuilder().QuoteIdentifier(table);
+            await using var cmd = new NpgsqlCommand($"SELECT count(*)::text || ':' || coalesce(md5(string_agg(x::text, ',' ORDER BY x::text)), '') FROM {q} x", conn);
+            sb.Append(table).Append('=').Append((string)(await cmd.ExecuteScalarAsync())!).Append(';');
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
     private async Task<bool> Exists(string name)
@@ -58,10 +72,18 @@ public class BackupRestoreDrillTests : PostgresTestBase
     {
         Directory.CreateDirectory(work);
         string a = NewTestName(), b = NewTestName(), restored = NewTestName();
-        await CreateDatabase(a); await CreateDatabase(b); await CreateDatabase(Options.SystemDatabaseName!);
-        await Seed(a, "a"); await Seed(b, "b");
         var system = Options.SystemDatabaseName!;
+        await CreateDatabase(a); await CreateDatabase(b); await CreateDatabase(system);
+        await Seed(a, "a"); await Seed(b, "b");
+        await using (var sys = new NpgsqlConnection(SystemConnection()))
+        {
+            await sys.OpenAsync();
+            await using var cmd = new NpgsqlCommand("CREATE TABLE registry_witness (id int PRIMARY KEY); INSERT INTO registry_witness VALUES (1), (2), (3)", sys);
+            await cmd.ExecuteNonQueryAsync();
+        }
         var digestB = await Digest(b);
+        var digestSystem = await DigestOf(SystemConnection());
+        var digestA = await Digest(a);
 
         var company = Guid.NewGuid();
         var att = Path.Combine(work, "att", company.ToString("N")); Directory.CreateDirectory(att);
@@ -81,9 +103,10 @@ public class BackupRestoreDrillTests : PostgresTestBase
         var files = BackupSet.RestoreAttachments(set, Path.Combine(work, "restored-att", company.ToString("N")), company);
 
         Assert.Equal(2, files.Files);
-        Assert.Equal(await Digest(a), await Digest(restored));                                       // the restored copy equals the source
-        Assert.Equal(digestB, await Digest(b));                                                      // another company untouched
-        Assert.True(await Exists(system));                                                           // the system database is still there and was never a target
+        Assert.Equal(digestA, await Digest(restored));                                               // the restored copy equals the source
+        Assert.Equal(digestA, await Digest(a));                                                      // the dump left the source unchanged
+        Assert.Equal(digestB, await Digest(b));                                                      // another company untouched (tables, row counts and row hashes)
+        Assert.Equal(digestSystem, await DigestOf(SystemConnection()));                              // the system database untouched
         Assert.Equal(50L, await Count(restored));
     }
 
@@ -109,7 +132,9 @@ public class BackupRestoreDrillTests : PostgresTestBase
         Assert.Equal("target_exists", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(dump, existing, a))).Code);
         Assert.Equal("target_is_source", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(dump, a, a))).Code);
         Assert.Equal("not_a_company_database", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(dump, Options.SystemDatabaseName!, a))).Code);
-        Assert.Equal("not_a_company_database", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(dump, "postgres", a))).Code);
+        foreach (var builtIn in new[] { "postgres", "template0", "template1", Options.MaintenanceDatabase })
+            Assert.Equal("not_a_company_database", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(dump, builtIn, a))).Code);
+        Assert.Equal("path_not_absolute", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync("relative.dump", fresh, a))).Code);
         Assert.Equal(digestExisting, await Digest(existing));                                        // the refused target was not modified
 
         var garbage = Path.Combine(work, "garbage.dump");

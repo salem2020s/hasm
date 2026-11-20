@@ -281,8 +281,12 @@ public static class BackupSet
         {
             cur = cur + Path.DirectorySeparatorChar + part;
             FileSystemInfo info = Directory.Exists(cur) ? new DirectoryInfo(cur) : new FileInfo(cur);
-            if (info.Exists && info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
-                cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
+            try
+            {
+                if (info.Exists && info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
+                    cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (IOException) { throw new BackupException("path_unresolvable"); }   // for example a cyclic symbolic link
         }
         return cur;
     }

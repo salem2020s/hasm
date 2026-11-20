@@ -109,6 +109,16 @@ jobs:
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
           echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
 
+      - name: PostgreSQL client tools match the server major version (restore drill)
+        run: |
+          set -euo pipefail
+          SERVER_MAJOR="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SHOW server_version_num" | cut -c1-2)"
+          for tool in pg_dump pg_restore; do
+            CLIENT_MAJOR="$("${tool}" --version | grep -oE '[0-9]+' | head -1)"
+            echo "${tool} major ${CLIENT_MAJOR}, server major ${SERVER_MAJOR}"
+            [ "${CLIENT_MAJOR}" = "${SERVER_MAJOR}" ] || { echo "::error::${tool} major version does not match the server (the restore drill needs matching tools)"; exit 1; }
+          done
+
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
 
