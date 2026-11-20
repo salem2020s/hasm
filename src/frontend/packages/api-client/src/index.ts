@@ -493,16 +493,22 @@ export interface TaxResolution { policyVersion: number; policy: { moneyDecimals:
 export interface PricingPolicy { version: number; isDefault: boolean; priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number; createdAtUtc: string | null }
 export interface PricingPolicyResponse { policy: PricingPolicy; can: { configure: boolean } }
 export interface PricingPolicyInput { priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number }
-export interface PriceList { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; currency: string; validFrom: string; validTo: string | null; isActive: boolean; customerId: string | null; revision: number; updatedAtUtc: string }
+export interface PriceList { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; currency: string; validFrom: string; validTo: string | null; isActive: boolean; customerId: string | null; customerGroupId?: string | null; revision: number; updatedAtUtc: string }
 export interface PriceListsResponse { priceLists: PriceList[]; can: { configure: boolean } }
-export interface PriceListInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; currency?: string; validFrom: string; validTo?: string | null; isActive?: boolean; customerId?: string | null }
+export interface PriceListInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; currency?: string; validFrom: string; validTo?: string | null; isActive?: boolean; customerId?: string | null; customerGroupId?: string | null }
 export interface PriceEntry { id: string; priceListId: string; itemId: string | null; itemGroupId: string | null; unitId: string; minQuantity: number; unitPrice: number; isActive: boolean; revision: number; updatedAtUtc: string }
 export interface PriceEntriesResponse { entries: PriceEntry[]; can: { configure: boolean } }
 export interface PriceEntryInput { itemId?: string | null; itemGroupId?: string | null; unitId?: string; minQuantity?: number; unitPrice: number; isActive?: boolean }
-export interface DiscountRule { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; validFrom: string; validTo: string | null; isActive: boolean; percent: number; minQuantity: number; customerId: string | null; itemId: string | null; itemGroupId: string | null; revision: number; updatedAtUtc: string }
+export interface DiscountRule { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; validFrom: string; validTo: string | null; isActive: boolean; percent: number; minQuantity: number; customerId: string | null; customerGroupId?: string | null; itemId: string | null; itemGroupId: string | null; revision: number; updatedAtUtc: string }
 export interface DiscountRulesResponse { discounts: DiscountRule[]; can: { configure: boolean } }
-export interface DiscountRuleInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; validFrom: string; validTo?: string | null; isActive?: boolean; percent: number; minQuantity?: number; customerId?: string | null; itemId?: string | null; itemGroupId?: string | null }
+export interface DiscountRuleInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; validFrom: string; validTo?: string | null; isActive?: boolean; percent: number; minQuantity?: number; customerId?: string | null; customerGroupId?: string | null; itemId?: string | null; itemGroupId?: string | null }
 export interface PricingQuoteRequest { date: string; currency: string; itemId: string; itemGroupId?: string | null; unitId: string; quantity: number; customerId?: string | null; unitCost?: number | null; override?: { unitPrice?: number | null; discountPercent?: number | null; reason: string } | null }
+// Customer groups (company migration 0027). A customer belongs to at most one group; the assignment revision 0 means never assigned.
+export interface CustomerGroup { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string }
+export interface CustomerGroupsResponse { customerGroups: CustomerGroup[]; can: { configure: boolean } }
+export interface CustomerGroupInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface CustomerGroupAssignment { partyId: string; partyCode: string; partyName: string; customerGroupId: string | null; customerGroupCode: string | null; revision: number }
+export interface CustomerGroupAssignmentsResponse { assignments: CustomerGroupAssignment[]; can: { configure: boolean } }
 export interface PricingTraceStep { kind: string; ruleRef: string; outcome: string }
 export interface PricingQuote {
   version: string; contentHash: string;
@@ -1208,6 +1214,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listDiscountRules: () => get<DiscountRulesResponse>("/api/v1/company/pricing/discounts"),
     createDiscountRule: (d: DiscountRuleInput) => request<DiscountRule>("POST", "/api/v1/company/pricing/discounts", { body: d }),
     updateDiscountRule: (id: string, d: DiscountRuleInput, revision: number) => request<DiscountRule>("PUT", `/api/v1/company/pricing/discounts/${enc(id)}`, { body: d, ifMatch: revision }),
+    listCustomerGroups: () => get<CustomerGroupsResponse>("/api/v1/company/pricing/customer-groups"),
+    createCustomerGroup: (g: CustomerGroupInput) => request<CustomerGroup>("POST", "/api/v1/company/pricing/customer-groups", { body: g }),
+    updateCustomerGroup: (id: string, g: CustomerGroupInput, revision: number) => request<CustomerGroup>("PUT", `/api/v1/company/pricing/customer-groups/${enc(id)}`, { body: g, ifMatch: revision }),
+    listCustomerGroupAssignments: () => get<CustomerGroupAssignmentsResponse>("/api/v1/company/pricing/customer-assignments"),
+    setCustomerGroupAssignment: (partyId: string, customerGroupId: string | null, revision: number) => request<CustomerGroupAssignment>("PUT", `/api/v1/company/pricing/customer-assignments/${enc(partyId)}`, { body: { customerGroupId }, ifMatch: revision }),
     quotePrice: (q: PricingQuoteRequest) => request<PricingQuote>("POST", "/api/v1/company/pricing/quote", { body: q }),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),

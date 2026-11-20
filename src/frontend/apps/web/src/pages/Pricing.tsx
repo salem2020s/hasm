@@ -1,4 +1,4 @@
-import type { DiscountRule, DiscountRulesResponse, InventoryGroup, InventoryItem, InventoryUnit, PartyRole, PriceEntry, PriceList, PriceListsResponse, PricingPolicyResponse, PricingQuote } from "@hasm/api-client";
+import type { CustomerGroup, CustomerGroupAssignment, DiscountRule, DiscountRulesResponse, InventoryGroup, InventoryItem, InventoryUnit, PartyRole, PriceEntry, PriceList, PriceListsResponse, PricingPolicyResponse, PricingQuote } from "@hasm/api-client";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
@@ -11,9 +11,9 @@ import { useReportUnsaved } from "../unsaved";
  * Pricing administration (Phase 3.11 slice 2c): ONE shared screen for Web and Desktop. Tabs by business meaning: the company POLICY (scales, margin control and the configurable precedence of price lists and
  * discounts), the PRICE LISTS with their entries, the DISCOUNT rules, and a QUOTE preview that shows exactly what the engine would price and seal. Everything is enforced by the server and PostgreSQL
  * (revision fences, the policy version fence, append-only history, no deletion, ambiguity and customer-role checks); this screen only shows and submits. Nothing here ever deletes: lists, entries and rules are deactivated.
- * Customer GROUPS are not available yet: there is no customer-group registry (tracked in docs/INTEGRATION-STATUS.md), so scopes are customer, item or item group.
+ * Customer GROUPS (migration 0027): a tab manages the group master and the one-group-per-customer assignment; a price list or discount rule is scoped to a customer OR a group (the two selects exclude each other).
  */
-interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; failed: boolean }
+interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; failed: boolean }
 const PICKER_LIMIT = 500;
 interface Data { policy: PricingPolicyResponse; lists: PriceListsResponse; discounts: DiscountRulesResponse; pickers: Pickers }
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -38,11 +38,12 @@ export function PricingPage() {
       // pickers need the inventory and party-role view permissions: a user without them still sees the configuration (the pickers are then empty)
       let failed = false;
       const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
-      const [units, groups, items, customers] = await Promise.all([
+      const [units, groups, items, customers, customerGroups, assignments] = await Promise.all([
         soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
         soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items)), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
+        soft(auth.api.listCustomerGroups().then((r) => r.customerGroups)), soft(auth.api.listCustomerGroupAssignments().then((r) => r.assignments)),
       ]);
-      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, failed } }); setLoadError(null);
+      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, failed } }); setLoadError(null);
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pricing.error.")); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -53,6 +54,7 @@ export function PricingPage() {
     { id: "policy", label: t("pricing.tab.policy"), dirty: dirty.policy, content: <PolicyTab data={data} configure={configure} reload={load} onDirty={(v) => setTabDirty("policy", v)} /> },
     { id: "lists", label: t("pricing.tab.lists"), dirty: dirty.lists, content: <ListsTab data={data} configure={configure} reload={load} onDirty={(v) => setTabDirty("lists", v)} /> },
     { id: "discounts", label: t("pricing.tab.discounts"), dirty: dirty.discounts, content: <DiscountsTab data={data} configure={configure} reload={load} onDirty={(v) => setTabDirty("discounts", v)} /> },
+    { id: "groups", label: t("pricing.tab.groups"), dirty: dirty.groups, content: <GroupsTab data={data} configure={configure} reload={load} onDirty={(v) => setTabDirty("groups", v)} /> },
     { id: "quote", label: t("pricing.tab.quote"), dirty: dirty.quote, content: <QuoteTab data={data} onDirty={(v) => setTabDirty("quote", v)} /> },
   ];
   return (
@@ -82,11 +84,11 @@ function Notices({ runner, id }: { runner: ReturnType<typeof useRunner>; id: str
 
 const customerName = (p: Pickers, id: string | null, none: string) => (id ? p.customers.find((c) => c.partyId === id)?.partyCode ?? id : none);
 
-function CustomerSelect({ id, value, onChange, pickers, error }: { id: string; value: string; onChange: (v: string) => void; pickers: Pickers; error?: string }) {
+function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id: string; value: string; onChange: (v: string) => void; pickers: Pickers; error?: string; disabled?: boolean }) {
   const { t } = useI18n();
   return (
     <Field id={id} label={t("pricing.customer")} hint={t("pricing.customer_hint")} error={error}>
-      {(a) => <select {...a} value={value} onChange={(e) => onChange(e.target.value)}><option value="">{t("pricing.all_customers")}</option>{pickers.customers.map((c) => <option key={c.partyId} value={c.partyId}>{c.partyCode} — {c.partyName}</option>)}</select>}
+      {(a) => <select {...a} disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)}><option value="">{t("pricing.all_customers")}</option>{pickers.customers.map((c) => <option key={c.partyId} value={c.partyId}>{c.partyCode} — {c.partyName}</option>)}</select>}
     </Field>
   );
 }
@@ -141,11 +143,109 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
 
 const asInput = (l: PriceList, isActive: boolean) => ({ nameAr: l.nameAr, nameEn: l.nameEn, priority: l.priority, validFrom: l.validFrom, validTo: l.validTo, isActive });
 
+const groupName = (p: Pickers, id: string | null | undefined, none: string) => (id ? p.customerGroups.find((g) => g.id === id)?.code ?? id : none);
+
+/** A customer OR a customer group (never both): choosing one disables the other; the server and PostgreSQL enforce it too. */
+function CustomerGroupSelect({ id, value, onChange, pickers, error, disabled }: { id: string; value: string; onChange: (v: string) => void; pickers: Pickers; error?: string; disabled?: boolean }) {
+  const { t, locale } = useI18n();
+  return (
+    <Field id={id} label={t("pricing.customer_group")} hint={t("pricing.customer_group_hint")} error={error}>
+      {(a) => <select {...a} disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)}><option value="">{t("pricing.all_groups")}</option>{pickers.customerGroups.filter((g) => g.isActive).map((g) => <option key={g.id} value={g.id}>{g.code} — {localName(g, locale)}</option>)}</select>}
+    </Field>
+  );
+}
+
+function GroupsTab({ data, configure, reload, onDirty }: TabProps) {
+  const { t, locale } = useI18n();
+  const auth = useAuth();
+  const runner = useRunner("pricing.error.", reload);
+  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "" });
+  const [editing, setEditing] = useState<{ id: string; nameAr: string; nameEn: string } | null>(null);
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const isDirty = form.code !== "" || form.nameAr !== "" || form.nameEn !== "" || editing !== null || Object.keys(picked).length > 0;
+  useReportUnsaved("pricing-groups", isDirty, t("pricing.tab.groups"));
+  useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function create() {
+    const done = await runner.run(() => auth.api.createCustomerGroup({ code: form.code, nameAr: form.nameAr, nameEn: blank(form.nameEn) }), t("pricing.saved"));
+    if (done) setForm({ code: "", nameAr: "", nameEn: "" });
+  }
+  async function saveNames() {
+    if (!editing) return;
+    const g = data.pickers.customerGroups.find((x) => x.id === editing.id);
+    if (!g) return;
+    const done = await runner.run(() => auth.api.updateCustomerGroup(g.id, { nameAr: editing.nameAr, nameEn: blank(editing.nameEn), isActive: g.isActive }, g.revision), t("pricing.saved"));
+    if (done) setEditing(null);
+  }
+  const toggle = (g: CustomerGroup) => void runner.run(() => auth.api.updateCustomerGroup(g.id, { nameAr: g.nameAr, nameEn: g.nameEn, isActive: !g.isActive }, g.revision), t("pricing.saved"));
+  async function assign(a: CustomerGroupAssignment) {
+    const value = picked[a.partyId] ?? (a.customerGroupId ?? "");
+    const done = await runner.run(() => auth.api.setCustomerGroupAssignment(a.partyId, value === "" ? null : value, a.revision), t("pricing.saved"));
+    if (done) setPicked(({ [a.partyId]: _drop, ...rest }) => rest);
+  }
+  return (
+    <div data-testid="pricing-tab-groups">
+      <Notices runner={runner} id="pricing-groups" />
+      <p className="hint">{t("pricing.groups.hint")}</p>
+      {data.pickers.customerGroups.length === 0 ? <p data-testid="pricing-groups-empty">{t("pricing.groups.empty")}</p> : (
+        <table className="table" data-testid="pricing-groups-table" aria-label={t("pricing.groups.list_label")}>
+          <thead><tr><th>{t("pricing.code")}</th><th>{t("pricing.name_ar")}</th><th>{t("pricing.name_en")}</th><th>{t("pricing.status")}</th><th>{t("pricing.actions")}</th></tr></thead>
+          <tbody>
+            {data.pickers.customerGroups.map((g) => (
+              <tr key={g.id} data-testid={`pricing-group-${g.code}`}>
+                <td><bdi dir="ltr">{g.code}</bdi></td>
+                <td>{editing?.id === g.id ? <input aria-label={t("pricing.name_ar")} value={editing.nameAr} onChange={(e) => setEditing({ ...editing, nameAr: e.target.value })} /> : <bdi dir="auto">{g.nameAr}</bdi>}</td>
+                <td>{editing?.id === g.id ? <input aria-label={t("pricing.name_en")} dir="ltr" value={editing.nameEn} onChange={(e) => setEditing({ ...editing, nameEn: e.target.value })} /> : <bdi dir="ltr">{g.nameEn ?? ""}</bdi>}</td>
+                <td>{g.isActive ? t("pricing.active") : t("pricing.inactive")}</td>
+                <td>{configure && (editing?.id === g.id
+                  ? <><button type="button" className="primary" disabled={runner.busy || !editing.nameAr.trim()} onClick={() => void saveNames()}>{t("pricing.save")}</button><button type="button" className="ghost" onClick={() => setEditing(null)}>{t("pricing.cancel")}</button></>
+                  : <><button type="button" className="ghost" onClick={() => setEditing({ id: g.id, nameAr: g.nameAr, nameEn: g.nameEn ?? "" })}>{t("pricing.groups.edit")}</button><button type="button" className="ghost" disabled={runner.busy} onClick={() => toggle(g)}>{g.isActive ? t("pricing.deactivate") : t("pricing.activate")}</button></>)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {configure && (
+        <fieldset disabled={runner.busy} data-testid="pricing-group-create">
+          <legend>{t("pricing.groups.create")}</legend>
+          <Field id="cg-code" label={t("pricing.code")} required error={runner.fields.code}>{(a) => <input {...a} dir="ltr" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />}</Field>
+          <Field id="cg-name-ar" label={t("pricing.name_ar")} required error={runner.fields.nameAr}>{(a) => <input {...a} value={form.nameAr} onChange={(e) => setForm({ ...form, nameAr: e.target.value })} />}</Field>
+          <Field id="cg-name-en" label={t("pricing.name_en")} error={runner.fields.nameEn}>{(a) => <input {...a} dir="ltr" value={form.nameEn} onChange={(e) => setForm({ ...form, nameEn: e.target.value })} />}</Field>
+          <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim()} onClick={() => void create()}>{t("pricing.groups.create")}</button>
+        </fieldset>
+      )}
+      <h3>{t("pricing.groups.assignments")}</h3>
+      <p className="hint">{t("pricing.groups.assignments_hint")}</p>
+      {data.pickers.assignments.length === 0 ? <p data-testid="pricing-assignments-empty">{t("pricing.groups.assignments_empty")}</p> : (
+        <table className="table" data-testid="pricing-assignments-table">
+          <thead><tr><th>{t("pricing.groups.party")}</th><th>{t("pricing.groups.group")}</th><th>{t("pricing.actions")}</th></tr></thead>
+          <tbody>
+            {data.pickers.assignments.map((a) => {
+              const value = picked[a.partyId] ?? (a.customerGroupId ?? "");
+              return (
+                <tr key={a.partyId} data-testid={`pricing-assignment-${a.partyCode}`}>
+                  <td><bdi dir="auto">{a.partyCode} — {a.partyName}</bdi></td>
+                  <td>{configure
+                    ? <select aria-label={`${t("pricing.groups.group")} ${a.partyCode}`} value={value} disabled={runner.busy} onChange={(e) => setPicked({ ...picked, [a.partyId]: e.target.value })}>
+                        <option value="">{t("pricing.groups.none")}</option>
+                        {data.pickers.customerGroups.filter((g) => g.isActive || g.id === a.customerGroupId).map((g) => <option key={g.id} value={g.id}>{g.code} — {localName(g, locale)}</option>)}
+                      </select>
+                    : <bdi dir="ltr">{a.customerGroupCode ?? t("pricing.groups.none")}</bdi>}</td>
+                  <td>{configure && <button type="button" className="ghost" disabled={runner.busy || picked[a.partyId] === undefined || picked[a.partyId] === (a.customerGroupId ?? "")} onClick={() => void assign(a)}>{t("pricing.groups.assign")}</button>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function ListsTab({ data, configure, reload, onDirty }: TabProps) {
   const { t, locale } = useI18n();
   const auth = useAuth();
   const runner = useRunner("pricing.error.", reload);
-  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", currency: "JOD", validFrom: today(), validTo: "", customerId: "" });
+  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", currency: "JOD", validFrom: today(), validTo: "", customerId: "", customerGroupId: "" });
   const [selected, setSelected] = useState("");
   const [entries, setEntries] = useState<PriceEntry[]>([]);
   const [entry, setEntry] = useState({ kind: "item", targetId: "", unitId: "", minQuantity: "0", unitPrice: "" });
@@ -170,7 +270,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
   const unitName = (id: string) => data.pickers.units.find((u) => u.id === id)?.code ?? id;
 
   async function create() {
-    const done = await runner.run(() => auth.api.createPriceList({ code: form.code, nameAr: form.nameAr, nameEn: blank(form.nameEn), priority: num(form.priority), currency: form.currency, validFrom: form.validFrom, validTo: blank(form.validTo), customerId: blank(form.customerId) }), t("pricing.saved"));
+    const done = await runner.run(() => auth.api.createPriceList({ code: form.code, nameAr: form.nameAr, nameEn: blank(form.nameEn), priority: num(form.priority), currency: form.currency, validFrom: form.validFrom, validTo: blank(form.validTo), customerId: blank(form.customerId), customerGroupId: blank(form.customerGroupId) }), t("pricing.saved"));
     if (done) { setForm({ ...form, code: "", nameAr: "", nameEn: "", validTo: "" }); setSelected(done.id); }
   }
   const toggle = (l: PriceList) => void runner.run(() => auth.api.updatePriceList(l.id, asInput(l, !l.isActive), l.revision), t("pricing.saved"));
@@ -194,12 +294,13 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
       <Notices runner={runner} id="pricing-lists" />
       {data.lists.priceLists.length === 0 ? <p data-testid="pricing-lists-empty">{t("pricing.lists_empty")}</p> : (
         <table className="table" data-testid="pricing-lists-table">
-          <thead><tr><th>{t("pricing.code")}</th><th>{t("pricing.name_ar")}</th><th>{t("pricing.priority")}</th><th>{t("pricing.currency")}</th><th>{t("pricing.customer")}</th><th>{t("pricing.valid")}</th><th>{t("pricing.status")}</th><th>{t("pricing.actions")}</th></tr></thead>
+          <thead><tr><th>{t("pricing.code")}</th><th>{t("pricing.name_ar")}</th><th>{t("pricing.priority")}</th><th>{t("pricing.currency")}</th><th>{t("pricing.customer")}</th><th>{t("pricing.customer_group")}</th><th>{t("pricing.valid")}</th><th>{t("pricing.status")}</th><th>{t("pricing.actions")}</th></tr></thead>
           <tbody>
             {data.lists.priceLists.map((l) => (
               <tr key={l.id} data-testid={`pricing-list-${l.code}`}>
                 <td><bdi dir="ltr">{l.code}</bdi></td><td>{localName(l, locale)}</td><td><bdi dir="ltr">{l.priority}</bdi></td><td><bdi dir="ltr">{l.currency}</bdi></td>
                 <td><bdi dir="ltr">{customerName(data.pickers, l.customerId, t("pricing.all_customers"))}</bdi></td>
+                <td><bdi dir="ltr">{groupName(data.pickers, l.customerGroupId, t("pricing.all_groups"))}</bdi></td>
                 <td><bdi dir="ltr">{l.validFrom} → {l.validTo ?? t("pricing.open_ended")}</bdi></td>
                 <td>{l.isActive ? t("pricing.active") : t("pricing.inactive")}</td>
                 <td>
@@ -221,7 +322,8 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
           <Field id="pl-currency" label={t("pricing.currency")} required error={runner.fields.currency}>{(a) => <input {...a} dir="ltr" maxLength={3} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase() })} />}</Field>
           <Field id="pl-from" label={t("pricing.valid_from")} required error={runner.fields.validFrom}>{(a) => <input {...a} type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} />}</Field>
           <Field id="pl-to" label={t("pricing.valid_to")} error={runner.fields.validTo}>{(a) => <input {...a} type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} />}</Field>
-          <CustomerSelect id="pl-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} />
+          <CustomerSelect id="pl-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} disabled={form.customerGroupId !== ""} />
+          <CustomerGroupSelect id="pl-group" value={form.customerGroupId} onChange={(v) => setForm({ ...form, customerGroupId: v })} pickers={data.pickers} error={runner.fields.customerGroupId} disabled={form.customerId !== ""} />
           <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || Number.isNaN(num(form.priority))} onClick={() => void create()}>{t("pricing.create_list")}</button>
         </fieldset>
       )}
@@ -276,17 +378,17 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
   const { t, locale } = useI18n();
   const auth = useAuth();
   const runner = useRunner("pricing.error.", reload);
-  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", validFrom: today(), validTo: "", percent: "", minQuantity: "0", customerId: "", scope: "all", targetId: "" });
+  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", validFrom: today(), validTo: "", percent: "", minQuantity: "0", customerId: "", customerGroupId: "", scope: "all", targetId: "" });
   const isDirty = form.code !== "" || form.nameAr !== "" || form.nameEn !== "" || form.percent !== "";
   useReportUnsaved("pricing-discounts", isDirty, t("pricing.tab.discounts"));
   useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
   const scopeText = (d: DiscountRule) => {
-    const parts = [d.customerId ? customerName(data.pickers, d.customerId, "") : "", d.itemId ? (data.pickers.items.find((i) => i.id === d.itemId)?.code ?? d.itemId) : "", d.itemGroupId ? (data.pickers.groups.find((g) => g.id === d.itemGroupId)?.code ?? d.itemGroupId) : ""].filter(Boolean);
+    const parts = [d.customerId ? customerName(data.pickers, d.customerId, "") : "", d.customerGroupId ? `${t("pricing.scope_customer_group")} ${groupName(data.pickers, d.customerGroupId, "")}` : "", d.itemId ? (data.pickers.items.find((i) => i.id === d.itemId)?.code ?? d.itemId) : "", d.itemGroupId ? (data.pickers.groups.find((g) => g.id === d.itemGroupId)?.code ?? d.itemGroupId) : ""].filter(Boolean);
     return parts.length === 0 ? t("pricing.scope_all") : parts.join(" · ");
   };
   async function create() {
     const done = await runner.run(() => auth.api.createDiscountRule({ code: form.code, nameAr: form.nameAr, nameEn: blank(form.nameEn), priority: num(form.priority), validFrom: form.validFrom, validTo: blank(form.validTo), percent: num(form.percent), minQuantity: num(form.minQuantity),
-      customerId: blank(form.customerId), itemId: form.scope === "item" ? form.targetId : null, itemGroupId: form.scope === "group" ? form.targetId : null }), t("pricing.saved"));
+      customerId: blank(form.customerId), customerGroupId: blank(form.customerGroupId), itemId: form.scope === "item" ? form.targetId : null, itemGroupId: form.scope === "group" ? form.targetId : null }), t("pricing.saved"));
     if (done) setForm({ ...form, code: "", nameAr: "", nameEn: "", percent: "" });
   }
   const toggle = (d: DiscountRule) => void runner.run(() => auth.api.updateDiscountRule(d.id, { nameAr: d.nameAr, nameEn: d.nameEn, priority: d.priority, validFrom: d.validFrom, validTo: d.validTo, isActive: !d.isActive, percent: d.percent, minQuantity: d.minQuantity }, d.revision), t("pricing.saved"));
@@ -320,7 +422,8 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
           <Field id="pd-priority" label={t("pricing.priority")} hint={t("pricing.priority_hint")} error={bad(form.priority) ? t("field.invalid") : runner.fields.priority}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />}</Field>
           <Field id="pd-from" label={t("pricing.valid_from")} required error={runner.fields.validFrom}>{(a) => <input {...a} type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} />}</Field>
           <Field id="pd-to" label={t("pricing.valid_to")} error={runner.fields.validTo}>{(a) => <input {...a} type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} />}</Field>
-          <CustomerSelect id="pd-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} />
+          <CustomerSelect id="pd-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} disabled={form.customerGroupId !== ""} />
+          <CustomerGroupSelect id="pd-group" value={form.customerGroupId} onChange={(v) => setForm({ ...form, customerGroupId: v })} pickers={data.pickers} error={runner.fields.customerGroupId} disabled={form.customerId !== ""} />
           <Field id="pd-scope" label={t("pricing.scope")} error={runner.fields.itemId}>
             {(a) => <select {...a} value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, targetId: "" })}><option value="all">{t("pricing.scope_all")}</option><option value="item">{t("pricing.kind_item")}</option><option value="group">{t("pricing.kind_group")}</option></select>}
           </Field>

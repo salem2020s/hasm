@@ -9,6 +9,11 @@ using PV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PricingPolicyVersio
 using PL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PriceList;
 using PE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PriceEntry;
 using DR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DiscountRule;
+using CG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CustomerGroup;
+using PLG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PriceListGroupScope;
+using DRG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DiscountRuleGroupScope;
+using Itm = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Item;
+using CGM = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CustomerGroupMember;
 using PartyRoleTable = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PartyRole;
 
 namespace Hasm.Infrastructure.Pricing;
@@ -18,7 +23,7 @@ namespace Hasm.Infrastructure.Pricing;
 /// price lists with their entries, and percentage discount rules. <b>No authorization here by design:</b> <see cref="PricingManagementService"/> wraps it. Every write is one company transaction with its
 /// audit event; lists, entries and rules advance by revision-fenced updates and are never removed (PostgreSQL refuses it); a policy change appends a version. Nothing here touches a document: a final
 /// document stores an immutable <see cref="PricingSnapshot"/>, so no change of this configuration can re-price it. <see cref="QuoteAsync"/> feeds the pure <see cref="PricingEngine"/> from these rows.
-/// Customer-group scope is not stored yet (there is no customer-group registry); the engine's group scope stays unused until a later forward migration adds it.
+/// Customer groups (company migration 0027, PricingConfigService.Groups.cs): the group master, the one-group-per-customer assignment and the group scope of lists and rules; a quote derives the customer group from the customer.
 /// </summary>
 public sealed partial class PricingConfigService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
 {
@@ -43,9 +48,10 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
     {
         try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
         catch (Abort a) { return a.To<T>(); }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PL.UqCode or DR.UqCode) { return ConfigResult<T>.Invalid([new FieldError("code", "code_taken")]); }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is DR.UqActiveKey) { return ConfigResult<T>.Invalid([new FieldError("priority", "ambiguous_rule")]); }   // an active rule with the same scope, priority, minimum quantity and start already exists
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PL.UqCode or DR.UqCode or CG.UqCode) { return ConfigResult<T>.Invalid([new FieldError("code", "code_taken")]); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is DRG.UqActiveKey) { return ConfigResult<T>.Invalid([new FieldError("priority", "ambiguous_rule")]); }   // an active rule with the same scope, priority, minimum quantity and start already exists
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PE.UqItemTier or PE.UqGroupTier) { return ConfigResult<T>.Invalid([new FieldError("minQuantity", "tier_exists")]); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is CGM.Pk) { return ConfigResult<T>.Fail(ConfigStatus.PreconditionFailed, "revision_conflict"); }   // a racing first assignment of the same customer
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PV.UqVersion) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "version_conflict"); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Invalid([new FieldError("reference", "reference_not_found")]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent change: nothing was written
@@ -123,10 +129,10 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
 
     // ================================================================================================================ price lists
 
-    private const string ListCols = $"{PL.Id}, {PL.Code}, {PL.NameAr}, {PL.NameEn}, {PL.Priority}, {PL.Currency}, {PL.ValidFrom}, {PL.ValidTo}, {PL.IsActive}, {PL.CustomerId}, {PL.Revision}, {PL.UpdatedAtUtc}";
+    private const string ListCols = $"{PL.Id}, {PL.Code}, {PL.NameAr}, {PL.NameEn}, {PL.Priority}, {PL.Currency}, {PL.ValidFrom}, {PL.ValidTo}, {PL.IsActive}, {PL.CustomerId}, {PL.Revision}, {PL.UpdatedAtUtc}, {PLG.CustomerGroupId}";
 
     private static PriceListView ReadList(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetInt32(4), r.GetString(5), r.GetFieldValue<DateOnly>(6),
-        r.IsDBNull(7) ? null : r.GetFieldValue<DateOnly>(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetGuid(9), r.GetInt64(10), r.GetFieldValue<DateTimeOffset>(11));
+        r.IsDBNull(7) ? null : r.GetFieldValue<DateOnly>(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetGuid(9), r.GetInt64(10), r.GetFieldValue<DateTimeOffset>(11), r.IsDBNull(12) ? null : r.GetGuid(12));
 
     private static async Task<List<PriceListView>> LoadLists(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid? id, bool forUpdate, CancellationToken ct)
     {
@@ -181,21 +187,23 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
         var currency = input.Currency?.Trim().ToUpperInvariant() ?? "";
         if (!CurrencyPattern().IsMatch(currency)) errors.Add(new FieldError("currency", "currency_invalid"));
         CheckPriority(input.Priority, errors); CheckWindow(input.ValidFrom, input.ValidTo, errors);
+        if (input.CustomerId is not null && input.CustomerGroupId is not null) errors.Add(new FieldError("customerGroupId", "customer_or_group_not_both"));
         if (errors.Count > 0) return ConfigResult<PriceListView>.Invalid(errors);
         var id = Guid.NewGuid();
         var r = await Mutate(companyId, async work =>
         {
             await RequireCustomerRole(work, input.CustomerId, ct);
+            await RequireActiveGroup(work, input.CustomerGroupId, ct);
             var now = Now;
-            await using (var ins = new NpgsqlCommand($"INSERT INTO {PL.Table} ({PL.Id}, {PL.Code}, {PL.NameAr}, {PL.NameEn}, {PL.Priority}, {PL.Currency}, {PL.ValidFrom}, {PL.ValidTo}, {PL.IsActive}, {PL.CustomerId}, {PL.Revision}, {PL.CreatedBy}, {PL.CreatedAtUtc}, {PL.UpdatedAtUtc}) " +
-                "VALUES (@id, @c, @ar, @en, @p, @cur, @vf, @vt, @a, @cu, 1, @by, @now, @now)", work.Connection, work.Transaction))
+            await using (var ins = new NpgsqlCommand($"INSERT INTO {PL.Table} ({PL.Id}, {PL.Code}, {PL.NameAr}, {PL.NameEn}, {PL.Priority}, {PL.Currency}, {PL.ValidFrom}, {PL.ValidTo}, {PL.IsActive}, {PL.CustomerId}, {PLG.CustomerGroupId}, {PL.Revision}, {PL.CreatedBy}, {PL.CreatedAtUtc}, {PL.UpdatedAtUtc}) " +
+                "VALUES (@id, @c, @ar, @en, @p, @cur, @vf, @vt, @a, @cu, @cg, 1, @by, @now, @now)", work.Connection, work.Transaction))
             {
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("c", code); ins.Parameters.AddWithValue("ar", ar); ins.Parameters.AddWithValue("en", Db(en)); ins.Parameters.AddWithValue("p", input.Priority!.Value);
                 ins.Parameters.AddWithValue("cur", currency); ins.Parameters.Add(Date("vf", input.ValidFrom)); ins.Parameters.Add(Date("vt", input.ValidTo)); ins.Parameters.AddWithValue("a", input.IsActive ?? true);
-                ins.Parameters.Add(Uuid("cu", input.CustomerId)); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
+                ins.Parameters.Add(Uuid("cu", input.CustomerId)); ins.Parameters.Add(Uuid("cg", input.CustomerGroupId)); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
                 await ins.ExecuteNonQueryAsync(ct);
             }
-            await work.AppendAuditAsync(new AuditEventData(PricingAuditEvents.PriceListCreated, ActorUserId: actor, SubjectId: id, Detail: $"price list created code={code} currency={currency} customer={(input.CustomerId is null ? "none" : "set")}"), ct);
+            await work.AppendAuditAsync(new AuditEventData(PricingAuditEvents.PriceListCreated, ActorUserId: actor, SubjectId: id, Detail: $"price list created code={code} currency={currency} customer={(input.CustomerId is null ? "none" : "set")} group={(input.CustomerGroupId is null ? "none" : "set")}"), ct);
             return true;
         }, ct);
         return r.IsOk ? ConfigResult<PriceListView>.Ok((await GetPriceListAsync(companyId, id, ct))!) : ConfigResult<PriceListView>.Fail(r.Status, r.Code!) with { Fields = r.Fields };
@@ -216,6 +224,7 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
             if (input.Code is { } c && !string.Equals(c.Trim(), cur.Code, StringComparison.OrdinalIgnoreCase)) throw Invalid("code", "code_immutable");
             if (input.Currency is { } cu && !string.Equals(cu.Trim(), cur.Currency, StringComparison.OrdinalIgnoreCase)) throw Invalid("currency", "currency_immutable");
             if (input.CustomerId is { } cid && cid != cur.CustomerId) throw Invalid("customerId", "customer_immutable");
+            if (input.CustomerGroupId is { } cgid && cgid != cur.CustomerGroupId) throw Invalid("customerGroupId", "customer_group_immutable");
             await using (var upd = new NpgsqlCommand($"UPDATE {PL.Table} SET {PL.NameAr} = @ar, {PL.NameEn} = @en, {PL.Priority} = @p, {PL.ValidFrom} = @vf, {PL.ValidTo} = @vt, {PL.IsActive} = @a, {PL.Revision} = {PL.Revision} + 1, {PL.UpdatedAtUtc} = @now WHERE {PL.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", ar); upd.Parameters.AddWithValue("en", Db(en)); upd.Parameters.AddWithValue("p", input.Priority!.Value);
@@ -324,10 +333,10 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
 
     // ================================================================================================================ discount rules
 
-    private const string DiscountCols = $"{DR.Id}, {DR.Code}, {DR.NameAr}, {DR.NameEn}, {DR.Priority}, {DR.ValidFrom}, {DR.ValidTo}, {DR.IsActive}, {DR.Percent}, {DR.MinQuantity}, {DR.CustomerId}, {DR.ItemId}, {DR.ItemGroupId}, {DR.Revision}, {DR.UpdatedAtUtc}";
+    private const string DiscountCols = $"{DR.Id}, {DR.Code}, {DR.NameAr}, {DR.NameEn}, {DR.Priority}, {DR.ValidFrom}, {DR.ValidTo}, {DR.IsActive}, {DR.Percent}, {DR.MinQuantity}, {DR.CustomerId}, {DR.ItemId}, {DR.ItemGroupId}, {DR.Revision}, {DR.UpdatedAtUtc}, {DRG.CustomerGroupId}";
 
     private static DiscountRuleView ReadDiscount(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetInt32(4), r.GetFieldValue<DateOnly>(5), r.IsDBNull(6) ? null : r.GetFieldValue<DateOnly>(6),
-        r.GetBoolean(7), r.GetDecimal(8), r.GetDecimal(9), r.IsDBNull(10) ? null : r.GetGuid(10), r.IsDBNull(11) ? null : r.GetGuid(11), r.IsDBNull(12) ? null : r.GetGuid(12), r.GetInt64(13), r.GetFieldValue<DateTimeOffset>(14));
+        r.GetBoolean(7), r.GetDecimal(8), r.GetDecimal(9), r.IsDBNull(10) ? null : r.GetGuid(10), r.IsDBNull(11) ? null : r.GetGuid(11), r.IsDBNull(12) ? null : r.GetGuid(12), r.GetInt64(13), r.GetFieldValue<DateTimeOffset>(14), r.IsDBNull(15) ? null : r.GetGuid(15));
 
     private static async Task<List<DiscountRuleView>> LoadDiscounts(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid? id, bool forUpdate, CancellationToken ct)
     {
@@ -365,18 +374,20 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
         if (!CodePattern().IsMatch(code)) errors.Add(new FieldError("code", "code_invalid"));
         CheckPriority(input.Priority, errors); CheckWindow(input.ValidFrom, input.ValidTo, errors); CheckPercent(input.Percent, errors); CheckQuantity(input.MinQuantity, "minQuantity", errors, required: false);
         if (input.ItemId is not null && input.ItemGroupId is not null) errors.Add(new FieldError("itemId", "item_or_group_not_both"));
+        if (input.CustomerId is not null && input.CustomerGroupId is not null) errors.Add(new FieldError("customerGroupId", "customer_or_group_not_both"));
         if (errors.Count > 0) return ConfigResult<DiscountRuleView>.Invalid(errors);
         var id = Guid.NewGuid();
         var r = await Mutate(companyId, async work =>
         {
             await RequireCustomerRole(work, input.CustomerId, ct);
+            await RequireActiveGroup(work, input.CustomerGroupId, ct);
             var now = Now;
-            await using (var ins = new NpgsqlCommand($"INSERT INTO {DR.Table} ({DR.Id}, {DR.Code}, {DR.NameAr}, {DR.NameEn}, {DR.Priority}, {DR.ValidFrom}, {DR.ValidTo}, {DR.IsActive}, {DR.Percent}, {DR.MinQuantity}, {DR.CustomerId}, {DR.ItemId}, {DR.ItemGroupId}, {DR.Revision}, {DR.CreatedBy}, {DR.CreatedAtUtc}, {DR.UpdatedAtUtc}) " +
-                "VALUES (@id, @c, @ar, @en, @p, @vf, @vt, @a, @pc, @mq, @cu, @i, @g, 1, @by, @now, @now)", work.Connection, work.Transaction))
+            await using (var ins = new NpgsqlCommand($"INSERT INTO {DR.Table} ({DR.Id}, {DR.Code}, {DR.NameAr}, {DR.NameEn}, {DR.Priority}, {DR.ValidFrom}, {DR.ValidTo}, {DR.IsActive}, {DR.Percent}, {DR.MinQuantity}, {DR.CustomerId}, {DRG.CustomerGroupId}, {DR.ItemId}, {DR.ItemGroupId}, {DR.Revision}, {DR.CreatedBy}, {DR.CreatedAtUtc}, {DR.UpdatedAtUtc}) " +
+                "VALUES (@id, @c, @ar, @en, @p, @vf, @vt, @a, @pc, @mq, @cu, @cg, @i, @g, 1, @by, @now, @now)", work.Connection, work.Transaction))
             {
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("c", code); ins.Parameters.AddWithValue("ar", ar); ins.Parameters.AddWithValue("en", Db(en)); ins.Parameters.AddWithValue("p", input.Priority!.Value);
                 ins.Parameters.Add(Date("vf", input.ValidFrom)); ins.Parameters.Add(Date("vt", input.ValidTo)); ins.Parameters.AddWithValue("a", input.IsActive ?? true); ins.Parameters.AddWithValue("pc", input.Percent!.Value); ins.Parameters.AddWithValue("mq", input.MinQuantity ?? 0m);
-                ins.Parameters.Add(Uuid("cu", input.CustomerId)); ins.Parameters.Add(Uuid("i", input.ItemId)); ins.Parameters.Add(Uuid("g", input.ItemGroupId)); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
+                ins.Parameters.Add(Uuid("cu", input.CustomerId)); ins.Parameters.Add(Uuid("cg", input.CustomerGroupId)); ins.Parameters.Add(Uuid("i", input.ItemId)); ins.Parameters.Add(Uuid("g", input.ItemGroupId)); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await work.AppendAuditAsync(new AuditEventData(PricingAuditEvents.DiscountCreated, ActorUserId: actor, SubjectId: id, Detail: $"discount rule created code={code} percent={input.Percent!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"), ct);
@@ -398,7 +409,7 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
             var cur = (await LoadDiscounts(work.Connection, work.Transaction, id, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "discount_not_found");
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
             if (input.Code is { } c && !string.Equals(c.Trim(), cur.Code, StringComparison.OrdinalIgnoreCase)) throw Invalid("code", "code_immutable");
-            if (input.CustomerId is { } cu && cu != cur.CustomerId || input.ItemId is { } i && i != cur.ItemId || input.ItemGroupId is { } g && g != cur.ItemGroupId) throw Invalid("scope", "scope_immutable");
+            if (input.CustomerId is { } cu && cu != cur.CustomerId || input.CustomerGroupId is { } cg2 && cg2 != cur.CustomerGroupId || input.ItemId is { } i && i != cur.ItemId || input.ItemGroupId is { } g && g != cur.ItemGroupId) throw Invalid("scope", "scope_immutable");
             await using (var upd = new NpgsqlCommand($"UPDATE {DR.Table} SET {DR.NameAr} = @ar, {DR.NameEn} = @en, {DR.Priority} = @p, {DR.ValidFrom} = @vf, {DR.ValidTo} = @vt, {DR.IsActive} = @a, {DR.Percent} = @pc, {DR.MinQuantity} = @mq, {DR.Revision} = {DR.Revision} + 1, {DR.UpdatedAtUtc} = @now WHERE {DR.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", ar); upd.Parameters.AddWithValue("en", Db(en)); upd.Parameters.AddWithValue("p", input.Priority!.Value);
@@ -431,11 +442,30 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
             var entries = new List<PriceEntryView>();
             foreach (var l in lists) entries.AddRange((await LoadEntries(conn, tx, l.Id, null, false, ct)).Where(e => e.IsActive));
             var discounts = (await LoadDiscounts(conn, tx, null, false, ct)).Where(d => d.IsActive).ToList();
+            // the server, not the caller, decides the item group and the customer group that price the line
+            Guid? itemGroup;
+            await using (var iq = new NpgsqlCommand($"SELECT {Itm.GroupId} FROM {Itm.Table} WHERE {Itm.Id} = @i", conn, tx))
+            {
+                iq.Parameters.AddWithValue("i", request.ItemId);
+                var v = await iq.ExecuteScalarAsync(ct);
+                if (v is null) return ConfigResult<PricingSnapshot>.Invalid([new FieldError("itemId", "item_not_found")]);
+                itemGroup = v is DBNull ? null : (Guid)v;
+            }
+            Guid? customerGroup = null;   // never taken from the caller: only the stored assignment of the customer decides
+            if (request.CustomerId is { } cust)
+            {
+                await using var gq = new NpgsqlCommand($"SELECT {CGM.CustomerGroupId} FROM {CGM.Table} WHERE {CGM.PartyId} = @p", conn, tx);
+                gq.Parameters.AddWithValue("p", cust);
+                var assigned = await gq.ExecuteScalarAsync(ct);
+                Guid? assignedGroup = assigned is null or DBNull ? null : (Guid)assigned;
+                customerGroup = assignedGroup;
+            }
             await tx.CommitAsync(ct);
+            request = request with { ItemGroupId = itemGroup, CustomerGroupId = customerGroup };
             var resolved = PricingEngine.Resolve(request,
-                [.. lists.Select(l => new PriceListRecord(l.Id, l.Code, l.Priority, l.Currency, l.ValidFrom, l.ValidTo, l.IsActive, l.CustomerId))],
+                [.. lists.Select(l => new PriceListRecord(l.Id, l.Code, l.Priority, l.Currency, l.ValidFrom, l.ValidTo, l.IsActive, l.CustomerId, l.CustomerGroupId))],
                 [.. entries.Where(e => ids.Contains(e.PriceListId)).Select(e => new PriceEntryRecord(e.PriceListId, e.ItemId, e.ItemGroupId, e.UnitId, e.MinQuantity, e.UnitPrice))],
-                [.. discounts.Select(d => new DiscountRuleRecord(d.Id, d.Code, d.Priority, d.ValidFrom, d.ValidTo, d.IsActive, d.Percent, d.MinQuantity, d.CustomerId, null, d.ItemId, d.ItemGroupId))], policy);
+                [.. discounts.Select(d => new DiscountRuleRecord(d.Id, d.Code, d.Priority, d.ValidFrom, d.ValidTo, d.IsActive, d.Percent, d.MinQuantity, d.CustomerId, d.CustomerGroupId, d.ItemId, d.ItemGroupId))], policy);
             return ConfigResult<PricingSnapshot>.Ok(PricingSnapshots.Create(policy, request, resolved, over));
         }
         catch (PricingException ex) { return ConfigResult<PricingSnapshot>.Invalid([new FieldError("pricing", ex.Code)]); }
@@ -470,6 +500,11 @@ public sealed class PricingManagementService(AccessService access, PricingConfig
     public Task<ConfigResult<PriceEntryView>> UpdateEntryAsync(Guid user, Guid company, Guid id, long? revision, PriceEntryInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.UpdateEntryAsync(user, company, id, revision, input, ct), ct);
     public Task<ConfigResult<DiscountRuleView>> CreateDiscountAsync(Guid user, Guid company, DiscountRuleInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.CreateDiscountAsync(user, company, input, ct), ct);
     public Task<ConfigResult<DiscountRuleView>> UpdateDiscountAsync(Guid user, Guid company, Guid id, long? revision, DiscountRuleInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.UpdateDiscountAsync(user, company, id, revision, input, ct), ct);
+    public Task<ConfigResult<IReadOnlyList<CustomerGroupView>>> ListCustomerGroupsAsync(Guid user, Guid company, CancellationToken ct = default) => Read<IReadOnlyList<CustomerGroupView>>(user, company, () => pricing.ListCustomerGroupsAsync(company, ct), ct);
+    public Task<ConfigResult<IReadOnlyList<CustomerGroupAssignmentView>>> ListAssignmentsAsync(Guid user, Guid company, CancellationToken ct = default) => Read<IReadOnlyList<CustomerGroupAssignmentView>>(user, company, () => pricing.ListAssignmentsAsync(company, ct), ct);
+    public Task<ConfigResult<CustomerGroupView>> CreateCustomerGroupAsync(Guid user, Guid company, CustomerGroupInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.CreateCustomerGroupAsync(user, company, input, ct), ct);
+    public Task<ConfigResult<CustomerGroupView>> UpdateCustomerGroupAsync(Guid user, Guid company, Guid id, long? revision, CustomerGroupInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.UpdateCustomerGroupAsync(user, company, id, revision, input, ct), ct);
+    public Task<ConfigResult<CustomerGroupAssignmentView>> SetAssignmentAsync(Guid user, Guid company, Guid partyId, long? revision, CustomerGroupAssignmentInput? input, CancellationToken ct = default) => Write(user, company, () => pricing.SetAssignmentAsync(user, company, partyId, revision, input, ct), ct);
 
     /// <summary>A quote needs the view permission; a manual override of the price or discount additionally needs <c>company.pricing.override</c> (the engine requires its reason).</summary>
     public async Task<ConfigResult<PricingSnapshot>> QuoteAsync(Guid user, Guid company, PricingRequest? request, PriceOverride? over, CancellationToken ct = default)

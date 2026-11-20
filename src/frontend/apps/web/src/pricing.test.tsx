@@ -21,6 +21,8 @@ const policy = { version: 2, isDefault: false, priceDecimals: 2, moneyDecimals: 
 const retail = { id: "l1", code: "RETAIL", nameAr: "قائمة التجزئة", nameEn: "Retail", priority: 5, currency: "JOD", validFrom: "2026-01-01", validTo: null, isActive: true, customerId: null, revision: 3, updatedAtUtc: "2026-06-01T00:00:00Z" };
 const entry = { id: "e1", priceListId: "l1", itemId: "i1", itemGroupId: null, unitId: "u1", minQuantity: 0, unitPrice: 10, isActive: true, revision: 2, updatedAtUtc: "2026-06-01T00:00:00Z" };
 const promo = { id: "d1", code: "PROMO", nameAr: "عرض", nameEn: "Promo", priority: 1, validFrom: "2026-01-01", validTo: null, isActive: true, percent: 15, minQuantity: 0, customerId: null, itemId: null, itemGroupId: "g1", revision: 1, updatedAtUtc: "2026-06-01T00:00:00Z" };
+const vipGroup = { id: "cg1", code: "VIP", nameAr: "كبار العملاء", nameEn: "VIP", isActive: true, revision: 2, updatedAtUtc: "2026-06-01T00:00:00Z" };
+const assignment = { partyId: "p1", partyCode: "CUST1", partyName: "عميل", customerGroupId: null, customerGroupCode: null, revision: 0 };
 const quote = {
   version: "pricing-snapshot-v2", contentHash: "a".repeat(64), policy: { priceDecimals: 2, moneyDecimals: 2, minMarginPercent: 10, marginAction: 2, listPrecedence: 2, discountPrecedence: 1 },
   result: { listUnitPrice: 10, priceRuleRef: "list:1@RETAIL;tier:0", discountPercent: 15, discountRuleRef: "discount:1@PROMO", netUnitPrice: 8.5, lineNet: 17, overridden: false, overrideReason: null, marginPercent: null, margin: 0, requiresApproval: false,
@@ -37,6 +39,11 @@ function render(over: Record<string, unknown> = {}, can = true) {
     listInventoryGroups: vi.fn().mockResolvedValue({ groups: [group] }),
     listInventoryItems: vi.fn().mockResolvedValue({ items: [apple], total: 1 }),
     listPartyRoles: vi.fn().mockResolvedValue({ items: [customer], can: { configure: can } }),
+    listCustomerGroups: vi.fn().mockResolvedValue({ customerGroups: [vipGroup], can: { configure: can } }),
+    listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [assignment], can: { configure: can } }),
+    createCustomerGroup: vi.fn().mockResolvedValue(vipGroup),
+    updateCustomerGroup: vi.fn().mockResolvedValue({ ...vipGroup, isActive: false, revision: 3 }),
+    setCustomerGroupAssignment: vi.fn().mockResolvedValue({ ...assignment, customerGroupId: "cg1", customerGroupCode: "VIP", revision: 1 }),
     savePricingPolicy: vi.fn().mockResolvedValue({ ...policy, version: 3 }),
     createPriceList: vi.fn().mockResolvedValue(retail),
     updatePriceList: vi.fn().mockResolvedValue({ ...retail, isActive: false, revision: 4 }),
@@ -54,11 +61,11 @@ const tab = (n: string) => screen.getByRole("tab", { name: new RegExp(`^${n}`) }
 const label = (k: string) => new RegExp(`^${A(k)}`);
 
 describe("pricing administration screen", () => {
-  it("is organised in four tabs by business meaning and shows the saved policy with its configurable precedence", async () => {
+  it("is organised in five tabs by business meaning and shows the saved policy with its configurable precedence", async () => {
     render();
     await go("#/company/pricing");
     expect(await screen.findByRole("heading", { name: A("pricing.title"), level: 1 })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual([A("pricing.tab.policy"), A("pricing.tab.lists"), A("pricing.tab.discounts"), A("pricing.tab.quote")]);
+    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual([A("pricing.tab.policy"), A("pricing.tab.lists"), A("pricing.tab.discounts"), A("pricing.tab.groups"), A("pricing.tab.quote")]);
     const current = await screen.findByTestId("pricing-policy-current");
     expect(current).toHaveTextContent(A("pricing.list_precedence.2"));
     expect(current).toHaveTextContent(A("pricing.margin_action.2"));
@@ -182,5 +189,52 @@ describe("pricing administration screen", () => {
     await userEvent.click(tab(A("pricing.tab.policy")));
     await userEvent.click(tab(A("pricing.tab.quote")));
     expect(within(screen.getByTestId("pricing-quote-form")).getByLabelText(label("pricing.quote.unit_cost"))).toHaveValue("5");
+  });
+
+  it("creates and deactivates a customer group with the revision it read and assigns a customer to ONE group", async () => {
+    const client = render();
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
+    expect(await screen.findByTestId("pricing-group-VIP")).toBeInTheDocument();
+    const form = within(screen.getByTestId("pricing-group-create"));
+    expect(form.getByRole("button", { name: A("pricing.groups.create") })).toBeDisabled();
+    await userEvent.type(form.getByLabelText(label("pricing.code")), "wholesale");
+    await userEvent.type(form.getByLabelText(label("pricing.name_ar")), "جملة");
+    await userEvent.click(form.getByRole("button", { name: A("pricing.groups.create") }));
+    await waitFor(() => expect(client.createCustomerGroup).toHaveBeenCalledWith({ code: "wholesale", nameAr: "جملة", nameEn: null }));
+    await userEvent.click(within(screen.getByTestId("pricing-group-VIP")).getByRole("button", { name: A("pricing.deactivate") }));
+    await waitFor(() => expect(client.updateCustomerGroup).toHaveBeenCalledWith("cg1", { nameAr: "كبار العملاء", nameEn: "VIP", isActive: false }, 2));
+    const row = within(screen.getByTestId("pricing-assignment-CUST1"));
+    expect(row.getByRole("button", { name: A("pricing.groups.assign") })).toBeDisabled();                          // nothing changed yet
+    await userEvent.selectOptions(row.getByRole("combobox"), "cg1");
+    await userEvent.click(row.getByRole("button", { name: A("pricing.groups.assign") }));
+    await waitFor(() => expect(client.setCustomerGroupAssignment).toHaveBeenCalledWith("p1", "cg1", 0));          // revision 0 = never assigned
+    expect(screen.queryByRole("button", { name: /delete|حذف/i })).not.toBeInTheDocument();
+  });
+
+  it("scopes a price list and a discount to a customer OR a group: choosing one disables the other and the group is sent", async () => {
+    const client = render();
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+    const panel = within(await screen.findByTestId("pricing-list-create"));
+    await userEvent.type(panel.getByLabelText(label("pricing.code")), "vipl");
+    await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "قائمة المجموعة");
+    await userEvent.selectOptions(panel.getByLabelText(label("pricing.customer_group")), "cg1");
+    expect(panel.getByLabelText(label("pricing.customer"))).toBeDisabled();                                       // never both
+    await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
+    await waitFor(() => expect(client.createPriceList).toHaveBeenCalledWith(expect.objectContaining({ code: "vipl", customerId: null, customerGroupId: "cg1" })));
+    await userEvent.click(tab(A("pricing.tab.discounts")));
+    const form = within(await screen.findByTestId("pricing-discount-create"));
+    await userEvent.selectOptions(form.getByLabelText(label("pricing.customer")), "p1");
+    expect(form.getByLabelText(label("pricing.customer_group"))).toBeDisabled();
+  });
+
+  it("shows a viewer the groups and assignments without any form", async () => {
+    render({}, false);
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
+    expect(await screen.findByTestId("pricing-groups-table")).toBeInTheDocument();
+    expect(screen.queryByTestId("pricing-group-create")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("pricing-assignment-CUST1")).queryByRole("combobox")).not.toBeInTheDocument();
   });
 });

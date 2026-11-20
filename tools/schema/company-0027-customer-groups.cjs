@@ -125,13 +125,13 @@ BEGIN
 END;
 $$;
 
--- discount rules: the optional group scope, and the active-tie index extended with the group
+-- discount rules: the optional group scope, and the active-tie index REPLACED by one that includes the group (new generated name: names are never reused)
 ALTER TABLE [[DiscountRule.Table]] ADD COLUMN {{DiscountRuleGroupScope.CustomerGroupId}} uuid NULL;
 ALTER TABLE [[DiscountRule.Table]] ADD CONSTRAINT {{DiscountRuleGroupScope.FkGroup}} FOREIGN KEY ({{DiscountRuleGroupScope.CustomerGroupId}}) REFERENCES {{CustomerGroup}} ({{CustomerGroup.Id}});
 ALTER TABLE [[DiscountRule.Table]] ADD CONSTRAINT {{DiscountRuleGroupScope.CkScope}} CHECK ([[DiscountRule.CustomerId]] IS NULL OR {{DiscountRuleGroupScope.CustomerGroupId}} IS NULL);
 
 DROP INDEX [[DiscountRule.UqActiveKey]];
-CREATE UNIQUE INDEX [[DiscountRule.UqActiveKey]] ON [[DiscountRule.Table]] (COALESCE([[DiscountRule.CustomerId]], '00000000-0000-0000-0000-000000000000'::uuid),
+CREATE UNIQUE INDEX {{DiscountRuleGroupScope.UqActiveKey}} ON [[DiscountRule.Table]] (COALESCE([[DiscountRule.CustomerId]], '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE({{DiscountRuleGroupScope.CustomerGroupId}}, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE([[DiscountRule.ItemId]], '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE([[DiscountRule.ItemGroupId]], '00000000-0000-0000-0000-000000000000'::uuid), [[DiscountRule.Priority]], [[DiscountRule.MinQuantity]], [[DiscountRule.ValidFrom]]) WHERE [[DiscountRule.IsActive]];
 

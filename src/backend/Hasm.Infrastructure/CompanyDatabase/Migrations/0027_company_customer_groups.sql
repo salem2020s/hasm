@@ -99,13 +99,13 @@ BEGIN
 END;
 $$;
 
--- discount rules: the optional group scope, and the active-tie index extended with the group
+-- discount rules: the optional group scope, and the active-tie index REPLACED by one that includes the group (new generated name: names are never reused)
 ALTER TABLE t_98209637 ADD COLUMN c_2a3bedc2 uuid NULL;
 ALTER TABLE t_98209637 ADD CONSTRAINT k_84c65bb7 FOREIGN KEY (c_2a3bedc2) REFERENCES t_3198d6e8 (c_d69a5fd6);
 ALTER TABLE t_98209637 ADD CONSTRAINT k_812d07a0 CHECK (c_267fdd7a IS NULL OR c_2a3bedc2 IS NULL);
 
 DROP INDEX k_7396728f;
-CREATE UNIQUE INDEX k_7396728f ON t_98209637 (COALESCE(c_267fdd7a, '00000000-0000-0000-0000-000000000000'::uuid),
+CREATE UNIQUE INDEX k_c912a6df ON t_98209637 (COALESCE(c_267fdd7a, '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE(c_2a3bedc2, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(c_27971215, '00000000-0000-0000-0000-000000000000'::uuid),
     COALESCE(c_1561271a, '00000000-0000-0000-0000-000000000000'::uuid), c_13ac6fbc, c_4aa76d4e, c_8d69b845) WHERE c_8e780ef0;
 
