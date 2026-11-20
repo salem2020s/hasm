@@ -163,7 +163,7 @@ describe("tax configuration screen", () => {
     expect(screen.queryByText(A("nav.taxes"))).not.toBeInTheDocument();
   });
 
-  it("accepts Arabic-Indic digits and a decimal comma, and never sends a non-number", async () => {
+  it("accepts Arabic-Indic digits and a decimal comma (strict shared parser), and never sends a non-number", async () => {
     const client = render();
     await go("#/company/taxes");
     await userEvent.click(within(await screen.findByTestId("tax-row-VAT")).getByRole("button", { name: A("tax.rates") }));
