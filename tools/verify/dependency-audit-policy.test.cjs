@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const proposed = require("./picomatch-exception.json");
-const { evaluate, scopeHash, verifyActivationEvidence, verifyProofInputs } = require("./dependency-audit-policy.cjs");
+const { evaluate, scopeHash, verifyActivationEvidence, verifyProofInputs, retiredHash, assertRetirement, RETIRED_SCOPE } = require("./dependency-audit-policy.cjs");
 const copy = value => structuredClone(value);
 const ID = proposed.advisory;
 function counts(report) {
@@ -134,4 +134,67 @@ test("proof commit must preserve frozen sources and all validation implementatio
     assert.throws(() => verifyProofInputs(policy, "unused", args => args[0] === "rev-parse" && args[1] === `HEAD:${input}` ? "d".repeat(40) : read(args)));
   assert.throws(() => verifyProofInputs(policy, "unused", args => args[0] === "show" ? JSON.stringify({ ...proposed, status: "APPROVED" }) : read(args)));
   assert.throws(() => verifyProofInputs(policy, "unused", () => { throw new Error("missing commit"); }));
+});
+
+// Retirement is a permanent strict audit, never an extension of the historical waiver.
+test("retired policy permits a clean audit with the unchanged matcher and no exception", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  f.report.vulnerabilities = {}; counts(f.report); f.exit = 0;
+  f.context.now = "2026-11-25T00:00:00Z"; f.context.advisory = null;
+  assert.deepEqual(run(f), { ok: true, excepted: [], failures: [] });
+});
+test("retired policy blocks the former exact High findings and every Critical finding", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+  f.report.vulnerabilities.picomatch.severity = "critical"; counts(f.report);
+  assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+});
+test("retired policy retains audit errors, schema and count validation", () => {
+  for (const mutate of [f => f.exit = 2, f => f.report.error = { code: "network" },
+    f => f.report.auditReportVersion = 3, f => f.report.metadata.vulnerabilities.total = 99]) {
+    const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+    f.report.vulnerabilities = {}; counts(f.report); f.exit = 0; mutate(f);
+    assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+  }
+});
+test("retired policy preserves high audit threshold and full lower-severity disclosure", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  f.report.vulnerabilities = { example: { name: "example", severity: "moderate", nodes: ["node_modules/example"], via: ["example"] } };
+  counts(f.report); f.exit = 0;
+  assert.deepEqual(run(f), { ok: true, excepted: [], failures: [] });
+});
+
+// ---- review addendum: retirement hardening ----
+test("only the exact retired status takes the strict path: every variant with a clean audit and the affected matcher still fails closed", () => {
+  for (const status of ["retired-advisory-withdrawn", "RETIRED", "", null, undefined]) {
+    const f = fixture(); f.policy.status = status; f.report.vulnerabilities = {}; counts(f.report); f.exit = 0; f.context.advisory = null;
+    const r = run(f); assert.equal(r.ok, false, String(status)); assert.deepEqual(r.excepted, []);
+  }
+});
+test("retired policy with High findings and a failing exit returns not ok, no exception and one failure per package", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  const r = run(f);
+  assert.equal(r.ok, false); assert.deepEqual(r.excepted, []);
+  assert.deepEqual(r.failures.map(x => x.split(":")[0]).sort(), Object.keys(f.report.vulnerabilities).sort());
+});
+test("the committed policy file is the reviewed retirement record: scope hash unchanged and the retirement hash pinned", () => {
+  assert.equal(scopeHash(proposed), "974e885031fcfca8eff952c48b7791be9cacc9d934ddafdfaae264252e3eaa23");
+  assert.equal(proposed.status, "RETIRED-ADVISORY-WITHDRAWN");
+  assert.equal(retiredHash(proposed), RETIRED_SCOPE);
+  assert.doesNotThrow(() => assertRetirement(proposed));
+  for (const change of [{ owner: "someone" }, { approvedBy: "someone" }, { repository: "x/y" }, { advisory: "GHSA-0000-0000-0000" }, { status: "RETIRED" }])
+    assert.throws(() => assertRetirement({ ...copy(proposed), ...change }), /Retirement record differs/);
+});
+test("the policy validator accepts exactly the three known statuses", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "validate-picomatch-policy.cjs"), "utf8");
+  assert.match(source, /\["CONDITIONALLY-APPROVED-INACTIVE", "APPROVED", "RETIRED-ADVISORY-WITHDRAWN"\]\.includes\(policy\.status\)/);
+});
+test("no security gate is optional: required checks keep dependency-scan and both picomatch jobs and no workflow tolerates a failure", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const root = path.join(__dirname, "..", "..");
+  const required = JSON.parse(fs.readFileSync(path.join(root, ".github/required-checks.json"), "utf8")).checks.map(c => c.name);
+  for (const name of ["dependency-scan", "picomatch-policy-validation", "picomatch-artifact-inspection", "secret-scan", "ci-guard"]) assert.ok(required.includes(name), name);
+  for (const file of fs.readdirSync(path.join(root, ".github/workflows")).filter(f => f.endsWith(".yml")))
+    assert.doesNotMatch(fs.readFileSync(path.join(root, ".github/workflows", file), "utf8"), /continue-on-error:\s*true/i, file);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, ".github/workflows/verification.yml"), "utf8"), /owner-approved exact development exception/);
 });
