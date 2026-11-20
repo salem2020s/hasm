@@ -90,6 +90,7 @@ Missing prerequisites (each to be built and merged before the slice that needs i
 
 ## Log
 
+* 2026-11-20 - Phase 3.11 slice 1 (pure pricing engine and snapshot) on branch feature/phase-3-11-pricing-engine, independent of the stacked branches (no migration). Persistence, API and UI follow after the 3.9B merge.
 * 2026-11-20 - Phase 3.9C slice 1 (reusable import mapping templates, OD-9 default) on branch feature/phase-3-9c-party-import, stacked on #57 (company 0025). Party adapter is slice 2.
 
 * 2026-11-20 - Phase 3.9B opened as Draft PR #56 (independent review recorded, 5 Medium fixed or documented). Phase 3.12 (attachments and key management) on branch feature/phase-3-12-attachments, stacked on #56 (company 0024, system 0026): backend, hardened API, key rotation drill, shared UI tab; independent review pending. Open owner decision added: retention of removed attachments (bytes are kept meanwhile).
