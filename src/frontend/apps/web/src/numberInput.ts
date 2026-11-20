@@ -9,3 +9,10 @@ export function parseDecimalInput(s: string): number {
   const n = Number(v.replace(",", "."));
   return Number.isFinite(n) ? n : Number.NaN;
 }
+
+/** Like parseDecimalInput, but accepts ONE leading minus sign (ASCII "-" or U+2212) for fields where a negative value is valid (for example a minimum margin). "-0" is zero; a bare "-" or "+5" is refused. */
+export function parseSignedDecimalInput(s: string): number {
+  const t = s.trim();
+  if (t.startsWith("-") || t.startsWith("\u2212")) { const rest = t.slice(1); if (/^\s/.test(rest)) return Number.NaN; const n = parseDecimalInput(rest); return Number.isNaN(n) ? n : (n === 0 ? 0 : -n); }
+  return parseDecimalInput(t);
+}
