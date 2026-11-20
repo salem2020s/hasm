@@ -139,7 +139,7 @@ public sealed class BackupSetTests : IDisposable
     }
 
     [Fact]
-    public void Create_refuses_a_missing_dump_a_non_empty_or_overlapping_destination_and_an_unreadable_envelope()
+    public void Create_refuses_a_missing_dump_a_non_empty_or_overlapping_destination_and_an_invalid_company()
     {
         var s = Source();
         Assert.Equal("database_dump_missing", Assert.Throws<BackupException>(() => BackupSet.Create(company, P("nope"), s.Source, P("a"), DateTimeOffset.UnixEpoch)).Code);
@@ -147,8 +147,6 @@ public sealed class BackupSetTests : IDisposable
         Assert.Equal("destination_not_empty", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, busy, DateTimeOffset.UnixEpoch)).Code);
         Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(s.Source, "inside"), DateTimeOffset.UnixEpoch)).Code);
         Assert.Equal("invalid_company", Assert.Throws<BackupException>(() => BackupSet.Create(Guid.Empty, s.Dump, s.Source, P("b"), DateTimeOffset.UnixEpoch)).Code);
-        File.WriteAllBytes(Path.Combine(s.Source, Name()), "HFE1\x01"u8.ToArray());                 // envelope magic with a truncated header
-        Assert.Equal("encrypted_file_unreadable", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("c"), DateTimeOffset.UnixEpoch)).Code);
     }
 
     [Fact]
@@ -225,6 +223,49 @@ public sealed class BackupSetTests : IDisposable
         Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, Path.Combine(set, "keys"), company)).Code);
         var rootTarget = Path.GetPathRoot(root)!;
         Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, rootTarget, company));
+    }
+
+    [Fact]
+    public void A_plain_file_that_merely_starts_with_the_envelope_magic_never_blocks_the_backup_and_names_no_key()
+    {
+        var s = Source();
+        File.WriteAllBytes(Path.Combine(s.Source, Name()), "HFE1,account,name\n1,cash\n"u8.ToArray());        // a user CSV
+        File.WriteAllBytes(Path.Combine(s.Source, Name()), "HFE1\x01"u8.ToArray());                           // truncated header
+        File.WriteAllBytes(Path.Combine(s.Source, Name()), [.. "HFE1"u8.ToArray(), 10, .. "NOT VALID!"u8.ToArray(), .. new byte[80]]);   // invalid key id characters
+        var m = BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch);
+        Assert.Equal(5, m.Attachments.Count);
+        Assert.Equal(new[] { "k1" }, m.KeyIdsRequired);                                                      // no false key id
+        Assert.Equal(3, m.NonEnvelopeFilesWithMagic);
+        Assert.True(BackupSet.Verify(P("set")).IsClean);
+    }
+
+    [Fact]
+    public void A_file_changed_between_verification_and_copy_is_caught_by_the_staged_re_hash_and_nothing_is_left()
+    {
+        var s = Source();
+        var set = P("set");
+        var m = BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        var target = P("toctou", "c");
+        BackupSet.BeforeStagedCopy = d => File.AppendAllText(Path.Combine(d, "attachments", m.Attachments[0].Name), "x");
+        try { Assert.Equal("staged_file_changed", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, company)).Code); }
+        finally { BackupSet.BeforeStagedCopy = null; }
+        Assert.False(Directory.Exists(target));
+        Assert.Empty(Directory.GetDirectories(P("toctou")));
+    }
+
+    [Fact]
+    public void An_alias_anywhere_in_a_path_cannot_hide_an_overlap()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var s = Source();
+        var set = P("set");
+        BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        var alias = P("alias-of-set");                                                                   // alias of the set, used as a middle component
+        Directory.CreateSymbolicLink(alias, set);
+        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, Path.Combine(alias, "attachments", "deeper", "still"), company)).Code);
+        var srcAlias = P("alias-of-att");
+        Directory.CreateSymbolicLink(srcAlias, P("att"));
+        Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(srcAlias, company.ToString("N"), "x", "y"), DateTimeOffset.UnixEpoch)).Code);
     }
 
     private static string[] Snapshot(string dir) =>

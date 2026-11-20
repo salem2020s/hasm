@@ -20,7 +20,7 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
 /// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
-public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles);
+public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0);
 
 /// <summary>The result of verifying a backup set against its manifest. Only generated names are listed.</summary>
 public sealed record BackupVerification(bool ManifestValid, bool DatabaseOk, IReadOnlyList<string> Missing, IReadOnlyList<string> HashMismatch, IReadOnlyList<string> Unexpected, BackupManifest? Manifest)
@@ -41,6 +41,9 @@ public sealed record KeyCoverage(IReadOnlyList<string> Required, IReadOnlyList<s
 /// </summary>
 public static class BackupSet
 {
+    /// <summary>Test seam: runs after the set was verified and before any file is copied (to prove the staged re-hash). Null in production.</summary>
+    internal static Action<string>? BeforeStagedCopy;
+
     public const int CurrentVersion = 1;
     public const string DatabaseFileName = "database.dump";
     public const string ManifestFileName = "manifest.json";
@@ -87,7 +90,7 @@ public static class BackupSet
 
         var files = new List<ManifestFile>();
         var keys = new SortedSet<string>(StringComparer.Ordinal);
-        var stray = 0;
+        var stray = 0; var lookalikes = 0;
         if (Directory.Exists(source))
         {
             foreach (var path in Directory.EnumerateFiles(source).OrderBy(p => p, StringComparer.Ordinal))
@@ -101,17 +104,15 @@ public static class BackupSet
                 var head = ReadHead(copy);
                 if (head.Length >= 4 && head.AsSpan(0, 4).SequenceEqual(EnvelopeMagic))
                 {
-                    // header of format v1: "HFE1" | keyIdLen(1) | keyId ... (the whole envelope is not needed to name its key)
-                    int idLen = head.Length > 4 ? head[4] : 0;
-                    if (idLen is 0 or > 32 || head.Length < 5 + idLen) throw new BackupException("encrypted_file_unreadable");
-                    var keyId = System.Text.Encoding.ASCII.GetString(head, 5, idLen);
-                    if (!KekRing.IsValidKeyId(keyId)) throw new BackupException("encrypted_file_unreadable");
-                    keys.Add(keyId);
+                    // Only a structurally valid envelope names a key. A plain file that merely starts with the magic (a CSV "HFE1,...") or carries an invalid key id is
+                    // ordinary content: it is counted, never a reason to refuse the backup. (A well-formed envelope with a made-up key id still lists that id: conservative, it can only add a missing-key report.)
+                    try { keys.Add(EnvelopeEncryptor.KeyIdOf(File.ReadAllBytes(copy))); }
+                    catch (EncryptionUnavailableException) { lookalikes++; }
                 }
             }
         }
 
-        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray);
+        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes);
         var temp = Path.Combine(dest, ManifestFileName + ".tmp");
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));
         File.Move(temp, Path.Combine(dest, ManifestFileName));
@@ -172,6 +173,7 @@ public static class BackupSet
         AuditFilePermissions.CreateOwnerOnlyDirectory(staging);
         try
         {
+            BeforeStagedCopy?.Invoke(set);
             foreach (var f in v.Manifest.Attachments)
             {
                 var copy = Path.Combine(staging, f.Name);
@@ -183,7 +185,7 @@ public static class BackupSet
         }
         catch
         {
-            try { Directory.Delete(staging, true); } catch (IOException) { /* best effort; the target was never touched */ }
+            try { Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort; the target was never touched */ }
             throw;
         }
         return v.Manifest.Attachments.Count;
@@ -232,15 +234,19 @@ public static class BackupSet
         return buf[..n];
     }
 
+    /// <summary>The full path with EVERY existing component resolved through symbolic links (so an alias anywhere in the path cannot hide an overlap).</summary>
     private static string RealPath(string path)
     {
-        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
-        // resolve the deepest existing ancestor through symbolic links so an alias cannot hide an overlap
-        var tail = new Stack<string>();
-        var cur = full;
-        while (cur.Length > 0 && !Directory.Exists(cur)) { tail.Push(Path.GetFileName(cur)); cur = Path.GetDirectoryName(cur) ?? ""; }
-        if (cur.Length > 0) { var info = new DirectoryInfo(cur); cur = (info.ResolveLinkTarget(true) as DirectoryInfo ?? info).FullName.TrimEnd(Path.DirectorySeparatorChar); }
-        while (tail.Count > 0) cur = Path.Combine(cur, tail.Pop());
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var cur = root.TrimEnd(Path.DirectorySeparatorChar);
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            cur = cur + Path.DirectorySeparatorChar + part;
+            FileSystemInfo info = Directory.Exists(cur) ? new DirectoryInfo(cur) : new FileInfo(cur);
+            if (info.Exists && info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
+                cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
+        }
         return cur;
     }
 
