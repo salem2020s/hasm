@@ -507,7 +507,7 @@ export interface PricingQuoteRequest { date: string; currency: string; itemId: s
 export interface CustomerGroup { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string }
 export interface CustomerGroupsResponse { customerGroups: CustomerGroup[]; can: { configure: boolean } }
 export interface CustomerGroupInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
-export interface CustomerGroupAssignment { partyId: string; partyCode: string; partyName: string; customerGroupId: string | null; customerGroupCode: string | null; revision: number }
+export interface CustomerGroupAssignment { partyId: string; customerGroupId: string | null; customerGroupCode: string | null; revision: number }
 export interface CustomerGroupAssignmentsResponse { assignments: CustomerGroupAssignment[]; can: { configure: boolean } }
 export interface PricingTraceStep { kind: string; ruleRef: string; outcome: string }
 export interface PricingQuote {

@@ -143,6 +143,8 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
 
 const asInput = (l: PriceList, isActive: boolean) => ({ nameAr: l.nameAr, nameEn: l.nameEn, priority: l.priority, validFrom: l.validFrom, validTo: l.validTo, isActive });
 
+/** The assignment list carries ids only (names are customer data of the party-role permission): the name is joined from the party-role list when the user may read it, otherwise the id is shown. */
+const partyLabel = (p: Pickers, id: string) => { const c = p.customers.find((x) => x.partyId === id); return c ? c.partyCode : id.slice(0, 8); };
 const groupName = (p: Pickers, id: string | null | undefined, none: string) => (id ? p.customerGroups.find((g) => g.id === id)?.code ?? id : none);
 
 /** A customer OR a customer group (never both): choosing one disables the other; the server and PostgreSQL enforce it too. */
@@ -186,6 +188,7 @@ function GroupsTab({ data, configure, reload, onDirty }: TabProps) {
     <div data-testid="pricing-tab-groups">
       <Notices runner={runner} id="pricing-groups" />
       <p className="hint">{t("pricing.groups.hint")}</p>
+      <Banner kind="info" testId="pricing-groups-deactivate-note">{t("pricing.groups.deactivate_note")}</Banner>
       {data.pickers.customerGroups.length === 0 ? <p data-testid="pricing-groups-empty">{t("pricing.groups.empty")}</p> : (
         <table className="table" data-testid="pricing-groups-table" aria-label={t("pricing.groups.list_label")}>
           <thead><tr><th>{t("pricing.code")}</th><th>{t("pricing.name_ar")}</th><th>{t("pricing.name_en")}</th><th>{t("pricing.status")}</th><th>{t("pricing.actions")}</th></tr></thead>
@@ -222,10 +225,10 @@ function GroupsTab({ data, configure, reload, onDirty }: TabProps) {
             {data.pickers.assignments.map((a) => {
               const value = picked[a.partyId] ?? (a.customerGroupId ?? "");
               return (
-                <tr key={a.partyId} data-testid={`pricing-assignment-${a.partyCode}`}>
-                  <td><bdi dir="auto">{a.partyCode} — {a.partyName}</bdi></td>
+                <tr key={a.partyId} data-testid={`pricing-assignment-${partyLabel(data.pickers, a.partyId)}`}>
+                  <td><bdi dir="auto">{partyLabel(data.pickers, a.partyId)}</bdi></td>
                   <td>{configure
-                    ? <select aria-label={`${t("pricing.groups.group")} ${a.partyCode}`} value={value} disabled={runner.busy} onChange={(e) => setPicked({ ...picked, [a.partyId]: e.target.value })}>
+                    ? <select aria-label={`${t("pricing.groups.group")} ${partyLabel(data.pickers, a.partyId)}`} value={value} disabled={runner.busy} onChange={(e) => setPicked({ ...picked, [a.partyId]: e.target.value })}>
                         <option value="">{t("pricing.groups.none")}</option>
                         {data.pickers.customerGroups.filter((g) => g.isActive || g.id === a.customerGroupId).map((g) => <option key={g.id} value={g.id}>{g.code} — {localName(g, locale)}</option>)}
                       </select>

@@ -4,7 +4,6 @@ using Hasm.Infrastructure.CompanyDatabase;
 using Npgsql;
 using CG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CustomerGroup;
 using CGM = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CustomerGroupMember;
-using LPT = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LocalParty;
 using PRT = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PartyRole;
 
 namespace Hasm.Infrastructure.Pricing;
@@ -16,7 +15,7 @@ public sealed partial class PricingConfigService
     private static async Task RequireActiveGroup(CompanyAuditedWork work, Guid? groupId, CancellationToken ct)
     {
         if (groupId is not { } g) return;
-        await using var q = new NpgsqlCommand($"SELECT {CG.IsActive} FROM {CG.Table} WHERE {CG.Id} = @g", work.Connection, work.Transaction);
+        await using var q = new NpgsqlCommand($"SELECT {CG.IsActive} FROM {CG.Table} WHERE {CG.Id} = @g FOR SHARE", work.Connection, work.Transaction);
         q.Parameters.AddWithValue("g", g);
         var v = await q.ExecuteScalarAsync(ct);
         if (v is null) throw Invalid("customerGroupId", "customer_group_not_found");
@@ -95,17 +94,18 @@ public sealed partial class PricingConfigService
 
     // ---- assignment (one group per customer party)
 
-    private const string AssignmentSelect = $"SELECT p.{LPT.Id}, p.{LPT.Code}, p.{LPT.DisplayName}, m.{CGM.CustomerGroupId}, g.{CG.Code}, COALESCE(m.{CGM.Revision}, 0) FROM {LPT.Table} p " +
-        $"LEFT JOIN {CGM.Table} m ON m.{CGM.PartyId} = p.{LPT.Id} LEFT JOIN {CG.Table} g ON g.{CG.Id} = m.{CGM.CustomerGroupId} " +
-        $"WHERE EXISTS (SELECT 1 FROM {PRT.Table} r WHERE r.{PRT.PartyId} = p.{LPT.Id} AND r.{PRT.Role} = 1)";
+    // Ids and group data ONLY: the party code and name are customer data that needs the party-role permission, so a pricing-view user never receives them here (the screen joins names from the party-role list it may already read).
+    private const string AssignmentSelect = $"SELECT r.{PRT.PartyId}, m.{CGM.CustomerGroupId}, g.{CG.Code}, COALESCE(m.{CGM.Revision}, 0) FROM {PRT.Table} r " +
+        $"LEFT JOIN {CGM.Table} m ON m.{CGM.PartyId} = r.{PRT.PartyId} LEFT JOIN {CG.Table} g ON g.{CG.Id} = m.{CGM.CustomerGroupId} " +
+        $"WHERE r.{PRT.Role} = 1";
 
     private static async Task<List<CustomerGroupAssignmentView>> LoadAssignments(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid? party, CancellationToken ct)
     {
         var rows = new List<CustomerGroupAssignmentView>();
-        await using var q = new NpgsqlCommand($"{AssignmentSelect}{(party is null ? "" : $" AND p.{LPT.Id} = @p")} ORDER BY p.{LPT.Code}", conn, tx);
+        await using var q = new NpgsqlCommand($"{AssignmentSelect}{(party is null ? "" : $" AND r.{PRT.PartyId} = @p")} ORDER BY r.{PRT.PartyId}", conn, tx);
         if (party is { } g) q.Parameters.AddWithValue("p", g);
         await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct)) rows.Add(new CustomerGroupAssignmentView(r.GetGuid(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetInt64(5)));
+        while (await r.ReadAsync(ct)) rows.Add(new CustomerGroupAssignmentView(r.GetGuid(0), r.IsDBNull(1) ? null : r.GetGuid(1), r.IsDBNull(2) ? null : r.GetString(2), r.GetInt64(3)));
         return rows;
     }
 

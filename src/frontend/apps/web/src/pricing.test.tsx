@@ -22,7 +22,7 @@ const retail = { id: "l1", code: "RETAIL", nameAr: "قائمة التجزئة", 
 const entry = { id: "e1", priceListId: "l1", itemId: "i1", itemGroupId: null, unitId: "u1", minQuantity: 0, unitPrice: 10, isActive: true, revision: 2, updatedAtUtc: "2026-06-01T00:00:00Z" };
 const promo = { id: "d1", code: "PROMO", nameAr: "عرض", nameEn: "Promo", priority: 1, validFrom: "2026-01-01", validTo: null, isActive: true, percent: 15, minQuantity: 0, customerId: null, itemId: null, itemGroupId: "g1", revision: 1, updatedAtUtc: "2026-06-01T00:00:00Z" };
 const vipGroup = { id: "cg1", code: "VIP", nameAr: "كبار العملاء", nameEn: "VIP", isActive: true, revision: 2, updatedAtUtc: "2026-06-01T00:00:00Z" };
-const assignment = { partyId: "p1", partyCode: "CUST1", partyName: "عميل", customerGroupId: null, customerGroupCode: null, revision: 0 };
+const assignment = { partyId: "p1", customerGroupId: null, customerGroupCode: null, revision: 0 };
 const quote = {
   version: "pricing-snapshot-v2", contentHash: "a".repeat(64), policy: { priceDecimals: 2, moneyDecimals: 2, minMarginPercent: 10, marginAction: 2, listPrecedence: 2, discountPrecedence: 1 },
   result: { listUnitPrice: 10, priceRuleRef: "list:1@RETAIL;tier:0", discountPercent: 15, discountRuleRef: "discount:1@PROMO", netUnitPrice: 8.5, lineNet: 17, overridden: false, overrideReason: null, marginPercent: null, margin: 0, requiresApproval: false,
@@ -204,6 +204,7 @@ describe("pricing administration screen", () => {
     await waitFor(() => expect(client.createCustomerGroup).toHaveBeenCalledWith({ code: "wholesale", nameAr: "جملة", nameEn: null }));
     await userEvent.click(within(screen.getByTestId("pricing-group-VIP")).getByRole("button", { name: A("pricing.deactivate") }));
     await waitFor(() => expect(client.updateCustomerGroup).toHaveBeenCalledWith("cg1", { nameAr: "كبار العملاء", nameEn: "VIP", isActive: false }, 2));
+    expect(screen.getByTestId("pricing-groups-deactivate-note")).toHaveTextContent(A("pricing.groups.deactivate_note"));   // stated prominently
     const row = within(screen.getByTestId("pricing-assignment-CUST1"));
     expect(row.getByRole("button", { name: A("pricing.groups.assign") })).toBeDisabled();                          // nothing changed yet
     await userEvent.selectOptions(row.getByRole("combobox"), "cg1");
@@ -227,6 +228,25 @@ describe("pricing administration screen", () => {
     const form = within(await screen.findByTestId("pricing-discount-create"));
     await userEvent.selectOptions(form.getByLabelText(label("pricing.customer")), "p1");
     expect(form.getByLabelText(label("pricing.customer_group"))).toBeDisabled();
+  });
+
+  it("keeps an inactive CURRENT group selectable in the membership row but never offers it for a new list, and shows an id when the names cannot be read", async () => {
+    const oldGroup = { ...vipGroup, id: "cg2", code: "OLD", nameAr: "قديمة", nameEn: "Old", isActive: false };
+    render({
+      listCustomerGroups: vi.fn().mockResolvedValue({ customerGroups: [vipGroup, oldGroup], can: { configure: true } }),
+      listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, customerGroupId: "cg2", customerGroupCode: "OLD", revision: 4 }, { partyId: "zz-unknown-party", customerGroupId: null, customerGroupCode: null, revision: 0 }], can: { configure: true } }),
+    });
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
+    const row = within(await screen.findByTestId("pricing-assignment-CUST1"));
+    const select = row.getByRole("combobox") as HTMLSelectElement;
+    expect(select.value).toBe("cg2");                                                                              // the inactive current group is still shown and selected
+    expect(within(select).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["", "cg1", "cg2"]);
+    expect(screen.getByTestId("pricing-assignment-zz-unkno")).toBeInTheDocument();                                   // a customer the user cannot name is shown by id
+    await userEvent.click(screen.getByRole("tab", { name: label("pricing.tab.lists") }));
+    const panel = within(await screen.findByTestId("pricing-list-create"));
+    const offered = within(panel.getByLabelText(label("pricing.customer_group"))).getAllByRole("option").map((o) => o.getAttribute("value"));
+    expect(offered).toEqual(["", "cg1"]);                                                                           // an inactive group is never offered for a new list
   });
 
   it("shows a viewer the groups and assignments without any form", async () => {

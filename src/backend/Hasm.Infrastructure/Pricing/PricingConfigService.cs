@@ -61,7 +61,7 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
     private static async Task RequireCustomerRole(CompanyAuditedWork work, Guid? partyId, CancellationToken ct)
     {
         if (partyId is not { } p) return;
-        await using var q = new NpgsqlCommand($"SELECT 1 FROM {PartyRoleTable.Table} WHERE {PartyRoleTable.PartyId} = @p AND {PartyRoleTable.Role} = 1", work.Connection, work.Transaction);
+        await using var q = new NpgsqlCommand($"SELECT 1 FROM {PartyRoleTable.Table} WHERE {PartyRoleTable.PartyId} = @p AND {PartyRoleTable.Role} = 1 FOR SHARE", work.Connection, work.Transaction);
         q.Parameters.AddWithValue("p", p);
         if (await q.ExecuteScalarAsync(ct) is null) throw Invalid("customerId", "customer_role_required");
     }

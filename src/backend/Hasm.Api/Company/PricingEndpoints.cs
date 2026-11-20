@@ -62,7 +62,7 @@ public static class PricingEndpoints
         customerId = d.CustomerId, customerGroupId = d.CustomerGroupId, itemId = d.ItemId, itemGroupId = d.ItemGroupId, revision = d.Revision, updatedAtUtc = d.UpdatedAtUtc,
     };
     private static object GroupBody(CustomerGroupView v) => new { id = v.Id, code = v.Code, nameAr = v.NameAr, nameEn = v.NameEn, isActive = v.IsActive, revision = v.Revision, updatedAtUtc = v.UpdatedAtUtc };
-    private static object AssignmentBody(CustomerGroupAssignmentView v) => new { partyId = v.PartyId, partyCode = v.PartyCode, partyName = v.PartyName, customerGroupId = v.CustomerGroupId, customerGroupCode = v.CustomerGroupCode, revision = v.Revision };
+    private static object AssignmentBody(CustomerGroupAssignmentView v) => new { partyId = v.PartyId, customerGroupId = v.CustomerGroupId, customerGroupCode = v.CustomerGroupCode, revision = v.Revision };
     private static object SnapshotBody(PricingSnapshot s) => new
     {
         version = s.Version, contentHash = s.ContentHash,

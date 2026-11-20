@@ -45,4 +45,4 @@ public sealed record CustomerGroupView(Guid Id, string Code, string NameAr, stri
 
 /// <summary>Sets the group of one customer party (null group = none). A customer belongs to at most one group at a time.</summary>
 public sealed record CustomerGroupAssignmentInput(Guid? CustomerGroupId);
-public sealed record CustomerGroupAssignmentView(Guid PartyId, string PartyCode, string PartyName, Guid? CustomerGroupId, string? CustomerGroupCode, long Revision);
+public sealed record CustomerGroupAssignmentView(Guid PartyId, Guid? CustomerGroupId, string? CustomerGroupCode, long Revision);

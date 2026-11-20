@@ -68,6 +68,14 @@ public class CustomerGroupApiTests : HttpApiTestBase
         var (viewer, _) = await Member([PermissionCatalog.Codes.PricingView], ScopeKind.Company, null);
         var viewerCookie = await SignIn(viewer);
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Base}/customer-groups", cookie: viewerCookie)).Status);
+        var viewerAssignments = await Send(HttpMethod.Get, $"{Base}/customer-assignments", cookie: viewerCookie);   // a pricing-view-only user gets ids and group data, never customer names or codes
+        Assert.Equal(HttpStatusCode.OK, viewerAssignments.Status);
+        var first = viewerAssignments.Json.GetProperty("assignments")[0];
+        Assert.Equal(party, first.GetProperty("partyId").GetGuid());
+        Assert.Equal("VIP", first.GetProperty("customerGroupCode").GetString());
+        Assert.False(first.TryGetProperty("partyCode", out _));
+        Assert.False(first.TryGetProperty("partyName", out _));
+        Assert.DoesNotContain("\"C1\"", viewerAssignments.Body);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/customer-groups", new { code = "X", nameAr = "س" }, viewerCookie)).Status);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Put, $"{Base}/customer-assignments/{party}", new { customerGroupId = (Guid?)null }, viewerCookie, ifMatch: "\"1\"")).Status);
         var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
