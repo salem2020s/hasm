@@ -101,8 +101,12 @@ public static class BackupSet
                 var head = ReadHead(copy);
                 if (head.Length >= 4 && head.AsSpan(0, 4).SequenceEqual(EnvelopeMagic))
                 {
-                    try { keys.Add(EnvelopeEncryptor.KeyIdOf(head)); }
-                    catch (EncryptionUnavailableException) { throw new BackupException("encrypted_file_unreadable"); }
+                    // header of format v1: "HFE1" | keyIdLen(1) | keyId ... (the whole envelope is not needed to name its key)
+                    int idLen = head.Length > 4 ? head[4] : 0;
+                    if (idLen is 0 or > 32 || head.Length < 5 + idLen) throw new BackupException("encrypted_file_unreadable");
+                    var keyId = System.Text.Encoding.ASCII.GetString(head, 5, idLen);
+                    if (!KekRing.IsValidKeyId(keyId)) throw new BackupException("encrypted_file_unreadable");
+                    keys.Add(keyId);
                 }
             }
         }
