@@ -1,5 +1,5 @@
 import { ApiError, ImportRowStatus } from "@hasm/api-client";
-import type { ImportAdapterInfo, ImportAdaptersResponse, ImportBatch, ImportDecision, ImportEvent, ImportFieldDef, ImportFieldsResponse, ImportMapping, ImportRowsPage, ImportSettings, ImportStatus } from "@hasm/api-client";
+import type { ImportAdapterInfo, ImportAdaptersResponse, ImportBatch, ImportDecision, ImportEvent, ImportFieldDef, ImportFieldsResponse, ImportMapping, ImportRowsPage, ImportSettings, ImportStatus, ImportTemplate } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth";
@@ -353,6 +353,13 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
   const headers = batch.options.headers ?? [];
   const tRef = useRef(t);
   tRef.current = t;
+  // reusable mapping templates (by header name): applying one only PRE-FILLS the form below; saving the mapping, validation, dry run and approval are unchanged
+  const [templates, setTemplates] = useState<ImportTemplate[]>([]);
+  const [tplName, setTplName] = useState("");
+  const [tplPick, setTplPick] = useState("");
+  const [tplNote, setTplNote] = useState<string | null>(null);
+  const loadTemplates = useCallback(async () => { try { setTemplates((await auth.api.listImportTemplates(batch.adapter)).templates); } catch { setTemplates([]); } }, [auth.api, batch.adapter]);
+  useEffect(() => { void loadTemplates(); }, [loadTemplates]);
 
   useEffect(() => {
     let alive = true;
@@ -399,6 +406,35 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
           {(a) => <select {...a} value={state.date} onChange={(e) => setState({ ...state, date: e.target.value })}>{defs.options.dateFormats.map((x) => <option key={x} value={x}>{x}</option>)}</select>}
         </Field>
       </div>
+      <fieldset disabled={act.busy} data-testid="imp-templates">
+        <legend>{t("imp.tpl.title")}</legend>
+        <p className="hint">{t("imp.tpl.hint")}</p>
+        <div className="form-row">
+          <Field id="imp-tpl-pick" label={t("imp.tpl.apply_label")}>
+            {(a) => <select {...a} value={tplPick} onChange={(e) => { setTplPick(e.target.value); setTplNote(null); }}><option value="">{t("imp.map_none")}</option>{templates.filter((x) => !x.isRetired).map((x) => <option key={x.id} value={x.name}>{x.name} (v{x.version})</option>)}</select>}
+          </Field>
+          <button type="button" disabled={!tplPick} data-testid="imp-tpl-apply" onClick={() => void (async () => {
+            try {
+              const res = await auth.api.applyImportTemplate(batch.id, tplPick);
+              setState(fromMapping(res.mapping));
+              setTplNote(res.unmatched.length === 0 ? t("imp.tpl.applied") : t("imp.tpl.applied_unmatched", { n: String(res.unmatched.length), fields: res.unmatched.map((k) => { const d = defs.fields.find((f) => f.key === k); return d ? localName(d, locale) : k; }).join("، ") }));
+            } catch (e) { if (!auth.handleError(e)) act.setError(importError(tRef.current, e)); }
+          })()}>{t("imp.tpl.apply")}</button>
+        </div>
+        {tplNote && <p role="status" data-testid="imp-tpl-note">{tplNote}</p>}
+        <div className="form-row">
+          <Field id="imp-tpl-name" label={t("imp.tpl.save_label")} hint={batch.mapping ? t("imp.tpl.save_hint") : t("imp.tpl.save_first")}>
+            {(a) => <input {...a} value={tplName} maxLength={100} onChange={(e) => setTplName(e.target.value)} />}
+          </Field>
+          <button type="button" disabled={!batch.mapping || tplName.trim() === ""} data-testid="imp-tpl-save" onClick={() => void (async () => {
+            try {
+              const current = templates.find((x) => x.name === tplName.trim())?.version ?? 0;
+              await auth.api.saveImportTemplate(batch.id, tplName.trim(), current);
+              setTplNote(t("imp.tpl.saved")); setTplName(""); await loadTemplates();
+            } catch (e) { if (!auth.handleError(e)) { act.setError(importError(tRef.current, e)); await loadTemplates(); } }
+          })()}>{t("imp.tpl.save")}</button>
+        </div>
+      </fieldset>
       <div className="actions">
         <button type="button" disabled={act.busy} onClick={() => void suggest()}>{t("imp.map_suggest")}</button>
         <button type="button" className="primary" disabled={act.busy} data-testid="imp-map-save" onClick={() => void act.run(() => auth.api.setImportMapping(batch.id, toMapping(defs.fields, state), batch.revision), t("imp.mapped"))}>{t("imp.map_save")}</button>

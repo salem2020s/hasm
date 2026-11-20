@@ -366,6 +366,10 @@ export interface ImportSheet { index: number; name: string; rows: number; column
 export interface ImportPlanSummary { total: number; valid: number; exact: number; invalid: number; conflict: number; resolved: number; operations: number; blocking: number }
 export interface ImportPlan { v: number; adapter: string; adapterVersion: number; rowsHash: string; mappingHash: string; baseline: string; summary: ImportPlanSummary; reconciliation: { key: string; value: string }[]; canApply: boolean; operationsHash: string }
 export interface ImportMapping { fields: Record<string, { column: number | null; default: string | null }>; options?: { decimalSeparator?: string; thousandsSeparator?: string; dateFormat?: string } }
+// ---- Reusable import mapping templates (Phase 3.9C): by header name, per company and adapter, versioned.
+export interface ImportTemplate { id: string; adapter: string; name: string; version: number; isRetired: boolean; content: { fields: Record<string, { header?: string; default?: string }>; options?: Record<string, string> }; createdAtUtc: string }
+export interface ImportTemplateApplication { name: string; version: number; mapping: ImportMapping; unmatched: string[] }
+
 export interface ImportBatch {
   id: string; adapter: string; adapterVersion: number; status: ImportStatus; fileName: string; fileKind: "csv" | "xlsx"; fileSize: number; fileSha256: string; keyId: string;
   options: { headers?: string[]; sheet?: number; sheetName?: string; headerRow?: number; encoding?: string; delimiter?: string | null };
@@ -1092,6 +1096,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       get<ImportRowsPage>(`/api/v1/company/imports/${enc(id)}/rows?offset=${q.offset ?? 0}&limit=${q.limit ?? 100}${q.status ? `&status=${q.status}` : ""}`),
     importEvents: (id: string) => get<{ events: ImportEvent[] }>(`/api/v1/company/imports/${enc(id)}/events`),
     importFields: (id: string) => get<ImportFieldsResponse>(`/api/v1/company/imports/${enc(id)}/fields`),
+    listImportTemplates: (adapter?: string) => get<{ templates: ImportTemplate[] }>(`/api/v1/company/imports/templates${adapter ? `?adapter=${enc(adapter)}` : ""}`),
+    importTemplateHistory: (adapter: string, name: string) => get<{ versions: ImportTemplate[] }>(`/api/v1/company/imports/templates/${enc(adapter)}/${enc(name)}/history`),
+    saveImportTemplate: (batchId: string, name: string, expectedVersion: number) => request<ImportTemplate>("POST", `/api/v1/company/imports/${enc(batchId)}/mapping/template`, { body: { name, expectedVersion } }),
+    applyImportTemplate: (batchId: string, name: string) => request<ImportTemplateApplication>("POST", `/api/v1/company/imports/${enc(batchId)}/mapping/apply-template`, { body: { name } }),
+    retireImportTemplate: (adapter: string, name: string, expectedVersion: number) => request<ImportTemplate>("POST", `/api/v1/company/imports/templates/${enc(adapter)}/${enc(name)}/retire`, { body: { expectedVersion } }),
     suggestImportMapping: (id: string) => get<{ mapping: ImportMapping }>(`/api/v1/company/imports/${enc(id)}/mapping/suggestion`),
     setImportMapping: (id: string, mapping: ImportMapping, revision: number) => request<ImportBatch>("PUT", `/api/v1/company/imports/${enc(id)}/mapping`, { body: mapping, ifMatch: revision }),
     dryRunImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/dry-run`, { ifMatch: revision }),
