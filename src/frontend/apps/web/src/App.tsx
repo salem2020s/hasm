@@ -29,6 +29,7 @@ import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
 import { CostCentersPage } from "./pages/CostCenters";
 import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
+import { TaxesPage } from "./pages/Taxes";
 import { FiscalClosingPage } from "./pages/FiscalClosing";
 import { ExchangeRatesPage } from "./pages/ExchangeRates";
 import { JournalPage } from "./pages/Journal";
@@ -78,6 +79,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/exchange-rates", permission: "company.exchangerates.view", element: <ExchangeRatesPage /> },
   { path: "/company/cost-centers", permission: "company.costcenters.view", element: <CostCentersPage /> },
   { path: "/company/cost-center-policies", permission: "company.costcenterpolicies.view", element: <CostCenterPoliciesPage /> },
+  { path: "/company/taxes", permission: "company.tax.view", element: <TaxesPage /> },
   { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
@@ -133,6 +135,7 @@ function Shell() {
       { id: "/company/exchange-rates", label: t("nav.exchange_rates"), permission: "company.exchangerates.view" },
       { id: "/company/cost-centers", label: t("nav.cost_centers"), permission: "company.costcenters.view" },
       { id: "/company/cost-center-policies", label: t("nav.cost_center_policies"), permission: "company.costcenterpolicies.view" },
+      { id: "/company/taxes", label: t("nav.taxes"), permission: "company.tax.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
       { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
