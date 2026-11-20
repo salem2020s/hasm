@@ -18,7 +18,7 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// <summary>
 /// The manifest of one company backup set (SRS 14.4, 16.2; Phase 3.12 coordination). It lists the database dump and every attachment file (active AND removed attachments: removed bytes are retained) with hashes,
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
-/// storage names) or any company name. The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
+/// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
 public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles);
 
@@ -57,12 +57,26 @@ public static class BackupSet
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
         if (!File.Exists(databaseDumpFile)) throw new BackupException("database_dump_missing");
         if (!Path.IsPathFullyQualified(destination) || !Path.IsPathFullyQualified(attachmentCompanyDirectory)) throw new BackupException("path_not_absolute");
-        var source = Path.GetFullPath(attachmentCompanyDirectory);
-        var dest = Path.GetFullPath(destination);
+        var source = RealPath(attachmentCompanyDirectory);
+        var dest = RealPath(destination);
+        if (Directory.Exists(attachmentCompanyDirectory) && new DirectoryInfo(Path.GetFullPath(attachmentCompanyDirectory).TrimEnd(Path.DirectorySeparatorChar)).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
         if (IsInside(dest, source) || IsInside(source, dest)) throw new BackupException("destination_overlaps_source");
         if (Directory.Exists(dest) && Directory.EnumerateFileSystemEntries(dest).Any()) throw new BackupException("destination_not_empty");
         if (new FileInfo(databaseDumpFile).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
 
+        var destExisted = Directory.Exists(dest);
+        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc); }
+        catch
+        {
+            // never leave a partial set that could be mistaken for a backup
+            try { if (destExisted) { foreach (var e in Directory.EnumerateFileSystemEntries(dest)) { if (Directory.Exists(e)) Directory.Delete(e, true); else File.Delete(e); } } else Directory.Delete(dest, true); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+            throw;
+        }
+    }
+
+    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc)
+    {
         AuditFilePermissions.CreateOwnerOnlyDirectory(dest);
         var attachDir = Path.Combine(dest, AttachmentFolderName);
         AuditFilePermissions.CreateOwnerOnlyDirectory(attachDir);
@@ -84,10 +98,10 @@ public static class BackupSet
                 var copy = Path.Combine(attachDir, name);
                 File.Copy(path, copy, false);
                 files.Add(Describe(copy, name));
-                var bytes = File.ReadAllBytes(copy);
-                if (bytes.Length >= 4 && bytes.AsSpan(0, 4).SequenceEqual(EnvelopeMagic))
+                var head = ReadHead(copy);
+                if (head.Length >= 4 && head.AsSpan(0, 4).SequenceEqual(EnvelopeMagic))
                 {
-                    try { keys.Add(EnvelopeEncryptor.KeyIdOf(bytes)); }
+                    try { keys.Add(EnvelopeEncryptor.KeyIdOf(head)); }
                     catch (EncryptionUnavailableException) { throw new BackupException("encrypted_file_unreadable"); }
                 }
             }
@@ -136,23 +150,30 @@ public static class BackupSet
     /// Restores the attachment folder of the set into <paramref name="targetCompanyDirectory"/>, which must not exist or be empty (never merges, never overwrites). The set is verified first; a set that is not clean is refused
     /// and nothing is written. Files are staged in a sibling directory and moved into place, so a failure leaves the target untouched. Returns the number of files restored.
     /// </summary>
-    public static int RestoreAttachments(string setDirectory, string targetCompanyDirectory)
+    public static int RestoreAttachments(string setDirectory, string targetCompanyDirectory, Guid expectedCompanyId)
     {
         if (!Path.IsPathFullyQualified(targetCompanyDirectory) || !Path.IsPathFullyQualified(setDirectory)) throw new BackupException("path_not_absolute");
-        var set = Path.GetFullPath(setDirectory);
-        var target = Path.GetFullPath(targetCompanyDirectory).TrimEnd(Path.DirectorySeparatorChar);
+        if (expectedCompanyId == Guid.Empty) throw new BackupException("invalid_company");
+        var set = RealPath(setDirectory);
+        var target = RealPath(targetCompanyDirectory);
+        if (target.Length == 0 || Path.GetDirectoryName(target) is not { Length: > 0 } parent) throw new BackupException("target_invalid");
         if (IsInside(target, set) || IsInside(set, target)) throw new BackupException("target_overlaps_set");
         if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()) throw new BackupException("target_not_empty");
         var v = Verify(set);
         if (!v.IsClean || v.Manifest is null) throw new BackupException("backup_set_not_clean");
+        if (v.Manifest.CompanyId != expectedCompanyId) throw new BackupException("company_mismatch");   // a set of another company is never restored under this one (Scenario 21.8)
 
-        var parent = Path.GetDirectoryName(target) ?? throw new BackupException("target_invalid");
         AuditFilePermissions.CreateOwnerOnlyDirectory(parent);
         var staging = target + ".restoring-" + Guid.NewGuid().ToString("N");
         AuditFilePermissions.CreateOwnerOnlyDirectory(staging);
         try
         {
-            foreach (var f in v.Manifest.Attachments) File.Copy(Path.Combine(set, AttachmentFolderName, f.Name), Path.Combine(staging, f.Name), false);
+            foreach (var f in v.Manifest.Attachments)
+            {
+                var copy = Path.Combine(staging, f.Name);
+                File.Copy(Path.Combine(set, AttachmentFolderName, f.Name), copy, false);
+                if (!Matches(copy, f)) throw new BackupException("staged_file_changed");   // the source changed after verification (TOCTOU)
+            }
             if (Directory.Exists(target)) Directory.Delete(target);   // empty by the check above
             Directory.Move(staging, target);
         }
@@ -196,6 +217,27 @@ public static class BackupSet
             if (a is null || a.Name is null || !StorageName.IsMatch(a.Name) || !Sha256Hex.IsMatch(a.Sha256 ?? "") || a.Size < 0 || !names.Add(a.Name)) return null;
         if (m.KeyIdsRequired.Any(k => k is null || !KekRing.IsValidKeyId(k))) return null;
         return m;
+    }
+
+    /// <summary>The envelope header (magic, id length and key id: at most 4 + 1 + 32 bytes) is all that is needed to name the key.</summary>
+    private static byte[] ReadHead(string path)
+    {
+        using var fs = File.OpenRead(path);
+        var buf = new byte[64];
+        var n = fs.Read(buf, 0, buf.Length);
+        return buf[..n];
+    }
+
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
+        // resolve the deepest existing ancestor through symbolic links so an alias cannot hide an overlap
+        var tail = new Stack<string>();
+        var cur = full;
+        while (cur.Length > 0 && !Directory.Exists(cur)) { tail.Push(Path.GetFileName(cur)); cur = Path.GetDirectoryName(cur) ?? ""; }
+        if (cur.Length > 0) { var info = new DirectoryInfo(cur); cur = (info.ResolveLinkTarget(true) as DirectoryInfo ?? info).FullName.TrimEnd(Path.DirectorySeparatorChar); }
+        while (tail.Count > 0) cur = Path.Combine(cur, tail.Pop());
+        return cur;
     }
 
     private static ManifestFile Describe(string path, string name)

@@ -112,7 +112,7 @@ public sealed class BackupSetTests : IDisposable
         BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
 
         var target = P("restored", "company");
-        Assert.Equal(2, BackupSet.RestoreAttachments(set, target));
+        Assert.Equal(2, BackupSet.RestoreAttachments(set, target, company));
         foreach (var f in new[] { s.Plain, s.Sensitive })
             Assert.Equal(File.ReadAllBytes(Path.Combine(s.Source, f)), File.ReadAllBytes(Path.Combine(target, f)));
         Assert.Equal(before, Snapshot(P("att")));                                                   // sources and other companies unchanged
@@ -127,13 +127,13 @@ public sealed class BackupSetTests : IDisposable
         BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
 
         var occupied = P("occupied"); Directory.CreateDirectory(occupied); File.WriteAllText(Path.Combine(occupied, "keep.txt"), "x");
-        Assert.Equal("target_not_empty", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, occupied)).Code);
-        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, Path.Combine(set, "attachments"))).Code);
-        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, root)).Code);
+        Assert.Equal("target_not_empty", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, occupied, company)).Code);
+        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, Path.Combine(set, "attachments"), company)).Code);
+        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, root, company)).Code);
 
         File.AppendAllText(Path.Combine(set, "attachments", s.Plain), "x");
         var target = P("never");
-        Assert.Equal("backup_set_not_clean", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target)).Code);
+        Assert.Equal("backup_set_not_clean", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, company)).Code);
         Assert.False(Directory.Exists(target));
         Assert.Equal(new[] { "keep.txt" }, Directory.GetFiles(occupied).Select(f => Path.GetFileName(f)).ToArray());
     }
@@ -170,6 +170,61 @@ public sealed class BackupSetTests : IDisposable
         FileKekRing.Generate(keys, "k0");
         Assert.True(BackupSet.CheckKeys(m, BackupSet.ListKeyIds(keys)).IsComplete);
         Assert.Empty(BackupSet.ListKeyIds(P("no-such-directory")));
+    }
+
+    [Fact]
+    public void A_set_of_another_company_is_never_restored_under_this_company()
+    {
+        var s = Source();
+        var set = P("set");
+        BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        var target = P("other-company-target");
+        Assert.Equal("company_mismatch", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, Guid.NewGuid())).Code);
+        Assert.Equal("invalid_company", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, Guid.Empty)).Code);
+        Assert.False(Directory.Exists(target));
+    }
+
+    [Fact]
+    public void Symbolic_links_and_aliased_overlaps_are_refused_and_a_failed_create_leaves_no_partial_set()
+    {
+        if (OperatingSystem.IsWindows()) return;                                                    // link creation needs privileges on Windows
+        var s = Source();
+        var linkedSource = P("linked-source");
+        Directory.CreateSymbolicLink(linkedSource, s.Source);
+        Assert.Equal("symbolic_link_refused", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, linkedSource, P("a"), DateTimeOffset.UnixEpoch)).Code);
+
+        var alias = P("alias");                                                                     // an alias of the source used as destination parent
+        Directory.CreateSymbolicLink(alias, s.Source);
+        Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(alias, "inside"), DateTimeOffset.UnixEpoch)).Code);
+
+        File.CreateSymbolicLink(Path.Combine(s.Source, Name()), s.Dump);                            // a file link inside the folder
+        var dest = P("partial");
+        Assert.Equal("symbolic_link_refused", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, dest, DateTimeOffset.UnixEpoch)).Code);
+        Assert.False(Directory.Exists(dest));                                                       // the partial set was removed
+    }
+
+    [Fact]
+    public void A_file_altered_after_the_backup_aborts_the_restore_before_anything_is_written_or_staged()
+    {
+        var s = Source();
+        var set = P("set");
+        var m = BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        var target = P("restored2", "c");
+        File.AppendAllText(Path.Combine(set, "attachments", m.Attachments[0].Name), "x");
+        Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, company));
+        Assert.False(Directory.Exists(target));
+        Assert.Empty(Directory.Exists(P("restored2")) ? Directory.GetDirectories(P("restored2")) : []);
+    }
+
+    [Fact]
+    public void A_key_directory_inside_the_destination_is_refused_by_the_overlap_rule_for_the_target_and_a_root_target_is_invalid()
+    {
+        var s = Source();
+        var set = P("set");
+        BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        Assert.Equal("target_overlaps_set", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, Path.Combine(set, "keys"), company)).Code);
+        var rootTarget = Path.GetPathRoot(root)!;
+        Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, rootTarget, company));
     }
 
     private static string[] Snapshot(string dir) =>
