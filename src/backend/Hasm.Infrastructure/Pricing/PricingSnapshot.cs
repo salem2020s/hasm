@@ -17,6 +17,14 @@ public static class PricingSnapshots
     public const string CurrentVersion = "pricing-snapshot-v1";
     /// <summary>The form of a snapshot whose policy has a NON-default precedence (the precedences are part of the sealed content). Snapshots of default-precedence policies stay v1 with their historical hash.</summary>
     public const string PrecedenceVersion = "pricing-snapshot-v2";
+    /// <summary>The policy steps a resolution under this policy records (none for the default precedences). A snapshot whose trace disagrees was resolved under another policy and is refused.</summary>
+    private static string[] ExpectedPolicySteps(PricingPolicy p) =>
+    [
+        .. p.ListPrecedence != PriceListPrecedence.ScopeThenPriority ? new[] { "list-precedence:priority-then-scope" } : [],
+        .. p.DiscountPrecedence != DiscountPrecedence.SpecificityThenPriority ? new[] { "discount-precedence:priority-then-specificity" } : [],
+    ];
+    private static bool PolicyStepsMatch(PricingPolicy p, ResolvedPricing r) =>
+        r.Trace.Where(s => s.Kind == "policy").Select(s => s.RuleRef).SequenceEqual(ExpectedPolicySteps(p)) && r.Trace.Where(s => s.Kind == "policy").All(s => s.Outcome == "applied");
     private static string VersionFor(PricingPolicy p) => p.HasDefaultPrecedence ? CurrentVersion : PrecedenceVersion;
 
     private sealed class CanonicalDecimal : JsonConverter<decimal>
@@ -46,6 +54,7 @@ public static class PricingSnapshots
     /// <summary>Calculates and seals, keeping read-only copies of the trace.</summary>
     public static PricingSnapshot Create(PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over = null)
     {
+        if (!PolicyStepsMatch(policy, resolved)) throw new PricingException("policy_mismatch");   // Resolve must have been called with the same policy
         var result = PricingEngine.Calculate(policy, request, resolved, over);
         var copy = resolved with { Trace = resolved.Trace.ToArray().AsReadOnly() };
         var version = VersionFor(policy);
@@ -55,9 +64,10 @@ public static class PricingSnapshots
     /// <summary>True only when the version is known, the stored hash matches the stored content AND recalculating from the stored values reproduces the stored result exactly.</summary>
     public static bool Verify(PricingSnapshot snapshot)
     {
-        if (snapshot is null || snapshot.Policy is null || snapshot.Version != VersionFor(snapshot.Policy) || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved?.Trace is null || snapshot.Result?.Trace is null) return false;
+        if (snapshot is null || snapshot.Policy is null || snapshot.Version != VersionFor(snapshot.Policy) || snapshot.Request is null || snapshot.Resolved?.Trace is null || snapshot.Result?.Trace is null) return false;
         try
         {
+            if (!PolicyStepsMatch(snapshot.Policy, snapshot.Resolved)) return false;
             if (!string.Equals(snapshot.ContentHash, Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, snapshot.Result), StringComparison.Ordinal)) return false;
             var recomputed = PricingEngine.Calculate(snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override);
             return string.Equals(Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, recomputed), snapshot.ContentHash, StringComparison.Ordinal);

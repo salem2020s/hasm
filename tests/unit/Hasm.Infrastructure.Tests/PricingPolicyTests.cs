@@ -102,4 +102,20 @@ public class PricingPolicyTests
         Assert.False(PricingSnapshots.Verify(v1 with { Version = "pricing-snapshot-v2" }));
         Assert.False(PricingSnapshots.Verify(v1 with { Policy = ByPriority }));                               // a v1 snapshot cannot carry a non-default precedence
     }
+
+    [Fact]
+    public void A_snapshot_must_be_sealed_under_the_policy_the_resolution_used_and_a_priority_first_discount_tie_is_broken_by_specificity()
+    {
+        var list = List("L", 1); var entries = new[] { Entry(list, 100m) };
+        var plain = PricingEngine.Resolve(Req(), [list], entries, [], Default);                               // resolved WITHOUT the non-default policy
+        Assert.Equal("policy_mismatch", Refusal(() => PricingSnapshots.Create(ByPriority, Req(), plain)));      // sealing it as priority-first would state a policy that was not applied
+        var prioritised = PricingEngine.Resolve(Req(), [list], entries, [], ByPriority);
+        Assert.Equal("policy_mismatch", Refusal(() => PricingSnapshots.Create(Default, Req(), prioritised)));   // and the reverse (a stray policy step)
+        var s = PricingSnapshots.Create(ByPriority, Req(), prioritised);
+        Assert.False(PricingSnapshots.Verify(s with { Resolved = s.Resolved with { Trace = s.Resolved.Trace.Where(t => t.Kind != "policy").ToArray() } }));
+        Assert.False(PricingSnapshots.Verify(s with { Policy = s.Policy with { ListPrecedence = (PriceListPrecedence)9 } }));   // an unknown value is invalid evidence, not a crash
+
+        var general = Disc("GENERAL", 4, 5m); var customer = Disc("CUSTOMER", 4, 9m, cust: Cust);
+        Assert.Equal(9m, PricingEngine.Resolve(Req(), [list], entries, [general, customer], ByPriority).DiscountPercent);   // equal priority: specificity decides
+    }
 }
