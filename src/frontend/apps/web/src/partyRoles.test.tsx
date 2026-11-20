@@ -154,4 +154,38 @@ describe("customers and suppliers screen", () => {
     await waitFor(() => expect(update).toHaveBeenLastCalledWith("r1", expect.objectContaining({ creditLimit: 2000 }), 5));
     expect(client.listPartyRoles).toHaveBeenCalled();
   });
+  it("a role whose control account and representative were later deactivated stays editable and keeps both references (PR-56 M2)", async () => {
+    const inactiveRep = { ...rep, isActive: false };
+    const update = vi.fn().mockResolvedValue(customer);
+    render({
+      updatePartyRole: update,
+      listSalesRepresentatives: vi.fn().mockResolvedValue({ items: [inactiveRep], can: { configure: true } }),
+      listAccounts: vi.fn().mockResolvedValue({ accounts: [account("a1", "1201", "asset", { isActive: false })], settings: {} }),
+    });
+    await go("#/company/party-roles");
+    await userEvent.click(within(await screen.findByTestId("pr-role-C1-1")).getByRole("button", { name: A("pr.edit") }));
+    const form = within(screen.getByTestId("pr-customer-form"));
+    expect((form.getByLabelText(A("pr.control_account_customer")) as HTMLSelectElement).value).toBe("a1");   // still shown, not silently blanked
+    expect((form.getByLabelText(A("pr.representative")) as HTMLSelectElement).value).toBe("s1");
+    const days = form.getByLabelText(lbl("pr.term_days"));
+    await userEvent.clear(days); await userEvent.type(days, "60");
+    await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("r1", { paymentMode: 2, termDays: 60, creditLimit: 1500, controlAccountId: "a1", representativeId: "s1" }, 4));
+  });
+
+  it("an inactive account is not offered for a NEW role", async () => {
+    render({ listAccounts: vi.fn().mockResolvedValue({ accounts: [account("a1", "1201", "asset", { isActive: false })], settings: {} }) });
+    await go("#/company/party-roles");
+    const form = within(await screen.findByTestId("pr-customer-form"));
+    const accOptions = Array.from((form.getByLabelText(A("pr.control_account_customer")) as HTMLSelectElement).options).map((o) => o.textContent ?? "");
+    expect(accOptions.some((o) => o.includes("1201"))).toBe(false);
+  });
+
+  it("an inactive role can be reactivated with its terms intact", async () => {
+    const update = vi.fn().mockResolvedValue(customer);
+    render({ updatePartyRole: update, listPartyRoles: vi.fn().mockImplementation((kind?: number) => Promise.resolve({ items: kind === 1 ? [{ ...customer, isActive: false }] : [], can: { configure: true } })) });
+    await go("#/company/party-roles");
+    await userEvent.click(within(await screen.findByTestId("pr-role-C1-1")).getByRole("button", { name: A("pr.activate") }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("r1", expect.objectContaining({ isActive: true, termDays: 30, creditLimit: 1500, controlAccountId: "a1", representativeId: "s1" }), 4));
+  });
 });
