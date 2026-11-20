@@ -93,8 +93,12 @@ public static class PartyEndpoints
     /// <summary>The registry (system database) cannot be reached or the runtime account lacks its grants: a stable 503 with a code the clients translate (review M2).</summary>
     private static IResult Unavailable() => Results.Json(new { error = "registry_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
+    // The shared-identity revision codes stay distinct from the local revision conflict: the 412 body names the CURRENT SHARED revision, not the local party revision.
     private static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null) =>
-        r.Status == ConfigStatus.Conflict && r.Code == "registry_unavailable" ? Unavailable() : CompanyConfigurationEndpoints.Map(r, body, revision);
+        r.Status == ConfigStatus.Conflict && r.Code == "registry_unavailable" ? Unavailable()
+        : r.Status == ConfigStatus.PreconditionFailed && r.Code == "shared_revision_conflict" ? Results.Json(new { error = r.Code, currentSharedRevision = r.CurrentRevision }, statusCode: 412)
+        : r.Status == ConfigStatus.PreconditionRequired && r.Code == "shared_revision_required" ? CompanyConfigurationEndpoints.Error(428, r.Code)
+        : CompanyConfigurationEndpoints.Map(r, body, revision);
 
     private static async Task<IResult> Central(Func<Task<IResult>> run)
     {

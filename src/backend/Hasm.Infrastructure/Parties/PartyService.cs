@@ -243,6 +243,9 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             if (change)
             {
                 if (!current.TryGetValue(id, out var linkedIdentity) || linkedIdentity.GlobalPartyId != cur.GlobalPartyId) throw new Abort(ConfigStatus.Conflict, "link_missing");
+                // the revision the USER saw is required and must still be current: otherwise the proposal would silently be based on newer shared data
+                if (input?.ViewedSharedRevision is not { } viewed) throw new Abort(ConfigStatus.PreconditionRequired, "shared_revision_required");
+                if (viewed != linkedIdentity.Revision) throw new Abort(ConfigStatus.PreconditionFailed, "shared_revision_conflict", null, linkedIdentity.Revision);
                 basedOn = linkedIdentity.Revision;
             }
             await using (var upd = new NpgsqlCommand(
