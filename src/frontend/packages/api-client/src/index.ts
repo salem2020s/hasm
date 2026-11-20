@@ -460,6 +460,8 @@ export interface TaxRuleInput {
   documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
   validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
 }
+export interface TaxAssignment { subjectId: string; classId: string }
+export interface TaxAssignmentsResponse { assignments: TaxAssignment[]; can: { configure: boolean } }
 export interface TaxPolicy { configured: boolean; id?: string; version?: number; moneyDecimals?: number; mode?: number; level?: number; createdAtUtc?: string }
 export interface TaxPolicyResponse { policy: TaxPolicy; can: { configure: boolean } }
 export interface TaxPolicyInput { moneyDecimals: number; mode: number; level: number }
@@ -1113,6 +1115,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listTaxClasses: () => get<TaxClassesResponse>("/api/v1/company/taxes/classes"),
     createTaxClass: (c: TaxClassInput) => request<TaxClass>("POST", "/api/v1/company/taxes/classes", { body: c }),
     updateTaxClass: (id: string, c: TaxClassInput, revision: number) => request<TaxClass>("PUT", `/api/v1/company/taxes/classes/${enc(id)}`, { body: c, ifMatch: revision }),
+    listItemTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/item-classes"),
+    listPartyTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/party-classes"),
     assignItemTaxClass: (itemId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/item-classes/${enc(itemId)}`, { body: { classId } }),
     assignPartyTaxClass: (partyId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/party-classes/${enc(partyId)}`, { body: { classId } }),
     listTaxRules: () => get<TaxRulesResponse>("/api/v1/company/taxes/rules"),

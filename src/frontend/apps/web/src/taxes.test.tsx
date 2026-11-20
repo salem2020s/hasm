@@ -162,4 +162,21 @@ describe("tax configuration screen", () => {
     await screen.findByTestId("company-name");
     expect(screen.queryByText(A("nav.taxes"))).not.toBeInTheDocument();
   });
+
+  it("accepts Arabic-Indic digits and a decimal comma, and never sends a non-number", async () => {
+    const client = render();
+    await go("#/company/taxes");
+    await userEvent.click(within(await screen.findByTestId("tax-row-VAT")).getByRole("button", { name: A("tax.rates") }));
+    const percent = within(screen.getByTestId("tax-add-rate")).getByLabelText(new RegExp(`^${A("tax.rate_percent")}`));
+    const add = screen.getByRole("button", { name: A("tax.add_rate") });
+    await userEvent.type(percent, "abc");
+    expect(add).toBeDisabled();
+    expect(screen.getByText(A("field.invalid"))).toBeInTheDocument();
+    await userEvent.clear(percent);
+    await userEvent.type(percent, "١٥,٥");
+    expect(add).toBeEnabled();
+    fireEvent.change(within(screen.getByTestId("tax-add-rate")).getByLabelText(new RegExp(`^${A("tax.effective_from")}`)), { target: { value: "2027-01-01" } });
+    await userEvent.click(add);
+    await waitFor(() => expect(client.addTaxRate).toHaveBeenCalledWith("t1", { effectiveFrom: "2027-01-01", treatment: 1, ratePercent: 15.5 }));
+  });
 });

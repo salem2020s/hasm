@@ -161,23 +161,25 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     {
         if (input is null) return ConfigResult<TaxView>.Invalid([new FieldError("input", "required")]);
         var errors = new List<FieldError>();
+        if (input.EffectiveFrom is null) errors.Add(new FieldError("effectiveFrom", "required"));
         if (!Enum.IsDefined(input.Treatment)) errors.Add(new FieldError("treatment", "treatment_invalid"));
         if (input.RatePercent < 0 || input.RatePercent > 1000 || decimal.Round(input.RatePercent, 6) != input.RatePercent) errors.Add(new FieldError("ratePercent", "rate_invalid"));
         else if (input.Treatment != TaxTreatment.Standard && input.RatePercent != 0) errors.Add(new FieldError("ratePercent", "treatment_rate_mismatch"));
         if (errors.Count > 0) return ConfigResult<TaxView>.Invalid(errors);
+        var effFrom = input.EffectiveFrom!.Value;
         var r = await Mutate(companyId, async work =>
         {
             var tax = (await LoadTaxes(work.Connection, work.Transaction, taxId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "tax_not_found");
-            if (MaxRateLeadDays > 0 && input.EffectiveFrom > DateOnly.FromDateTime(Now).AddDays(MaxRateLeadDays)) throw Invalid("effectiveFrom", "rate_too_far");   // versions are never removed: a typo years ahead would block every later version
-            if (tax.Rates.Count > 0 && tax.Rates.Max(x => x.EffectiveFrom) >= input.EffectiveFrom) throw Invalid("effectiveFrom", "rate_not_later");
+            if (MaxRateLeadDays > 0 && effFrom > DateOnly.FromDateTime(Now).AddDays(MaxRateLeadDays)) throw Invalid("effectiveFrom", "rate_too_far");   // versions are never removed: a typo years ahead would block every later version
+            if (tax.Rates.Count > 0 && tax.Rates.Max(x => x.EffectiveFrom) >= effFrom) throw Invalid("effectiveFrom", "rate_not_later");
             await using (var ins = new NpgsqlCommand($"INSERT INTO {TR.Table} ({TR.Id}, {TR.TaxId}, {TR.EffectiveFrom}, {TR.Treatment}, {TR.RatePercent}, {TR.CreatedBy}, {TR.CreatedAtUtc}) VALUES (@id, @t, @f, @tr, @r, @by, @now)", work.Connection, work.Transaction))
             {
-                ins.Parameters.AddWithValue("id", Guid.NewGuid()); ins.Parameters.AddWithValue("t", taxId); ins.Parameters.AddWithValue("f", input.EffectiveFrom);
+                ins.Parameters.AddWithValue("id", Guid.NewGuid()); ins.Parameters.AddWithValue("t", taxId); ins.Parameters.AddWithValue("f", effFrom);
                 ins.Parameters.AddWithValue("tr", (short)input.Treatment); ins.Parameters.AddWithValue("r", input.RatePercent); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", Now);
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.RateAdded, ActorUserId: actor, SubjectId: taxId,
-                Detail: $"tax rate added code={tax.Code} from={input.EffectiveFrom:yyyy-MM-dd} treatment={(short)input.Treatment} rate={input.RatePercent.ToString(System.Globalization.CultureInfo.InvariantCulture)}"), ct);
+                Detail: $"tax rate added code={tax.Code} from={effFrom:yyyy-MM-dd} treatment={(short)input.Treatment} rate={input.RatePercent.ToString(System.Globalization.CultureInfo.InvariantCulture)}"), ct);
             return true;
         }, ct);
         return r.IsOk ? ConfigResult<TaxView>.Ok((await GetTaxAsync(companyId, taxId, ct))!) : ConfigResult<TaxView>.Fail(r.Status, r.Code!) with { Fields = r.Fields };
@@ -241,7 +243,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
             var cur = (await LoadClasses(work.Connection, work.Transaction, id, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "class_not_found");
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
             if (input.Code is { } c && !string.Equals(c.Trim(), cur.Code, StringComparison.OrdinalIgnoreCase)) throw Invalid("code", "code_immutable");
-            if (input.Kind != cur.Kind && Enum.IsDefined(input.Kind) && input.Kind != 0) throw Invalid("kind", "kind_immutable");
+            if (input.Kind != cur.Kind) throw Invalid("kind", "kind_immutable");
             await using (var upd = new NpgsqlCommand($"UPDATE {TC.Table} SET {TC.NameAr} = @ar, {TC.NameEn} = @en, {TC.IsActive} = @a, {TC.Revision} = {TC.Revision} + 1, {TC.UpdatedAtUtc} = @now WHERE {TC.Id} = @id", work.Connection, work.Transaction))
             {
                 upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", n.NameAr); upd.Parameters.AddWithValue("en", Db(n.NameEn)); upd.Parameters.AddWithValue("a", input.IsActive ?? cur.IsActive); upd.Parameters.AddWithValue("now", Now);
@@ -299,6 +301,22 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         catch (Abort a) { return a.To<bool>(); }
     }
 
+    /// <summary>Every item-to-class assignment (item id, class id). One row per classified item; unclassified items have none.</summary>
+    public Task<IReadOnlyList<TaxAssignment>> ListItemClassesAsync(Guid companyId, CancellationToken ct = default) => ListAssignments(companyId, TI.Table, TI.ItemId, TI.ClassId, ct);
+
+    /// <summary>Every local-party-to-class assignment (party id, class id).</summary>
+    public Task<IReadOnlyList<TaxAssignment>> ListPartyClassesAsync(Guid companyId, CancellationToken ct = default) => ListAssignments(companyId, TP.Table, TP.PartyId, TP.ClassId, ct);
+
+    private async Task<IReadOnlyList<TaxAssignment>> ListAssignments(Guid companyId, string table, string subjectCol, string classCol, CancellationToken ct)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var q = new NpgsqlCommand($"SELECT {subjectCol}, {classCol} FROM {table} ORDER BY {subjectCol}", conn);
+        var rows = new List<TaxAssignment>();
+        await using var r = await q.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) rows.Add(new TaxAssignment(r.GetGuid(0), r.GetGuid(1)));
+        return rows;
+    }
+
     // ================================================================================================================ rules
 
     private const string RuleCols = $"{TU.Id}, {TU.DocumentType}, {TU.Operation}, {TU.ItemClassId}, {TU.PartyClassId}, {TU.TaxId}, {TU.Priority}, {TU.ValidFrom}, {TU.ValidTo}, {TU.IsActive}, {TU.TreatmentOverride}, {TU.Revision}";
@@ -339,35 +357,41 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         if (!KeyPattern().IsMatch(input.DocumentType?.Trim() ?? "")) errors.Add(new FieldError("documentType", "document_type_invalid"));
         if (!KeyPattern().IsMatch(input.Operation?.Trim() ?? "")) errors.Add(new FieldError("operation", "operation_invalid"));
         if (input.Priority is < 1 or > 1000) errors.Add(new FieldError("priority", "priority_invalid"));
-        if (input.ValidTo is { } to && to < input.ValidFrom) errors.Add(new FieldError("validTo", "range_invalid"));
+        if (input.ValidFrom is null) errors.Add(new FieldError("validFrom", "required"));
+        else if (input.ValidTo is { } to && to < input.ValidFrom) errors.Add(new FieldError("validTo", "range_invalid"));
         if (input.TreatmentOverride is { } o && (o == TaxTreatment.Standard || !Enum.IsDefined(o))) errors.Add(new FieldError("treatmentOverride", "treatment_invalid"));
         var includes = input.IncludesTaxIds ?? [];
         if (includes.Count != includes.Distinct().Count() || includes.Contains(input.TaxId)) errors.Add(new FieldError("includesTaxIds", "base_invalid"));
         if (errors.Count > 0) throw new Abort(ConfigStatus.Invalid, "invalid", errors);
+        var vf = input.ValidFrom!.Value;
 
         var taxes = (await LoadTaxes(work.Connection, work.Transaction, null, false, ct)).ToDictionary(t => t.Id);
         if (!taxes.TryGetValue(input.TaxId, out var tax)) throw Invalid("taxId", "tax_not_found");
-        if (!tax.IsActive && input.IsActive) throw Invalid("taxId", "tax_inactive");   // an inactive tax stays referenced by old rules, which may be switched off but not newly activated
+        if (!tax.IsActive && input.IsActive == true) throw Invalid("taxId", "tax_inactive");   // an inactive tax stays referenced by old rules, which may be switched off but not newly activated
         await LoadTaxes(work.Connection, work.Transaction, input.TaxId, true, ct);          // lock the tax row so concurrent rule writes for it are serialized (overlap and order checks below)
         foreach (var inc in includes) if (!taxes.ContainsKey(inc)) throw Invalid("includesTaxIds", "tax_not_found");
         var classes = (await LoadClasses(work.Connection, work.Transaction, null, false, ct)).ToDictionary(c => c.Id);
         if (input.ItemClassId is { } ic && (!classes.TryGetValue(ic, out var icv) || icv.Kind != TaxClassKind.Item)) throw Invalid("itemClassId", "class_kind_mismatch");
+        if (input.IsActive == true && input.ItemClassId is { } ic2 && !classes[ic2].IsActive) throw Invalid("itemClassId", "class_inactive");
         if (input.PartyClassId is { } pc && (!classes.TryGetValue(pc, out var pcv) || pcv.Kind != TaxClassKind.Party)) throw Invalid("partyClassId", "class_kind_mismatch");
+        if (input.IsActive == true && input.PartyClassId is { } pc2 && !classes[pc2].IsActive) throw Invalid("partyClassId", "class_inactive");
 
         // two active rules of the same tax, document type, operation and classification that overlap in time would always be ambiguous: refuse them when they are written
         var doc = input.DocumentType!.Trim(); var op = input.Operation!.Trim();
-        if (input.IsActive)
+        // serialize every rule write of one document type and operation: duplicate_priority and invalid_base_reference compare against rules of OTHER taxes, which the tax-row lock does not cover
+        await using (var lk = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@k, 0))", work.Connection, work.Transaction)) { lk.Parameters.AddWithValue("k", "taxrule:" + doc + "|" + op); await lk.ExecuteNonQueryAsync(ct); }
+        if (input.IsActive == true)
         {
             foreach (var other in await LoadRules(work.Connection, work.Transaction, null, false, doc, op, ct))
             {
                 var x = other.Rule;
                 if (x.Id == selfId || !x.IsActive || x.TaxId != input.TaxId || x.ItemClassId != input.ItemClassId || x.PartyClassId != input.PartyClassId) continue;
-                var overlap = x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && input.ValidFrom <= (x.ValidTo ?? DateOnly.MaxValue);
+                var overlap = x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && vf <= (x.ValidTo ?? DateOnly.MaxValue);
                 if (overlap) throw new Abort(ConfigStatus.Conflict, "rule_overlap");
             }
             // what the resolver would refuse for a line that matches both rules is refused here, when the rule is written
             var peers = (await LoadRules(work.Connection, work.Transaction, null, false, doc, op, ct)).Select(v => v.Rule)
-                .Where(x => x.Id != selfId && x.IsActive && x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && input.ValidFrom <= (x.ValidTo ?? DateOnly.MaxValue)
+                .Where(x => x.Id != selfId && x.IsActive && x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && vf <= (x.ValidTo ?? DateOnly.MaxValue)
                             && (x.ItemClassId is null || input.ItemClassId is null || x.ItemClassId == input.ItemClassId) && (x.PartyClassId is null || input.PartyClassId is null || x.PartyClassId == input.PartyClassId)).ToArray();
             var specificity = (input.ItemClassId is null ? 0 : 1) + (input.PartyClassId is null ? 0 : 1);
             if (peers.Any(x => x.TaxId == input.TaxId && ((x.ItemClassId is null ? 0 : 1) + (x.PartyClassId is null ? 0 : 1)) == specificity)) throw new Abort(ConfigStatus.Conflict, "rule_ambiguous");
@@ -392,6 +416,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     {
         if (input is null) return ConfigResult<TaxRuleView>.Invalid([new FieldError("input", "required")]);
         var id = Guid.NewGuid();
+        input = input with { IsActive = input.IsActive ?? true };
         var r = await Mutate(companyId, async work =>
         {
             await ValidateRule(work, input, null, ct);
@@ -420,6 +445,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         {
             var cur = (await LoadRules(work.Connection, work.Transaction, id, true, null, null, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "rule_not_found");
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
+            input = input with { IsActive = input.IsActive ?? cur.Rule.IsActive };   // an omitted flag never silently reactivates a rule
             await ValidateRule(work, input, id, ct);
             await using (var upd = new NpgsqlCommand($"UPDATE {TU.Table} SET {TU.DocumentType} = @d, {TU.Operation} = @o, {TU.ItemClassId} = @ic, {TU.PartyClassId} = @pc, {TU.TaxId} = @t, {TU.Priority} = @p, {TU.ValidFrom} = @vf, {TU.ValidTo} = @vt, " +
                 $"{TU.IsActive} = @a, {TU.TreatmentOverride} = @ov, {TU.Revision} = {TU.Revision} + 1, {TU.UpdatedAtUtc} = @now WHERE {TU.Id} = @id", work.Connection, work.Transaction))
@@ -439,8 +465,8 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     private static void Bind(NpgsqlCommand c, TaxRuleInput i)
     {
         c.Parameters.AddWithValue("d", i.DocumentType!.Trim()); c.Parameters.AddWithValue("o", i.Operation!.Trim()); c.Parameters.AddWithValue("ic", Db(i.ItemClassId, true)); c.Parameters.AddWithValue("pc", Db(i.PartyClassId, true));
-        c.Parameters.AddWithValue("t", i.TaxId); c.Parameters.AddWithValue("p", i.Priority); c.Parameters.AddWithValue("vf", i.ValidFrom); c.Parameters.AddWithValue("vt", Db(i.ValidTo, true));
-        c.Parameters.AddWithValue("a", i.IsActive); c.Parameters.AddWithValue("ov", i.TreatmentOverride is { } o ? (object)(short)o : DBNull.Value);
+        c.Parameters.AddWithValue("t", i.TaxId); c.Parameters.AddWithValue("p", i.Priority); c.Parameters.AddWithValue("vf", i.ValidFrom!.Value); c.Parameters.AddWithValue("vt", Db(i.ValidTo, true));
+        c.Parameters.AddWithValue("a", i.IsActive ?? true); c.Parameters.AddWithValue("ov", i.TreatmentOverride is { } o ? (object)(short)o : DBNull.Value);
     }
 
     // ================================================================================================================ rounding policy
@@ -464,7 +490,8 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     {
         if (input is null) return ConfigResult<TaxPolicyView>.Invalid([new FieldError("input", "required")]);
         var errors = new List<FieldError>();
-        if (input.MoneyDecimals is < 0 or > TaxEngine.MaxMoneyDecimals) errors.Add(new FieldError("moneyDecimals", "decimals_invalid"));
+        if (input.MoneyDecimals is null) errors.Add(new FieldError("moneyDecimals", "required"));
+        else if (input.MoneyDecimals is < 0 or > TaxEngine.MaxMoneyDecimals) errors.Add(new FieldError("moneyDecimals", "decimals_invalid"));
         if (!Enum.IsDefined(input.Mode)) errors.Add(new FieldError("mode", "mode_invalid"));
         if (!Enum.IsDefined(input.Level)) errors.Add(new FieldError("level", "level_invalid"));
         if (errors.Count > 0) return ConfigResult<TaxPolicyView>.Invalid(errors);
@@ -540,6 +567,8 @@ public sealed class TaxManagementService(AccessService access, TaxConfigService 
 
     public Task<ConfigResult<IReadOnlyList<TaxView>>> ListTaxesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.ListTaxesAsync(company, ct), ct);
     public Task<ConfigResult<IReadOnlyList<TaxClassView>>> ListClassesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.ListClassesAsync(company, ct), ct);
+    public Task<ConfigResult<IReadOnlyList<TaxAssignment>>> ListItemClassesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.ListItemClassesAsync(company, ct), ct);
+    public Task<ConfigResult<IReadOnlyList<TaxAssignment>>> ListPartyClassesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.ListPartyClassesAsync(company, ct), ct);
     public Task<ConfigResult<IReadOnlyList<TaxRuleView>>> ListRulesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.ListRulesAsync(company, ct), ct);
     public Task<ConfigResult<TaxPolicyView?>> GetPolicyAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, () => taxes.GetPolicyAsync(company, ct), ct);
 

@@ -12,8 +12,11 @@ public static class TaxSetup
     public static IServiceCollection AddHasmTaxes(this IServiceCollection services, IConfiguration configuration)
     {
         // Deployment policy only (see TaxConfigOptions): how far ahead a rate version may be dated. The SRS sets no limit; absent = the default of one year, 0 = unlimited.
-        var options = new TaxConfigOptions(configuration.GetValue("Tax:MaxRateLeadDays", TaxConfigService.DefaultMaxRateLeadDays));
+        var lead = configuration.GetValue("Tax:MaxRateLeadDays", TaxConfigService.DefaultMaxRateLeadDays);
+        if (lead is < 0 or > 3650) throw new InvalidOperationException("Tax:MaxRateLeadDays must be between 0 (unlimited) and 3650");   // fail at startup, never on the first request
+        var options = new TaxConfigOptions(lead);
         services.AddSingleton(sp => new TaxConfigService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), options));
+        services.AddSingleton(sp => new TaxLocalizationHost(sp.GetServices<ITaxLocalization>()));   // extension point only: no localization is registered in HASM core (SRS 6.4)
         services.AddSingleton(sp => new TaxManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<TaxConfigService>()));
         return services;
     }
@@ -27,7 +30,6 @@ public static class TaxSetup
 public static class TaxEndpoints
 {
     private sealed class BodyLimit : IRequestSizeLimitMetadata { public long? MaxRequestBodySize => 64 * 1024; }
-    public sealed record ClassAssignment(Guid? ClassId);
 
     public static void MapTaxEndpoints(this WebApplication app)
     {
@@ -39,6 +41,8 @@ public static class TaxEndpoints
         g.MapGet("/classes", ListClasses);
         g.MapPost("/classes", CreateClass).WithMetadata(new BodyLimit());
         g.MapPut("/classes/{id:guid}", UpdateClass).WithMetadata(new BodyLimit());
+        g.MapGet("/item-classes", ListItemClasses);
+        g.MapGet("/party-classes", ListPartyClasses);
         g.MapPut("/item-classes/{itemId:guid}", AssignItem).WithMetadata(new BodyLimit());
         g.MapPut("/party-classes/{partyId:guid}", AssignParty).WithMetadata(new BodyLimit());
         g.MapGet("/rules", ListRules);
@@ -48,6 +52,13 @@ public static class TaxEndpoints
         g.MapPost("/policy", AddPolicy).WithMetadata(new BodyLimit());
         g.MapGet("/resolve", Resolve);
     }
+
+    /// <summary>The assignment body must carry classId explicitly (a GUID, or null to remove): a missing body, missing property or malformed value is a client error and never a removal.</summary>
+    private static Guid? ClassOf(System.Text.Json.JsonElement? body) =>
+        body is { ValueKind: System.Text.Json.JsonValueKind.Object } b && b.TryGetProperty("classId", out var v)
+            ? v.ValueKind == System.Text.Json.JsonValueKind.Null ? null : v.ValueKind == System.Text.Json.JsonValueKind.String && Guid.TryParse(v.GetString(), out var g) ? g : throw new BadAssignment()
+            : throw new BadAssignment();
+    private sealed class BadAssignment : Exception;
 
     private static object TaxBody(TaxView t) => new { id = t.Id, code = t.Code, nameAr = t.NameAr, nameEn = t.NameEn, isActive = t.IsActive, revision = t.Revision, updatedAtUtc = t.UpdatedAtUtc,
         rates = t.Rates.OrderBy(r => r.EffectiveFrom).Select(r => new { effectiveFrom = r.EffectiveFrom, treatment = (short)r.Treatment, ratePercent = r.RatePercent }) };
@@ -74,6 +85,10 @@ public static class TaxEndpoints
         Read(http, access, svc, (u, c) => svc.ListTaxesAsync(u, c, http.RequestAborted), (v, can) => new { taxes = v.Select(TaxBody), can = new { configure = can } });
     private static Task<IResult> ListClasses(HttpContext http, AccessService access, TaxManagementService svc) =>
         Read(http, access, svc, (u, c) => svc.ListClassesAsync(u, c, http.RequestAborted), (v, can) => new { classes = v.Select(ClassBody), can = new { configure = can } });
+    private static Task<IResult> ListItemClasses(HttpContext http, AccessService access, TaxManagementService svc) =>
+        Read(http, access, svc, (u, c) => svc.ListItemClassesAsync(u, c, http.RequestAborted), (v, can) => new { assignments = v.Select(a => new { subjectId = a.SubjectId, classId = a.ClassId }), can = new { configure = can } });
+    private static Task<IResult> ListPartyClasses(HttpContext http, AccessService access, TaxManagementService svc) =>
+        Read(http, access, svc, (u, c) => svc.ListPartyClassesAsync(u, c, http.RequestAborted), (v, can) => new { assignments = v.Select(a => new { subjectId = a.SubjectId, classId = a.ClassId }), can = new { configure = can } });
     private static Task<IResult> ListRules(HttpContext http, AccessService access, TaxManagementService svc) =>
         Read(http, access, svc, (u, c) => svc.ListRulesAsync(u, c, http.RequestAborted), (v, can) => new { rules = v.Select(RuleBody), can = new { configure = can } });
     private static Task<IResult> GetPolicy(HttpContext http, AccessService access, TaxManagementService svc) =>
@@ -85,7 +100,8 @@ public static class TaxEndpoints
         if (failure is not null) return failure;
         long? expected = null;
         if (needsRevision && !CompanyConfigurationEndpoints.TryReadIfMatch(http, out expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
-        return CompanyConfigurationEndpoints.Map(await call(actor!.UserId, actor.CompanyId, expected), body, revision);
+        try { return CompanyConfigurationEndpoints.Map(await call(actor!.UserId, actor.CompanyId, expected), body, revision); }
+        catch (BadAssignment) { return CompanyConfigurationEndpoints.Error(400, "invalid_request"); }
     }
 
     private static Task<IResult> CreateTax(TaxInput? body, HttpContext http, AccessService access, TaxManagementService svc) =>
@@ -98,10 +114,10 @@ public static class TaxEndpoints
         Write(http, access, false, (u, c, _) => svc.CreateClassAsync(u, c, body, http.RequestAborted), ClassBody, t => t.Revision);
     private static Task<IResult> UpdateClass(Guid id, TaxClassInput? body, HttpContext http, AccessService access, TaxManagementService svc) =>
         Write(http, access, true, (u, c, rev) => svc.UpdateClassAsync(u, c, id, rev, body, http.RequestAborted), ClassBody, t => t.Revision);
-    private static Task<IResult> AssignItem(Guid itemId, ClassAssignment? body, HttpContext http, AccessService access, TaxManagementService svc) =>
-        Write(http, access, false, (u, c, _) => svc.AssignItemClassAsync(u, c, itemId, body?.ClassId, http.RequestAborted), _ => new { ok = true }, null);
-    private static Task<IResult> AssignParty(Guid partyId, ClassAssignment? body, HttpContext http, AccessService access, TaxManagementService svc) =>
-        Write(http, access, false, (u, c, _) => svc.AssignPartyClassAsync(u, c, partyId, body?.ClassId, http.RequestAborted), _ => new { ok = true }, null);
+    private static Task<IResult> AssignItem(Guid itemId, System.Text.Json.JsonElement? body, HttpContext http, AccessService access, TaxManagementService svc) =>
+        Write(http, access, false, (u, c, _) => svc.AssignItemClassAsync(u, c, itemId, ClassOf(body), http.RequestAborted), _ => new { ok = true }, null);
+    private static Task<IResult> AssignParty(Guid partyId, System.Text.Json.JsonElement? body, HttpContext http, AccessService access, TaxManagementService svc) =>
+        Write(http, access, false, (u, c, _) => svc.AssignPartyClassAsync(u, c, partyId, ClassOf(body), http.RequestAborted), _ => new { ok = true }, null);
     private static Task<IResult> CreateRule(TaxRuleInput? body, HttpContext http, AccessService access, TaxManagementService svc) =>
         Write(http, access, false, (u, c, _) => svc.CreateRuleAsync(u, c, body, http.RequestAborted), RuleBody, v => v.Revision);
     private static Task<IResult> UpdateRule(Guid id, TaxRuleInput? body, HttpContext http, AccessService access, TaxManagementService svc) =>

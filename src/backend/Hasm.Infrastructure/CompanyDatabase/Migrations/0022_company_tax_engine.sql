@@ -190,6 +190,7 @@ CREATE TABLE t_90ffcb0e (
 );
 -- a rule's tax base may change only in the SAME transaction that wrote the rule row itself (insert, or an update that advanced its revision): the base can never be edited behind the
 -- revision fence. The rule row's xmin equals the current transaction id exactly when this transaction inserted or updated it.
+-- Limitation (fail-closed): inside a savepoint or subtransaction the row xmin is a subtransaction id, so such a write is refused; no savepoint is used on this path.
 CREATE FUNCTION f_831e3a7a() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE rid uuid; written boolean;
 BEGIN

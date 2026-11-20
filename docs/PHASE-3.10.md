@@ -62,4 +62,12 @@ Remaining in slice 2: the company migration (definitions, append-only dated rate
 
 **Tests.** 3 PostgreSQL HTTP tests (`TaxApiTests`, registry 973 -> 976): authentication and company selection on every route, no delete route, the end-to-end flow with ETags, 428/412/400 handling, resolution, and permission denial (no permission: nothing read or written; viewer cannot configure). 9 shared component tests (`taxes.test.tsx`). Frontend: 401 web tests, typecheck and production build pass locally.
 
-Remaining: slice 4 (localization extension point) and the class pickers on the item and party screens.
+Remaining: document-framework integration (a later phase) calls the resolver and the snapshot.
+
+## Slice 4 - localization extension point (implemented)
+
+`Taxes/TaxLocalization.cs`: `ITaxLocalization` (stable id, positive version, `Contribute()`, `Validate(context)`) and `TaxLocalizationHost`. A localization may ONLY (1) propose additional classifications and rule templates (they still pass the validated, audited configuration path; a proposal that collides with an existing code is dropped and reported, never replaces anything) and (2) validate a prepared calculation by returning problems (reported as `id:code`); a throwing localization fails closed (`id:validation_failed`, or `id:contribution_failed`). It receives an immutable copy of the resolution and the host verifies nothing changed (`id:mutated_input`). The interface returns only problems and proposals, so engine arithmetic and snapshots are unreachable by construction (asserted by a reflection test). Registrations are unique per id, ordered, and need a valid id and a positive version. DI registers the host with whatever `ITaxLocalization` services exist: none in this repository; no country module, no e-invoicing (SRS 6.4). 6 unit tests.
+
+## Slice 3 follow-up (independent review, `docs/review-records/PR-54-tax-slice3.md`)
+
+Six Medium findings fixed: explicit `classId` required on assignment bodies (a malformed body is 400, never a removal), per document type/operation advisory lock for rule writes (closes the cross-tax write skew), nullable `IsActive` on rules (omitted never reactivates), nullable required dates and decimals (omitted is `required`, never a default), documented fail-closed limitation of the rule-base trigger, and tolerant numeric parsing in the UI (Arabic-Indic digits, decimal comma). Item and party editors gained a tax class tab (`TaxClassPicker`, visible with `company.tax.view`, saved independently with its own permission, unsaved state reported to the shared guard). New read endpoints list item and party assignments. PostgreSQL registry 978.

@@ -21,20 +21,23 @@ public enum TaxClassKind : short { Item = 1, Party = 2 }
 /// <summary>IsActive: null = true on create and "unchanged" on update (an omitted flag never silently reactivates).</summary>
 public sealed record TaxInput(string? Code, string? NameAr, string? NameEn, bool? IsActive = null);
 public sealed record TaxView(Guid Id, string Code, string NameAr, string? NameEn, bool IsActive, long Revision, IReadOnlyList<TaxRateRecord> Rates, DateTimeOffset UpdatedAtUtc);
-public sealed record TaxRateInput(DateOnly EffectiveFrom, TaxTreatment Treatment, decimal RatePercent);
+/// <summary>EffectiveFrom is nullable only so that an omitted JSON field is reported as required instead of becoming 0001-01-01.</summary>
+public sealed record TaxRateInput(DateOnly? EffectiveFrom, TaxTreatment Treatment, decimal RatePercent);
 
 public sealed record TaxClassInput(TaxClassKind Kind, string? Code, string? NameAr, string? NameEn, bool? IsActive = null);
 public sealed record TaxClassView(Guid Id, TaxClassKind Kind, string Code, string NameAr, string? NameEn, bool IsActive, long Revision);
 
 public sealed record TaxRuleInput(string? DocumentType, string? Operation, Guid? ItemClassId, Guid? PartyClassId, Guid TaxId, int Priority, IReadOnlyList<Guid>? IncludesTaxIds,
-    DateOnly ValidFrom, DateOnly? ValidTo, bool IsActive = true, TaxTreatment? TreatmentOverride = null);
+    DateOnly? ValidFrom, DateOnly? ValidTo, bool? IsActive = null, TaxTreatment? TreatmentOverride = null);   // ValidFrom: required (null is refused); IsActive: null = true on create, unchanged on update
 public sealed record TaxRuleView(TaxRuleRecord Rule, long Revision);
 
-public sealed record TaxPolicyInput(int MoneyDecimals, TaxRoundingMode Mode, TaxRoundingLevel Level);
+public sealed record TaxPolicyInput(int? MoneyDecimals, TaxRoundingMode Mode, TaxRoundingLevel Level);
 public sealed record TaxPolicyView(Guid Id, int Version, TaxPolicy Policy, DateTimeOffset CreatedAtUtc);
 
 /// <summary>What <see cref="TaxConfigService.ResolveAsync"/> hands to the engine: the ordered components, the rounding policy in force and its version (the snapshot seals both).</summary>
 public sealed record TaxResolution(IReadOnlyList<TaxComponent> Components, TaxPolicy Policy, int PolicyVersion);
+
+public sealed record TaxAssignment(Guid SubjectId, Guid ClassId);
 
 public sealed record TaxCapabilities(bool View, bool Configure);
 

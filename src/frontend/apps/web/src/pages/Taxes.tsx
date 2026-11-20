@@ -13,7 +13,14 @@ import { useReportUnsaved } from "../unsaved";
  */
 interface Data { taxes: TaxesResponse; classes: TaxClassesResponse; rules: TaxRulesResponse; policy: TaxPolicyResponse }
 const TREATMENTS = [1, 2, 3, 4];
-const today = () => new Date().toISOString().slice(0, 10);
+const pad = (n: number) => String(n).padStart(2, "0");
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };   // the local calendar day, not UTC
+/** Parses what a user types, accepting Arabic-Indic and Persian digits and a comma or Arabic decimal separator; NaN when it is not a number (never sent to the server). */
+const num = (s: string) => {
+  const v = s.trim().replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/[,٫]/g, ".");
+  return v === "" ? Number.NaN : Number(v);
+};
+const bad = (s: string) => s.trim() !== "" && Number.isNaN(num(s));
 const blank = (v: string) => (v.trim() === "" ? null : v.trim());
 
 export function TaxesPage() {
@@ -34,8 +41,7 @@ export function TaxesPage() {
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
 
-  if (loadError) return <Banner kind="error" testId="tax-load-error">{loadError}</Banner>;
-  if (!data) return <Loading />;
+  if (!data) return loadError ? <Banner kind="error" testId="tax-load-error">{loadError}</Banner> : <Loading />;
   const configure = data.taxes.can.configure;
   const tabs: TabItem[] = [
     { id: "taxes", label: t("tax.tab.taxes"), dirty: dirty.taxes, content: <TaxesTab data={data} configure={configure} reload={load} onDirty={(v) => setTabDirty("taxes", v)} /> },
@@ -46,6 +52,7 @@ export function TaxesPage() {
   return (
     <section aria-labelledby="page-title" data-testid="taxes">
       <PageHeader title={t("tax.title")} description={t("tax.subtitle")} />
+      {loadError && <Banner kind="error" testId="tax-load-error">{loadError}</Banner>}
       <Banner kind="info" testId="tax-note">{t("tax.note")}</Banner>
       <Card><Tabs label={t("tax.tabs_label")} tabs={tabs} value={tab} onChange={setTab} testId="tax-tabs" /></Card>
     </section>
@@ -89,7 +96,7 @@ function TaxesTab({ data, configure, reload, onDirty }: TabProps) {
   }
   async function addRate() {
     if (!tax) return;
-    const done = await runner.run(() => auth.api.addTaxRate(tax.id, { effectiveFrom: rate.effectiveFrom, treatment: Number(rate.treatment), ratePercent: rate.treatment === "1" ? Number(rate.ratePercent) : 0 }), t("tax.saved"));
+    const done = await runner.run(() => auth.api.addTaxRate(tax.id, { effectiveFrom: rate.effectiveFrom, treatment: Number(rate.treatment), ratePercent: rate.treatment === "1" ? num(rate.ratePercent) : 0 }), t("tax.saved"));
     if (done) setRate({ effectiveFrom: today(), treatment: "1", ratePercent: "" });
   }
   const toggle = (x: Tax) => void runner.run(() => auth.api.updateTax(x.id, { nameAr: x.nameAr, nameEn: x.nameEn, isActive: !x.isActive }, x.revision), t("tax.saved"));
@@ -108,7 +115,7 @@ function TaxesTab({ data, configure, reload, onDirty }: TabProps) {
                 <td><bdi dir="ltr">{rateText(t, x, today())}</bdi></td>
                 <td>{x.isActive ? t("tax.active") : t("tax.inactive")}</td>
                 <td>
-                  <button type="button" className="ghost" onClick={() => setSelected(x.id)}>{t("tax.rates")}</button>
+                  <button type="button" className="ghost" onClick={() => { setSelected(x.id); setRate({ effectiveFrom: today(), treatment: "1", ratePercent: "" }); }}>{t("tax.rates")}</button>
                   {configure && <button type="button" className="ghost" disabled={runner.busy} onClick={() => toggle(x)}>{x.isActive ? t("tax.deactivate") : t("tax.activate")}</button>}
                 </td>
               </tr>
@@ -142,8 +149,8 @@ function TaxesTab({ data, configure, reload, onDirty }: TabProps) {
               <Field id="tax-rate-treatment" label={t("tax.treatment")} error={runner.fields.treatment}>
                 {(a) => <select {...a} value={rate.treatment} onChange={(e) => setRate({ ...rate, treatment: e.target.value })}>{TREATMENTS.map((n) => <option key={n} value={n}>{t(`tax.treatment.${n}`)}</option>)}</select>}
               </Field>
-              {rate.treatment === "1" && <Field id="tax-rate-percent" label={t("tax.rate_percent")} required error={runner.fields.ratePercent}>{(a) => <input {...a} dir="ltr" inputMode="decimal" value={rate.ratePercent} onChange={(e) => setRate({ ...rate, ratePercent: e.target.value })} />}</Field>}
-              <button type="button" className="primary" disabled={!rate.effectiveFrom || (rate.treatment === "1" && rate.ratePercent.trim() === "")} onClick={() => void addRate()}>{t("tax.add_rate")}</button>
+              {rate.treatment === "1" && <Field id="tax-rate-percent" label={t("tax.rate_percent")} required error={bad(rate.ratePercent) ? t("field.invalid") : runner.fields.ratePercent}>{(a) => <input {...a} dir="ltr" inputMode="decimal" value={rate.ratePercent} onChange={(e) => setRate({ ...rate, ratePercent: e.target.value })} />}</Field>}
+              <button type="button" className="primary" disabled={!rate.effectiveFrom || (rate.treatment === "1" && Number.isNaN(num(rate.ratePercent)))} onClick={() => void addRate()}>{t("tax.add_rate")}</button>
             </fieldset>
           )}
         </div>
@@ -222,7 +229,7 @@ function RulesTab({ data, configure, reload, onDirty }: TabProps) {
   async function create() {
     const done = await runner.run(() => auth.api.createTaxRule({
       documentType: form.documentType.trim(), operation: form.operation.trim(), taxId: form.taxId, itemClassId: blank(form.itemClassId), partyClassId: blank(form.partyClassId),
-      priority: Number(form.priority), includesTaxIds: form.includes, validFrom: form.validFrom, validTo: blank(form.validTo), isActive: true, treatmentOverride: form.override ? Number(form.override) : null,
+      priority: num(form.priority), includesTaxIds: form.includes, validFrom: form.validFrom, validTo: blank(form.validTo), isActive: true, treatmentOverride: form.override ? Number(form.override) : null,
     }), t("tax.saved"));
     if (done) setForm(blankForm);
   }
@@ -261,7 +268,7 @@ function RulesTab({ data, configure, reload, onDirty }: TabProps) {
           <Field id="tax-rule-party-class" label={t("tax.rule.party_class")} error={runner.fields.partyClassId}>
             {(a) => <select {...a} value={form.partyClassId} onChange={(e) => setForm({ ...form, partyClassId: e.target.value })}><option value="">{t("tax.any")}</option>{partyClasses.map((c) => <option key={c.id} value={c.id}>{localName(c, locale)}</option>)}</select>}
           </Field>
-          <Field id="tax-rule-priority" label={t("tax.rule.priority")} required error={runner.fields.priority}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />}</Field>
+          <Field id="tax-rule-priority" label={t("tax.rule.priority")} required error={bad(form.priority) ? t("field.invalid") : runner.fields.priority}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />}</Field>
           <Field id="tax-rule-from" label={t("tax.rule.valid_from")} required error={runner.fields.validFrom}>{(a) => <input {...a} type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} />}</Field>
           <Field id="tax-rule-to" label={t("tax.rule.valid_to")} error={runner.fields.validTo}>{(a) => <input {...a} type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} />}</Field>
           <Field id="tax-rule-override" label={t("tax.rule.override")} error={runner.fields.treatmentOverride}>
@@ -273,7 +280,7 @@ function RulesTab({ data, configure, reload, onDirty }: TabProps) {
               <div className="field" key={x.id}><label><input type="checkbox" checked={form.includes.includes(x.id)} onChange={(e) => setForm({ ...form, includes: e.target.checked ? [...form.includes, x.id] : form.includes.filter((i) => i !== x.id) })} /> {x.code} — {localName(x, locale)}</label></div>
             ))}
           </fieldset>
-          <button type="button" className="primary" disabled={!form.documentType.trim() || !form.operation.trim() || !form.taxId || !form.validFrom || form.priority.trim() === ""} onClick={() => void create()}>{t("tax.rule.create")}</button>
+          <button type="button" className="primary" disabled={!form.documentType.trim() || !form.operation.trim() || !form.taxId || !form.validFrom || !Number.isInteger(num(form.priority))} onClick={() => void create()}>{t("tax.rule.create")}</button>
         </fieldset>
       )}
     </div>
@@ -291,7 +298,7 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
   useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function add() {
-    await runner.run(() => auth.api.addTaxPolicy({ moneyDecimals: Number(form.decimals), mode: Number(form.mode), level: Number(form.level) }), t("tax.saved"));
+    await runner.run(() => auth.api.addTaxPolicy({ moneyDecimals: num(form.decimals), mode: Number(form.mode), level: Number(form.level) }), t("tax.saved"));
   }
   return (
     <div data-testid="tax-tab-policy">
@@ -306,14 +313,14 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
       {configure && (
         <fieldset disabled={runner.busy} data-testid="tax-policy-form">
           <legend>{t("tax.policy.add")}</legend>
-          <Field id="tax-policy-decimals" label={t("tax.policy.decimals")} error={runner.fields.moneyDecimals}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.decimals} onChange={(e) => setForm({ ...form, decimals: e.target.value })} />}</Field>
+          <Field id="tax-policy-decimals" label={t("tax.policy.decimals")} error={bad(form.decimals) ? t("field.invalid") : runner.fields.moneyDecimals}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.decimals} onChange={(e) => setForm({ ...form, decimals: e.target.value })} />}</Field>
           <Field id="tax-policy-mode" label={t("tax.policy.mode")} error={runner.fields.mode}>
             {(a) => <select {...a} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}><option value="1">{t("tax.policy.mode.1")}</option><option value="2">{t("tax.policy.mode.2")}</option></select>}
           </Field>
           <Field id="tax-policy-level" label={t("tax.policy.level")} error={runner.fields.level}>
             {(a) => <select {...a} value={form.level} onChange={(e) => setForm({ ...form, level: e.target.value })}><option value="1">{t("tax.policy.level.1")}</option><option value="2">{t("tax.policy.level.2")}</option></select>}
           </Field>
-          <button type="button" className="primary" disabled={form.decimals.trim() === ""} onClick={() => void add()}>{t("tax.policy.add")}</button>
+          <button type="button" className="primary" disabled={!Number.isInteger(num(form.decimals))} onClick={() => void add()}>{t("tax.policy.add")}</button>
         </fieldset>
       )}
     </div>

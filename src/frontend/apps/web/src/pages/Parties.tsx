@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useAuth } from "../auth";
 import { Banner, Card, Field, Loading, PageHeader } from "../components";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
+import { TaxClassPicker } from "./TaxClassPicker";
 
 /**
  * Parties (Phase 3.9A): this company's local party records and their link to the centrally approved SHARED identity. ONE implementation for Web and Windows Desktop; the screen only drives the server,
@@ -240,6 +241,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
         </div>
       ),
     },
+    ...(doc && auth.can("company.tax.view") ? [{ id: "tax", label: t("tax.tab.class"), content: <TaxClassPicker kind="party" subjectId={doc.id} /> } as TabItem] : []),
     ...(doc ? [{
       id: "requests", label: t("pty.tab.requests"),
       content: (

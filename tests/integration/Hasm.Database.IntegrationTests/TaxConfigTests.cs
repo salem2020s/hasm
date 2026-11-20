@@ -344,6 +344,27 @@ public class TaxConfigTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task Concurrent_rules_of_different_taxes_never_share_a_priority_and_a_rule_omitting_the_flag_keeps_its_state()
+    {
+        await Prepare();
+        var a = await NewTax("AAA", (Jan, TaxTreatment.Standard, 5m));
+        var b = await NewTax("BBB", (Jan, TaxTreatment.Standard, 7m));
+        var results = await Task.WhenAll(new[] { a, b }.Select(t => Task.Run(() => Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(t.Id, 30)))));
+        Assert.Equal(1, results.Count(r => r.IsOk));                                                                            // the other one is refused: write skew is closed
+        Assert.Equal("duplicate_priority", results.Single(r => !r.IsOk).Code);
+        var kept = results.Single(r => r.IsOk).Value!;
+        var off = Ok(await Tax.UpdateRuleAsync(Admin.Id, Company.Id, kept.Rule.Id, kept.Revision, Rule(kept.Rule.TaxId, 30) with { IsActive = false }));
+        Assert.False(off.Rule.IsActive);
+        var same = Ok(await Tax.UpdateRuleAsync(Admin.Id, Company.Id, kept.Rule.Id, off.Revision, Rule(kept.Rule.TaxId, 30) with { IsActive = null }));
+        Assert.False(same.Rule.IsActive);                                                                                       // an omitted flag never reactivates
+        var inactive = await NewClass(TaxClassKind.Item, "old");
+        Ok(await Tax.UpdateClassAsync(Admin.Id, Company.Id, inactive.Id, 1, new TaxClassInput(TaxClassKind.Item, null, "قديمة", null, false)));
+        Invalid(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(a.Id, 40, itemClass: inactive.Id)), "itemClassId", "class_inactive");
+        Invalid(await Tax.AddPolicyAsync(Admin.Id, Company.Id, new TaxPolicyInput(null, TaxRoundingMode.HalfEven, TaxRoundingLevel.PerLine)), "moneyDecimals", "required");
+        Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, a.Id, new TaxRateInput(null, TaxTreatment.Standard, 1m)), "effectiveFrom", "required");
+    }
+
+    [PostgresFact]
     public async Task A_rule_base_changes_only_with_its_rule_removals_record_the_previous_class_and_the_rate_lead_is_configurable()
     {
         await Prepare();

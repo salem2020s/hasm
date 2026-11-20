@@ -110,6 +110,47 @@ public class TaxApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
+    public async Task Incomplete_or_malformed_requests_are_refused_and_never_filled_with_defaults_or_treated_as_a_removal()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        var vat = await Send(HttpMethod.Post, Base, new { code = "VAT", nameAr = "ضريبة" }, cookie);
+        var vatId = vat.Json.GetProperty("id").GetGuid();
+        // an omitted required field is reported, never turned into 0001-01-01 / 0 (rate versions are append-only)
+        var noDate = await Send(HttpMethod.Post, $"{Base}/{vatId}/rates", new { treatment = 1, ratePercent = 15 }, cookie);
+        Assert.Equal(HttpStatusCode.BadRequest, noDate.Status);
+        Assert.Contains("effectiveFrom", noDate.Body);
+        Assert.Equal(0, (await Send(HttpMethod.Get, Base, cookie: cookie)).Json.GetProperty("taxes")[0].GetProperty("rates").GetArrayLength());
+        var noDecimals = await Send(HttpMethod.Post, $"{Base}/policy", new { mode = 1, level = 1 }, cookie);
+        Assert.Equal(HttpStatusCode.BadRequest, noDecimals.Status);
+        Assert.Contains("moneyDecimals", noDecimals.Body);
+        var noValidFrom = await Send(HttpMethod.Post, $"{Base}/rules", new { documentType = "sales_invoice", operation = "sale", taxId = vatId, priority = 10, includesTaxIds = None }, cookie);
+        Assert.Equal(HttpStatusCode.BadRequest, noValidFrom.Status);
+        Assert.Contains("validFrom", noValidFrom.Body);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, $"{Base}/classes", new { kind = 99, code = "X", nameAr = "س" }, cookie)).Status);
+
+        // a rule update that omits isActive never reactivates a switched-off rule
+        var rule = await Send(HttpMethod.Post, $"{Base}/rules", RuleBody(vatId, "2026-01-01"), cookie);
+        var ruleId = rule.Json.GetProperty("id").GetGuid();
+        var off = await Send(HttpMethod.Put, $"{Base}/rules/{ruleId}", RuleBody(vatId, "2026-01-01", false), cookie, ifMatch: Etag(rule));
+        var omitted = await Send(HttpMethod.Put, $"{Base}/rules/{ruleId}", new { documentType = "sales_invoice", operation = "sale", taxId = vatId, priority = 10, includesTaxIds = None, validFrom = "2026-01-01" }, cookie, ifMatch: Etag(off));
+        Assert.Equal(HttpStatusCode.OK, omitted.Status);
+        Assert.False(omitted.Json.GetProperty("isActive").GetBoolean());
+
+        // the assignment endpoints distinguish "remove" (classId: null) from a missing or malformed body, which is a client error
+        var item = Guid.NewGuid();
+        foreach (var body in new object?[] { null, new { }, new { classID = Guid.NewGuid() }, new { classId = "not-a-guid" }, new { classId = 7 } })
+        {
+            var r = await Send(HttpMethod.Put, $"{Base}/item-classes/{item}", body, cookie);
+            Assert.Equal(HttpStatusCode.BadRequest, r.Status);
+            Assert.Equal("invalid_request", r.Error);
+        }
+        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Put, $"{Base}/item-classes/{item}", new { classId = (Guid?)null }, cookie)).Status);   // explicit removal of a missing assignment
+        var listed = await Send(HttpMethod.Get, $"{Base}/item-classes", cookie: cookie);
+        Assert.Equal(0, listed.Json.GetProperty("assignments").GetArrayLength());
+    }
+
+    [PostgresFact]
     public async Task A_user_without_the_tax_permissions_reads_and_writes_nothing_and_a_viewer_cannot_configure()
     {
         await StartApi();
