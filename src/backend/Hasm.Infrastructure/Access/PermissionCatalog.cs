@@ -153,6 +153,7 @@ public sealed partial class PermissionCatalog
         new("company.tax", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
     ]);
@@ -272,6 +273,9 @@ public sealed partial class PermissionCatalog
         public const string PartiesUpdate = "company.parties.update";
         public const string PartiesSubmit = "company.parties.submit";
         public const string PartiesConfigure = "company.parties.configure";
+        public const string PricingView = "company.pricing.view";
+        public const string PricingConfigure = "company.pricing.configure";
+        public const string PricingOverride = "company.pricing.override";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
         public const string PartyRolesView = "company.partyroles.view";
