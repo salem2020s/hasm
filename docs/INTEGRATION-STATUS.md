@@ -7,13 +7,15 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | PR | Branch | Head | Content | Based on | Required checks on the exact head | Review |
 |----|--------|------|---------|----------|-----------------------------------|--------|
 | #51 | `feature/security-picomatch-retirement` | `fe2ee06` | INERT proposal: retire the picomatch exception (strict audit, zero exceptions) | main | `dependency-scan` fails (the gate this proposal fixes) | independent review recorded in the PR |
-| #55 | `docs/security-consolidated-proposal` | `f6a31c8` | INERT proposal: lift the frozen source-tree pins only under the retired status | main | `dependency-scan` fails | independent review recorded; combined re-review: see below |
+| #55 | `docs/security-consolidated-proposal` | `23d4850` | INERT proposals: lift the frozen source-tree pins only under the retired status + hardening addendum + combined review | main | `dependency-scan` fails | combined independent review recorded (`docs/security/COMBINED-REVIEW.md`) |
 | #52 | `test/costingmath-negative-guards` | `a0c0618` | tests only (costing guards) | main | all pass except `dependency-scan` | not required (tests only) |
 | #53 | `fix/phase-3-9a-followups` | `bdea3cb` | 3.9A follow-ups (shared revision, dirty state, pagination) | main | backend, PostgreSQL, frontend, desktop, e2e, ci-guard, docs, secret scan pass; 3 security gates fail | recorded in the PR |
 | #54 | `feature/phase-3-10-tax-engine` | `a805caf` | 3.10 tax engine, persistence, API, shared UI, localization point, class tabs | main | all pass except the 3 security gates (PostgreSQL 9m20s) | `docs/review-records/PR-54-tax-slice2.md`, `PR-54-tax-slice3.md` (no Critical/High; Mediums fixed) |
 | #56 | `feature/phase-3-9b-customers-suppliers` | `6aee2f7` | 3.9B customers, suppliers, representatives | #53 + #54 (stacked) | all pass except the 3 security gates | `docs/review-records/PR-3-9b-customers-suppliers.md` |
 | #57 | `feature/phase-3-12-attachments` | `79b0726` | 3.12 attachments and key management | #56 (stacked) | all complete checks pass except the 3 security gates; PostgreSQL pending at the time of writing | `docs/review-records/PR-3-12-attachments.md` |
-| #58 | `feature/phase-3-11-pricing-engine` | `3617721` | 3.11 slice 1: pure pricing engine and snapshot | main | all pass except `dependency-scan` | self-review; independent review pending |
+| #58 | `feature/phase-3-11-pricing-engine` | `9fe12af` | 3.11 slice 1: pure pricing engine and snapshot | main | previous head `3617721`: all pass except `dependency-scan`; CI on `9fe12af` running | `docs/review-records/PR-3-11-pricing-slice1.md` (no Critical/High; 5 Medium fixed or decided) |
+| #59 | `docs/integration-status` | see PR | this handoff (docs only) | main | docs-only checks | n/a |
+| #60 | `docs/claude-md-autonomy` | see PR | CLAUDE.md autonomy and integration principles (PROTECTED file: owner merges) | main | docs-only checks | n/a |
 | #48 | `feature/phase-3-8d-impact-preview` | `1e8f477` | 3.8D internal replay checkpoint (no financial execution) | main | all pass except `dependency-scan` | decisions X1-X8 pending; execution stays disabled |
 
 The three security gates are `dependency-scan`, `picomatch-policy-validation` and `picomatch-artifact-inspection`. They fail on EVERY branch for the same two protected-policy reasons (below); no other required check fails anywhere.
@@ -52,19 +54,21 @@ After each merge: verify the merge commit on `main`, update this file and `docs/
 * **Issue B - frozen trees.** `inspect-production-artifacts.cjs` pins `git rev-parse HEAD:<tree>` of `src/frontend`, `src/desktop` and `assets/branding` to the exception-era hashes, so ANY change of those paths fails. PR #55's second patch skips the pin check only when the status is exactly the retired value (any other value, spelling, null or a missing map keeps the pins, fail closed).
 * **What stays enforced after both patches** (verified in the code): the same-commit relationship (the capture step records `GITHUB_SHA` in the manifest, the installer step asserts it equals `GITHUB_SHA` and that the rebuilt Tauri web assets are byte-identical to the inspected ones); the vulnerable-module blacklist on the real production module graph (`picomatch`, `fdir`, `tinyglobby`, `vite`, `vitest`, `@vitejs/plugin-react` must not be bundled); the SHA-256 inventory of every written asset; the NSIS payload byte comparison; full frontend, production, desktop and NuGet audits; secret scan; ci-guard and exact-head verification (`verify-head`).
 * **Verified by the lead agent on 2026-11-20:** both patches apply cleanly to `main` in order (scratch worktree, nothing pushed); the policy and inspector fixtures pass **28/28**, zero skips (Node 26, Windows). **Not yet verifiable locally:** the actual Node 24/Linux audit CLI and the hosted Web/Tauri inspections (the audit runner supports hosted Linux only); these are the first steps after approval.
-* **Independent review of the combined effect:** requested 2026-11-20; the record is attached to PR #55 when it lands (`docs/security/`), and any Critical/High finding is fixed before approval is requested again.
+* **Independent review of the combined effect (done 2026-11-20, `docs/security/COMBINED-REVIEW.md` on PR #55):** no Critical/High; two Medium (retirement status not covered by `scopeHash`; config-level changes can evade the six-name blacklist once the pins are lifted) and four Low. The first Medium, the stale text and the missing tests are fixed by a third inert patch, `RETIREMENT-HARDENING-ADDENDUM.patch` (hash-bound retirement record asserted by the audit CLI and the inspector, six more tests, corrected comments). Recorded residuals for the owner: no Rust dependency audit exists (propose a mandatory `cargo audit` job), and the audit and inspection artifacts are bound to one commit only through `verify-head` (optional stronger binding). **All three patches apply cleanly in order to `main`; `node --test tools/verify/` passes 68/68, zero skips.**
+* **Approval A therefore covers three patches in order:** PICOMATCH-RETIREMENT (#51), ARTIFACT-PIN-RETIREMENT (#55), RETIREMENT-HARDENING-ADDENDUM (#55).
 * **Application procedure after approval A** (separate protected PR, never self-merged): apply patch 1 then patch 2 as two reviewed commits; run the fixtures; push; verify hosted Node 24/Linux validation and the Windows artifact inspection on the exact head; independent full-diff review; verify with `verify-head`; merge only with explicit owner approval and the head SHA pinned; then re-validate every dependent branch.
 
 ## Consolidated owner-decision register (each recorded once)
 
 | ID | Decision | Effect while open (fail-closed default) |
 |----|----------|------------------------------------------|
-| A | Approve applying the picomatch retirement (#51) and the pin lift (#55) | all branches keep a failing security gate; frontend/desktop work cannot reach `main` |
+| A | Approve applying the three picomatch/pin patches (#51, #55 x2) | all branches keep a failing security gate; frontend/desktop work cannot reach `main` |
 | M | Explicit approval to merge each PR into `main` (sequence above) | nothing merges |
 | X1-X8 | Phase 3.8D decisions (X1 would relax a database safeguard) | #48 stays an internal replay checkpoint; no financial execution; no safeguard changed |
 | OD-11 | Phase 3.8C lots/serials/expiry/reservations decision | 3.8C not started |
 | R | Retention/purge of removed attachments | default in force: bytes of removed attachments are kept; nothing purged |
 | Q | Per-company attachment quota and malware scanning | not built; size limit and content checks only |
+| C | Add a mandatory Rust (cargo) dependency audit job | no Rust audit exists (pre-existing gap); not added without approval of the gate change |
 
 ## Next development tasks (no approval needed)
 
