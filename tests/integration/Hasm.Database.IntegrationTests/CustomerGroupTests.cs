@@ -106,8 +106,8 @@ public class CustomerGroupTests : InventoryTestBase
         var inactive = Ok(await Pricing.CreateCustomerGroupAsync(Admin.Id, Company.Id, Grp("OFF", active: false)));
         var customer = await NewCustomerId("C1");
         var plain = await NewPartyId("NOROLE");
-        Assert.Equal(customer, Assert.Single(Ok(await Pricing.ListAssignmentsAsync(Company.Id))).PartyId);          // only customer parties are listed
-        Assert.Equal(0L, Assert.Single(Ok(await Pricing.ListAssignmentsAsync(Company.Id))).Revision);
+        Assert.Equal(customer, Assert.Single((await Pricing.ListAssignmentsAsync(Company.Id))).PartyId);          // only customer parties are listed
+        Assert.Equal(0L, Assert.Single((await Pricing.ListAssignmentsAsync(Company.Id))).Revision);
 
         Fails(await Pricing.SetAssignmentAsync(Admin.Id, Company.Id, customer, null, new CustomerGroupAssignmentInput(a.Id)), ConfigStatus.PreconditionRequired, "precondition_required");
         Invalid(await Pricing.SetAssignmentAsync(Admin.Id, Company.Id, plain, 0, new CustomerGroupAssignmentInput(a.Id)), "customerId", "customer_role_required");   // a non-customer is refused by the service
@@ -154,7 +154,7 @@ public class CustomerGroupTests : InventoryTestBase
             Pricing.SetAssignmentAsync(Admin.Id, Company.Id, customer, 1, new CustomerGroupAssignmentInput(c.Id)));
         Assert.Equal(1, race.Count(r => r.IsOk));
         Assert.Equal(1, race.Count(r => r.Status == ConfigStatus.PreconditionFailed));
-        Assert.Equal(2L, Assert.Single(Ok(await Pricing.ListAssignmentsAsync(Company.Id))).Revision);                  // exactly one change was applied
+        Assert.Equal(2L, Assert.Single((await Pricing.ListAssignmentsAsync(Company.Id))).Revision);                  // exactly one change was applied
     }
 
     [PostgresFact]
