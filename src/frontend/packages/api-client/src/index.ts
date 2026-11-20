@@ -489,6 +489,27 @@ export interface TaxPolicyInput { moneyDecimals: number; mode: number; level: nu
 export interface TaxResolutionComponent { taxId: string; code: string; treatment: number; ratePercent: number; priority: number; includesInBase: string[]; ruleRef: string | null }
 export interface TaxResolution { policyVersion: number; policy: { moneyDecimals: number; mode: number; level: number }; components: TaxResolutionComponent[] }
 
+// ---- Pricing configuration (Phase 3.11). margin action: 1 warn, 2 require approval, 3 block. list precedence: 1 scope then priority (default), 2 priority then scope. discount precedence: 1 specificity then priority (default), 2 priority then specificity.
+export interface PricingPolicy { version: number; isDefault: boolean; priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number; createdAtUtc: string | null }
+export interface PricingPolicyResponse { policy: PricingPolicy; can: { configure: boolean } }
+export interface PricingPolicyInput { priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number }
+export interface PriceList { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; currency: string; validFrom: string; validTo: string | null; isActive: boolean; customerId: string | null; revision: number; updatedAtUtc: string }
+export interface PriceListsResponse { priceLists: PriceList[]; can: { configure: boolean } }
+export interface PriceListInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; currency?: string; validFrom: string; validTo?: string | null; isActive?: boolean; customerId?: string | null }
+export interface PriceEntry { id: string; priceListId: string; itemId: string | null; itemGroupId: string | null; unitId: string; minQuantity: number; unitPrice: number; isActive: boolean; revision: number; updatedAtUtc: string }
+export interface PriceEntriesResponse { entries: PriceEntry[]; can: { configure: boolean } }
+export interface PriceEntryInput { itemId?: string | null; itemGroupId?: string | null; unitId?: string; minQuantity?: number; unitPrice: number; isActive?: boolean }
+export interface DiscountRule { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; validFrom: string; validTo: string | null; isActive: boolean; percent: number; minQuantity: number; customerId: string | null; itemId: string | null; itemGroupId: string | null; revision: number; updatedAtUtc: string }
+export interface DiscountRulesResponse { discounts: DiscountRule[]; can: { configure: boolean } }
+export interface DiscountRuleInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; validFrom: string; validTo?: string | null; isActive?: boolean; percent: number; minQuantity?: number; customerId?: string | null; itemId?: string | null; itemGroupId?: string | null }
+export interface PricingQuoteRequest { date: string; currency: string; itemId: string; itemGroupId?: string | null; unitId: string; quantity: number; customerId?: string | null; unitCost?: number | null; override?: { unitPrice?: number | null; discountPercent?: number | null; reason: string } | null }
+export interface PricingTraceStep { kind: string; ruleRef: string; outcome: string }
+export interface PricingQuote {
+  version: string; contentHash: string;
+  policy: { priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number };
+  result: { listUnitPrice: number; priceRuleRef: string; discountPercent: number; discountRuleRef: string | null; netUnitPrice: number; lineNet: number; overridden: boolean; overrideReason: string | null; marginPercent: number | null; margin: number; requiresApproval: boolean; trace: PricingTraceStep[] };
+}
+
 export interface CostCenterBranchRule { costCenterId: string; restricted: boolean; branchIds: string[]; revision: number }
 export interface CostCenterBranchRulesResponse { costCenters: CostCenterBranchRule[]; can: { configure: boolean } }
 export interface JournalLineInput {
@@ -1176,6 +1197,18 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     addTaxPolicy: (p: TaxPolicyInput) => request<TaxPolicy>("POST", "/api/v1/company/taxes/policy", { body: p }),
     resolveTaxes: (q: { documentType: string; operation: string; taxDate: string; itemId?: string; partyId?: string }) =>
       get<TaxResolution>(`/api/v1/company/taxes/resolve?documentType=${enc(q.documentType)}&operation=${enc(q.operation)}&taxDate=${enc(q.taxDate)}${q.itemId ? `&itemId=${enc(q.itemId)}` : ""}${q.partyId ? `&partyId=${enc(q.partyId)}` : ""}`),
+    getPricingPolicy: () => get<PricingPolicyResponse>("/api/v1/company/pricing/policy"),
+    savePricingPolicy: (p: PricingPolicyInput, version: number) => request<PricingPolicy>("POST", "/api/v1/company/pricing/policy", { body: p, ifMatch: version }),
+    listPriceLists: () => get<PriceListsResponse>("/api/v1/company/pricing/price-lists"),
+    createPriceList: (l: PriceListInput) => request<PriceList>("POST", "/api/v1/company/pricing/price-lists", { body: l }),
+    updatePriceList: (id: string, l: PriceListInput, revision: number) => request<PriceList>("PUT", `/api/v1/company/pricing/price-lists/${enc(id)}`, { body: l, ifMatch: revision }),
+    listPriceEntries: (listId: string) => get<PriceEntriesResponse>(`/api/v1/company/pricing/price-lists/${enc(listId)}/entries`),
+    createPriceEntry: (listId: string, e: PriceEntryInput) => request<PriceEntry>("POST", `/api/v1/company/pricing/price-lists/${enc(listId)}/entries`, { body: e }),
+    updatePriceEntry: (id: string, e: PriceEntryInput, revision: number) => request<PriceEntry>("PUT", `/api/v1/company/pricing/entries/${enc(id)}`, { body: e, ifMatch: revision }),
+    listDiscountRules: () => get<DiscountRulesResponse>("/api/v1/company/pricing/discounts"),
+    createDiscountRule: (d: DiscountRuleInput) => request<DiscountRule>("POST", "/api/v1/company/pricing/discounts", { body: d }),
+    updateDiscountRule: (id: string, d: DiscountRuleInput, revision: number) => request<DiscountRule>("PUT", `/api/v1/company/pricing/discounts/${enc(id)}`, { body: d, ifMatch: revision }),
+    quotePrice: (q: PricingQuoteRequest) => request<PricingQuote>("POST", "/api/v1/company/pricing/quote", { body: q }),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
     recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),

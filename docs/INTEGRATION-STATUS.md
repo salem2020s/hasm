@@ -1,6 +1,6 @@
 # HASM - Integration status and handoff
 
-Maintained by the lead agent; the authoritative record of what is open, how it depends on what, and what is waiting for the owner. Recover from this file after a context reset (then `git fetch`, `gh pr list`, `gh pr checks`). Last verified against GitHub: **2026-11-20**, `main` = `23963e6` (hosted CI on `eb9dfea` verified green; CI on later `main` commits NOT VERIFIED at the time of writing). Routine PRs are merged autonomously once every gate of the Autonomous merge policy holds (owner directive 2026-11-20, recorded in `CLAUDE.md` by PR #60).
+Maintained by the lead agent; the authoritative record of what is open, how it depends on what, and what is waiting for the owner. Recover from this file after a context reset (then `git fetch`, `gh pr list`, `gh pr checks`). Last verified against GitHub: **2026-11-20**, `main` = `219af25` (PR #68). Hosted CI on `40228b2` verified green; CI on later `main` commits is NOT VERIFIED here unless stated. Routine PRs are merged autonomously once every gate of the Autonomous merge policy holds (owner directive 2026-11-20, recorded in `CLAUDE.md` by PR #60).
 
 ## Merged on 2026-11-20 (each on its exact head, verify-head green, independent review recorded)
 
@@ -19,14 +19,16 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #64 | `acf66bb` | 3.9C slice 2 party import adapter (3.9C complete) |
 | #65 | `3d13007` | 3.11 slice 2a configurable price-list and discount precedence (decision P resolved) |
 | #66 | `23963e6` | attachment key-retirement safety (decision K resolved) |
+| #67 | `40228b2` | handoff update |
+| #68 | `219af25` | 3.11 slice 2b pricing persistence (company 0026, system 0027) |
 
-Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). PostgreSQL registry: 1016 tests (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0026, system 0027. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0026 / system 0027 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
+Migrations on `main`: **company 0001-0026, system 0001-0027** (contiguous). PostgreSQL registry: 1022 tests on `main` (1025 on the 3.11 slice 2c branch) (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0027, system 0028. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0027 / system 0028 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
 
 ## Open pull requests
 
 | PR | Branch | Status |
 |----|--------|--------|
-| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; number any migration from company 0026 / system 0027 on rebase |
+| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; number any migration from company 0027 / system 0028 on rebase |
 | #51, #55 | security proposals | SUPERSEDED and inert (applied by #61); not to be merged; may be closed by the owner |
 | #62 | `integration/chain-with-security` | VALIDATION ONLY; never merge |
 | #67 | `docs/handoff-after-3-9c` | this handoff (docs only; the table excludes the PR that carries it once merged) |
@@ -50,11 +52,17 @@ Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). Post
 * #57: spool of plaintext multipart parts to the OS temp directory (deployment requirement: encrypted temp disk, or stream); lower hard cap/concurrency on upload memory; 403-vs-404 oracle; sweep stale `*.att.tmp-*`.
 * #63: retire UI for import templates; route-encoding tests for odd names.
 
+## UNFINISHED Release 1 requirements (explicitly tracked; never silently omitted)
+
+* **Customer groups (SRS 8.1, pricing by customer group):** no customer-group registry exists; pricing has no group scope yet. Plan in `docs/PHASE-3.11.md` (master + assignment, group scope on price lists and discounts, quote and screens, tests). Release 1 is not complete without it.
+* **Import-file rewrap retirability report** (decision K follow-up) and the other Medium follow-ups recorded in the review records (#56, #57, #63, #66).
+* **Backup/restore coordination** for attachment folders and the key directory (SRS 14.4, 16): tested procedure.
+* **Production-readiness hardening:** decision S (bundler/Tauri inspection) and decision C (Rust `cargo audit`) need the owner (protected gates).
+
 ## Next development tasks
 
-1. 3.11 slice 2b: persistence of price lists, entries, discount rules and the two company precedences (default = slice 1), revision-fenced, audited; then API and shared screens (company migration 0026, system 0027). Slice-2 requirements: margin basis stated in UI/API, approval record before sealing a below-minimum Warn/RequireApproval result, validation on write.
-2. Import-file rewrap: report failed/retained counts and a retirability flag like the attachments rewrap (decision K follow-up); the key-retirement rule needs both.
-3. Backup/restore coordination for attachment folders and key directory (SRS 14.4, 16): tested procedure on top of #57.
-4. Attachment follow-ups (review of #57): plaintext multipart spooling to the OS temp directory, upload memory cap/concurrency, 403-vs-404 oracle, stale tmp sweep.
-5. 3.13 commercial document framework once 3.7C and 3.11 slice 2b are in.
-6. Do not open new feature PRs until open work is reviewed; one slice at a time, each with an independent full-diff review.
+1. Merge 3.11 slice 2c (pricing API and screens; branch `feature/phase-3-11-pricing-ui`) after review and exact-head CI.
+2. Customer-group registry and its pricing integration (above).
+3. Import-file rewrap retirability report; backup/restore coordination; attachment follow-ups from the #57 review.
+4. 3.13 commercial document framework once 3.7C and the pricing slices are in.
+5. One slice at a time, each with an independent full-diff review.
