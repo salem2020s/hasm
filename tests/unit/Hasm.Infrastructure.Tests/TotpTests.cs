@@ -112,6 +112,69 @@ public class TotpTests
     public void Base32_decoding_rejects_invalid_input(string? text)
         => Assert.False(Totp.TryFromBase32(text, out _));
 
+    [Theory]
+    [InlineData("MZXW6YTBOI=")]       // padding that does not complete a block of 8
+    [InlineData("MZXW6YTBOI=====")]   // wrong padding count (5)
+    [InlineData("MZXW6YTBOI=======")] // too much padding (7)
+    [InlineData("MZXW6YQ==")]         // block longer than 8 symbols
+    [InlineData("MZXW6YTBOı")]   // dotless i (U+0131) upper-cases to 'I' under culture rules: non-ASCII is refused
+    [InlineData("ＭＺＸＷ６")] // full-width letters are not folded
+    public void Base32_decoding_is_strict_about_padding_and_ASCII(string text)
+        => Assert.False(Totp.TryFromBase32(text, out _));
+
+    [Theory]
+    [InlineData("MZXW6YQ=")]          // 7 symbols + 1 pad
+    [InlineData("MZXW6===")]          // 5 symbols + 3 pads
+    [InlineData("MY======")]          // 2 symbols + 6 pads
+    [InlineData("MZXQ====")]          // 4 symbols + 4 pads
+    public void Base32_decoding_accepts_correct_padding(string text)
+        => Assert.True(Totp.TryFromBase32(text, out _));
+
+    [Fact]
+    public void Window_zero_accepts_only_the_current_step()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1111111111);
+        var step = Totp.StepFor(now);
+        Assert.Equal(step, Totp.Verify(Rfc, Totp.Compute(Rfc, step), now, window: 0));
+        Assert.Null(Totp.Verify(Rfc, Totp.Compute(Rfc, step - 1), now, window: 0));
+        Assert.Null(Totp.Verify(Rfc, Totp.Compute(Rfc, step + 1), now, window: 0));
+    }
+
+    [Fact]
+    public void A_negative_step_is_computed_and_verified_around_the_epoch()
+    {
+        var code = Totp.Compute(Rfc, -1);
+        Assert.Equal(6, code.Length);
+        Assert.Equal(-1L, Totp.Verify(Rfc, code, DateTimeOffset.FromUnixTimeSeconds(0)));
+    }
+
+    [Fact]
+    public void Leading_zeros_are_kept_and_required()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1111111109);       // the RFC 8-digit value 07081804 ends in 081804
+        Assert.Equal("081804", Totp.Compute(Rfc, Totp.StepFor(now)));
+        Assert.Equal(Totp.StepFor(now), Totp.Verify(Rfc, "081804", now));
+        Assert.Null(Totp.Verify(Rfc, "81804", now));
+        Assert.Null(Totp.Verify(Rfc, "0818040", now));
+    }
+
+    [Fact]
+    public void A_last_accepted_step_in_the_future_refuses_every_candidate()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1111111111);
+        var step = Totp.StepFor(now);
+        foreach (var s in new[] { step - 1, step, step + 1 })
+            Assert.Null(Totp.Verify(Rfc, Totp.Compute(Rfc, s), now, lastAcceptedStep: step + 5));
+        Assert.Equal(step + 1, Totp.Verify(Rfc, Totp.Compute(Rfc, step + 1), now, lastAcceptedStep: step));
+    }
+
+    [Fact]
+    public void Provisioning_uri_rejects_an_empty_account_and_escapes_a_colon_in_it()
+    {
+        Assert.Throws<ArgumentException>(() => Totp.ProvisioningUri("HASM", "", Rfc));
+        Assert.StartsWith("otpauth://totp/HASM:a%3Ab%40example.com?", Totp.ProvisioningUri("HASM", "a:b@example.com", Rfc));
+    }
+
     [Fact]
     public void Provisioning_uri_carries_the_standard_parameters_and_escapes_the_labels()
     {

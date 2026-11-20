@@ -41,6 +41,9 @@ public static class Totp
     /// Checks a submitted code against the steps within <paramref name="window"/> of the current one. Returns the matched step, or null when
     /// the code is malformed, wrong, or belongs to a step not newer than <paramref name="lastAcceptedStep"/> (replay). Every candidate step is compared in
     /// constant time and all are always evaluated, so timing does not reveal which step, if any, matched.
+    /// <para><b>Caller requirement (replay protection):</b> this function is pure and cannot prevent a replay by itself. The caller MUST pass the last accepted step it stored for the user and MUST persist the
+    /// returned step with an atomic compare-and-set (for example <c>UPDATE ... SET last_step = @matched WHERE user = @u AND (last_step IS NULL OR last_step &lt; @matched)</c> and require one affected row) in
+    /// the same step as accepting the sign-in. A plain read-then-write lets two concurrent requests with the same code both succeed. Failures must also be throttled by the caller (see the login throttling).</para>
     /// </summary>
     public static long? Verify(ReadOnlySpan<byte> secret, string? code, DateTimeOffset utc, long? lastAcceptedStep = null, int window = 1)
     {
@@ -87,14 +90,16 @@ public static class Totp
         var bytes = new List<byte>(text.Length * 5 / 8);
         var buffer = 0;
         var bits = 0;
-        var padding = false;
+        var padding = 0;
+        var symbols = 0;
         foreach (var raw in text)
         {
             if (raw is ' ' or '-') continue;
-            if (raw == '=') { padding = true; continue; }
-            if (padding) return false;
-            var index = Alphabet.IndexOf(char.ToUpperInvariant(raw));
+            if (raw == '=') { padding++; continue; }
+            if (padding > 0 || raw > 127) return false;                       // data after padding, or any non-ASCII character (no culture folding: U+0131 must not become 'I')
+            var index = Alphabet.IndexOf(raw is >= 'a' and <= 'z' ? (char)(raw - 32) : raw);
             if (index < 0) return false;
+            symbols++;
             buffer = (buffer << 5) | index;
             bits += 5;
             if (bits >= 8)
@@ -106,6 +111,8 @@ public static class Totp
         }
         // A valid encoding leaves fewer than 5 spare bits, all zero.
         if (bytes.Count == 0 || bits >= 5 || buffer != 0) return false;
+        // Padding is optional, but when present it must complete a block of 8 symbols with a valid count (1, 3, 4 or 6).
+        if (padding > 0 && (padding is not (1 or 3 or 4 or 6) || (symbols + padding) % 8 != 0)) return false;
         data = bytes.ToArray();
         return true;
     }
