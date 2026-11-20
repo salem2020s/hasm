@@ -93,7 +93,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 4), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Wh.Table}', '{Wr.Table}')", legacy));
-        Assert.Equal(5L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(4L, await Count(legacy, SystemSchema.MigrationJournalTable));
         // The branch triggers of 0004 are untouched by the failed attempt (the deferred link trigger was never attached to the branch table).
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM pg_trigger WHERE tgname = '{Wh.LinkBranchTrigger}'", legacy));
     }

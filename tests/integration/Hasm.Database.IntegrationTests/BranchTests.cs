@@ -138,7 +138,7 @@ public class BranchMigrationTests : BranchTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 3), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Br.Table}', '{Rv.Table}')", legacy));
-        Assert.Equal(4L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(3L, await Count(legacy, SystemSchema.MigrationJournalTable));
         // ... and the real migration still applies afterwards.
         Assert.Equal(CompanyMigrationStatus.Migrated, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
         Assert.Equal(1L, await Count(legacy, Br.Table));

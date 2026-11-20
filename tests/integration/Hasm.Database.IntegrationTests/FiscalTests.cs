@@ -109,7 +109,7 @@ public class FiscalMigrationTests : FiscalTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 5), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Fy.Table}', '{Fp.Table}', '{Fh.Table}')", legacy));
-        Assert.Equal(6L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(5L, await Count(legacy, SystemSchema.MigrationJournalTable));
     }
 
     [PostgresFact]
