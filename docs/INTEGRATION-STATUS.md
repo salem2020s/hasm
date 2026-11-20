@@ -1,8 +1,8 @@
 # HASM - Integration status and handoff
 
-Maintained by the lead agent; the authoritative record of what is open, how it depends on what, and what is waiting for the owner. Recover from this file after a context reset (then `git fetch`, `gh pr list`, `gh pr checks`). Last verified against GitHub: **2026-11-20**, `main` = `219af25` (PR #68). Hosted CI on `40228b2` verified green; CI on later `main` commits is NOT VERIFIED here unless stated. Routine PRs are merged autonomously once every gate of the Autonomous merge policy holds (owner directive 2026-11-20, recorded in `CLAUDE.md` by PR #60).
+Maintained by the lead agent; the authoritative record of what is open, how it depends on what, and what is waiting for the owner. Recover from this file after a context reset (then `git fetch`, `gh pr list`, `gh pr checks`). Last verified against GitHub: **2026-11-21**, `main` = `83343c8` (see the cloud-team handoff section for the current state; the older sections below are history unless marked current). Routine PRs are merged autonomously once every gate of the Autonomous merge policy holds (owner directive 2026-11-20, recorded in `CLAUDE.md` by PR #60).
 
-## Merged on 2026-11-20 (each on its exact head, verify-head green, independent review recorded)
+## Merged on 2026-11-20 up to #69 (each on its exact head, verify-head green, independent review recorded; later merges are listed in the cloud-team handoff section)
 
 | PR | Merge commit | Content |
 |----|--------------|---------|
@@ -21,8 +21,9 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #66 | `23963e6` | attachment key-retirement safety (decision K resolved) |
 | #67 | `40228b2` | handoff update |
 | #68 | `219af25` | 3.11 slice 2b pricing persistence (company 0026, system 0027) |
+| #69 | `3bbf66a` | 3.11 slice 2c pricing API and shared screens (no migration) |
 
-Migrations on `main`: **company 0001-0026, system 0001-0027** (contiguous). PostgreSQL registry: 1022 tests on `main` (1025 on the 3.11 slice 2c branch) (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0027, system 0028. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0027 / system 0028 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
+Migrations on `main`: **company 0001-0026, system 0001-0027** (contiguous). PostgreSQL registry on `main`: **1029** tests (`.github/workflows/backend.yml`, raise-only). Company 0027 is taken by #75 (customer groups); the next unassigned numbers are company 0028 and system 0028 (system 0028 is reserved for Phase 4.1 enrolment). #48 predates these merges; any migration it adds is numbered from the next free numbers at rebase time and its pinned counts re-reconciled.
 
 ## Cloud team handoff (reconciled 2026-11-21 against GitHub; lead = Claude Cloud; recover from here after a reset or usage limit)
 
@@ -49,14 +50,13 @@ Recorded follow-ups: quote must not trust client `itemGroupId`/`unitCost` when 3
 
 Next tasks after merges (approved, unblocked): A pricing follow-ups, then 3.13 once 3.11 is complete; B 4.3 follow-up then 4.4 (needs 4.3); D further scenario gap tests that need no decision. Blocked: 3.8C (OD-11), 3.8D (X1-X8), 4.1 enforcement, Phase 4.0 full-stack E2E (protected CI area; larger design).
 
-## Open pull requests
+## Open pull requests (current table: see the cloud-team handoff section for #75, #76, #77 and the backup follow-up)
 
 | PR | Branch | Status |
 |----|--------|--------|
-| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; number any migration from company 0027 / system 0028 on rebase |
-| #51, #55 | security proposals | SUPERSEDED and inert (applied by #61); not to be merged; may be closed by the owner |
+| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled, implementation preserved; any migration it adds is numbered from the next free numbers at rebase time |
+| #51, #55 | security proposals | SUPERSEDED by the merged owner-approved #61 (`215da56`) and inert; not to be merged; may be closed by the owner; never reopen the resolved decision |
 | #62 | `integration/chain-with-security` | VALIDATION ONLY; never merge |
-| #67 | `docs/handoff-after-3-9c` | this handoff (docs only; the table excludes the PR that carries it once merged) |
 
 ## Owner-decision register (each recorded once; fail-closed while open)
 
@@ -69,25 +69,23 @@ Next tasks after merges (approved, unblocked): A pricing follow-ups, then 3.13 o
 | Q | Per-company attachment quota and malware scanning | not built |
 | K | RESOLVED by the owner rule of 2026-11-20 (never retire a key retained attachments still need): rewrap now reports `retainedUnderOtherKeys` / `oldKeysMayBeRetired`; retirement requires true for every company plus a clean verify (`docs/PHASE-3.12.md`) | removed sensitive files keep their key; the import-file rewrap needs the same report (follow-up) |
 | S | Production-readiness: bundler/Tauri inspection hardening (aliases outside node_modules, externals, workers, platform Tauri configs and `TAURI_CONFIG`, build hooks, installer/executable embedding; `docs/review-records/PR-security-picomatch-apply.md` M1-M5) | recorded residual risk; existing gates unchanged |
+| 4.1-1..6 | Phase 4.1 (OPEN): MFA enforcement scope; key protecting TOTP secrets; lost-authenticator recovery and audit; emergency account; second approval; optional AD/Kerberos | only the TOTP primitive (#72) exists; enrolment, enforcement and system migration 0028 are not built |
+| 4.3-1 | Phase 4.3 (OPEN): audited restore acknowledgement with a checkpoint epoch | not built; recorded BLOCKED in docs/PHASE-4.3.md |
+| AR | RESOLVED by the owner 2026-11-20: Arabic label for retiring an import template is "إيقاف استخدام القالب" | applied in #73 |
 | C | Production-readiness: mandatory Rust `cargo audit` job (M6) | no Rust audit exists (pre-existing gap); adding a mandatory job changes protected gates, so it needs the owner |
 
 ## Medium follow-ups recorded in review records (no approval needed; schedule with the owning slice)
 
-* #56: validate a sales representative's `UserId` against system membership before any feature uses it; test that a role whose account/representative was later deactivated stays editable.
-* #57: spool of plaintext multipart parts to the OS temp directory (deployment requirement: encrypted temp disk, or stream); lower hard cap/concurrency on upload memory; 403-vs-404 oracle; sweep stale `*.att.tmp-*`.
-* #63: retire UI for import templates; route-encoding tests for odd names.
+* DONE: #56 deactivated account/representative stays editable and the representative `UserId` membership check (#73, #74); #57 plaintext spooling, upload memory cap/concurrency, 403-vs-404 oracle and stale `*.att.tmp-*` sweep (#74); #63 retire UI for import templates and route-encoding tests (#73).
+* OPEN: #56 free-text user GUID input and the raw representative id shown to viewers without `company.salesreps.view` (need a backend user lookup API); #57 encrypt while receiving (one plaintext copy is still held in memory); PR-69 M2 (pricing pickers' silent truncation, until a screen adopts `SearchPicker`); #70 Lows (scheduled in the backup follow-up).
 
 ## UNFINISHED Release 1 requirements (explicitly tracked; never silently omitted)
 
-* **Customer groups (SRS 8.1, pricing by customer group):** no customer-group registry exists; pricing has no group scope yet. Plan in `docs/PHASE-3.11.md` (master + assignment, group scope on price lists and discounts, quote and screens, tests). Release 1 is not complete without it.
-* **Import-file rewrap retirability report** (decision K follow-up) and the other Medium follow-ups recorded in the review records (#56, #57, #63, #66).
-* **Backup/restore coordination** for attachment folders and the key directory (SRS 14.4, 16): tested procedure.
+* **Customer groups (SRS 8.1, pricing by customer group):** in progress in #75 (company 0027); until it merges there is no group registry and pricing has no group scope. Plan in `docs/PHASE-3.11.md`.
+* **Import-file rewrap retirability report** (decision K follow-up) and import-file key coverage in the backup manifest.
+* **Backup/restore (SRS 14.4, 16):** slice 1 merged (#70: backup set, verify, isolated attachment restore, key coverage). Remaining: pg_dump/pg_restore coordination into an isolated target, scheduling, retention, encryption, RPO/RTO, full restore, and the blocked owner decisions (restore acknowledgement, decision R).
 * **Production-readiness hardening:** decision S (bundler/Tauri inspection) and decision C (Rust `cargo audit`) need the owner (protected gates).
 
 ## Next development tasks
 
-1. Merge 3.11 slice 2c (pricing API and screens; branch `feature/phase-3-11-pricing-ui`) after review and exact-head CI.
-2. Customer-group registry and its pricing integration (above).
-3. Import-file rewrap retirability report; backup/restore coordination; attachment follow-ups from the #57 review.
-4. 3.13 commercial document framework once 3.7C and the pricing slices are in.
-5. One slice at a time, each with an independent full-diff review.
+See "Next tasks after merges" in the cloud-team handoff section above (one slice at a time, each with an independent full-diff review).
