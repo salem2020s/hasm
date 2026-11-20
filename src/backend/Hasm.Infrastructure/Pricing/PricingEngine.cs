@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Hasm.Infrastructure.Pricing;
 
 /// <summary>
@@ -40,6 +42,7 @@ public static class PricingEngine
     public static ResolvedPricing Resolve(PricingRequest request, IReadOnlyList<PriceListRecord> lists, IReadOnlyList<PriceEntryRecord> entries, IReadOnlyList<DiscountRuleRecord> discounts)
     {
         ValidateRequest(request);
+        if (lists is null || entries is null || discounts is null) throw Refuse("invalid_request");
         var currency = request.Currency.Trim().ToUpperInvariant();
         var trace = new List<TraceStep>();
 
@@ -47,14 +50,17 @@ public static class PricingEngine
         var eligible = new List<(PriceListRecord List, int Scope)>();
         foreach (var l in lists)
         {
-            if (l.CustomerId is not null && l.CustomerGroupId is not null) throw Refuse("invalid_price_list");
-            if (!l.IsActive || !InRange(request.Date, l.ValidFrom, l.ValidTo) || !string.Equals(l.Currency?.Trim(), currency, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!l.IsActive) continue;                                                       // an inactive list is never evaluated, so its data cannot block pricing
+            if ((l.CustomerId is not null && l.CustomerGroupId is not null) || (l.ValidTo is { } vt && vt < l.ValidFrom)) throw Refuse("invalid_price_list");
+            if ( !InRange(request.Date, l.ValidFrom, l.ValidTo) || !string.Equals(l.Currency?.Trim(), currency, StringComparison.OrdinalIgnoreCase)) continue;
             if (l.CustomerId is { } cu) { if (cu != request.CustomerId) continue; eligible.Add((l, 2)); }
             else if (l.CustomerGroupId is { } g) { if (g != request.CustomerGroupId) continue; eligible.Add((l, 1)); }
             else eligible.Add((l, 0));
         }
         foreach (var (list, _) in eligible.OrderByDescending(x => x.Scope).ThenBy(x => x.List.Priority).ThenByDescending(x => x.List.ValidFrom).ThenBy(x => x.List.Code, StringComparer.Ordinal).ThenBy(x => x.List.Id))
         {
+            foreach (var bad in entries.Where(e => e.PriceListId == list.Id))
+                if (bad.MinQuantity < 0 || !Scale(bad.MinQuantity, 10) || (bad.ItemId is not null && bad.ItemGroupId is not null) || (bad.ItemId is null && bad.ItemGroupId is null)) throw Refuse("invalid_price");
             var mine = entries.Where(e => e.PriceListId == list.Id && e.UnitId == request.UnitId && e.MinQuantity <= request.Quantity
                 && ((e.ItemId is not null && e.ItemId == request.ItemId) || (e.ItemId is null && e.ItemGroupId is not null && e.ItemGroupId == request.ItemGroupId))).ToList();
             var listRef = Ref("list", list.Id, list.Code);
@@ -78,9 +84,10 @@ public static class PricingEngine
         var applicable = new List<(DiscountRuleRecord Rule, int Customer, int Item)>();
         foreach (var d in discounts)
         {
-            if (d.Percent < 0 || d.Percent > 100 || !Scale(d.Percent, 4) || d.MinQuantity < 0 || !Scale(d.MinQuantity, 10)) throw Refuse("invalid_discount");
+            if (!d.IsActive) continue;                                                       // an inactive rule is never evaluated, so its data cannot block pricing
+            if (d.Percent < 0 || d.Percent > 100 || !Scale(d.Percent, 4) || d.MinQuantity < 0 || !Scale(d.MinQuantity, 10) || (d.ValidTo is { } dv && dv < d.ValidFrom)) throw Refuse("invalid_discount");
             if ((d.CustomerId is not null && d.CustomerGroupId is not null) || (d.ItemId is not null && d.ItemGroupId is not null)) throw Refuse("invalid_discount");
-            if (!d.IsActive || !InRange(request.Date, d.ValidFrom, d.ValidTo) || request.Quantity < d.MinQuantity) continue;
+            if (!InRange(request.Date, d.ValidFrom, d.ValidTo) || request.Quantity < d.MinQuantity) continue;
             int cs;
             if (d.CustomerId is { } cu) { if (cu != request.CustomerId) continue; cs = 2; }
             else if (d.CustomerGroupId is { } g) { if (g != request.CustomerGroupId) continue; cs = 1; }
@@ -108,25 +115,54 @@ public static class PricingEngine
 
     private static decimal Round(decimal v, int places) => decimal.Round(v, places, MidpointRounding.AwayFromZero);
 
+    /// <summary>net x quantity rounded once, half away from zero, computed EXACTLY on integers (a decimal product could overflow or round silently before the real rounding). Too large a result is a refusal, never an overflow.</summary>
+    private static decimal ExactLine(decimal net, decimal quantity, int places)
+    {
+        try
+        {
+            static (BigInteger Value, int Scale) Scaled(decimal v) { var bits = decimal.GetBits(v); var scale = (bits[3] >> 16) & 0xFF; var mantissa = new BigInteger(new decimal(bits[0], bits[1], bits[2], false, 0)); return (v < 0 ? -mantissa : mantissa, scale); }
+            var (a, sa) = Scaled(net); var (b, sb) = Scaled(quantity);
+            var product = a * b; var scale = sa + sb;                                              // value = product / 10^scale
+            var shift = scale - places;
+            if (shift > 0)
+            {
+                var divisor = BigInteger.Pow(10, shift);
+                var q = BigInteger.DivRem(BigInteger.Abs(product), divisor, out var rem);
+                if (rem * 2 >= divisor) q += 1;                                                    // half away from zero
+                product = product.Sign < 0 ? -q : q; scale = places;
+            }
+            var result = (decimal)product;
+            for (var i = 0; i < scale; i++) result /= 10m;
+            return result;
+        }
+        catch (OverflowException) { throw Refuse("amount_too_large"); }
+    }
+
     /// <summary>Arithmetic only: net unit price = round(list price x (1 - discount / 100)), line net = round(net unit price x quantity). An override replaces the selected price and/or discount (a reason is mandatory).</summary>
     public static PricingResult Calculate(PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over = null)
     {
         ValidatePolicy(policy); ValidateRequest(request);
         if (resolved is null || resolved.ListUnitPrice < 0 || resolved.ListUnitPrice > MaxPrice || !Scale(resolved.ListUnitPrice, MaxDecimals) || resolved.DiscountPercent < 0 || resolved.DiscountPercent > 100 || !Scale(resolved.DiscountPercent, 4))
             throw Refuse("invalid_resolution");
+        if (string.IsNullOrWhiteSpace(resolved.PriceRuleRef) || resolved.Trace is null || (resolved.DiscountPercent > 0 && string.IsNullOrWhiteSpace(resolved.DiscountRuleRef))) throw Refuse("invalid_resolution");   // the chosen rule must always be on record
         var price = resolved.ListUnitPrice; var discount = resolved.DiscountPercent; string? reason = null; var overridden = false;
         var trace = resolved.Trace.ToList();
+        var priceRef = resolved.PriceRuleRef; var discountRef = resolved.DiscountRuleRef;
         if (over is not null)
         {
-            if (string.IsNullOrWhiteSpace(over.Reason) || over.Reason.Trim().Length > 500) throw Refuse("override_reason_required");
+            if (string.IsNullOrWhiteSpace(over.Reason)) throw Refuse("override_reason_required");
+            if (over.Reason.Trim().Length > 500) throw Refuse("override_reason_invalid");
             if (over.UnitPrice is null && over.DiscountPercent is null) throw Refuse("override_empty");
             if (over.UnitPrice is { } op) { if (op < 0 || op > MaxPrice || !Scale(op, MaxDecimals)) throw Refuse("invalid_override"); price = op; }
             if (over.DiscountPercent is { } od) { if (od < 0 || od > 100 || !Scale(od, 4)) throw Refuse("invalid_override"); discount = od; }
             overridden = true; reason = over.Reason.Trim();
-            trace.Add(new("override", "manual", $"price={(over.UnitPrice is null ? "rule" : "manual")};discount={(over.DiscountPercent is null ? "rule" : "manual")}"));
+            // the rules that would have applied, and their values, stay on record; the result no longer claims them for the replaced part
+            trace.Add(new("override", "manual", $"price={(over.UnitPrice is null ? "rule" : $"manual(replaced {resolved.PriceRuleRef}={resolved.ListUnitPrice.ToString(System.Globalization.CultureInfo.InvariantCulture)})")};discount={(over.DiscountPercent is null ? "rule" : $"manual(replaced {resolved.DiscountRuleRef ?? "none"}={resolved.DiscountPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)})")}"));
+            if (over.UnitPrice is not null) priceRef = "manual-override";
+            if (over.DiscountPercent is not null) discountRef = "manual-override";
         }
         var net = Round(price * (100m - discount) / 100m, policy.PriceDecimals);
-        var line = Round(net * request.Quantity, policy.MoneyDecimals);
+        var line = ExactLine(net, request.Quantity, policy.MoneyDecimals);
 
         decimal? margin = null; var status = MarginStatus.NotEvaluated; var approval = false;
         if (policy.MinMarginPercent is { } min)
@@ -149,6 +185,6 @@ public static class PricingEngine
                 else { status = MarginStatus.Ok; trace.Add(new("margin", "policy", "ok")); }
             }
         }
-        return new(price, resolved.PriceRuleRef, discount, resolved.DiscountRuleRef, net, line, overridden, reason, margin, status, approval, trace.ToArray());
+        return new(price, priceRef, discount, discountRef, net, line, overridden, reason, margin, status, approval, trace.ToArray());
     }
 }

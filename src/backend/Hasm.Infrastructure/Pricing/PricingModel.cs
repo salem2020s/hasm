@@ -28,7 +28,11 @@ public sealed record PriceEntryRecord(Guid PriceListId, Guid? ItemId, Guid? Item
 public sealed record DiscountRuleRecord(Guid Id, string Code, int Priority, DateOnly ValidFrom, DateOnly? ValidTo, bool IsActive, decimal Percent, decimal MinQuantity = 0,
     Guid? CustomerId = null, Guid? CustomerGroupId = null, Guid? ItemId = null, Guid? ItemGroupId = null);
 
-/// <summary>The priced line. UnitCost (in the price currency) is optional input of the margin control.</summary>
+/// <summary>
+/// The priced line. DECISIONS (recorded in docs/PHASE-3.11.md): the quantity is expressed in the unit being priced (a price entry exists per unit; conversion between units is the caller's job before pricing,
+/// never implied here) and the currency is the document currency (a price list is in one currency; conversion is the document framework's job). UnitCost is optional input of the margin control and MUST be in the
+/// same unit and currency as the price.
+/// </summary>
 public sealed record PricingRequest(DateOnly Date, string Currency, Guid ItemId, Guid? ItemGroupId, Guid UnitId, decimal Quantity, Guid? CustomerId = null, Guid? CustomerGroupId = null, decimal? UnitCost = null);
 
 /// <summary>An authorized manual override (the permission is checked by the caller): a price and/or a discount percent, with a mandatory reason. The rule that WOULD have applied stays in the trace.</summary>

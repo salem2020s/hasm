@@ -20,3 +20,8 @@ Sources: SRS 8.1-8.4 (several price lists and deterministic, configurable priori
 ## Tests
 
 12 unit tests: price list ordering matrix, skip tracing and eligibility, quantity tiers and item-before-group, refusals, discount specificity matrix without stacking, ambiguity and data refusals, rounding, override rules, margin actions, snapshot sealing and tamper detection, order independence over randomized input orders. No migration and no API in this slice.
+
+## Decisions and review follow-up (docs/review-records/PR-3-11-pricing-slice1.md)
+
+* **Units and currency.** The quantity is expressed in the unit being priced (an entry exists per unit; conversion between units is the caller's job before pricing); the price currency is the document currency (a list is in one currency; conversion is the document framework's job); `UnitCost` must be in the same unit and currency. Reversible; revisit with the document framework (3.13).
+* **Override** results name `manual-override` for the replaced price or discount; the replaced rule and value stay in the trace. **Resolution integrity:** the price rule reference is mandatory and a discount needs its rule reference. **Exactness:** the line amount is computed on integers and rounded once. **Snapshot v1** is defined by an explicit field list and pinned by a golden hash; adding a field requires a new snapshot version. Tests: 17.

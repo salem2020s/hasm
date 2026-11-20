@@ -24,8 +24,19 @@ public static class PricingSnapshots
     }
     private static readonly JsonSerializerOptions Canonical = new() { Converters = { new CanonicalDecimal() } };
 
+    // The v1 hash is computed over EXPLICIT field lists, not over the live record types: adding a property to a record later can never change (and so never invalidate) a stored v1 snapshot.
+    // A new field needs a new snapshot version. A golden-hash test pins this.
+    private static object Trace(IReadOnlyList<TraceStep> t) => t.Select(x => new { x.Kind, x.RuleRef, x.Outcome }).ToArray();
     private static string Hash(string version, PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over, PricingResult result) =>
-        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { Version = version, Policy = policy, Request = request, Resolved = resolved, Override = over, Result = result }, Canonical))).ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            Version = version,
+            Policy = new { policy.PriceDecimals, policy.MoneyDecimals, policy.MinMarginPercent, Action = (int)policy.Action },
+            Request = new { request.Date, request.Currency, request.ItemId, request.ItemGroupId, request.UnitId, request.Quantity, request.CustomerId, request.CustomerGroupId, request.UnitCost },
+            Resolved = new { resolved.ListUnitPrice, resolved.PriceRuleRef, resolved.DiscountPercent, resolved.DiscountRuleRef, Trace = Trace(resolved.Trace) },
+            Override = over is null ? null : new { over.UnitPrice, over.DiscountPercent, over.Reason },
+            Result = new { result.ListUnitPrice, result.PriceRuleRef, result.DiscountPercent, result.DiscountRuleRef, result.NetUnitPrice, result.LineNet, result.Overridden, result.OverrideReason, result.MarginPercent, Margin = (int)result.Margin, result.RequiresApproval, Trace = Trace(result.Trace) },
+        }, Canonical))).ToLowerInvariant();
 
     /// <summary>Calculates and seals, keeping read-only copies of the trace.</summary>
     public static PricingSnapshot Create(PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over = null)
@@ -38,13 +49,13 @@ public static class PricingSnapshots
     /// <summary>True only when the version is known, the stored hash matches the stored content AND recalculating from the stored values reproduces the stored result exactly.</summary>
     public static bool Verify(PricingSnapshot snapshot)
     {
-        if (snapshot is null || snapshot.Version != CurrentVersion || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved is null || snapshot.Result is null) return false;
-        if (!string.Equals(snapshot.ContentHash, Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, snapshot.Result), StringComparison.Ordinal)) return false;
+        if (snapshot is null || snapshot.Version != CurrentVersion || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved?.Trace is null || snapshot.Result?.Trace is null) return false;
         try
         {
+            if (!string.Equals(snapshot.ContentHash, Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, snapshot.Result), StringComparison.Ordinal)) return false;
             var recomputed = PricingEngine.Calculate(snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override);
             return string.Equals(Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, recomputed), snapshot.ContentHash, StringComparison.Ordinal);
         }
-        catch (PricingException) { return false; }
+        catch (Exception ex) when (ex is PricingException or ArgumentException or InvalidOperationException or NullReferenceException or OverflowException) { return false; }   // a malformed snapshot is invalid evidence, never a crash
     }
 }
