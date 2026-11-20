@@ -320,4 +320,57 @@ public class AttachmentTests : InventoryTestBase
         Fails(await Mgmt.RemoveAsync(blind.Id, Company.Id, normal.Id, 1, "x"), ConfigStatus.Forbidden, "forbidden");
         Fails(await Mgmt.SweepOrphansAsync(blind.Id, Company.Id), ConfigStatus.Forbidden, "forbidden");
     }
+
+    [PostgresFact]
+    public async Task Backup_and_restore_drill_the_verification_proves_a_restored_set_and_names_every_problem_and_the_keys_it_needs()
+    {
+        await Prepare();
+        var plain = Ok(await Up());
+        var removedPlain = Ok(await Up(name: "gone.pdf"));
+        var secrets = new List<AttachmentView>();
+        for (var i = 0; i < 2; i++) secrets.Add(Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes($" S{i}")).ToArray(), sensitive: true, name: $"s{i}.pdf")));
+        Ok(await Svc.RemoveAsync(Admin.Id, Company.Id, removedPlain.Id, 1, "mistake", true));                          // removed bytes are retained and must also survive a restore
+        var clean = await Svc.VerifyAsync(Admin.Id, Company.Id);
+        Assert.True(clean.IsClean);
+        Assert.Equal((4, 4, 2), (clean.Checked, clean.Ok, clean.TotalSensitive));
+        Assert.Equal(["k1"], clean.KeyIdsInUse);
+        Assert.Equal(1L, await Events(AttachmentAuditEvents.Verified));
+
+        // BACKUP: the database rows, the attachment folder and (separately protected) the key. RESTORE into a fresh folder and prove it.
+        var restored = Path.Combine(Path.GetTempPath(), "hasm-att-restore-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CopyDirectory(Path.Combine(dir, Company.Id.ToString("N")), Path.Combine(restored, Company.Id.ToString("N")));
+            var options = new AttachmentOptions { StorageDirectory = restored, MaxFileBytes = 1024 * 1024 };
+            var restoredSvc = new AttachmentService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), new AttachmentFileStore(options, new EncryptionOptions { AllowInsecureFilePermissions = true }), new EnvelopeEncryptor(ring), options, Clock);
+            Assert.True((await restoredSvc.VerifyAsync(Admin.Id, Company.Id)).IsClean);                                 // the stored hashes prove the restored files
+            var files = Directory.GetFiles(Path.Combine(restored, Company.Id.ToString("N")), "*.att");
+
+            // a restore that lost a file, corrupted one, lost the key and carries a stray file is described exactly
+            var byName = new Dictionary<Guid, string>();
+            foreach (var a in new[] { plain, removedPlain, secrets[0], secrets[1] }) byName[a.Id] = Path.Combine(restored, Company.Id.ToString("N"), await Sql<string>($"SELECT {AT.StorageName} FROM {AT.Table} WHERE {AT.Id} = '{a.Id}'"));
+            File.Delete(byName[removedPlain.Id]);
+            var bytes = await File.ReadAllBytesAsync(byName[plain.Id]); bytes[^1] ^= 1; await File.WriteAllBytesAsync(byName[plain.Id], bytes);
+            File.WriteAllBytes(Path.Combine(restored, Company.Id.ToString("N"), AttachmentFileStore.NewName()), [9, 9]);
+            var withoutKey = new AttachmentService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), new AttachmentFileStore(options, new EncryptionOptions { AllowInsecureFilePermissions = true }), new EnvelopeEncryptor(new InMemoryKekRing("k9")), options, Clock);
+            var bad = await withoutKey.VerifyAsync(Admin.Id, Company.Id);
+            Assert.False(bad.IsClean);
+            Assert.Equal([removedPlain.Id], bad.Missing);
+            Assert.Equal([plain.Id], bad.HashMismatch);
+            Assert.Equal(secrets.Select(s => s.Id).Order(), bad.KeyUnavailable.Order());                               // without the key backup the sensitive files cannot be proven
+            Assert.Equal((1, 0), (bad.OrphanFiles, bad.Unreadable.Count));
+            Assert.Equal(["k1"], bad.KeyIdsInUse);                                                                        // the operator learns which key the key backup must contain
+        }
+        finally { if (Directory.Exists(restored)) try { Directory.Delete(restored, true); } catch (IOException) { } }
+
+        var (editor, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.PartiesView], ScopeKind.Company, null);
+        Fails(await Mgmt.VerifyAsync(editor.Id, Company.Id), ConfigStatus.Forbidden, "forbidden");
+        Assert.True(Ok(await Mgmt.VerifyAsync(Admin.Id, Company.Id)).IsClean);
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)));
+    }
 }

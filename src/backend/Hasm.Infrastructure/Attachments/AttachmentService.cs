@@ -22,6 +22,7 @@ public static class AttachmentAuditEvents
     public const short IntegrityFailure = 1604;
     public const short RewrapFailed = 1605;
     public const short OrphansSwept = 1606;
+    public const short Verified = 1607;
 }
 
 /// <summary>Where attachments live on the server and how large they may be (section <c>Hasm:Attachments</c>).</summary>
@@ -105,6 +106,16 @@ public sealed record AttachmentView(Guid Id, string SubjectKind, Guid SubjectId,
 public sealed record AttachmentContent(AttachmentView Attachment, byte[] Bytes);
 public sealed record AttachmentCapabilities(bool View, bool Upload, bool Delete, bool SensitiveView, bool SensitiveUpload);
 public sealed record RewrapOutcome(int Rewrapped, int Skipped, int Failed);
+
+/// <summary>
+/// The result of verifying a company's attachment set against its stored files (the proof after a restore or before a backup is relied on). Lists carry attachment ids only (never names or paths).
+/// <see cref="KeyIdsInUse"/> are the master keys that the sensitive files need: they must be in the key backup. A file is OK only when it exists, is readable with an available key and its plaintext hash matches.
+/// </summary>
+public sealed record AttachmentVerification(int Checked, int Ok, int TotalSensitive, long TotalBytes, IReadOnlyList<Guid> Missing, IReadOnlyList<Guid> HashMismatch, IReadOnlyList<Guid> KeyUnavailable,
+    IReadOnlyList<Guid> Unreadable, int OrphanFiles, IReadOnlyList<string> KeyIdsInUse)
+{
+    public bool IsClean => Missing.Count == 0 && HashMismatch.Count == 0 && KeyUnavailable.Count == 0 && Unreadable.Count == 0;
+}
 
 /// <summary>
 /// The audited company-side store of attachments (Phase 3.12, SRS 14.3/14.4/17.1/17.2). <b>No authorization here by design:</b> <see cref="AttachmentManagementService"/> wraps it. Metadata in the company
@@ -406,6 +417,43 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { /* the failure count of the outcome still reports it */ }
     }
 
+    /// <summary>
+    /// Verifies EVERY attachment row (active and removed: removed bytes are retained) against the stored bytes: existence, decryption with an available key, plaintext hash. One file is held in memory at a time.
+    /// Orphan files (named by no row) are counted, never touched. Read-only apart from one audit event with the counts.
+    /// </summary>
+    public async Task<AttachmentVerification> VerifyAsync(Guid actor, Guid companyId, CancellationToken ct = default)
+    {
+        List<(AttachmentView View, string StorageName, string? KeyId)> rows;
+        await using (var conn = await resolver.OpenAsync(companyId, ct)) rows = await Load(conn, null, "true", _ => { }, false, ct);
+        var missing = new List<Guid>(); var mismatch = new List<Guid>(); var keys = new List<Guid>(); var unreadable = new List<Guid>();
+        var keyIds = new SortedSet<string>(StringComparer.Ordinal); int ok = 0, sensitive = 0; long bytes = 0;
+        foreach (var row in rows)
+        {
+            ct.ThrowIfCancellationRequested();
+            bytes += row.View.SizeBytes;
+            if (row.View.IsSensitive) { sensitive++; if (row.KeyId is not null) keyIds.Add(row.KeyId); }
+            byte[]? raw;
+            try { raw = store.Read(companyId, row.StorageName); }
+            catch (IOException) { unreadable.Add(row.View.Id); continue; }
+            if (raw is null) { missing.Add(row.View.Id); continue; }
+            byte[] plain;
+            if (row.View.IsSensitive)
+            {
+                try { keyIds.Add(EnvelopeEncryptor.KeyIdOf(raw)); plain = encryptor.Decrypt(raw, Context(companyId, row.View.Id)); }
+                catch (EncryptionUnavailableException ex) when (ex.Code is "encryption_key_unavailable" or "encryption_key_invalid" or "encryption_not_configured") { keys.Add(row.View.Id); continue; }
+                catch (Exception ex) when (ex is EncryptionUnavailableException or CryptographicException or FormatException or ArgumentException) { mismatch.Add(row.View.Id); continue; }
+            }
+            else plain = raw;
+            if (string.Equals(Convert.ToHexStringLower(SHA256.HashData(plain)), row.View.Sha256, StringComparison.Ordinal)) ok++; else mismatch.Add(row.View.Id);
+        }
+        var known = rows.Select(r => r.StorageName).ToHashSet();
+        var orphans = store.List(companyId).Count(f => !known.Contains(f.Name));
+        var result = new AttachmentVerification(rows.Count, ok, sensitive, bytes, missing, mismatch, keys, unreadable, orphans, [.. keyIds]);
+        await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.Verified, ActorUserId: actor,
+            Detail: $"attachments verified checked={result.Checked} ok={result.Ok} missing={missing.Count} hash_mismatch={mismatch.Count} key_unavailable={keys.Count} unreadable={unreadable.Count} orphans={orphans}"), ct); return true; }, ct);
+        return result;
+    }
+
     private async Task<ConfigResult<T>> Mutate<T>(Guid companyId, Func<CompanyAuditedWork, Task<T>> work, CancellationToken ct)
     {
         try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
@@ -462,6 +510,13 @@ public sealed class AttachmentManagementService(AccessService access, Attachment
     {
         if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveUpload, ct)) return Denied<RewrapOutcome>();
         return ConfigResult<RewrapOutcome>.Ok(await attachments.RewrapAsync(user, company, ct));
+    }
+
+    /// <summary>Verifies the whole attachment set against the stored files (restore proof; also lists the master keys the sensitive files need). Same permission as the key rotation.</summary>
+    public async Task<ConfigResult<AttachmentVerification>> VerifyAsync(Guid user, Guid company, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveUpload, ct)) return Denied<AttachmentVerification>();
+        return ConfigResult<AttachmentVerification>.Ok(await attachments.VerifyAsync(user, company, ct));
     }
 
     /// <summary>Removes stored files no row names (left by a crash between the file write and the commit). Same permission as the key rotation.</summary>

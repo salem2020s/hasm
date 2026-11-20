@@ -34,11 +34,18 @@ Stacked on PR #56 (3.9B: company 0023, system 0025), which is stacked on PR #54 
 
 ## Tests
 
-3 unit (names) + 7 PostgreSQL service tests (`AttachmentTests`: plain and encrypted storage, validation matrix, traversal and company isolation, tamper/swap/missing-file/missing-key, removal and database guards, rotation drill with key retirement and recovery, authorization) + 5 HTTP tests (`AttachmentApiTests`: authentication and company selection, end-to-end upload/download/removal with hardened headers, malformed and oversized uploads, sensitive visibility, 503 without a key); registry 989 -> 1002; 5 component tests (`attachments.test.tsx`).
+3 unit (names) + 7 PostgreSQL service tests (`AttachmentTests`: plain and encrypted storage, validation matrix, traversal and company isolation, tamper/swap/missing-file/missing-key, removal and database guards, rotation drill with key retirement and recovery, authorization) + 5 HTTP tests (`AttachmentApiTests`: authentication and company selection, end-to-end upload/download/removal with hardened headers, malformed and oversized uploads, sensitive visibility, 503 without a key); registry 989 -> 1003; 5 component tests (`attachments.test.tsx`).
 
 ## Review hardening (docs/review-records/PR-3-12-attachments.md)
 
 Upload is authorized before the body is buffered; the file is written before the transaction (no lock during I/O) and removed only when no row exists; `POST /api/v1/company/attachments/maintenance/sweep` removes orphan files older than one hour; every decryption failure other than a missing key is an audited integrity failure; names lose bidirectional/zero-width/format characters and are truncated on a character boundary; the plaintext digest of a sensitive file is neither returned nor audited; list, upload, download and removal also require the owning module's view permission (parties, items); a charset parameter is accepted and a Windows-labelled .csv is read as text/csv.
+
+## Backup and restore coordination (SRS 14.4, 16)
+
+* **The backup set has three parts that must come from the same moment:** (1) the company database (the attachment rows), (2) the attachment folder of the company (`Hasm:Attachments:StorageDirectory/<company>`; the bytes of REMOVED attachments are included: they are retained), (3) the master key directory (`Hasm:Encryption:KeyDirectory`), stored and protected SEPARATELY from (1) and (2) so that a stolen data backup does not carry its keys. Order: copy the folder after the database snapshot is taken (a file with no row is an orphan and harmless; a row with no file is a missing file and is reported).
+* **Restore:** restore the database and the folder, then the key directory; start the application; run `POST /api/v1/company/attachments/maintenance/verify` (permission `company.attachmentssensitive.upload`). The report proves the set: `clean` is true only when every row (active and removed) has its file, decrypts with an available key and matches its stored plaintext SHA-256. Otherwise it lists attachment ids (never names or paths) as `missing`, `hashMismatch`, `keyUnavailable` and `unreadable`, counts `orphanFiles` (never deleted by the verification) and gives `keyIdsInUse`: the master keys the sensitive files need, which the key backup must contain. A `keyUnavailable` file becomes readable when its key is restored; a `missing` or `hashMismatch` file must be restored from an older backup or re-uploaded. The verification writes one audit event (1607).
+* **Drill:** `AttachmentTests` restores a copy of the folder into a fresh directory and proves it clean, then restores with a lost file, a corrupted file, a stray file and without the key and checks that each problem is named.
+* **Not covered here:** scheduling and encryption of the data backup itself (Phase 4.3), and retention/purge of removed attachments (owner decision R).
 
 ## Open owner decisions (blocker register)
 

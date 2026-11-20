@@ -44,6 +44,7 @@ public static class AttachmentEndpoints
         g.MapPost("/{id:guid}/remove", Remove).WithMetadata(new BodyLimit());
         g.MapPost("/maintenance/rewrap", Rewrap);
         g.MapPost("/maintenance/sweep", Sweep);
+        g.MapPost("/maintenance/verify", Verify);
     }
 
     private static object Body(AttachmentView v) => new
@@ -122,6 +123,17 @@ public static class AttachmentEndpoints
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         return Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { rewrapped = v.Rewrapped, skipped = v.Skipped, failed = v.Failed });
+    }
+
+    private static async Task<IResult> Verify(HttpContext http, AccessService access, AttachmentManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return Map(await svc.VerifyAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new
+        {
+            clean = v.IsClean, checkedCount = v.Checked, ok = v.Ok, totalSensitive = v.TotalSensitive, totalBytes = v.TotalBytes, missing = v.Missing, hashMismatch = v.HashMismatch,
+            keyUnavailable = v.KeyUnavailable, unreadable = v.Unreadable, orphanFiles = v.OrphanFiles, keyIdsInUse = v.KeyIdsInUse,
+        });
     }
 
     private static async Task<IResult> Sweep(HttpContext http, AccessService access, AttachmentManagementService svc)
