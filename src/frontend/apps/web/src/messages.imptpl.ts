@@ -4,10 +4,10 @@ export const impTplAr: Record<string, string> = {
   "imp.tpl.apply_label": "تطبيق قالب", "imp.tpl.apply": "تطبيق", "imp.tpl.applied": "طُبّق القالب: راجع الربط ثم احفظه.",
   "imp.tpl.applied_unmatched": "طُبّق القالب ولم يُعثر على عمود ل {n} حقل/حقول: {fields}. راجع الربط ثم احفظه.",
   "imp.tpl.save_label": "حفظ الربط الحالي كقالب", "imp.tpl.save_hint": "يُحفظ الربط المحفوظ للدفعة كنسخة جديدة إن وُجد قالب بالاسم نفسه.", "imp.tpl.save_first": "احفظ ربط الدفعة أولاً.",
-  "imp.tpl.save": "حفظ القالب", "imp.tpl.retire": "إحالة إلى التقاعد", "imp.tpl.retire_title": "إحالة القالب إلى التقاعد", "imp.tpl.retire_message": "لن يُعرض القالب «⁨{name}⁩» بعد الآن للتطبيق.", "imp.tpl.retired": "أُحيل القالب إلى التقاعد.", "imp.tpl.retire_missing": "القالب المحدد لم يعد في القائمة: حُدّثت القائمة، اختره من جديد.", "imp.tpl.busy": "عملية على القوالب قيد التنفيذ، انتظر انتهاءها.", "imp.tpl.saved": "حُفظ القالب.",
+  "imp.tpl.save": "حفظ القالب", "imp.tpl.retire": "إيقاف استخدام القالب", "imp.tpl.retire_title": "إيقاف استخدام القالب", "imp.tpl.retire_message": "لن يُعرض القالب «⁨{name}⁩» بعد الآن للتطبيق.", "imp.tpl.retired": "أُوقف استخدام القالب.", "imp.tpl.retire_missing": "القالب المحدد لم يعد في القائمة: حُدّثت القائمة، اختره من جديد.", "imp.tpl.busy": "عملية على القوالب قيد التنفيذ، انتظر انتهاءها.", "imp.tpl.saved": "حُفظ القالب.",
   "imp.error.default_too_long": "القيمة الافتراضية أطول من 400 حرف: لا تصلح لقالب.",
   "imp.error.header_unusable": "عنوان عمود فارغ أو طويل لا يصلح لقالب.", "imp.error.header_ambiguous": "عنوانان متطابقان بعد التوحيد: لا يمكن حفظ قالب موثوق.",
-  "imp.error.batch_not_mapped": "لا ربط محفوظاً لهذه الدفعة.", "imp.error.template_not_found": "القالب غير موجود أو متقاعد.", "imp.error.already_retired": "القالب متقاعد مسبقاً.",
+  "imp.error.batch_not_mapped": "لا ربط محفوظاً لهذه الدفعة.", "imp.error.template_not_found": "القالب غير موجود أو أُوقف استخدامه.", "imp.error.already_retired": "أُوقف استخدام القالب مسبقاً.",
   "imp.error.version_conflict": "حُفظت نسخة أخرى من القالب في الوقت نفسه.", "imp.error.template_incompatible": "القالب لا يطابق حقول المحوّل الحالية.", "imp.error.name_invalid": "اسم القالب مطلوب وبحد أقصى 100 حرف.",
 };
 

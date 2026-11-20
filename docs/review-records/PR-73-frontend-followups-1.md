@@ -19,7 +19,7 @@
 | L5 | Low | `Imports.tsx` retire handler | Version 0 was sent when the template was not in the list; a click swallowed by the in-flight guard gave no feedback. | Fixed: aborts with a clear message and reloads; a message is shown when the guard swallows the click; test for the missing-template path. The busy path is not reachable through the UI (the fieldset is disabled while busy) and is not separately tested. |
 | L6 | Low | tests | Gaps: debounce coalescing, disabled, `allowNone=false`, load/filter change, unmount during a request. | Fixed: tests added for each. |
 | L7 | Low | `Imports.tsx` | The `danger` button class. | Checked: `button.danger` exists in `app.css` and is the class already used by `ConfirmDialog` and the import cancel button; no change. |
-| F1 | Low (copy) | `messages.imptpl.ts` | The Arabic wording "إحالة إلى التقاعد" is an owner copy decision. | Kept as is; **recorded follow-up** for owner review. |
+| F1 | Low (copy) | `messages.imptpl.ts` | The Arabic wording "إحالة إلى التقاعد" was an owner copy decision. | Closed by a recorded OWNER DECISION: the wording is "إيقاف استخدام القالب", applied to the button, dialog title, success message and the related refusal messages (`template_not_found`, `already_retired`); the template name stays isolated with Unicode isolates. Not a follow-up. |
 
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** no visual review of RTL/LTR rendering or of the new picker styling in a browser; no local Tauri compile or Playwright run (hosted `desktop-build` and `e2e-smoke` ran green on the reviewed head); the reviewer was read-only and ran no code; the reviewer shares the author's model family, so independence is limited to a separate session and context.
