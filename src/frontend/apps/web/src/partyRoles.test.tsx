@@ -132,4 +132,26 @@ describe("customers and suppliers screen", () => {
     expect(screen.queryByTestId("pr-customer-form")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: A("pr.edit") })).not.toBeInTheDocument();
   });
+
+  it("refuses an ambiguous credit limit instead of guessing and retries an edit after a conflict with the stored revision", async () => {
+    const update = vi.fn().mockRejectedValueOnce(apiError(412, "revision_conflict", { currentRevision: 5 })).mockResolvedValue(customer);
+    let revision = 4;
+    const client = render({ updatePartyRole: update, listPartyRoles: vi.fn().mockImplementation((kind?: number) => Promise.resolve({ items: kind === 1 ? [{ ...customer, revision }] : [], can: { configure: true } })) });
+    await go("#/company/party-roles");
+    await userEvent.click(within(await screen.findByTestId("pr-role-C1-1")).getByRole("button", { name: A("pr.edit") }));
+    const form = within(screen.getByTestId("pr-customer-form"));
+    const limit = form.getByLabelText(lbl("pr.credit_limit"));
+    await userEvent.clear(limit); await userEvent.type(limit, "5,000");
+    expect(form.getByRole("button", { name: A("pr.save") })).toBeDisabled();           // "5,000" could be five or five thousand
+    await userEvent.clear(limit); await userEvent.type(limit, "Infinity");
+    expect(form.getByRole("button", { name: A("pr.save") })).toBeDisabled();
+    await userEvent.clear(limit); await userEvent.type(limit, "2000");
+    revision = 5;                                                                       // someone else saved: the next load returns revision 5
+    await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith("r1", expect.objectContaining({ creditLimit: 2000 }), 4));
+    expect(await screen.findByTestId("pr-customer-conflict")).toBeInTheDocument();
+    await userEvent.click(form.getByRole("button", { name: A("pr.save") }));            // retry without leaving the editor
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith("r1", expect.objectContaining({ creditLimit: 2000 }), 5));
+    expect(client.listPartyRoles).toHaveBeenCalled();
+  });
 });

@@ -195,4 +195,25 @@ public class PartyRoleTests : InventoryTestBase
         Assert.All(results.Where(r => !r.IsOk), r => Assert.Equal("role_exists", r.Code));
         Assert.Equal(1L, await Count(Company, PR.Table));
     }
+
+    [PostgresFact]
+    public async Task A_role_whose_account_or_representative_was_deactivated_later_can_still_be_edited_and_deactivated()
+    {
+        await Prepare();
+        var party = await NewParty("LATE");
+        var account = await Acc("1401", "asset");
+        var rep = Ok(await Roles.CreateRepresentativeAsync(Admin.Id, Company.Id, new SalesRepresentativeInput("LR", "م", null, null)));
+        var role = Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, Customer(party, account.Id, rep.Id)));
+        Ok(await ChartDomain.DeactivateAsync(Admin.Id, Company.Id, account.Id, account.Revision));
+        Ok(await Roles.UpdateRepresentativeAsync(Admin.Id, Company.Id, rep.Id, 1, new SalesRepresentativeInput(null, "م", null, null, false)));
+        // unchanged references are not re-validated: the role stays editable and can be switched off
+        var edited = Ok(await Roles.UpdateRoleAsync(Admin.Id, Company.Id, role.Id, 1, Customer(party, account.Id, rep.Id, days: 90)));
+        Assert.Equal(90, edited.TermDays);
+        var off = Ok(await Roles.UpdateRoleAsync(Admin.Id, Company.Id, role.Id, 2, Customer(party, account.Id, rep.Id, days: 90) with { IsActive = false }));
+        Assert.False(off.IsActive);
+        // but a NEW reference to an inactive account or representative is still refused
+        var other = await NewParty("LATE2");
+        Invalid(await Roles.CreateRoleAsync(Admin.Id, Company.Id, Customer(other, account.Id)), "controlAccountId", "account_inactive");
+        Invalid(await Roles.CreateRoleAsync(Admin.Id, Company.Id, Customer(other, rep: rep.Id)), "representativeId", "representative_inactive");
+    }
 }

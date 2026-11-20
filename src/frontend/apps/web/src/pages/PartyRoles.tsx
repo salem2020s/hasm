@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
 import { localName, useRunner } from "../ledgerCommon";
+import { parseDecimalInput } from "../numberInput";
 import { useReportUnsaved } from "../unsaved";
 
 /**
@@ -13,10 +14,7 @@ import { useReportUnsaved } from "../unsaved";
  */
 interface Data { customers: PartyRolesResponse | null; suppliers: PartyRolesResponse | null; reps: SalesRepresentativesResponse | null }
 const blank = (v: string) => (v.trim() === "" ? null : v.trim());
-const num = (s: string) => {
-  const v = s.trim().replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/[,٫]/g, ".");
-  return v === "" ? Number.NaN : Number(v);
-};
+const num = parseDecimalInput;
 const bad = (s: string) => s.trim() !== "" && Number.isNaN(num(s));
 
 export function PartyRolesPage() {
@@ -89,6 +87,9 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
   const isDirty = editing ? true : form.partyId !== "" || form.limit !== "" || form.account !== "" || form.rep !== "" || form.mode !== "2" || form.days !== "30";
   useReportUnsaved(`pr-${id}`, isDirty && (editing !== null || form.partyId !== ""), t(kind === 1 ? "pr.tab.customers" : "pr.tab.suppliers"));
   useEffect(() => { onDirty(isDirty && (editing !== null || form.partyId !== "")); }, [isDirty, editing, form.partyId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // after a reload (for example following a 412) the edited role takes the stored revision, so a retry is not doomed; the typed values stay
+  useEffect(() => { if (editing) { const fresh = resp.items.find((x) => x.id === editing.id); if (fresh && fresh.revision !== editing.revision) setEditing(fresh); } }, [resp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cash = form.mode === "1";
   const invalidNumbers = (!cash && !Number.isInteger(num(form.days))) || bad(form.limit);

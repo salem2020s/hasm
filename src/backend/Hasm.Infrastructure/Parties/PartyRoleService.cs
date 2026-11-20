@@ -63,7 +63,8 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == SR.UqCode) { return ConfigResult<T>.Invalid([new FieldError("code", "code_taken")]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == SR.UqUser) { return ConfigResult<T>.Invalid([new FieldError("userId", "user_taken")]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == PR.UqPartyRole) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "role_exists"); }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent change: nothing was written
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }
+        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // a database guard refused a racing or inconsistent change: nothing was written
     }
 
     // ================================================================================================================ sales representatives
@@ -174,7 +175,7 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
     }
 
     /// <summary>Validates the terms and the references of a role; throws the field errors. Locks the referenced account and representative against concurrent change.</summary>
-    private static async Task ValidateTerms(CompanyAuditedWork work, PartyRoleKind kind, PartyRoleInput input, CancellationToken ct)
+    private static async Task ValidateTerms(CompanyAuditedWork work, PartyRoleKind kind, PartyRoleInput input, PartyRoleView? current, CancellationToken ct)
     {
         var errors = new List<FieldError>();
         if (input.PaymentMode is not { } mode || !Enum.IsDefined(mode)) errors.Add(new FieldError("paymentMode", "payment_mode_invalid"));
@@ -188,7 +189,8 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
         if (input.RepresentativeId is not null && kind != PartyRoleKind.Customer) errors.Add(new FieldError("representativeId", "representative_not_allowed"));
         if (errors.Count > 0) throw new Abort(ConfigStatus.Invalid, "invalid", errors);
 
-        if (input.ControlAccountId is { } acc)
+        // a reference that is UNCHANGED is not re-validated: a role whose account or representative was deactivated later must still be editable and deactivatable (PostgreSQL checks the account whenever it changes)
+        if (input.ControlAccountId is { } acc && acc != current?.ControlAccountId)
         {
             await using var q = new NpgsqlCommand($"SELECT {A.Type}, {A.IsGroup}, {A.IsActive} FROM {A.Table} WHERE {A.Id} = @a FOR SHARE", work.Connection, work.Transaction);
             q.Parameters.AddWithValue("a", acc);
@@ -200,7 +202,7 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
             if (kind == PartyRoleKind.Customer && type != 1) throw Invalid("controlAccountId", "customer_account_must_be_asset");
             if (kind == PartyRoleKind.Supplier && type != 2) throw Invalid("controlAccountId", "supplier_account_must_be_liability");
         }
-        if (input.RepresentativeId is { } rep)
+        if (input.RepresentativeId is { } rep && rep != current?.RepresentativeId)
         {
             var reps = await LoadReps(work.Connection, work.Transaction, rep, true, ct);
             if (reps.Count == 0) throw Invalid("representativeId", "representative_not_found");
@@ -225,7 +227,7 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
                 if (await pq.ExecuteScalarAsync(ct) is not bool active) throw Invalid("partyId", "party_not_found");
                 if (!active) throw Invalid("partyId", "party_inactive");
             }
-            await ValidateTerms(work, role, input, ct);
+            await ValidateTerms(work, role, input, null, ct);
             var now = Now;
             await using (var ins = new NpgsqlCommand($"INSERT INTO {PR.Table} ({PR.Id}, {PR.PartyId}, {PR.Role}, {PR.IsActive}, {PR.PaymentMode}, {PR.TermDays}, {PR.CreditLimit}, {PR.ControlAccountId}, {PR.RepresentativeId}, {PR.Revision}, {PR.CreatedBy}, {PR.CreatedAtUtc}, {PR.UpdatedAtUtc}) " +
                 "VALUES (@id, @p, @k, @a, @m, @d, @l, @acc, @rep, 1, @by, @now, @now)", work.Connection, work.Transaction))
@@ -253,7 +255,7 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
             if (input.PartyId is { } p && p != cur.PartyId) throw Invalid("partyId", "party_immutable");
             if (input.Role is { } k && k != cur.Role) throw Invalid("role", "role_immutable");
-            await ValidateTerms(work, cur.Role, input, ct);
+            await ValidateTerms(work, cur.Role, input, cur, ct);
             var active = input.IsActive ?? cur.IsActive;
             await using (var upd = new NpgsqlCommand($"UPDATE {PR.Table} SET {PR.IsActive} = @a, {PR.PaymentMode} = @m, {PR.TermDays} = @d, {PR.CreditLimit} = @l, {PR.ControlAccountId} = @acc, {PR.RepresentativeId} = @rep, {PR.Revision} = {PR.Revision} + 1, {PR.UpdatedAtUtc} = @now WHERE {PR.Id} = @id", work.Connection, work.Transaction))
             {
