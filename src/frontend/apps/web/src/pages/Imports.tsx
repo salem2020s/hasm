@@ -359,6 +359,7 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
   const [tplPick, setTplPick] = useState("");
   const [tplNote, setTplNote] = useState<string | null>(null);
   const [tplBusy, setTplBusyState] = useState(false);
+  const [tplRetire, setTplRetire] = useState(false);
   const tplInFlight = useRef(false);                      // synchronous guard: a double click must not send two requests on the same version
   const setTplBusy = (v: boolean) => { tplInFlight.current = v; setTplBusyState(v); };
   const loadTemplates = useCallback(async () => { try { setTemplates((await auth.api.listImportTemplates(batch.adapter)).templates); } catch { setTemplates([]); } }, [auth.api, batch.adapter]);
@@ -426,6 +427,7 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
             } catch (e) { if (!auth.handleError(e)) act.setError(importError(tRef.current, e)); }
             finally { setTplBusy(false); }
           })()}>{t("imp.tpl.apply")}</button>
+          <button type="button" className="danger" disabled={!tplPick} data-testid="imp-tpl-retire" onClick={() => setTplRetire(true)}>{t("imp.tpl.retire")}</button>
         </div>
         {tplNote && <p role="status" data-testid="imp-tpl-note">{tplNote}</p>}
         <div className="form-row">
@@ -445,6 +447,21 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
           })()}>{t("imp.tpl.save")}</button>
         </div>
       </fieldset>
+      {tplRetire && (
+        <ConfirmDialog title={t("imp.tpl.retire_title")} message={t("imp.tpl.retire_message", { name: tplPick })} confirmLabel={t("imp.tpl.retire")}
+          onCancel={() => setTplRetire(false)} onConfirm={() => void (async () => {
+            setTplRetire(false);
+            if (tplInFlight.current) { act.setError(t("imp.tpl.busy")); return; }
+            const version = templates.find((x) => x.name === tplPick && !x.isRetired)?.version;   // the version this screen read: the server refuses a stale one
+            if (version === undefined) { act.setError(t("imp.tpl.retire_missing")); setTplPick(""); await loadTemplates(); return; }
+            setTplBusy(true);
+            try {
+              await auth.api.retireImportTemplate(batch.adapter, tplPick, version);
+              setTplNote(t("imp.tpl.retired")); setTplPick(""); await loadTemplates();
+            } catch (e) { if (!auth.handleError(e)) { act.setError(importError(tRef.current, e)); await loadTemplates(); } }
+            finally { setTplBusy(false); }
+          })()} />
+      )}
       <div className="actions">
         <button type="button" disabled={act.busy || tplBusy} onClick={() => void suggest()}>{t("imp.map_suggest")}</button>
         <button type="button" className="primary" disabled={act.busy || tplBusy} data-testid="imp-map-save" onClick={() => void act.run(() => auth.api.setImportMapping(batch.id, toMapping(defs.fields, state), batch.revision), t("imp.mapped"))}>{t("imp.map_save")}</button>

@@ -111,4 +111,49 @@ describe("import mapping templates", () => {
     expect(save).toHaveBeenCalledWith("b1", "café", 0);                                // composed form
     release(tpl("café", 1));
   });
+  it("retires the selected template only after confirmation, using the version it read, then refreshes the list", async () => {
+    const retire = vi.fn().mockResolvedValue(tpl("Sheet", 2, true));
+    const client = render(batch("staged"), { retireImportTemplate: retire });
+    const box = await open();
+    expect(box.getByTestId("imp-tpl-retire")).toBeDisabled();                          // nothing selected
+    await userEvent.selectOptions(box.getByLabelText(A("imp.tpl.apply_label")), "Sheet");
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(retire).not.toHaveBeenCalled();                                             // the dialog alone changes nothing
+    await userEvent.click(dialog.getByRole("button", { name: A("cancel") }));
+    expect(retire).not.toHaveBeenCalled();
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("imp.tpl.retire") }));
+    await waitFor(() => expect(retire).toHaveBeenCalledWith("chart-of-accounts", "Sheet", 2));
+    expect(await screen.findByTestId("imp-tpl-note")).toHaveTextContent(A("imp.tpl.retired"));
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a translated refusal when retiring fails and reloads the list", async () => {
+    const retire = vi.fn().mockRejectedValue(apiError(409, "already_retired"));
+    const client = render(batch("staged"), { retireImportTemplate: retire });
+    const box = await open();
+    await userEvent.selectOptions(box.getByLabelText(A("imp.tpl.apply_label")), "Sheet");
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("imp.tpl.retire") }));
+    await waitFor(() => expect(retire).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(2));
+  });
+  it("does not send version 0 when the selected template is no longer in the list: it says so and reloads", async () => {
+    const retire = vi.fn();
+    // first load: Sheet exists; a failing save then reloads the list and Sheet is gone while it is still the selected value
+    const list = vi.fn().mockResolvedValueOnce({ templates: [tpl("Sheet", 2)] }).mockResolvedValue({ templates: [] });
+    const save = vi.fn().mockRejectedValue(apiError(412, "revision_conflict", { currentRevision: 3 }));
+    const client = render(batch("mapped", { mapping }), { retireImportTemplate: retire, listImportTemplates: list, saveImportTemplate: save });
+    const box = await open();
+    await userEvent.selectOptions(box.getByLabelText(A("imp.tpl.apply_label")), "Sheet");
+    await userEvent.type(box.getByLabelText(new RegExp("^" + A("imp.tpl.save_label"))), "Other");
+    await userEvent.click(box.getByTestId("imp-tpl-save"));
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(2));
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("imp.tpl.retire") }));
+    expect(await screen.findByText(A("imp.tpl.retire_missing"))).toBeInTheDocument();
+    expect(retire).not.toHaveBeenCalled();                                            // never version 0
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(3));
+  });
 });

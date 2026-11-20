@@ -81,7 +81,7 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
   const [form, setForm] = useState(emptyForm);
   const configure = resp.can.configure;
   const wantedType = kind === 1 ? "asset" : "liability";
-  const candidates = accounts.filter((a) => a.type === wantedType && a.isActive && !a.isGroup && a.postable);
+  const candidates = accounts.filter((a) => a.type === wantedType && !a.isGroup && a.postable && (a.isActive || a.id === form.account));   // an already-chosen account stays shown even if later deactivated, so editing never silently drops it
   const used = new Set(resp.items.map((r) => r.partyId));
   const choices = (parties ?? []).filter((p) => p.isActive && !used.has(p.id));
   const isDirty = editing ? true : form.partyId !== "" || form.limit !== "" || form.account !== "" || form.rep !== "" || form.mode !== "2" || form.days !== "30";
@@ -143,7 +143,7 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
           {!cash && <Field id={`pr-${id}-days`} label={t("pr.term_days")} required error={bad(form.days) ? t("field.invalid") : runner.fields.termDays}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} />}</Field>}
           <Field id={`pr-${id}-limit`} label={t("pr.credit_limit")} hint={t("pr.credit_limit_hint")} error={bad(form.limit) ? t("field.invalid") : runner.fields.creditLimit}>{(a) => <input {...a} dir="ltr" inputMode="decimal" value={form.limit} onChange={(e) => setForm({ ...form, limit: e.target.value })} />}</Field>
           <Field id={`pr-${id}-account`} label={t(kind === 1 ? "pr.control_account_customer" : "pr.control_account_supplier")} error={runner.fields.controlAccountId}>
-            {(a) => <select {...a} value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}><option value="">{t("pr.none")}</option>{candidates.map((c) => <option key={c.id} value={c.id}>{c.code} — {localName(c, locale)}</option>)}</select>}
+            {(a) => <select {...a} value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}><option value="">{t("pr.none")}</option>{candidates.map((c) => <option key={c.id} value={c.id}>{c.code} — {localName(c, locale)}{c.isActive ? "" : ` (${t("pr.inactive")})`}</option>)}</select>}
           </Field>
           {kind === 1 && (
             <Field id={`pr-${id}-rep`} label={t("pr.representative")} error={runner.fields.representativeId}>
