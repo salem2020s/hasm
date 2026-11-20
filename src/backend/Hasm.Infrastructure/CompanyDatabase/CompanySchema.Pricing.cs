@@ -105,6 +105,7 @@ public static partial class CompanySchema
         public const string FkGroup = "k_8356fffe";
         public const string CkValues = "k_b3a43836";
         public const string UqCode = "k_38393890";
+        public const string UqActiveKey = "k_7396728f";
         public const string FnGuard = "f_86f87c19";
         public const string TrRow = "r_04e2e792";
         public const string TrTruncate = "r_6916ba5d";
@@ -199,6 +200,7 @@ public static partial class CompanySchema
         ["DiscountRule.FkGroup"] = DiscountRule.FkGroup,
         ["DiscountRule.CkValues"] = DiscountRule.CkValues,
         ["DiscountRule.UqCode"] = DiscountRule.UqCode,
+        ["DiscountRule.UqActiveKey"] = DiscountRule.UqActiveKey,
         ["DiscountRule.FnGuard"] = DiscountRule.FnGuard,
         ["DiscountRule.TrRow"] = DiscountRule.TrRow,
         ["DiscountRule.TrTruncate"] = DiscountRule.TrTruncate,

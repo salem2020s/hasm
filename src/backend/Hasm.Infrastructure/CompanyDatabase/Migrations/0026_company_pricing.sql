@@ -10,7 +10,7 @@
 --   * a policy version is append-only and is exactly one above the latest (versions 1, 2, 3 ...); scales, margin, action and precedences are within their ranges;
 --   * a price list is for ONE customer or general; its currency is three capital letters; its dates are in range; an entry names an item OR an item group (never both, never neither), a unit, a
 --     non-negative quantity tier and a non-negative price within the engine's bounds; two entries of one list never share the same item/group, unit and tier;
---   * a discount rule has a percentage within 0-100 and a non-negative minimum quantity; its item scope is an item, an item group or neither.
+--   * a discount rule has a percentage within 0-100 and a non-negative minimum quantity; its item scope is an item, an item group or neither; two active rules never share scope, priority, minimum quantity and start.
 -- margin action: 1 warn, 2 require approval, 3 block. list precedence: 1 scope then priority (default), 2 priority then scope. discount precedence: 1 specificity then priority (default), 2 priority then specificity.
 
 CREATE TABLE t_fb7a5f4a (
@@ -161,6 +161,10 @@ CREATE TABLE t_98209637 (
         AND NOT (c_27971215 IS NOT NULL AND c_1561271a IS NOT NULL))
 );
 CREATE UNIQUE INDEX k_38393890 ON t_98209637 (c_1b96af38);
+-- two ACTIVE rules of exactly the same scope, priority, minimum quantity and start can never both apply cleanly (the engine refuses such a tie as ambiguous), so PostgreSQL refuses to hold them: one badly
+-- configured pair can never block pricing. (NULL scope columns are compared as the all-zero uuid.)
+CREATE UNIQUE INDEX k_7396728f ON t_98209637 (COALESCE(c_267fdd7a, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(c_27971215, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(c_1561271a, '00000000-0000-0000-0000-000000000000'::uuid), c_13ac6fbc, c_4aa76d4e, c_8d69b845) WHERE c_8e780ef0;
 
 CREATE FUNCTION f_86f87c19() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

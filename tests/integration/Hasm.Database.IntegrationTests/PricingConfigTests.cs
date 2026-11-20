@@ -1,6 +1,7 @@
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
+using Hasm.Infrastructure.Parties;
 using Hasm.Infrastructure.Pricing;
 using Audit_ = Hasm.Infrastructure.CompanyDatabase.CompanySchema.BusinessAudit;
 using PV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PricingPolicyVersion;
@@ -20,12 +21,14 @@ public class PricingConfigTests : InventoryTestBase
     private static readonly DateOnly Jan = new(2026, 1, 1), Jun = new(2026, 6, 1);
     private PricingConfigService Pricing = null!;
     private PricingManagementService PricingMgmt = null!;
+    private PartyRoleService Roles = null!;
 
     private async Task Prepare()
     {
         await PrepareInventory();
         Pricing = new PricingConfigService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), Clock);
         PricingMgmt = new PricingManagementService(Rbac, Pricing);
+        Roles = new PartyRoleService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), Clock);
     }
 
     private Task<long> PricingEvents() => Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} BETWEEN 1800 AND 1809");
@@ -39,6 +42,13 @@ public class PricingConfigTests : InventoryTestBase
     {
         var id = Guid.NewGuid();
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{id}', '{code}', 'p', true, 1, 1, '{Admin.Id}', now(), now())");
+        return id;
+    }
+    /// <summary>A local party WITH a customer role (a cash customer needs no control account): the only kind a price list or discount rule may name.</summary>
+    private async Task<Guid> NewCustomerId(string code)
+    {
+        var id = await NewPartyId(code);
+        Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, new PartyRoleInput(id, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null)));
         return id;
     }
     private static PriceListInput List(string code, int priority = 10, Guid? customer = null, string currency = "JOD", DateOnly? from = null, DateOnly? to = null, bool? active = null) =>
@@ -96,7 +106,7 @@ public class PricingConfigTests : InventoryTestBase
     public async Task Price_lists_and_entries_keep_their_identity_advance_by_revision_validate_and_are_never_removed()
     {
         await Prepare();
-        var party = await NewPartyId("C1");
+        var party = await NewCustomerId("C1");
         var list = Ok(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List(" retail ", 5, party)));
         Assert.Equal(("RETAIL", 1L, "JOD", true, party), (list.Code, list.Revision, list.Currency, list.IsActive, list.CustomerId));
         Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("RETAIL")), "code", "code_taken");
@@ -104,14 +114,15 @@ public class PricingConfigTests : InventoryTestBase
         Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X1", currency: "jd")), "currency", "currency_invalid");
         Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X2", to: new DateOnly(2025, 12, 31))), "validTo", "before_valid_from");
         Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X3", priority: -1)), "priority", "out_of_range");
-        Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X4", customer: Guid.NewGuid())), "reference", "reference_not_found");   // the customer must exist
+        Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X4", customer: Guid.NewGuid())), "customerId", "customer_role_required");   // the customer must exist and be a customer
+        Invalid(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, List("X5", customer: await NewPartyId("NOROLE"))), "customerId", "customer_role_required");   // a party without a customer role is refused
         Fails(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, null, List("RETAIL")), ConfigStatus.PreconditionRequired, "precondition_required");
         var updated = Ok(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 1, List("RETAIL", 7, party, active: false)));
         Assert.Equal((2L, 7, false), (updated.Revision, updated.Priority, updated.IsActive));
         Fails(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 1, List("RETAIL", 8, party)), ConfigStatus.PreconditionFailed, "revision_conflict");
         Invalid(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 2, List("OTHER", 7, party)), "code", "code_immutable");
         Invalid(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 2, List("RETAIL", 7, party, currency: "USD")), "currency", "currency_immutable");
-        Invalid(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 2, List("RETAIL", 7, await NewPartyId("C2"))), "customerId", "customer_immutable");
+        Invalid(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, list.Id, 2, List("RETAIL", 7, await NewCustomerId("C2"))), "customerId", "customer_immutable");
         Fails(await Pricing.UpdatePriceListAsync(Admin.Id, Company.Id, Guid.NewGuid(), 1, List("RETAIL")), ConfigStatus.NotFound, "price_list_not_found");
         Assert.Equal("P0001", await Fails($"UPDATE {PL.Table} SET {PL.Currency} = 'USD', {PL.Revision} = {PL.Revision} + 1"));                                       // immutable in PostgreSQL too
         Assert.Equal("P0001", await Fails($"DELETE FROM {PL.Table}"));
@@ -147,7 +158,7 @@ public class PricingConfigTests : InventoryTestBase
     {
         await Prepare();
         var (item, _, group) = await NewItem("D1");
-        var party = await NewPartyId("C9");
+        var party = await NewCustomerId("C9");
         DiscountRuleInput Rule(string code, decimal pct = 10m, int prio = 10, Guid? cust = null, Guid? it = null, Guid? grp = null, decimal? min = null) => new(code, "خصم " + code, "Discount " + code, prio, Jan, null, null, pct, min, cust, it, grp);
         var d = Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule(" promo ", 12.5m, 3, party, item, null, 5m)));
         Assert.Equal(("PROMO", 12.5m, 5m, party, item, 1L, true), (d.Code, d.Percent, d.MinQuantity, d.CustomerId, d.ItemId, d.Revision, d.IsActive));
@@ -156,7 +167,14 @@ public class PricingConfigTests : InventoryTestBase
         Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D3", pct: 5.12345m)), "percent", "out_of_range");
         Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D4", it: item, grp: group)), "itemId", "item_or_group_not_both");
         Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D5", min: -1m)), "minQuantity", "out_of_range");
-        Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D6", cust: Guid.NewGuid())), "reference", "reference_not_found");
+        Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D6", cust: Guid.NewGuid())), "customerId", "customer_role_required");
+        Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("D7", cust: await NewPartyId("NOROLE2"))), "customerId", "customer_role_required");
+        // two ACTIVE rules of the same scope, priority, minimum quantity and start would be ambiguous for the engine: refused, so one bad pair can never block pricing
+        Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("G1", 5m, 7)));
+        Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("G2", 6m, 7)), "priority", "ambiguous_rule");
+        Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("G3", 6m, 8)));                                              // another priority is fine
+        var inactive = Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Rule("G4", 6m, 7) with { IsActive = false }));          // an inactive one is not evaluated, so it may share the key
+        Invalid(await Pricing.UpdateDiscountAsync(Admin.Id, Company.Id, inactive.Id, 1, Rule("G4", 6m, 7) with { IsActive = true }), "priority", "ambiguous_rule");   // activating it would create the tie
         Fails(await Pricing.UpdateDiscountAsync(Admin.Id, Company.Id, d.Id, null, Rule("PROMO")), ConfigStatus.PreconditionRequired, "precondition_required");
         var updated = Ok(await Pricing.UpdateDiscountAsync(Admin.Id, Company.Id, d.Id, 1, Rule("PROMO", 15m, 4, null, null, null, 6m)));
         Assert.Equal((2L, 15m, 4, 6m), (updated.Revision, updated.Percent, updated.Priority, updated.MinQuantity));
@@ -167,7 +185,7 @@ public class PricingConfigTests : InventoryTestBase
         Assert.Equal("P0001", await Fails($"UPDATE {DR.Table} SET {DR.ItemId} = NULL, {DR.Revision} = {DR.Revision} + 1"));
         Assert.Equal("P0001", await Fails($"DELETE FROM {DR.Table}"));
         Assert.Equal("23514", await Fails($"UPDATE {DR.Table} SET {DR.Percent} = 150, {DR.Revision} = {DR.Revision} + 1"));
-        Assert.Equal(2L, await PricingEvents());
+        Assert.Equal(5L, await PricingEvents());
     }
 
     [PostgresFact]
@@ -175,7 +193,7 @@ public class PricingConfigTests : InventoryTestBase
     {
         await Prepare();
         var (item, unit, group) = await NewItem("Q1");
-        var customer = await NewPartyId("CQ");
+        var customer = await NewCustomerId("CQ");
         var special = await NewList("SPECIAL", priority: 99, customer: customer);
         var general = await NewList("GENERAL", priority: 1);
         await NewEntry(special.Id, item, unit, 8m);

@@ -30,7 +30,7 @@ const TEMPLATE = `-- Migration 0026: pricing configuration (Phase 3.11 slice 2b)
 --   * a policy version is append-only and is exactly one above the latest (versions 1, 2, 3 ...); scales, margin, action and precedences are within their ranges;
 --   * a price list is for ONE customer or general; its currency is three capital letters; its dates are in range; an entry names an item OR an item group (never both, never neither), a unit, a
 --     non-negative quantity tier and a non-negative price within the engine's bounds; two entries of one list never share the same item/group, unit and tier;
---   * a discount rule has a percentage within 0-100 and a non-negative minimum quantity; its item scope is an item, an item group or neither.
+--   * a discount rule has a percentage within 0-100 and a non-negative minimum quantity; its item scope is an item, an item group or neither; two active rules never share scope, priority, minimum quantity and start.
 -- margin action: 1 warn, 2 require approval, 3 block. list precedence: 1 scope then priority (default), 2 priority then scope. discount precedence: 1 specificity then priority (default), 2 priority then specificity.
 
 CREATE TABLE {{PricingPolicyVersion}} (
@@ -181,6 +181,10 @@ CREATE TABLE {{DiscountRule}} (
         AND NOT ({{DiscountRule.ItemId}} IS NOT NULL AND {{DiscountRule.ItemGroupId}} IS NOT NULL))
 );
 CREATE UNIQUE INDEX {{DiscountRule.UqCode}} ON {{DiscountRule}} ({{DiscountRule.Code}});
+-- two ACTIVE rules of exactly the same scope, priority, minimum quantity and start can never both apply cleanly (the engine refuses such a tie as ambiguous), so PostgreSQL refuses to hold them: one badly
+-- configured pair can never block pricing. (NULL scope columns are compared as the all-zero uuid.)
+CREATE UNIQUE INDEX {{DiscountRule.UqActiveKey}} ON {{DiscountRule}} (COALESCE({{DiscountRule.CustomerId}}, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE({{DiscountRule.ItemId}}, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE({{DiscountRule.ItemGroupId}}, '00000000-0000-0000-0000-000000000000'::uuid), {{DiscountRule.Priority}}, {{DiscountRule.MinQuantity}}, {{DiscountRule.ValidFrom}}) WHERE {{DiscountRule.IsActive}};
 
 CREATE FUNCTION {{DiscountRule.FnGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

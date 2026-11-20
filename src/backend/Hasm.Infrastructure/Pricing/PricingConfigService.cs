@@ -9,6 +9,7 @@ using PV = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PricingPolicyVersio
 using PL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PriceList;
 using PE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PriceEntry;
 using DR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DiscountRule;
+using PartyRoleTable = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PartyRole;
 
 namespace Hasm.Infrastructure.Pricing;
 
@@ -43,10 +44,20 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
         try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
         catch (Abort a) { return a.To<T>(); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PL.UqCode or DR.UqCode) { return ConfigResult<T>.Invalid([new FieldError("code", "code_taken")]); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is DR.UqActiveKey) { return ConfigResult<T>.Invalid([new FieldError("priority", "ambiguous_rule")]); }   // an active rule with the same scope, priority, minimum quantity and start already exists
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PE.UqItemTier or PE.UqGroupTier) { return ConfigResult<T>.Invalid([new FieldError("minQuantity", "tier_exists")]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is PV.UqVersion) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "version_conflict"); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Invalid([new FieldError("reference", "reference_not_found")]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent change: nothing was written
+    }
+
+    /// <summary>A price list or discount rule for a customer needs the party to HAVE a customer role (SRS 8.1: prices by customer); a later deactivation of the role does not invalidate it.</summary>
+    private static async Task RequireCustomerRole(CompanyAuditedWork work, Guid? partyId, CancellationToken ct)
+    {
+        if (partyId is not { } p) return;
+        await using var q = new NpgsqlCommand($"SELECT 1 FROM {PartyRoleTable.Table} WHERE {PartyRoleTable.PartyId} = @p AND {PartyRoleTable.Role} = 1", work.Connection, work.Transaction);
+        q.Parameters.AddWithValue("p", p);
+        if (await q.ExecuteScalarAsync(ct) is null) throw Invalid("customerId", "customer_role_required");
     }
 
     // ================================================================================================================ policy
@@ -174,6 +185,7 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
         var id = Guid.NewGuid();
         var r = await Mutate(companyId, async work =>
         {
+            await RequireCustomerRole(work, input.CustomerId, ct);
             var now = Now;
             await using (var ins = new NpgsqlCommand($"INSERT INTO {PL.Table} ({PL.Id}, {PL.Code}, {PL.NameAr}, {PL.NameEn}, {PL.Priority}, {PL.Currency}, {PL.ValidFrom}, {PL.ValidTo}, {PL.IsActive}, {PL.CustomerId}, {PL.Revision}, {PL.CreatedBy}, {PL.CreatedAtUtc}, {PL.UpdatedAtUtc}) " +
                 "VALUES (@id, @c, @ar, @en, @p, @cur, @vf, @vt, @a, @cu, 1, @by, @now, @now)", work.Connection, work.Transaction))
@@ -357,6 +369,7 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
         var id = Guid.NewGuid();
         var r = await Mutate(companyId, async work =>
         {
+            await RequireCustomerRole(work, input.CustomerId, ct);
             var now = Now;
             await using (var ins = new NpgsqlCommand($"INSERT INTO {DR.Table} ({DR.Id}, {DR.Code}, {DR.NameAr}, {DR.NameEn}, {DR.Priority}, {DR.ValidFrom}, {DR.ValidTo}, {DR.IsActive}, {DR.Percent}, {DR.MinQuantity}, {DR.CustomerId}, {DR.ItemId}, {DR.ItemGroupId}, {DR.Revision}, {DR.CreatedBy}, {DR.CreatedAtUtc}, {DR.UpdatedAtUtc}) " +
                 "VALUES (@id, @c, @ar, @en, @p, @vf, @vt, @a, @pc, @mq, @cu, @i, @g, 1, @by, @now, @now)", work.Connection, work.Transaction))
