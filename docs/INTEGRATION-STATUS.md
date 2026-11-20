@@ -36,7 +36,7 @@ Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). Post
 | P | RESOLVED by the owner directive 2026-11-20: precedence is company-configurable, defaults = slice 1; no stacking offered | slice 2a (engine policy) implemented; persistence is slice 2b |
 | R | Retention/purge of removed attachments | bytes of removed attachments are kept |
 | Q | Per-company attachment quota and malware scanning | not built |
-| K | Key retirement for removed sensitive attachments (review of #57 M1) | removed sensitive files stay under the old key, which must stay available; fail-closed `KeyUnavailable` |
+| K | RESOLVED by the owner rule of 2026-11-20 (never retire a key retained attachments still need): rewrap now reports `retainedUnderOtherKeys` / `oldKeysMayBeRetired`; retirement requires true for every company plus a clean verify (`docs/PHASE-3.12.md`) | removed sensitive files keep their key; the import-file rewrap needs the same report (follow-up) |
 | S | Production-readiness: bundler/Tauri inspection hardening (aliases outside node_modules, externals, workers, platform Tauri configs and `TAURI_CONFIG`, build hooks, installer/executable embedding; `docs/review-records/PR-security-picomatch-apply.md` M1-M5) | recorded residual risk; existing gates unchanged |
 | C | Production-readiness: mandatory Rust `cargo audit` job (M6) | no Rust audit exists (pre-existing gap); adding a mandatory job changes protected gates, so it needs the owner |
 
