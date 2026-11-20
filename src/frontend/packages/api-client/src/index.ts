@@ -607,7 +607,7 @@ export interface StocktakeCapabilities { view: string[]; create: string[]; updat
 export type PartyKind = 1 | 2;
 export type PartyLinkState = 1 | 2 | 3;
 export interface SharedIdentity { globalPartyId: string; kind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status: 1 | 2; revision: number }
-export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null }
+export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null; viewedSharedRevision?: number | null }
 export interface PartyRequest {
   id: string; kind: 1 | 2; status: 1 | 2 | 3; outcome: 1 | 2 | 3 | null; partyKind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null;
   proposedStatus: 1 | 2; note: string | null; attempts: number; lastAttemptAtUtc: string | null; lastErrorCode: string | null; createdBy: string; createdAtUtc: string; deliveredAtUtc: string | null; completedAtUtc: string | null;
@@ -952,7 +952,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     proposeParty: (id: string, identity: SharedIdentityInput, revision: number) => request<LocalParty>("POST", `/api/v1/company/parties/${enc(id)}/propose`, { body: identity, ifMatch: revision }),
     syncParties: () => request<PartySyncResult>("POST", "/api/v1/company/parties/sync"),
     reconcileParties: (repair: boolean) => request<PartyReconciliation>("POST", `/api/v1/company/parties/reconcile?repair=${repair}`),
-    listPartyProposals: (status?: 1 | 2 | 3) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals${status ? `?status=${status}` : ""}`),
+    listPartyProposals: (status?: 1 | 2 | 3, offset = 0, limit = 25) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
     getPartyProposal: (id: string) => get<PartyProposal>(`/api/v1/admin/parties/proposals/${enc(id)}`),
     approvePartyProposal: (id: string, linkTo: string | null, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/approve`, { body: { linkTo }, ifMatch: revision }),
     rejectPartyProposal: (id: string, note: string, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),

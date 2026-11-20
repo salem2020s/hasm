@@ -53,7 +53,8 @@ public static class PartyAuditEvents
 }
 
 /// <summary>Proposed identifying data of a shared identity. <see cref="Status"/> is used only by a change proposal (a new identity is always active); <see cref="Note"/> justifies the proposal.</summary>
-public sealed record SharedIdentityInput(int? Kind, string? LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int? Status = null, string? Note = null);
+/// <summary><see cref="ViewedSharedRevision"/>: the revision of the shared identity the user was looking at. A CHANGE proposal must carry it and it must still be the current revision (review follow-up of 3.9A: a change is never silently based on newer data than the user saw).</summary>
+public sealed record SharedIdentityInput(int? Kind, string? LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int? Status = null, string? Note = null, long? ViewedSharedRevision = null);
 
 /// <summary>A company-local party record. <see cref="Identity"/> is required on creation (every new local party proposes its shared identity) and refused on update.</summary>
 public sealed record LocalPartyInput(string? Code, string? DisplayName, string? Notes, bool? IsActive, SharedIdentityInput? Identity = null);

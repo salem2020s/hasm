@@ -38,8 +38,8 @@ public class PartyReviewTests : PartyTestBase
         // both companies propose a change against revision 1 of the same identity
         var curA = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, a1.Id));
         var curB = Ok(await PMgmt.GetAsync(adminB.Id, b.Id, b1.Id));
-        var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a1.Id, curA.Revision, Id_("اسم أ", tax: "700", reg: "RA"))).OpenRequest!;
-        var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, b1.Id, curB.Revision, Id_("اسم ب", tax: "700", reg: "RB"))).OpenRequest!;
+        var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a1.Id, curA.Revision, Id_("اسم أ", tax: "700", reg: "RA", viewed: curA.Identity!.Revision))).OpenRequest!;
+        var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, b1.Id, curB.Revision, Id_("اسم ب", tax: "700", reg: "RB", viewed: curB.Identity!.Revision))).OpenRequest!;
         Assert.Equal((1L, 1L), (reqA.BasedOnRevision!.Value, reqB.BasedOnRevision!.Value));
         var winner = aFirst ? (Request: reqA, Company: Company, Admin: Admin, Name: "اسم أ", Reg: "RA") : (Request: reqB, Company: b, Admin: adminB, Name: "اسم ب", Reg: "RB");
         var loser = aFirst ? (Request: reqB, Company: b, Admin: adminB, Party: b1) : (Request: reqA, Company: Company, Admin: Admin, Party: a1);
@@ -60,7 +60,7 @@ public class PartyReviewTests : PartyTestBase
         Assert.Equal(((int?)PartyRequestOutcome.Rejected, "based on an outdated version; propose again"), (rejected.Outcome, rejected.DecisionNote));   // M3
         Assert.Equal((winner.Name, 2L), (bAfter.Identity!.LegalNameAr, bAfter.Identity.Revision));
         // a new proposal of B is based on the current revision and can be approved
-        var again = Ok(await PMgmt.ProposeAsync(loser.Admin.Id, loser.Company.Id, loser.Party.Id, bAfter.Revision, Id_("اسم جديد", tax: "700", reg: "RC"))).OpenRequest!;
+        var again = Ok(await PMgmt.ProposeAsync(loser.Admin.Id, loser.Company.Id, loser.Party.Id, bAfter.Revision, Id_("اسم جديد", tax: "700", reg: "RC", viewed: bAfter.Identity!.Revision))).OpenRequest!;
         Assert.Equal(2L, again.BasedOnRevision);
         await Approve(again.Id, company: loser.Company.Id);
         Assert.Equal(3L, await Scalar<long>($"SELECT {GP.Revision} FROM {GP.Table}"));
@@ -82,8 +82,8 @@ public class PartyReviewTests : PartyTestBase
         await Parties.SyncAsync(adminB.Id, b.Id);
         var curA = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, a.Id));
         var curB = Ok(await PMgmt.GetAsync(adminB.Id, b.Id, other.Id));
-        var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a.Id, curA.Revision, Id_("Race A", tax: "701", reg: "RA"))).OpenRequest!;
-        var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, other.Id, curB.Revision, Id_("Race B", tax: "701", reg: "RB"))).OpenRequest!;
+        var reqA = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, a.Id, curA.Revision, Id_("Race A", tax: "701", reg: "RA", viewed: curA.Identity!.Revision))).OpenRequest!;
+        var reqB = Ok(await PMgmt.ProposeAsync(adminB.Id, b.Id, other.Id, curB.Revision, Id_("Race B", tax: "701", reg: "RB", viewed: curB.Identity!.Revision))).OpenRequest!;
         Assert.Equal((1L, 1L), (reqA.BasedOnRevision!.Value, reqB.BasedOnRevision!.Value));
         var pa = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqA.Id)));
         var pb = Ok(await Registry.GetProposalAsync(Central.Id, await ProposalOf(reqB.Id, b.Id)));

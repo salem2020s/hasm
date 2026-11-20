@@ -16,10 +16,13 @@ const blank = (s: string) => (s.trim() ? s.trim() : null);
 interface IdentityForm { kind: string; legalNameAr: string; legalNameEn: string; taxNumber: string; registrationNumber: string; status: string; note: string }
 interface Form { code: string; displayName: string; notes: string; isActive: boolean; identity: IdentityForm }
 const emptyIdentity: IdentityForm = { kind: "1", legalNameAr: "", legalNameEn: "", taxNumber: "", registrationNumber: "", status: "1", note: "" };
-const snap = (f: Form) => JSON.stringify(f);
-const identityInput = (i: IdentityForm, change: boolean): SharedIdentityInput => ({
+const snapLocal = (f: Form) => JSON.stringify([f.code, f.displayName, f.notes, f.isActive]);
+const snapIdentity = (f: Form) => JSON.stringify(f.identity);
+type Scope = "all" | "local" | "identity";
+const identityInput = (i: IdentityForm, change: boolean, viewedSharedRevision?: number): SharedIdentityInput => ({
   kind: i.kind ? (Number(i.kind) as PartyKind) : null, legalNameAr: blank(i.legalNameAr), legalNameEn: blank(i.legalNameEn), taxNumber: blank(i.taxNumber), registrationNumber: blank(i.registrationNumber),
   status: change ? (Number(i.status) as 1 | 2) : null, note: blank(i.note),
+  ...(change && viewedSharedRevision !== undefined ? { viewedSharedRevision } : {}),
 });
 
 type Editor = { mode: "new" } | { mode: "edit"; id: string };
@@ -149,26 +152,44 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
   const [doc, setDoc] = useState<LocalParty | null>(null);
   const [loading, setLoading] = useState(!isNew);
   const [form, setForm] = useState<Form>({ code: "", displayName: "", notes: "", isActive: true, identity: emptyIdentity });
-  const [base, setBase] = useState(() => snap(form));
+  const [baseLocal, setBaseLocal] = useState(() => snapLocal(form));
+  const [baseIdentity, setBaseIdentity] = useState(() => snapIdentity(form));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [conflict, setConflict] = useState(false);
+  const [conflict, setConflict] = useState<null | "local" | "shared">(null);
+  // the shared identity revision the user was LOOKING AT: set only when the identity was loaded for display, never by a local Save reload
+  const [viewedRevision, setViewedRevision] = useState<number | undefined>(undefined);
+  const [identityStale, setIdentityStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
 
-  const load = useCallback(async () => {
+  // Reloading after Save refreshes ONLY the local data, after Propose ONLY the identity: edits the user made in the other section stay (review follow-up of 3.9A).
+  const load = useCallback(async (scope: Scope = "all") => {
     if (editor.mode !== "edit") return;
     try {
       const d = await auth.api.getParty(editor.id);
       const i = d.identity;
-      const f: Form = { code: d.code, displayName: d.displayName, notes: d.notes ?? "", isActive: d.isActive,
-        identity: i ? { kind: String(i.kind), legalNameAr: i.legalNameAr, legalNameEn: i.legalNameEn ?? "", taxNumber: i.taxNumber ?? "", registrationNumber: i.registrationNumber ?? "", status: String(i.status), note: "" } : emptyIdentity };
-      setDoc(d); setForm(f); setBase(snap(f)); setErrors({}); setConflict(false); setLoading(false);
+      const identity: IdentityForm = i ? { kind: String(i.kind), legalNameAr: i.legalNameAr, legalNameEn: i.legalNameEn ?? "", taxNumber: i.taxNumber ?? "", registrationNumber: i.registrationNumber ?? "", status: String(i.status), note: "" } : emptyIdentity;
+      const fresh: Form = { code: d.code, displayName: d.displayName, notes: d.notes ?? "", isActive: d.isActive, identity };
+      setDoc(d);
+      if (scope !== "local") { setViewedRevision(i?.revision); setIdentityStale(false); }
+      else setIdentityStale(i?.revision !== viewedRevisionRef.current);
+      setForm((cur) => ({
+        ...(scope === "identity" ? { code: cur.code, displayName: cur.displayName, notes: cur.notes, isActive: cur.isActive } : { code: fresh.code, displayName: fresh.displayName, notes: fresh.notes, isActive: fresh.isActive }),
+        identity: scope === "local" ? cur.identity : identity,
+      }));
+      if (scope !== "identity") setBaseLocal(snapLocal(fresh));
+      if (scope !== "local") setBaseIdentity(snapIdentity(fresh));
+      setErrors({}); setConflict(null); setLoading(false);
     } catch (e) { if (!auth.handleError(e)) { setError(errText(e)); setLoading(false); } }
   }, [auth.api, auth.handleError, editor, errText]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load("all"); }, [load]);
 
-  const dirty = snap(form) !== base;
+  const viewedRevisionRef = useRef<number | undefined>(undefined);
+  viewedRevisionRef.current = viewedRevision;
+  const dirtyLocal = snapLocal(form) !== baseLocal;
+  const dirtyIdentity = snapIdentity(form) !== baseIdentity;
+  const dirty = dirtyLocal || dirtyIdentity;
   useReportUnsaved("party-form", dirty, t("pty.title"));
   const canEditLocal = isNew ? caps.create : caps.update;
   const open = doc?.requests.find((r) => r.status !== 3);
@@ -177,7 +198,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
 
   function showServerError(err: unknown) {
     if (auth.handleError(err)) return;
-    if (err instanceof ApiError && err.status === 412) { setConflict(true); return; }
+    if (err instanceof ApiError && err.status === 412) { setConflict(err.code === "shared_revision_conflict" ? "shared" : "local"); return; }
     if (err instanceof ApiError && err.status === 400) {
       const out: Record<string, string> = {};
       // a proposal reports bare identity field names; the form keys them under "identity."
@@ -201,17 +222,17 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
     if (isNew && !form.identity.legalNameAr.trim()) v["identity.legalNameAr"] = t("field.required");
     setErrors(v);
     if (Object.keys(v).length) { setError(t("form.fix_errors")); const first = (["details", "identity"] as const).find((id) => Object.keys(v).some((k) => tabOf(k) === id)); if (first) setTab(first); return; }
-    setBusy(true); setError(null); setConflict(false);
+    setBusy(true); setError(null); setConflict(null);
     try {
-      if (editor.mode === "new") { const d = await auth.api.createParty(localInput()); setBase(snap(form)); onChanged(t("pty.created")); onSwitch(d.id); }
-      else { await auth.api.updateParty(editor.id, localInput(), doc!.revision); onChanged(t("pty.saved")); await load(); }
+      if (editor.mode === "new") { const d = await auth.api.createParty(localInput()); setBaseLocal(snapLocal(form)); setBaseIdentity(snapIdentity(form)); onChanged(t("pty.created")); onSwitch(d.id); }
+      else { await auth.api.updateParty(editor.id, localInput(), doc!.revision); onChanged(t("pty.saved")); await load("local"); }
     } catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
   async function propose() {
     if (!doc) return;
-    setBusy(true); setError(null); setConflict(false);
-    try { await auth.api.proposeParty(doc.id, identityInput(form.identity, change), doc.revision); onChanged(t("pty.proposed")); await load(); }
+    setBusy(true); setError(null); setConflict(null);
+    try { await auth.api.proposeParty(doc.id, identityInput(form.identity, change, viewedRevision), doc.revision); onChanged(t("pty.proposed")); await load("identity"); }
     catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
@@ -219,7 +240,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
   const invalid = new Set(Object.keys(errors).map(tabOf));
   const tabs: TabItem[] = [
     {
-      id: "details", label: t("pty.tab.details"), invalid: invalid.has("details"),
+      id: "details", label: t("pty.tab.details"), invalid: invalid.has("details"), dirty: dirtyLocal,
       content: (
         <div className="fields">
           <Field id="pty-code" label={t("pty.code")} required hint={t("pty.code_hint")} error={errors.code}>{(aria) => <input {...aria} dir="ltr" value={form.code} readOnly={!canEditLocal} maxLength={30} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} autoComplete="off" />}</Field>
@@ -230,7 +251,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
       ),
     },
     {
-      id: "identity", label: t("pty.tab.identity"), invalid: invalid.has("identity"),
+      id: "identity", label: t("pty.tab.identity"), invalid: invalid.has("identity"), dirty: dirtyIdentity,
       content: (
         <div data-testid="pty-identity">
           {!isNew && !doc?.identity && <p className="hint" data-testid="pty-identity-none">{t("pty.identity_none")}</p>}
@@ -263,7 +284,9 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
         actions={doc && <span className={`chip ${doc.linkState === 2 ? "chip-ok" : doc.linkState === 3 ? "chip-off" : ""}`} data-testid="pty-link">{t(`pty.link.${doc.linkState}`)}</span>} />
       <Banner kind="info">{t("pty.isolation_note")}</Banner>
       {doc?.registryUnavailable && <Banner kind="warning" testId="pty-registry-down">{t("pty.registry_unavailable")}</Banner>}
-      {conflict && <Banner kind="error" testId="form-conflict">{t("pty.error.revision_conflict")} <button type="button" onClick={() => void load()}>{t("form.reload_latest")}</button></Banner>}
+      {conflict === "local" && <Banner kind="error" testId="form-conflict">{t("pty.error.revision_conflict")} <button type="button" onClick={() => void load("local")}>{t("form.reload_latest")}</button></Banner>}
+      {conflict === "shared" && <Banner kind="error" testId="form-conflict-shared">{t("pty.error.shared_revision_conflict")} <button type="button" onClick={() => void load("identity")}>{t("pty.reload_identity")}</button></Banner>}
+      {identityStale && !conflict && dirtyIdentity && <Banner kind="warning" testId="pty-identity-stale">{t("pty.identity_changed_elsewhere")} <button type="button" onClick={() => void load("identity")}>{t("pty.reload_identity")}</button></Banner>}
       {error && <Banner kind="error" testId="form-error">{error}</Banner>}
       <form onSubmit={save} noValidate>
         <Tabs label={t("pty.tabs_label")} tabs={tabs} value={activeTab} onChange={setTab} testId="pty-tabs" />
