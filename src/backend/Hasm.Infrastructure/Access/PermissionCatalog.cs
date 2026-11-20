@@ -151,6 +151,8 @@ public sealed partial class PermissionCatalog
         new("company.parties", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Configure]),
         // Tax engine configuration (3.10, system migration 0024): company-wide. View taxes, rate versions, classes, rules and the rounding policy; configure = create and change them (audited; rate and policy versions are append-only).
         new("company.tax", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -270,6 +272,10 @@ public sealed partial class PermissionCatalog
         public const string PartiesConfigure = "company.parties.configure";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
+        public const string PartyRolesView = "company.partyroles.view";
+        public const string PartyRolesConfigure = "company.partyroles.configure";
+        public const string SalesRepsView = "company.salesreps.view";
+        public const string SalesRepsConfigure = "company.salesreps.configure";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
