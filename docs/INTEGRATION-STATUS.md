@@ -16,13 +16,13 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #52 | `371adb3` | costing guard tests |
 | #58 | `84614cf` | 3.11 slice 1 pure pricing engine |
 
-Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). PostgreSQL registry: 1011 tests (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0026, system 0027 (PR #48 reserved 0023/0025 before the others took them: it must be renumbered when it is rebased).
+Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). PostgreSQL registry: 1011 tests (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0026, system 0027. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0026 / system 0027 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
 
 ## Open pull requests
 
 | PR | Branch | Status |
 |----|--------|--------|
-| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; renumber migrations on rebase |
+| #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; number any migration from company 0026 / system 0027 on rebase |
 | #51, #55 | security proposals | SUPERSEDED and inert (applied by #61); not to be merged; may be closed by the owner |
 | #62 | `integration/chain-with-security` | VALIDATION ONLY; never merge |
 | #59 | `docs/integration-status` | this file (docs only) |
