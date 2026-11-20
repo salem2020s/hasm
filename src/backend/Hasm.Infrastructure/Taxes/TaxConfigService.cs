@@ -21,7 +21,7 @@ namespace Hasm.Infrastructure.Taxes;
 /// transaction with its audit event; taxes, classes and rules advance by revision-fenced updates and are never removed (PostgreSQL refuses it). Nothing here touches a document: a final
 /// document stores an immutable snapshot, so no change of this configuration can alter it. <see cref="ResolveAsync"/> feeds the pure <see cref="TaxResolver"/> from these rows.
 /// </summary>
-public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
+public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, TaxConfigOptions? options = null)
 {
     private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
@@ -33,8 +33,10 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     [GeneratedRegex("^[A-Z0-9][A-Z0-9._-]{0,29}$")] private static partial Regex CodePattern();
     [GeneratedRegex("^[a-z][a-z0-9_.-]{0,39}$")] private static partial Regex KeyPattern();
 
-    /// <summary>A rate version may be dated at most this many days ahead of today (planned changes), because versions can never be removed or reordered.</summary>
-    public const int MaxRateLeadDays = 366;
+    /// <summary>Default for <see cref="TaxConfigOptions.MaxRateLeadDays"/>.</summary>
+    public const int DefaultMaxRateLeadDays = 366;
+
+    private int MaxRateLeadDays => options?.MaxRateLeadDays ?? DefaultMaxRateLeadDays;
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static object Db<T>(T? v) where T : class => (object?)v ?? DBNull.Value;
@@ -166,7 +168,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         var r = await Mutate(companyId, async work =>
         {
             var tax = (await LoadTaxes(work.Connection, work.Transaction, taxId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "tax_not_found");
-            if (input.EffectiveFrom > DateOnly.FromDateTime(Now).AddDays(MaxRateLeadDays)) throw Invalid("effectiveFrom", "rate_too_far");   // versions are never removed: a typo years ahead would block every later version
+            if (MaxRateLeadDays > 0 && input.EffectiveFrom > DateOnly.FromDateTime(Now).AddDays(MaxRateLeadDays)) throw Invalid("effectiveFrom", "rate_too_far");   // versions are never removed: a typo years ahead would block every later version
             if (tax.Rates.Count > 0 && tax.Rates.Max(x => x.EffectiveFrom) >= input.EffectiveFrom) throw Invalid("effectiveFrom", "rate_not_later");
             await using (var ins = new NpgsqlCommand($"INSERT INTO {TR.Table} ({TR.Id}, {TR.TaxId}, {TR.EffectiveFrom}, {TR.Treatment}, {TR.RatePercent}, {TR.CreatedBy}, {TR.CreatedAtUtc}) VALUES (@id, @t, @f, @tr, @r, @by, @now)", work.Connection, work.Transaction))
             {
@@ -268,6 +270,12 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         {
             return ConfigResult<bool>.Ok(await transactions.ExecuteAsync(companyId, async work =>
             {
+                Guid? previous = null;
+                await using (var sel = new NpgsqlCommand($"SELECT {classCol} FROM {table} WHERE {subjectCol} = @s FOR UPDATE", work.Connection, work.Transaction))
+                {
+                    sel.Parameters.AddWithValue("s", subject);
+                    if (await sel.ExecuteScalarAsync(ct) is Guid g) previous = g;
+                }
                 if (classId is { } cid)
                 {
                     var cls = (await LoadClasses(work.Connection, work.Transaction, cid, false, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "class_not_found");
@@ -282,9 +290,9 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
                 {
                     await using var del = new NpgsqlCommand($"DELETE FROM {table} WHERE {subjectCol} = @s", work.Connection, work.Transaction);
                     del.Parameters.AddWithValue("s", subject);
-                    if (await del.ExecuteNonQueryAsync(ct) == 0) throw new Abort(ConfigStatus.NotFound, "assignment_not_found");
+                    if (previous is null || await del.ExecuteNonQueryAsync(ct) == 0) throw new Abort(ConfigStatus.NotFound, "assignment_not_found");
                 }
-                await work.AppendAuditAsync(new AuditEventData(auditType, ActorUserId: actor, SubjectId: subject, Detail: $"{label} tax class {(classId is null ? "removed" : $"assigned class={classId:N}")}"), ct);
+                await work.AppendAuditAsync(new AuditEventData(auditType, ActorUserId: actor, SubjectId: subject, Detail: $"{label} tax class {(classId is null ? "removed" : $"assigned class={classId:N}")} previous={(previous is { } pv ? pv.ToString("N") : "none")}"), ct);
                 return true;
             }, ct));
         }
@@ -420,7 +428,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
                 await upd.ExecuteNonQueryAsync(ct);
             }
             await ReplaceBase(work, id, input.IncludesTaxIds ?? [], ct);
-            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.RuleUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax rule updated r{cur.Revision + 1} doc={input.DocumentType!.Trim()} op={input.Operation!.Trim()} tax={input.TaxId:N} priority={input.Priority} active={input.IsActive}"), ct);
+            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.RuleUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax rule updated r{cur.Revision + 1} base={string.Join(",", (input.IncludesTaxIds ?? []).Select(b => b.ToString("N")[..8]))} was={string.Join(",", cur.Rule.IncludesTaxIds.Select(b => b.ToString("N")[..8]))} doc={input.DocumentType!.Trim()} op={input.Operation!.Trim()} tax={input.TaxId:N} priority={input.Priority} active={input.IsActive}"), ct);
             return true;
         }, ct);
         if (!r.IsOk) return ConfigResult<TaxRuleView>.Fail(r.Status, r.Code!, r.CurrentRevision) with { Fields = r.Fields };

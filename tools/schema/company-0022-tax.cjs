@@ -208,6 +208,19 @@ CREATE TABLE {{TaxRuleBase}} (
     CONSTRAINT {{TaxRuleBase.FkRule}} FOREIGN KEY ({{TaxRuleBase.RuleId}}) REFERENCES {{TaxRule}} ({{TaxRule.Id}}),
     CONSTRAINT {{TaxRuleBase.FkTax}} FOREIGN KEY ({{TaxRuleBase.IncludedTaxId}}) REFERENCES {{TaxDefinition}} ({{TaxDefinition.Id}})
 );
+-- a rule's tax base may change only in the SAME transaction that wrote the rule row itself (insert, or an update that advanced its revision): the base can never be edited behind the
+-- revision fence. The rule row's xmin equals the current transaction id exactly when this transaction inserted or updated it.
+CREATE FUNCTION {{TaxRuleBase.FnGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE rid uuid; written boolean;
+BEGIN
+    IF TG_OP = 'DELETE' THEN rid := OLD.{{TaxRuleBase.RuleId}}; ELSE rid := NEW.{{TaxRuleBase.RuleId}}; END IF;
+    SELECT (xmin::text = (txid_current() & 4294967295)::text) INTO written FROM {{TaxRule}} WHERE {{TaxRule.Id}} = rid;
+    IF written IS DISTINCT FROM true THEN RAISE EXCEPTION 'a tax rule base changes only together with its rule (revision advance)'; END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER {{TaxRuleBase.TrRow}} BEFORE INSERT OR DELETE ON {{TaxRuleBase}} FOR EACH ROW EXECUTE FUNCTION {{TaxRuleBase.FnGuard}}();
 REVOKE ALL ON TABLE {{TaxRuleBase}} FROM PUBLIC;
 
 CREATE TABLE {{TaxPolicyVersion}} (

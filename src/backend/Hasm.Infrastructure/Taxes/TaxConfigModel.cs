@@ -37,3 +37,9 @@ public sealed record TaxPolicyView(Guid Id, int Version, TaxPolicy Policy, DateT
 public sealed record TaxResolution(IReadOnlyList<TaxComponent> Components, TaxPolicy Policy, int PolicyVersion);
 
 public sealed record TaxCapabilities(bool View, bool Configure);
+
+/// <summary>
+/// Deployment policy of the tax configuration. <see cref="MaxRateLeadDays"/>: how far ahead of today a rate version may be dated. The SRS sets no such limit; it is a guard
+/// against a typo that could never be undone (versions are append-only and each must be later than the last), so the default is one year and 0 disables the limit.
+/// </summary>
+public sealed record TaxConfigOptions(int MaxRateLeadDays = TaxConfigService.DefaultMaxRateLeadDays);

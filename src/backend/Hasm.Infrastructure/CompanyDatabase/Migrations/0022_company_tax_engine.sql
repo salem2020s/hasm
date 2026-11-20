@@ -188,6 +188,19 @@ CREATE TABLE t_90ffcb0e (
     CONSTRAINT k_72c1c4e5 FOREIGN KEY (c_1ca4b385) REFERENCES t_7c5f20ac (c_e9395319),
     CONSTRAINT k_26e035e1 FOREIGN KEY (c_b3cf7851) REFERENCES t_e04d482b (c_0139c549)
 );
+-- a rule's tax base may change only in the SAME transaction that wrote the rule row itself (insert, or an update that advanced its revision): the base can never be edited behind the
+-- revision fence. The rule row's xmin equals the current transaction id exactly when this transaction inserted or updated it.
+CREATE FUNCTION f_831e3a7a() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE rid uuid; written boolean;
+BEGIN
+    IF TG_OP = 'DELETE' THEN rid := OLD.c_1ca4b385; ELSE rid := NEW.c_1ca4b385; END IF;
+    SELECT (xmin::text = (txid_current() & 4294967295)::text) INTO written FROM t_7c5f20ac WHERE c_e9395319 = rid;
+    IF written IS DISTINCT FROM true THEN RAISE EXCEPTION 'a tax rule base changes only together with its rule (revision advance)'; END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_93dc07ce BEFORE INSERT OR DELETE ON t_90ffcb0e FOR EACH ROW EXECUTE FUNCTION f_831e3a7a();
 REVOKE ALL ON TABLE t_90ffcb0e FROM PUBLIC;
 
 CREATE TABLE t_606b37f9 (

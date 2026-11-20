@@ -132,6 +132,8 @@ public static partial class CompanySchema
         public const string Pk = "k_7265aadc";
         public const string FkRule = "k_72c1c4e5";
         public const string FkTax = "k_26e035e1";
+        public const string FnGuard = "f_831e3a7a";
+        public const string TrRow = "r_93dc07ce";
     }
 
     public static class TaxPolicyVersion
@@ -256,6 +258,8 @@ public static partial class CompanySchema
         ["TaxRuleBase.Pk"] = TaxRuleBase.Pk,
         ["TaxRuleBase.FkRule"] = TaxRuleBase.FkRule,
         ["TaxRuleBase.FkTax"] = TaxRuleBase.FkTax,
+        ["TaxRuleBase.FnGuard"] = TaxRuleBase.FnGuard,
+        ["TaxRuleBase.TrRow"] = TaxRuleBase.TrRow,
         ["TaxPolicyVersion"] = TaxPolicyVersion.Table,
         ["TaxPolicyVersion.Id"] = TaxPolicyVersion.Id,
         ["TaxPolicyVersion.Version"] = TaxPolicyVersion.Version,

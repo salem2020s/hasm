@@ -342,4 +342,41 @@ public class TaxConfigTests : InventoryTestBase
         Assert.Equal(await Count(Company, TV.Table), versions);
         Assert.Equal(policies.Count(r => r.IsOk), (int)versions);
     }
+
+    [PostgresFact]
+    public async Task A_rule_base_changes_only_with_its_rule_removals_record_the_previous_class_and_the_rate_lead_is_configurable()
+    {
+        await Prepare();
+        var vat = await NewTax("VAT", (Jan, TaxTreatment.Standard, 15m));
+        var excise = await NewTax("EXC", (Jan, TaxTreatment.Standard, 5m));
+        var rule = Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 20, includes: [excise.Id])));
+        Assert.Equal(1L, await Count(Company, TB.Table));
+        // outside the service nobody can edit a base behind the revision fence: the rule row was not written by that transaction
+        Assert.Equal("P0001", await Fails($"DELETE FROM {TB.Table} WHERE {TB.RuleId} = '{rule.Rule.Id}'"));
+        Assert.Equal("P0001", await Fails($"INSERT INTO {TB.Table} ({TB.RuleId}, {TB.IncludedTaxId}) VALUES ('{rule.Rule.Id}', '{vat.Id}')"));
+        Assert.Equal(1L, await Count(Company, TB.Table));
+        // through the service the base is replaced together with the revision advance, and the audit names both bases
+        var updated = Ok(await Tax.UpdateRuleAsync(Admin.Id, Company.Id, rule.Rule.Id, rule.Revision, Rule(vat.Id, 20)));
+        Assert.Equal((2L, 0), (updated.Revision, updated.Rule.IncludesTaxIds.Count));
+        var detail = await Sql<string>($"SELECT {Audit_.Detail} FROM {Audit_.Table} WHERE {Audit_.EventType} = {TaxAuditEvents.RuleUpdated} ORDER BY {Audit_.Seq} DESC LIMIT 1");
+        Assert.Contains("was=" + excise.Id.ToString("N")[..8], detail);
+        Assert.Contains("base= was=", detail);
+
+        // removing or replacing an assignment audits the class it had
+        var food = await NewClass(TaxClassKind.Item, "food");
+        var item = await NewItemId("B1");
+        Ok(await Tax.AssignItemClassAsync(Admin.Id, Company.Id, item, food.Id));
+        Ok(await Tax.AssignItemClassAsync(Admin.Id, Company.Id, item, null));
+        var removed = await Sql<string>($"SELECT {Audit_.Detail} FROM {Audit_.Table} WHERE {Audit_.EventType} = {TaxAuditEvents.ItemClassAssigned} ORDER BY {Audit_.Seq} DESC LIMIT 1");
+        Assert.Contains("removed", removed);
+        Assert.Contains("previous=" + food.Id.ToString("N"), removed);
+
+        // the lead limit is a deployment policy: default one year, configurable, 0 = none
+        var far = new DateOnly(2062, 1, 1);
+        Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(far, TaxTreatment.Standard, 5m)), "effectiveFrom", "rate_too_far");
+        var wide = new TaxConfigService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), Clock, new TaxConfigOptions(0));
+        Ok(await wide.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(far, TaxTreatment.Standard, 5m)));
+        var narrow = new TaxConfigService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), Clock, new TaxConfigOptions(30));
+        Invalid(await narrow.AddRateAsync(Admin.Id, Company.Id, excise.Id, new TaxRateInput(DateOnly.FromDateTime(Clock.GetUtcNow().UtcDateTime).AddDays(60), TaxTreatment.Standard, 5m)), "effectiveFrom", "rate_too_far");
+    }
 }
