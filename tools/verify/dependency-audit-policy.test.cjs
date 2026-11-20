@@ -135,3 +135,31 @@ test("proof commit must preserve frozen sources and all validation implementatio
   assert.throws(() => verifyProofInputs(policy, "unused", args => args[0] === "show" ? JSON.stringify({ ...proposed, status: "APPROVED" }) : read(args)));
   assert.throws(() => verifyProofInputs(policy, "unused", () => { throw new Error("missing commit"); }));
 });
+
+// Retirement is a permanent strict audit, never an extension of the historical waiver.
+test("retired policy permits a clean audit with the unchanged matcher and no exception", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  f.report.vulnerabilities = {}; counts(f.report); f.exit = 0;
+  f.context.now = "2026-11-25T00:00:00Z"; f.context.advisory = null;
+  assert.deepEqual(run(f), { ok: true, excepted: [], failures: [] });
+});
+test("retired policy blocks the former exact High findings and every Critical finding", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+  f.report.vulnerabilities.picomatch.severity = "critical"; counts(f.report);
+  assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+});
+test("retired policy retains audit errors, schema and count validation", () => {
+  for (const mutate of [f => f.exit = 2, f => f.report.error = { code: "network" },
+    f => f.report.auditReportVersion = 3, f => f.report.metadata.vulnerabilities.total = 99]) {
+    const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+    f.report.vulnerabilities = {}; counts(f.report); f.exit = 0; mutate(f);
+    assert.equal(run(f).ok, false); assert.deepEqual(run(f).excepted, []);
+  }
+});
+test("retired policy preserves high audit threshold and full lower-severity disclosure", () => {
+  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
+  f.report.vulnerabilities = { example: { name: "example", severity: "moderate", nodes: ["node_modules/example"], via: ["example"] } };
+  counts(f.report); f.exit = 0;
+  assert.deepEqual(run(f), { ok: true, excepted: [], failures: [] });
+});

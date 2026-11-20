@@ -38,6 +38,9 @@ function evaluate(report, exitCode, lock, policy, context) {
       (exitCode === 1 && counts.high + counts.critical === 0))
     return { ok: false, excepted, failures: ["Audit counts/exit status disagree"] };
   const blocking = rows.filter(([, finding]) => ["high", "critical"].includes(finding.severity));
+  // Permanent strict mode: retirement authorizes ZERO exceptions, including this advisory.
+  if (policy?.status === "RETIRED-ADVISORY-WITHDRAWN")
+    return { ok: blocking.length === 0, excepted, failures: blocking.map(([name]) => `${name}: High/Critical vulnerability blocks strict audit`) };
   if (!blocking.length) {
     if (lock?.packages?.["node_modules/picomatch"]?.version === "4.0.7")
       return { ok: false, excepted, failures: ["Known affected matcher unexpectedly missing from audit findings"] };
