@@ -451,10 +451,11 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
         <ConfirmDialog title={t("imp.tpl.retire_title")} message={t("imp.tpl.retire_message", { name: tplPick })} confirmLabel={t("imp.tpl.retire")}
           onCancel={() => setTplRetire(false)} onConfirm={() => void (async () => {
             setTplRetire(false);
-            if (tplInFlight.current) return;
+            if (tplInFlight.current) { act.setError(t("imp.tpl.busy")); return; }
+            const version = templates.find((x) => x.name === tplPick && !x.isRetired)?.version;   // the version this screen read: the server refuses a stale one
+            if (version === undefined) { act.setError(t("imp.tpl.retire_missing")); setTplPick(""); await loadTemplates(); return; }
             setTplBusy(true);
             try {
-              const version = templates.find((x) => x.name === tplPick && !x.isRetired)?.version ?? 0;   // the version this screen read: the server refuses a stale one
               await auth.api.retireImportTemplate(batch.adapter, tplPick, version);
               setTplNote(t("imp.tpl.retired")); setTplPick(""); await loadTemplates();
             } catch (e) { if (!auth.handleError(e)) { act.setError(importError(tRef.current, e)); await loadTemplates(); } }
