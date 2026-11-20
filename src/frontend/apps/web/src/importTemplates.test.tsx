@@ -98,4 +98,17 @@ describe("import mapping templates", () => {
     await userEvent.click(box.getByTestId("imp-tpl-save"));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   });
+
+  it("sends one request for a double click and saves the name in NFC", async () => {
+    let release: (v: ImportTemplate) => void = () => undefined;
+    const save = vi.fn().mockImplementation(() => new Promise<ImportTemplate>((r) => { release = r; }));
+    render(batch("mapped", { mapping }), { saveImportTemplate: save });
+    const box = await open();
+    fireEvent.change(box.getByLabelText(new RegExp("^" + A("imp.tpl.save_label"))), { target: { value: "café" } });   // decomposed "café"
+    const button = box.getByTestId("imp-tpl-save");
+    fireEvent.click(button); fireEvent.click(button);                                      // two clicks before any re-render
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith("b1", "café", 0);                                // composed form
+    release(tpl("café", 1));
+  });
 });

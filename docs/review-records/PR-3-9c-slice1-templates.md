@@ -16,3 +16,14 @@
 | L5 | Low | `Norm` (same as the suggestion) does not strip BOM, zero-width or tatweel from headers; the Arabic comma joins unmatched field names in English. | Accepted for this slice (shared normalizer; changing it affects the suggestion); recorded. |
 
 Checked without defect: the version-gap trigger plus the unique index is race-safe; append-only for update/delete/truncate; anchored check regexes; SELECT/INSERT-only runtime privileges; deterministic generator checked in CI; the advisory-lock key is unambiguous; Apply writes nothing to the batch and everything then goes through the ordinary validated mapping step (required fields, duplicate columns, options), dry run, approval and plan hash; `Validate` runs before apply; the literal `templates` route does not collide with `{id:guid}`; registry and pinned counts consistent.
+
+## Re-review - full diff against main after the integration of #53/#54/#56/#57 (2026-11-20, head 48693b6)
+
+Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; static, it did not run the PostgreSQL suite). **No Critical, no High.** The earlier H1 and M1-M3 were verified fixed (audit codes 1700/1701 unique across every `*AuditEvents` class; default length refused at save; name cleaning; own-row response); pinned migration counts (24 -> 25, `0026_extra` test migrations) not weakened; registry 1003 -> 1011 raise-only; migration 0025 contiguous, additive, append-only, runtime SELECT/INSERT only; company scope and permissions on every endpoint.
+
+| # | Sev | Finding | Disposition |
+|---|-----|---------|-------------|
+| M-a | Medium | Saving over a retired name silently revives it. | Documented as the intended lifecycle rule in `docs/PHASE-3.9C.md`. |
+| M-b | Medium | The double-submit guard was state-only; sibling mapping buttons were not disabled during a template call. | Fixed: a synchronous `useRef` in-flight guard; Suggest and Save mapping are disabled while a template call runs. |
+| M-c | Medium | The client sent the name without NFC; no retire UI. | Fixed: the name is normalized to NFC before the version lookup; the retire UI is a recorded follow-up (outside slice 1). |
+| Lows | Low | Route-encoding tests for `/ % ? #` names; case/space-variant names distinct; DB does not enforce the name policy (service is the guard); Arabic comma in the English unmatched list; apply needs upload permission; empty-field-set validation uses an error-field prefix (unit-tested); missing tests for sibling-button disabling and the 412 text. | Recorded follow-ups; none blocks. |

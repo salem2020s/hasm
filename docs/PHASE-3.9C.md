@@ -21,3 +21,7 @@ Sources: ROADMAP 3.9C (a parties adapter on the 3.2D framework; reusable mapping
 ## Migration coordination
 
 Stacked on PR #57 (company 0024, system 0026): company 0025, no system migration in this slice. Contiguous numbering follows the merge order (see docs/INTEGRATION-STATUS.md).
+
+## Template lifecycle rule (recorded after the full-diff review of PR #63)
+
+Saving over a retired template name creates a new, non-retired version of the same name (append-only history is preserved; the retirement stays visible in the history). This is the behavior pinned by `ImportTemplateTests`; it is a template-management convenience, not an accounting rule. A retire action is available in the client API (`retireImportTemplate`, `importTemplateHistory`) but has no screen in slice 1; the retire UI is a follow-up.
