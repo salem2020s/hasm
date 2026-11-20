@@ -111,4 +111,32 @@ describe("import mapping templates", () => {
     expect(save).toHaveBeenCalledWith("b1", "café", 0);                                // composed form
     release(tpl("café", 1));
   });
+  it("retires the selected template only after confirmation, using the version it read, then refreshes the list", async () => {
+    const retire = vi.fn().mockResolvedValue(tpl("Sheet", 2, true));
+    const client = render(batch("staged"), { retireImportTemplate: retire });
+    const box = await open();
+    expect(box.getByTestId("imp-tpl-retire")).toBeDisabled();                          // nothing selected
+    await userEvent.selectOptions(box.getByLabelText(A("imp.tpl.apply_label")), "Sheet");
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(retire).not.toHaveBeenCalled();                                             // the dialog alone changes nothing
+    await userEvent.click(dialog.getByRole("button", { name: A("cancel") }));
+    expect(retire).not.toHaveBeenCalled();
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("imp.tpl.retire") }));
+    await waitFor(() => expect(retire).toHaveBeenCalledWith("chart-of-accounts", "Sheet", 2));
+    expect(await screen.findByTestId("imp-tpl-note")).toHaveTextContent(A("imp.tpl.retired"));
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a translated refusal when retiring fails and reloads the list", async () => {
+    const retire = vi.fn().mockRejectedValue(apiError(409, "already_retired"));
+    const client = render(batch("staged"), { retireImportTemplate: retire });
+    const box = await open();
+    await userEvent.selectOptions(box.getByLabelText(A("imp.tpl.apply_label")), "Sheet");
+    await userEvent.click(box.getByTestId("imp-tpl-retire"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("imp.tpl.retire") }));
+    await waitFor(() => expect(retire).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(client.listImportTemplates).toHaveBeenCalledTimes(2));
+  });
 });
