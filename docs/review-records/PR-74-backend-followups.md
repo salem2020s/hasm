@@ -1,8 +1,9 @@
 # Independent review record - PR #74, backend Medium follow-ups (attachments #57, representatives #56)
 
 * **Pull request:** #74
-* **Head SHA reviewed (full 40 characters):** a3a231eb499b7e2324f67b1a19e94597f0612f26
+* **Head SHA reviewed (full 40 characters):** 85feef1caabc81d9c37975c01ddd7ca4f33b2109
 * **Reviewer context:** Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors, fresh context, read-only). Prompt: "independent FULL-diff adversarial review, read-only" of the complete diff against `origin/main`. Independence is limited to a separate context; the model family is the same as the authors'.
+* **Review history:** first review of head `a3a231eb499b7e2324f67b1a19e94597f0612f26` (findings below); re-review of head `85feef1caabc81d9c37975c01ddd7ca4f33b2109` after the fixes (section "Re-review" below). The 40-character SHA above is the re-reviewed head.
 * **Scope read:** the full diff against `origin/main` at the reviewed head (upload endpoint, attachment service/options/sweep, party-role management, tests, `backend.yml` registry).
 * **Checks run (commands and results):** code reading only by the reviewer. The author ran nothing locally (no dotnet in the sandbox); hosted CI on the reviewed head: backend-build-test success, ci-guard, docs-traceability, secret-scan, guard-selftest, dependency-scan success; postgres-integration was still running when the review was written.
 * **Findings:** no Critical, no High, three Medium, several Low.
@@ -19,6 +20,16 @@
 | L5 | Low | No `att.error.upload_busy` message. | Fixed: Arabic and English `att.error.upload_busy` and `att.error.upload_timeout` in `messages.attachments.ts` (the only frontend line touched). |
 | L6 | Low | A malformed multipart body answered 413. | Fixed: malformed or truncated bodies are 400 `invalid_request`; 413 is only for a too-large file (or a 413 from the host). |
 | L7 | Low | `docs/PHASE-3.12.md` did not describe the new limits. | Fixed: new section (100 MB cap, `MaxConcurrentUploads`, per-user limit, 503, deadline, 404 for a hidden owner, temp-file sweep, memory worst case). |
+
+## Re-review (head 85feef1caabc81d9c37975c01ddd7ca4f33b2109)
+
+Reviewer: Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors), full diff against `origin/main`, code reading. It verified that M1, M2, M3 and L1-L7 above are fixed as recorded (per-user gate, deadline and minimum data rate, the three HTTP tests, the preallocated bounded read and the stated memory worst case, field cap, filename handling, clamps, 400 for malformed multipart, messages, docs) and that the compile fix (qualified Kestrel feature type) is the only change since the previous head. **No Critical, High or Medium finding is open.** Three new Low findings:
+
+| # | Sev | Finding | Disposition |
+|---|-----|---------|-------------|
+| L8 | Low | `ReadBounded` allocates its buffer from the client-supplied Content-Length before the data arrives. | Accepted and documented: the allocation is capped by `MaxFileBytes` and the number of uploads by the gate, so the exposure is gate size times the cap. |
+| L9 | Low | A timeout from Kestrel's minimum data rate surfaces as 400 `invalid_request` rather than 408. | Accepted (cosmetic): the connection is being aborted for a stalled sender; the overall deadline path does return 408. |
+| L10 | Low | The 16 KB/s floor may abort uploads over very slow links. | Accepted (policy call): make the rate configurable if field use shows a problem. |
 
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** behaviour under a real Kestrel host (the HTTP tests run on the in-memory test server, which has no minimum-data-rate feature, so that setting is exercised only by code review); memory use under a real concurrent load at the 100 MB cap.
