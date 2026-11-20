@@ -173,26 +173,37 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             if (!PartyValidation.TryIdentity(input.Identity, false, "identity.", out identity, out var identityErrors)) errors.AddRange(identityErrors);
         }
         if (!ok || errors.Count > 0) return ConfigResult<LocalPartyView>.Invalid(errors);
-        var id = Guid.NewGuid();
-        Guid requestId = default;
+        Guid id = default, requestId = default;
         var created = await Mutate(companyId, async work =>
         {
-            var now = Now;
-            await using (var ins = new NpgsqlCommand(
-                $"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.Notes}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) " +
-                "VALUES (@id, @code, @name, @notes, @active, 1, 1, @a, @now, @now)", work.Connection, work.Transaction))
-            {
-                ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("code", local.Code); ins.Parameters.AddWithValue("name", local.DisplayName); ins.Parameters.AddWithValue("notes", Db(local.Notes));
-                ins.Parameters.AddWithValue("active", local.IsActive); ins.Parameters.AddWithValue("a", actor); ins.Parameters.AddWithValue("now", now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.LocalPartyCreated, ActorUserId: actor, SubjectId: id, Detail: $"local party created code={local.Code}"), ct);
-            requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, null, identity, now, ct);
+            (id, requestId) = await CreateInWorkAsync(work, actor, local, identity, ct);
             return true;
         }, ct);
         if (!created.IsOk) return ConfigResult<LocalPartyView>.Fail(created.Status, created.Code!) with { Fields = created.Fields };
         await ProcessAsync(companyId, requestId, actor, ct);
         return ConfigResult<LocalPartyView>.Ok((await GetAsync(companyId, id, ct))!);
+    }
+
+    /// <summary>
+    /// Creates a pending local party and queues the proposal of its shared identity INSIDE the caller's company transaction (the same two writes and audit events as <see cref="CreateAsync"/>), without
+    /// delivering the request: the caller delivers after its own commit (<see cref="SyncAsync"/> is safe to repeat). Used by the party import adapter so a whole approved batch stays all-or-nothing.
+    /// Inputs must already be validated by <see cref="PartyValidation"/>. A code that is already taken surfaces as the unique-code <see cref="PostgresException"/>.
+    /// </summary>
+    internal async Task<(Guid Id, Guid RequestId)> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, PartyValidation.Local local, PartyValidation.Identity identity, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var now = Now;
+        await using (var ins = new NpgsqlCommand(
+            $"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.Notes}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) " +
+            "VALUES (@id, @code, @name, @notes, @active, 1, 1, @a, @now, @now)", work.Connection, work.Transaction))
+        {
+            ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("code", local.Code); ins.Parameters.AddWithValue("name", local.DisplayName); ins.Parameters.AddWithValue("notes", Db(local.Notes));
+            ins.Parameters.AddWithValue("active", local.IsActive); ins.Parameters.AddWithValue("a", actor); ins.Parameters.AddWithValue("now", now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.LocalPartyCreated, ActorUserId: actor, SubjectId: id, Detail: $"local party created code={local.Code}"), ct);
+        var requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, null, identity, now, ct);
+        return (id, requestId);
     }
 
     /// <summary>Changes the company-local fields only (code, display name, notes, active). The shared identity is changed only by a proposal (<see cref="ProposeAsync"/>).</summary>
