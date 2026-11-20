@@ -135,6 +135,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.TaxPolicyVersion.Table, ["SELECT", "INSERT"]),
         (CompanySchema.SalesRepresentative.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.PartyRole.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Attachment.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

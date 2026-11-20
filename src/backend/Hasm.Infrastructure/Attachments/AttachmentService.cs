@@ -1,0 +1,388 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.CompanyConfiguration;
+using Hasm.Infrastructure.CompanyDatabase;
+using Hasm.Infrastructure.Security;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
+using AT = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Attachment;
+
+namespace Hasm.Infrastructure.Attachments;
+
+/// <summary>Business audit events of attachments (company stream, 1600-1609). Persisted codes: never renumber.</summary>
+public static class AttachmentAuditEvents
+{
+    public const short Uploaded = 1600;
+    public const short Removed = 1601;
+    public const short SensitiveDownloaded = 1602;
+    public const short Rewrapped = 1603;
+    public const short IntegrityFailure = 1604;
+}
+
+/// <summary>Where attachments live on the server and how large they may be (section <c>Hasm:Attachments</c>).</summary>
+public sealed class AttachmentOptions
+{
+    public const string SectionName = "Hasm:Attachments";
+    /// <summary>Absolute directory outside any web root (disk, SMB or NFS mount); a sub-directory per company is created owner-only. Required.</summary>
+    public string? StorageDirectory { get; init; }
+    public long MaxFileBytes { get; init; } = 25L * 1024 * 1024;
+
+    public static AttachmentOptions FromConfiguration(IConfiguration configuration)
+    {
+        string? Get(string key) => string.IsNullOrWhiteSpace(configuration[$"{SectionName}:{key}"]) ? null : configuration[$"{SectionName}:{key}"]!.Trim();
+        var max = long.TryParse(Get("MaxFileBytes"), out var m) && m is > 0 and <= 512L * 1024 * 1024 ? m : new AttachmentOptions().MaxFileBytes;
+        return new AttachmentOptions { StorageDirectory = Get("StorageDirectory"), MaxFileBytes = max };
+    }
+}
+
+/// <summary>
+/// Files on the server filesystem (company-isolated owner-only directories, never inside a web root, never served directly). File names are generated identifiers (<c>&lt;32 hex&gt;.att</c>),
+/// validated on every call, so a path can never escape its company directory. Writes go to a temporary name created exclusively and are moved into place atomically.
+/// </summary>
+public sealed partial class AttachmentFileStore(AttachmentOptions options, EncryptionOptions encryption)
+{
+    [GeneratedRegex("^[0-9a-f]{32}\\.att$", RegexOptions.CultureInvariant)] private static partial Regex NamePattern();
+
+    private string Directory(Guid companyId)
+    {
+        if (options.StorageDirectory is not { } root || !Path.IsPathFullyQualified(root))
+            throw new EncryptionUnavailableException("attachment_storage_not_configured", $"{AttachmentOptions.SectionName}:StorageDirectory (an absolute path) is required.");
+        var dir = Path.Combine(root, companyId.ToString("N"));
+        AuditFilePermissions.CreateOwnerOnlyDirectory(root);
+        AuditFilePermissions.CreateOwnerOnlyDirectory(dir);
+        if (!encryption.AllowInsecureFilePermissions) AuditFilePermissions.EnsureNotWritableByOthers(dir);
+        return dir;
+    }
+
+    private string PathOf(Guid companyId, string name)
+    {
+        if (!NamePattern().IsMatch(name)) throw new ArgumentException("Invalid stored file name.", nameof(name));
+        return Path.Combine(Directory(companyId), name);
+    }
+
+    public static string NewName() => Guid.NewGuid().ToString("N") + ".att";
+
+    public void Create(Guid companyId, string name, byte[] bytes) => Write(companyId, name, bytes, overwrite: false);
+    public void Replace(Guid companyId, string name, byte[] bytes) => Write(companyId, name, bytes, overwrite: true);
+
+    private void Write(Guid companyId, string name, byte[] bytes, bool overwrite)
+    {
+        var path = PathOf(companyId, name);
+        var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            AuditFilePermissions.CreateOwnerOnlyFile(temp, bytes);
+            File.Move(temp, path, overwrite);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+
+    public byte[]? Read(Guid companyId, string name) { var p = PathOf(companyId, name); return File.Exists(p) ? File.ReadAllBytes(p) : null; }
+    public bool Exists(Guid companyId, string name) => File.Exists(PathOf(companyId, name));
+    public bool Delete(Guid companyId, string name) { var p = PathOf(companyId, name); if (!File.Exists(p)) return false; File.Delete(p); return true; }
+}
+
+/// <summary>The record kinds an attachment may belong to. A new kind is registered here when its module exists; the polymorphic reference is validated by the service (the only writer).</summary>
+public static class AttachmentSubjects
+{
+    public static readonly IReadOnlyDictionary<string, (string Table, string IdColumn)> Kinds = new Dictionary<string, (string, string)>
+    {
+        ["local_party"] = (CompanySchema.LocalParty.Table, CompanySchema.LocalParty.Id),
+        ["inventory_item"] = (CompanySchema.Item.Table, CompanySchema.Item.Id),
+    };
+}
+
+public sealed record AttachmentView(Guid Id, string SubjectKind, Guid SubjectId, string FileName, string ContentType, long SizeBytes, string Sha256, bool IsSensitive, bool IsRemoved, string? RemovalReason, long Revision, DateTimeOffset CreatedAtUtc);
+public sealed record AttachmentContent(AttachmentView Attachment, byte[] Bytes);
+public sealed record AttachmentCapabilities(bool View, bool Upload, bool Delete, bool SensitiveView, bool SensitiveUpload);
+public sealed record RewrapOutcome(int Rewrapped, int Skipped, int Failed);
+
+/// <summary>
+/// The audited company-side store of attachments (Phase 3.12, SRS 14.3/14.4/17.1/17.2). <b>No authorization here by design:</b> <see cref="AttachmentManagementService"/> wraps it. Metadata in the company
+/// database, bytes on the server filesystem; a normal file is stored as is, a SENSITIVE file is envelope-encrypted (AES-256-GCM, a fresh data key wrapped under the versioned master key, the context binds it
+/// to its company and attachment so it cannot be swapped). The SHA-256 of the plaintext is stored and verified on EVERY read (a mismatch is an integrity failure, audited, and nothing is returned).
+/// A removal keeps the metadata row and the stored bytes (retention policy is an owner decision): the file is simply no longer readable through the application.
+/// </summary>
+public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, AttachmentFileStore store, EnvelopeEncryptor encryptor, AttachmentOptions options, TimeProvider clock)
+{
+    private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
+    {
+        public ConfigResult<T> To<T>() => status == ConfigStatus.Invalid && fields is not null ? ConfigResult<T>.Invalid(fields) : ConfigResult<T>.Fail(status, code, currentRevision);
+    }
+    private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, code, [new FieldError(field, code)]);
+    private DateTime Now => clock.GetUtcNow().UtcDateTime;
+    private static string Context(Guid companyId, Guid id) => $"hasm-attachment:{companyId:N}:{id:N}";
+
+    /// <summary>Declared type -> allowed, with the signature the content must start with (null = text, validated as UTF-8 without NUL bytes).</summary>
+    private static readonly IReadOnlyDictionary<string, byte[]?[]> Types = new Dictionary<string, byte[]?[]>
+    {
+        ["application/pdf"] = [Encoding.ASCII.GetBytes("%PDF-")],
+        ["image/png"] = [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]],
+        ["image/jpeg"] = [[0xFF, 0xD8, 0xFF]],
+        ["text/plain"] = [null],
+        ["text/csv"] = [null],
+        ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = [[0x50, 0x4B, 0x03, 0x04]],
+        ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = [[0x50, 0x4B, 0x03, 0x04]],
+    };
+    public static IReadOnlyCollection<string> AllowedContentTypes => [.. Types.Keys];
+
+    [GeneratedRegex("[\\x00-\\x1f\\x7f\"<>|:*?\\\\/]")] private static partial Regex Unsafe();
+
+    /// <summary>The display name: any directory part removed, control and path characters replaced, trimmed, at most 200 characters; null when nothing usable remains.</summary>
+    public static string? SanitizeFileName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var n = name.Replace('\\', '/'); n = n[(n.LastIndexOf('/') + 1)..];
+        n = Unsafe().Replace(n, "_").Trim().Trim('.');
+        if (n.Length == 0) return null;
+        return n.Length > 200 ? n[..200] : n;
+    }
+
+    private static bool LooksLike(string contentType, byte[] bytes)
+    {
+        foreach (var sig in Types[contentType])
+        {
+            if (sig is null)
+            {
+                if (Array.IndexOf(bytes, (byte)0) >= 0) return false;
+                try { new UTF8Encoding(false, true).GetString(bytes); return true; } catch (DecoderFallbackException) { return false; }
+            }
+            if (bytes.Length >= sig.Length && bytes.AsSpan(0, sig.Length).SequenceEqual(sig)) return true;
+        }
+        return false;
+    }
+
+    private static AttachmentView Map(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetGuid(2), r.GetString(3), r.GetString(4), r.GetInt64(5), r.GetString(6), r.GetInt16(7) == 2, r.GetInt16(8) == 2,
+        r.IsDBNull(9) ? null : r.GetString(9), r.GetInt64(10), r.GetFieldValue<DateTimeOffset>(11));
+    private const string Cols = $"{AT.Id}, {AT.SubjectKind}, {AT.SubjectId}, {AT.FileName}, {AT.ContentType}, {AT.SizeBytes}, {AT.Sha256}, {AT.Sensitivity}, {AT.State}, {AT.RemovalReason}, {AT.Revision}, {AT.CreatedAtUtc}";
+
+    private static async Task<List<(AttachmentView View, string StorageName, string? KeyId)>> Load(NpgsqlConnection conn, NpgsqlTransaction? tx, string where, Action<NpgsqlCommand> bind, bool forUpdate, CancellationToken ct)
+    {
+        var rows = new List<(AttachmentView, string, string?)>();
+        await using var q = new NpgsqlCommand($"SELECT {Cols}, {AT.StorageName}, {AT.KeyId} FROM {AT.Table} WHERE {where} ORDER BY {AT.CreatedAtUtc}, {AT.Id}{(forUpdate ? " FOR UPDATE" : "")}", conn, tx);
+        bind(q);
+        await using var r = await q.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) rows.Add((Map(r), r.GetString(12), r.IsDBNull(13) ? null : r.GetString(13)));
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<AttachmentView>> ListAsync(Guid companyId, string subjectKind, Guid subjectId, bool includeSensitive, bool includeRemoved, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        var rows = await Load(conn, null, $"{AT.SubjectKind} = @k AND {AT.SubjectId} = @s", c => { c.Parameters.AddWithValue("k", subjectKind); c.Parameters.AddWithValue("s", subjectId); }, false, ct);
+        return [.. rows.Select(x => x.View).Where(v => (includeSensitive || !v.IsSensitive) && (includeRemoved || !v.IsRemoved))];
+    }
+
+    public async Task<AttachmentView?> GetAsync(Guid companyId, Guid id, CancellationToken ct = default)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        return (await Load(conn, null, $"{AT.Id} = @id", c => c.Parameters.AddWithValue("id", id), false, ct)).Select(x => x.View).SingleOrDefault();
+    }
+
+    public async Task<ConfigResult<AttachmentView>> UploadAsync(Guid actor, Guid companyId, string? subjectKind, Guid? subjectId, string? fileName, string? contentType, byte[]? content, bool sensitive, CancellationToken ct = default)
+    {
+        var errors = new List<FieldError>();
+        if (subjectKind is null || !AttachmentSubjects.Kinds.ContainsKey(subjectKind)) errors.Add(new FieldError("subjectKind", "subject_kind_invalid"));
+        if (subjectId is null) errors.Add(new FieldError("subjectId", "required"));
+        var name = SanitizeFileName(fileName);
+        if (name is null) errors.Add(new FieldError("fileName", "file_name_invalid"));
+        var type = contentType?.Trim().ToLowerInvariant();
+        if (type is null || !Types.ContainsKey(type)) errors.Add(new FieldError("contentType", "content_type_not_allowed"));
+        if (content is null || content.Length == 0) errors.Add(new FieldError("file", "file_empty"));
+        else if (content.LongLength > options.MaxFileBytes) errors.Add(new FieldError("file", "file_too_large"));
+        else if (type is not null && Types.ContainsKey(type) && !LooksLike(type, content)) errors.Add(new FieldError("file", "content_type_mismatch"));
+        if (errors.Count > 0) return ConfigResult<AttachmentView>.Invalid(errors);
+
+        var id = Guid.NewGuid();
+        var storageName = AttachmentFileStore.NewName();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(content!));
+        string? keyId = null;
+        var written = false;
+        try
+        {
+            var r = await Mutate<bool>(companyId, async work =>
+            {
+                var (table, idCol) = AttachmentSubjects.Kinds[subjectKind!];
+                await using (var sq = new NpgsqlCommand($"SELECT 1 FROM {table} WHERE {idCol} = @s FOR SHARE", work.Connection, work.Transaction))
+                {
+                    sq.Parameters.AddWithValue("s", subjectId!.Value);
+                    if (await sq.ExecuteScalarAsync(ct) is null) throw Invalid("subjectId", "subject_not_found");
+                }
+                byte[] stored = content!;
+                if (sensitive) { stored = encryptor.Encrypt(content!, Context(companyId, id)); keyId = EnvelopeEncryptor.KeyIdOf(stored); }
+                store.Create(companyId, storageName, stored); written = true;                                      // before the commit: a failed commit removes it below
+                var now = Now;
+                await using (var ins = new NpgsqlCommand($"INSERT INTO {AT.Table} ({AT.Id}, {AT.SubjectKind}, {AT.SubjectId}, {AT.FileName}, {AT.ContentType}, {AT.SizeBytes}, {AT.Sha256}, {AT.Sensitivity}, {AT.StorageName}, {AT.KeyId}, {AT.State}, {AT.Revision}, {AT.CreatedBy}, {AT.CreatedAtUtc}, {AT.UpdatedAtUtc}) " +
+                    "VALUES (@id, @k, @s, @n, @t, @z, @h, @v, @sn, @key, 1, 1, @by, @now, @now)", work.Connection, work.Transaction))
+                {
+                    ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("k", subjectKind!); ins.Parameters.AddWithValue("s", subjectId!.Value); ins.Parameters.AddWithValue("n", name!); ins.Parameters.AddWithValue("t", type!);
+                    ins.Parameters.AddWithValue("z", (long)content!.Length); ins.Parameters.AddWithValue("h", hash); ins.Parameters.AddWithValue("v", (short)(sensitive ? 2 : 1)); ins.Parameters.AddWithValue("sn", storageName);
+                    ins.Parameters.AddWithValue("key", (object?)keyId ?? DBNull.Value); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
+                    await ins.ExecuteNonQueryAsync(ct);
+                }
+                await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.Uploaded, ActorUserId: actor, SubjectId: id, Detail: $"attachment uploaded kind={subjectKind} record={subjectId:N} size={content.Length} sha256={hash[..16]} sensitive={sensitive}"), ct);
+                return true;
+            }, ct);
+            if (!r.IsOk) { if (written) store.Delete(companyId, storageName); return ConfigResult<AttachmentView>.Fail(r.Status, r.Code!) with { Fields = r.Fields }; }
+        }
+        catch (EncryptionUnavailableException ex) { if (written) store.Delete(companyId, storageName); return ConfigResult<AttachmentView>.Fail(ConfigStatus.Conflict, ex.Code); }
+        catch { if (written) store.Delete(companyId, storageName); throw; }
+        return ConfigResult<AttachmentView>.Ok((await GetAsync(companyId, id, ct))!);
+    }
+
+    /// <summary>Reads the file. The hash of the plaintext is verified; a mismatch or a missing file is an integrity failure (audited) and nothing is returned. A sensitive download is audited.</summary>
+    public async Task<ConfigResult<AttachmentContent>> OpenAsync(Guid actor, Guid companyId, Guid id, bool allowSensitive, CancellationToken ct = default)
+    {
+        (AttachmentView View, string StorageName, string? KeyId) row;
+        await using (var conn = await resolver.OpenAsync(companyId, ct))
+            row = (await Load(conn, null, $"{AT.Id} = @id", c => c.Parameters.AddWithValue("id", id), false, ct)).SingleOrDefault();
+        if (row.View is null || row.View.IsRemoved) return ConfigResult<AttachmentContent>.Fail(ConfigStatus.NotFound, "attachment_not_found");
+        if (row.View.IsSensitive && !allowSensitive) return ConfigResult<AttachmentContent>.Fail(ConfigStatus.Forbidden, "forbidden");
+        byte[] plain;
+        try
+        {
+            var raw = store.Read(companyId, row.StorageName);
+            if (raw is null) return await Failure(actor, companyId, row.View, "file_missing", ct);
+            try { plain = row.View.IsSensitive ? encryptor.Decrypt(raw, Context(companyId, id)) : raw; }
+            catch (EncryptionUnavailableException ex) when (ex.Code == "encryption_authentication_failed") { return await Failure(actor, companyId, row.View, "decryption_failed", ct); }   // tampered or swapped ciphertext
+            catch (EncryptionUnavailableException ex) { return ConfigResult<AttachmentContent>.Fail(ConfigStatus.Conflict, ex.Code); }
+            catch (CryptographicException) { return await Failure(actor, companyId, row.View, "decryption_failed", ct); }
+        }
+        catch (EncryptionUnavailableException ex) { return ConfigResult<AttachmentContent>.Fail(ConfigStatus.Conflict, ex.Code); }
+        if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(plain)), row.View.Sha256, StringComparison.Ordinal)) return await Failure(actor, companyId, row.View, "hash_mismatch", ct);
+        if (row.View.IsSensitive)
+            await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.SensitiveDownloaded, ActorUserId: actor, SubjectId: id, Detail: $"sensitive attachment downloaded kind={row.View.SubjectKind} record={row.View.SubjectId:N}"), ct); return true; }, ct);
+        return ConfigResult<AttachmentContent>.Ok(new AttachmentContent(row.View, plain));
+    }
+
+    private async Task<ConfigResult<AttachmentContent>> Failure(Guid actor, Guid companyId, AttachmentView v, string reason, CancellationToken ct)
+    {
+        await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.IntegrityFailure, ActorUserId: actor, SubjectId: v.Id, Detail: $"attachment integrity failure reason={reason} kind={v.SubjectKind} record={v.SubjectId:N}"), ct); return true; }, ct);
+        return ConfigResult<AttachmentContent>.Fail(ConfigStatus.Conflict, "integrity_failure");
+    }
+
+    /// <summary>Removes an attachment from use (revision-fenced, a reason is required). The metadata row and the stored bytes are kept; the file is no longer readable through the application.</summary>
+    public async Task<ConfigResult<AttachmentView>> RemoveAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, string? reason, bool allowSensitive, CancellationToken ct = default)
+    {
+        if (expectedRevision is null) return ConfigResult<AttachmentView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
+        var why = reason?.Trim();
+        if (string.IsNullOrEmpty(why)) return ConfigResult<AttachmentView>.Invalid([new FieldError("reason", "required")]);
+        if (why.Length > 500) return ConfigResult<AttachmentView>.Invalid([new FieldError("reason", "too_long")]);
+        var r = await Mutate<bool>(companyId, async work =>
+        {
+            var cur = (await Load(work.Connection, work.Transaction, $"{AT.Id} = @id", c => c.Parameters.AddWithValue("id", id), true, ct)).SingleOrDefault();
+            if (cur.View is null) throw new Abort(ConfigStatus.NotFound, "attachment_not_found");
+            if (cur.View.IsSensitive && !allowSensitive) throw new Abort(ConfigStatus.Forbidden, "forbidden");
+            if (cur.View.IsRemoved) throw new Abort(ConfigStatus.Conflict, "already_removed");
+            if (cur.View.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.View.Revision);
+            await using (var upd = new NpgsqlCommand($"UPDATE {AT.Table} SET {AT.State} = 2, {AT.RemovedBy} = @by, {AT.RemovedAtUtc} = @now, {AT.RemovalReason} = @why, {AT.Revision} = {AT.Revision} + 1, {AT.UpdatedAtUtc} = @now WHERE {AT.Id} = @id", work.Connection, work.Transaction))
+            {
+                upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("by", actor); upd.Parameters.AddWithValue("now", Now); upd.Parameters.AddWithValue("why", why);
+                await upd.ExecuteNonQueryAsync(ct);
+            }
+            await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.Removed, ActorUserId: actor, SubjectId: id, Detail: $"attachment removed kind={cur.View.SubjectKind} record={cur.View.SubjectId:N} sensitive={cur.View.IsSensitive}"), ct);
+            return true;
+        }, ct);
+        if (!r.IsOk) return ConfigResult<AttachmentView>.Fail(r.Status, r.Code!, r.CurrentRevision) with { Fields = r.Fields };
+        return ConfigResult<AttachmentView>.Ok((await GetAsync(companyId, id, ct))!);
+    }
+
+    /// <summary>
+    /// Key rotation: re-wraps the data key of every ACTIVE sensitive attachment whose envelope is not under the active master key (the file bytes are replaced atomically, the key id recorded and audited).
+    /// The envelope itself names its key, so a crash between the file replacement and the database update leaves a readable file. Nothing is decrypted to disk and no plaintext is retained.
+    /// </summary>
+    public async Task<RewrapOutcome> RewrapAsync(Guid actor, Guid companyId, CancellationToken ct = default)
+    {
+        string active = encryptor.ActiveKeyId;
+        List<(AttachmentView View, string StorageName, string? KeyId)> rows;
+        await using (var conn = await resolver.OpenAsync(companyId, ct))
+            rows = await Load(conn, null, $"{AT.Sensitivity} = 2 AND {AT.State} = 1", _ => { }, false, ct);
+        int done = 0, skipped = 0, failed = 0;
+        foreach (var row in rows)
+        {
+            try
+            {
+                var raw = store.Read(companyId, row.StorageName);
+                if (raw is null) { failed++; continue; }
+                if (EnvelopeEncryptor.KeyIdOf(raw) == active && row.KeyId == active) { skipped++; continue; }
+                var rewrapped = encryptor.Rewrap(raw, Context(companyId, row.View.Id));
+                store.Replace(companyId, row.StorageName, rewrapped);
+                var r = await Mutate<bool>(companyId, async work =>
+                {
+                    await using var upd = new NpgsqlCommand($"UPDATE {AT.Table} SET {AT.KeyId} = @k, {AT.Revision} = {AT.Revision} + 1, {AT.UpdatedAtUtc} = @now WHERE {AT.Id} = @id AND {AT.State} = 1", work.Connection, work.Transaction);
+                    upd.Parameters.AddWithValue("k", active); upd.Parameters.AddWithValue("now", Now); upd.Parameters.AddWithValue("id", row.View.Id);
+                    if (await upd.ExecuteNonQueryAsync(ct) == 0) return false;
+                    await work.AppendAuditAsync(new AuditEventData(AttachmentAuditEvents.Rewrapped, ActorUserId: actor, SubjectId: row.View.Id, Detail: $"attachment key rewrapped from={row.KeyId ?? "none"} to={active}"), ct);
+                    return true;
+                }, ct);
+                if (r.IsOk && r.Value) done++; else failed++;
+            }
+            catch (Exception ex) when (ex is CryptographicException or EncryptionUnavailableException or IOException) { failed++; }
+        }
+        return new RewrapOutcome(done, skipped, failed);
+    }
+
+    private async Task<ConfigResult<T>> Mutate<T>(Guid companyId, Func<CompanyAuditedWork, Task<T>> work, CancellationToken ct)
+    {
+        try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
+        catch (Abort a) { return a.To<T>(); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }
+        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }
+    }
+}
+
+/// <summary>Permission-checked entry: <c>company.attachments.view|upload|delete</c>; sensitive files additionally need <c>company.attachmentssensitive.view|upload</c> (company-wide). A user without the sensitive permission neither sees nor opens nor removes a sensitive attachment.</summary>
+public sealed class AttachmentManagementService(AccessService access, AttachmentService attachments)
+{
+    private static ConfigResult<T> Denied<T>() => ConfigResult<T>.Fail(ConfigStatus.Forbidden, "forbidden");
+    private Task<bool> Can(Guid user, Guid company, string code, CancellationToken ct) => access.IsAllowedAsync(user, company, code, ScopeTarget.Company, ct);
+
+    public async Task<AttachmentCapabilities> CapabilitiesAsync(Guid user, Guid company, CancellationToken ct = default)
+    {
+        var e = await access.GetEffectivePermissionsAsync(user, company, ct);
+        var c = PermissionCatalog.Codes.AttachmentsView;
+        return new AttachmentCapabilities(e.HasCompanyWide(c), e.HasCompanyWide(PermissionCatalog.Codes.AttachmentsUpload), e.HasCompanyWide(PermissionCatalog.Codes.AttachmentsDelete),
+            e.HasCompanyWide(PermissionCatalog.Codes.AttachmentsSensitiveView), e.HasCompanyWide(PermissionCatalog.Codes.AttachmentsSensitiveUpload));
+    }
+
+    public async Task<ConfigResult<IReadOnlyList<AttachmentView>>> ListAsync(Guid user, Guid company, string subjectKind, Guid subjectId, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsView, ct)) return Denied<IReadOnlyList<AttachmentView>>();
+        var sensitive = await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveView, ct);
+        return ConfigResult<IReadOnlyList<AttachmentView>>.Ok(await attachments.ListAsync(company, subjectKind, subjectId, sensitive, includeRemoved: false, ct));
+    }
+
+    public async Task<ConfigResult<AttachmentView>> UploadAsync(Guid user, Guid company, string? subjectKind, Guid? subjectId, string? fileName, string? contentType, byte[]? content, bool sensitive, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsUpload, ct)) return Denied<AttachmentView>();
+        if (sensitive && !await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveUpload, ct)) return Denied<AttachmentView>();
+        return await attachments.UploadAsync(user, company, subjectKind, subjectId, fileName, contentType, content, sensitive, ct);
+    }
+
+    public async Task<ConfigResult<AttachmentContent>> OpenAsync(Guid user, Guid company, Guid id, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsView, ct)) return Denied<AttachmentContent>();
+        var sensitive = await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveView, ct);
+        var r = await attachments.OpenAsync(user, company, id, sensitive, ct);
+        // a sensitive file the caller may not read looks exactly like a missing one (no existence probing)
+        return r.Status == ConfigStatus.Forbidden ? ConfigResult<AttachmentContent>.Fail(ConfigStatus.NotFound, "attachment_not_found") : r;
+    }
+
+    /// <summary>Key rotation (re-wraps sensitive files under the active master key). Needs the sensitive-upload permission: it handles the keys of sensitive files.</summary>
+    public async Task<ConfigResult<RewrapOutcome>> RewrapAsync(Guid user, Guid company, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveUpload, ct)) return Denied<RewrapOutcome>();
+        return ConfigResult<RewrapOutcome>.Ok(await attachments.RewrapAsync(user, company, ct));
+    }
+
+    public async Task<ConfigResult<AttachmentView>> RemoveAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsDelete, ct)) return Denied<AttachmentView>();
+        var sensitive = await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveView, ct);
+        var r = await attachments.RemoveAsync(user, company, id, revision, reason, sensitive, ct);
+        return r.Status == ConfigStatus.Forbidden ? ConfigResult<AttachmentView>.Fail(ConfigStatus.NotFound, "attachment_not_found") : r;
+    }
+}

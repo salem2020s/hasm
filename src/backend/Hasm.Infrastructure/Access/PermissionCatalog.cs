@@ -153,6 +153,8 @@ public sealed partial class PermissionCatalog
         new("company.tax", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
+        new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
     ]);
 
     public static class Codes
@@ -276,6 +278,11 @@ public sealed partial class PermissionCatalog
         public const string PartyRolesConfigure = "company.partyroles.configure";
         public const string SalesRepsView = "company.salesreps.view";
         public const string SalesRepsConfigure = "company.salesreps.configure";
+        public const string AttachmentsView = "company.attachments.view";
+        public const string AttachmentsUpload = "company.attachments.upload";
+        public const string AttachmentsDelete = "company.attachments.delete";
+        public const string AttachmentsSensitiveView = "company.attachmentssensitive.view";
+        public const string AttachmentsSensitiveUpload = "company.attachmentssensitive.upload";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
