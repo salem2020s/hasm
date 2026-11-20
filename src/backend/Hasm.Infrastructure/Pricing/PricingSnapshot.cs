@@ -1,0 +1,50 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Hasm.Infrastructure.Pricing;
+
+/// <summary>
+/// The immutable snapshot of a priced line (SRS 8.4): it stores VALUES - the policy, the request, the selected price and discount with their opaque rule references and trace, the optional override and
+/// the result - never live references, so a later change of a price list or rule cannot re-price an issued document. <see cref="ContentHash"/> is a SHA-256 over the canonical (scale-normalized,
+/// culture-independent) JSON of everything else: TAMPER-EVIDENCE that Verify also cross-checks by recalculation, not authentication (that is the document store's and the audit chain's job).
+/// </summary>
+public sealed record PricingSnapshot(string Version, PricingPolicy Policy, PricingRequest Request, ResolvedPricing Resolved, PriceOverride? Override, PricingResult Result, string ContentHash);
+
+public static class PricingSnapshots
+{
+    public const string CurrentVersion = "pricing-snapshot-v1";
+
+    private sealed class CanonicalDecimal : JsonConverter<decimal>
+    {
+        public override decimal Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options) => decimal.Parse(reader.GetString()!, CultureInfo.InvariantCulture);
+        public override void Write(Utf8JsonWriter writer, decimal value, JsonSerializerOptions options) =>
+            writer.WriteStringValue((value / 1.0000000000000000000000000000m).ToString(CultureInfo.InvariantCulture));
+    }
+    private static readonly JsonSerializerOptions Canonical = new() { Converters = { new CanonicalDecimal() } };
+
+    private static string Hash(string version, PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over, PricingResult result) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { Version = version, Policy = policy, Request = request, Resolved = resolved, Override = over, Result = result }, Canonical))).ToLowerInvariant();
+
+    /// <summary>Calculates and seals, keeping read-only copies of the trace.</summary>
+    public static PricingSnapshot Create(PricingPolicy policy, PricingRequest request, ResolvedPricing resolved, PriceOverride? over = null)
+    {
+        var result = PricingEngine.Calculate(policy, request, resolved, over);
+        var copy = resolved with { Trace = resolved.Trace.ToArray().AsReadOnly() };
+        return new(CurrentVersion, policy, request, copy, over, result, Hash(CurrentVersion, policy, request, copy, over, result));
+    }
+
+    /// <summary>True only when the version is known, the stored hash matches the stored content AND recalculating from the stored values reproduces the stored result exactly.</summary>
+    public static bool Verify(PricingSnapshot snapshot)
+    {
+        if (snapshot is null || snapshot.Version != CurrentVersion || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved is null || snapshot.Result is null) return false;
+        if (!string.Equals(snapshot.ContentHash, Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, snapshot.Result), StringComparison.Ordinal)) return false;
+        try
+        {
+            var recomputed = PricingEngine.Calculate(snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override);
+            return string.Equals(Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, recomputed), snapshot.ContentHash, StringComparison.Ordinal);
+        }
+        catch (PricingException) { return false; }
+    }
+}
