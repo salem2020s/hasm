@@ -384,6 +384,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     /// <summary>
     /// Key rotation: re-wraps the data key of every ACTIVE sensitive attachment whose envelope is not under the active master key (the file bytes are replaced atomically, the key id recorded and audited).
     /// The envelope itself names its key, so a crash between the file replacement and the database update leaves a readable file. Nothing is decrypted to disk and no plaintext is retained.
+    /// Removed attachments keep their bytes and key id and are only COUNTED (<see cref="RewrapOutcome.RetainedUnderOtherKeys"/>, a point-in-time count taken after the loop), so a key they still need is never reported as retirable.
     /// </summary>
     public async Task<RewrapOutcome> RewrapAsync(Guid actor, Guid companyId, CancellationToken ct = default)
     {
