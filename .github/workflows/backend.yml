@@ -213,7 +213,7 @@ jobs:
                 # Phase 3.9C slice 2 party import adapter: creation through the party service, queued proposals, validation and conflicts, atomic rollback, stale plan.
                 "PartyImportTests": 4,
                 # Phase 3.11 slice 2b pricing configuration: policy versions with company-configurable precedences, price lists, entries, discount rules, quote and snapshot, authorization (company migration 0026, system migration 0027).
-                "PricingConfigTests": 6, "PricingApiTests": 3,
+                "PricingConfigTests": 6, "PricingApiTests": 5,
                 # Phase 3.11 customer groups (company migration 0027): group master, one-group-per-customer assignment, customer-or-group scope, regroup concurrency, server-derived quote group; HTTP API.
                 "CustomerGroupTests": 5, "CustomerGroupApiTests": 1,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).

@@ -1,5 +1,6 @@
 using System.Net;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Inventory;
@@ -126,6 +127,80 @@ public class PricingApiTests : HttpApiTestBase
         var noPrice = await Send(HttpMethod.Post, $"{Base}/quote", new { date = "2025-01-01", currency = "JOD", itemId = item, unitId = unit, quantity = 1 }, cookie);   // before the list is valid
         Assert.Equal(HttpStatusCode.BadRequest, noPrice.Status);
         Assert.Contains("no_price", noPrice.Body);
+    }
+
+    [PostgresFact]
+    public async Task Another_company_cannot_read_or_change_this_companys_pricing_and_a_company_id_in_the_request_is_ignored()
+    {
+        await StartApi();
+        var (item, unit, _) = await Catalog();
+        var a = await SignIn(Admin);
+        var list = await Send(HttpMethod.Post, $"{Base}/price-lists", new { code = "SHARED", nameAr = "قائمة", priority = 1, currency = "JOD", validFrom = "2026-01-01" }, a);
+        Assert.Equal(HttpStatusCode.OK, list.Status);
+        var listId = list.Json.GetProperty("id").GetGuid();
+        var entry = await Send(HttpMethod.Post, $"{Base}/price-lists/{listId}/entries", new { itemId = item, unitId = unit, minQuantity = 0, unitPrice = 10 }, a);
+        Assert.Equal(HttpStatusCode.OK, entry.Status);
+        var entryId = entry.Json.GetProperty("id").GetGuid();
+
+        // a second company with its own administrator, signed in and with ITS company selected
+        var other = await ReadyCompany();
+        Credentials.Set(other.Id, new CompanyCredential(CompanyRuntimeRole.NameFor(other.PhysicalDatabaseName), "unused-in-single-principal-tests"));   // the test resolver reaches every company with the single test principal
+        var otherAdmin = await NewAdminOf(other);
+        var b = await SignIn(otherAdmin, selectCompany: false);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/api/v1/session/company", new { companyId = other.Id }, b)).Status);
+
+        var theirs = await Send(HttpMethod.Get, $"{Base}/price-lists", cookie: b);
+        Assert.Equal(HttpStatusCode.OK, theirs.Status);
+        Assert.Equal(0, theirs.Json.GetProperty("priceLists").GetArrayLength());                      // nothing of company A is listed
+        Assert.DoesNotContain(listId.ToString(), theirs.Body);
+        var theirEntries = await Send(HttpMethod.Get, $"{Base}/price-lists/{listId}/entries", cookie: b);        // an unknown list id lists nothing (200 with an empty array by design), never company A's entries
+        Assert.Equal(HttpStatusCode.OK, theirEntries.Status);
+        Assert.Equal(0, theirEntries.Json.GetProperty("entries").GetArrayLength());
+        Assert.DoesNotContain(entryId.ToString(), theirEntries.Body);
+        Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/price-lists/{listId}", new { nameAr = "اختراق", priority = 9, validFrom = "2026-01-01" }, b, ifMatch: "\"1\"")).Status);
+        Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/entries/{entryId}", new { unitPrice = 1 }, b, ifMatch: "\"1\"")).Status);
+
+        // a company id in the body or query is ignored: the write lands in company B, the same code is free there
+        var mine = await Send(HttpMethod.Post, $"{Base}/price-lists?companyId={Company.Id}", new { companyId = Company.Id, code = "SHARED", nameAr = "قائمة ب", priority = 1, currency = "JOD", validFrom = "2026-01-01" }, b);
+        Assert.Equal(HttpStatusCode.OK, mine.Status);
+        Assert.NotEqual(listId, mine.Json.GetProperty("id").GetGuid());
+
+        // company A is unchanged: one list, still revision 1, the entry still priced 10
+        var aLists = await Send(HttpMethod.Get, $"{Base}/price-lists", cookie: a);
+        Assert.Equal(1, aLists.Json.GetProperty("priceLists").GetArrayLength());
+        Assert.DoesNotContain(mine.Json.GetProperty("id").GetGuid().ToString(), aLists.Body);
+        var aEntries = await Send(HttpMethod.Get, $"{Base}/price-lists/{listId}/entries", cookie: a);
+        Assert.Equal(10m, aEntries.Json.GetProperty("entries")[0].GetProperty("unitPrice").GetDecimal());
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/price-lists/{listId}", new { nameAr = "قائمة", priority = 1, validFrom = "2026-01-01" }, a, ifMatch: "\"1\"")).Status);   // revision 1 was never consumed by company B
+    }
+
+    [PostgresFact]
+    public async Task Two_simultaneous_edits_of_one_price_list_or_entry_with_the_same_revision_let_exactly_one_win()
+    {
+        await StartApi();
+        var (item, unit, _) = await Catalog();
+        var cookie = await SignIn(Admin);
+        var list = await Send(HttpMethod.Post, $"{Base}/price-lists", new { code = "RACE", nameAr = "قائمة", priority = 1, currency = "JOD", validFrom = "2026-01-01" }, cookie);
+        var listId = list.Json.GetProperty("id").GetGuid();
+        var entry = await Send(HttpMethod.Post, $"{Base}/price-lists/{listId}/entries", new { itemId = item, unitId = unit, minQuantity = 0, unitPrice = 10 }, cookie);
+        var entryId = entry.Json.GetProperty("id").GetGuid();
+
+        var listRace = await Task.WhenAll(
+            Send(HttpMethod.Put, $"{Base}/price-lists/{listId}", new { nameAr = "أ", priority = 2, validFrom = "2026-01-01" }, cookie, ifMatch: "\"1\""),
+            Send(HttpMethod.Put, $"{Base}/price-lists/{listId}", new { nameAr = "ب", priority = 3, validFrom = "2026-01-01" }, cookie, ifMatch: "\"1\""));
+        Assert.Equal(1, listRace.Count(r => r.Status == HttpStatusCode.OK));
+        Assert.Equal(1, listRace.Count(r => r.Status == HttpStatusCode.PreconditionFailed));
+        Assert.Equal("\"2\"", Etag(listRace.Single(r => r.Status == HttpStatusCode.OK)));                  // one revision step, not two
+
+        var entryRace = await Task.WhenAll(
+            Send(HttpMethod.Put, $"{Base}/entries/{entryId}", new { unitPrice = 11 }, cookie, ifMatch: "\"1\""),
+            Send(HttpMethod.Put, $"{Base}/entries/{entryId}", new { unitPrice = 12 }, cookie, ifMatch: "\"1\""));
+        Assert.Equal(1, entryRace.Count(r => r.Status == HttpStatusCode.OK));
+        Assert.Equal(1, entryRace.Count(r => r.Status == HttpStatusCode.PreconditionFailed));
+        var winner = entryRace.Single(r => r.Status == HttpStatusCode.OK).Json.GetProperty("unitPrice").GetDecimal();
+        var stored = (await Send(HttpMethod.Get, $"{Base}/price-lists/{listId}/entries", cookie: cookie)).Json.GetProperty("entries")[0];
+        Assert.Equal(winner, stored.GetProperty("unitPrice").GetDecimal());                                 // the stored price is the winner's, never a mix
+        Assert.Equal(2L, stored.GetProperty("revision").GetInt64());
     }
 
     [PostgresFact]
