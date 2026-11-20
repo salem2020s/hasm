@@ -37,3 +37,17 @@ Apply both patches (PR #51 first, then the second as a separate reviewed commit 
 ## If approval is not given
 
 The security gate stays failing and is not bypassed. Frontend/desktop/branding changes (PR #53 and later UI phases) cannot reach `main` with green required checks; backend-only work is unaffected. Interim alternatives are rejected: pin-hash updates per PR (repeated manual policy edits), disabling the job, or broadening the exception.
+
+## Update 2026-11-20: three patches, one approval
+
+After the independent review of the COMBINED effect (`COMBINED-REVIEW.md`), the proposal is three inert patches applied in this order on one protected PR (no other file touched):
+
+1. `PICOMATCH-RETIREMENT.patch` (PR #51).
+2. `ARTIFACT-PIN-RETIREMENT.patch` (this branch).
+3. `RETIREMENT-HARDENING-ADDENDUM.patch` (this branch): a hash-bound retirement record asserted by the audit CLI and the inspector, six more regression tests, corrected comments and a retirement note in `docs/SECURITY-PICOMATCH.md`.
+
+Verified: all three apply cleanly in order to `main` (fe44321); `node --test tools/verify/` passes 68/68, zero skips. `npm audit` on the current frontend lockfile reports 0 vulnerabilities (2026-11-20), consistent with the withdrawal.
+
+**Validation plan after approval:** apply the three patches as three reviewed commits; run the fixtures; push; verify the real Node 24/Linux audit CLI result (strict mode, zero exceptions, exit 0) and the Windows artifact inspection on the exact head; independent full-diff review of the applied PR; verify the head with `verify-head`; merge only on the owner's explicit instruction with the head SHA pinned; then update every dependent branch by merging `main` into it and re-run its checks.
+
+**Decision requested (approval A, once):** apply these three patches. It authorizes no exception, no renewal, no skipped or optional job. Separately recorded for the owner (not part of this change): add a mandatory Rust dependency audit job; optionally bind the audit and inspection artifacts to one commit and record the tree hashes of the two bundler/desktop config files.

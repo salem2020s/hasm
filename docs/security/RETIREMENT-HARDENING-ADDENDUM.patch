@@ -1,0 +1,155 @@
+diff --git a/docs/SECURITY-PICOMATCH.md b/docs/SECURITY-PICOMATCH.md
+index 5e69a79..8a15481 100644
+--- a/docs/SECURITY-PICOMATCH.md
++++ b/docs/SECURITY-PICOMATCH.md
+@@ -36,3 +36,7 @@ The owner explicitly conditionally approved the narrow six-record development-on
+ ## Resume policy
+ 
+ Preserve PR48/49 and continue independently safe Release1 work. Their required security gates remain mandatory; do not merge either while failed. Revisit this investigation only for a new official patched release or a new independently validated replacement/security patch, not by repeating these rejected attempts. Then use one isolated shared fix from current verified main, verify actual code safety and full consumer/frontend/E2E/desktop regressions, perform independent review and exact-head CI, merge normally, and merge updated main into both feature branches without rewriting history. Until then, main is unchanged and there is no shared fix to propagate.
++
++## Retirement (owner-approved change; supersedes the conditional exception and D-046 once applied)
++
++GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18; the full frontend audit reports zero findings. The policy status becomes `RETIRED-ADVISORY-WITHDRAWN`: the gate permits ZERO exceptions and every High or Critical finding blocks (including this advisory if it is ever reinstated), with all schema, count and exit-status validation retained. The retirement record is bound by a hash (`retiredHash`); the exception-era frozen source-tree pins of the artifact inspector are lifted only for that exact record. The forbidden-module blacklist on the real production graph, the written-asset inventory, the same-commit manifest and the installer payload comparison stay in force. Residual points recorded for the owner: the Rust crates are not audited by any job (an owner decision on `cargo audit` is open), and the audit job and the inspection jobs are bound to one commit only through the exact-head verification (`verify-head`).
+diff --git a/tools/verify/dependency-audit-policy.cjs b/tools/verify/dependency-audit-policy.cjs
+index 4aba340..5250235 100644
+--- a/tools/verify/dependency-audit-policy.cjs
++++ b/tools/verify/dependency-audit-policy.cjs
+@@ -14,6 +14,13 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
+   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+ const scopeHash = policy => createHash("sha256").update(JSON.stringify(canonical(Object.fromEntries(
+   ["owner", "repository", "advisory", "source", "vulnerableRange", "expiresAt", "trees", "findings"].map(key => [key, policy[key]]))))).digest("hex");
++// The retirement is a reviewed, owner-approved state. Its identifying fields are bound to a hash so that editing the status to the retired value (which also lifts the frozen-tree pins) cannot be done together
++// with a different owner, approver, repository or advisory without failing here. The hash cannot make the edit itself impossible: review of tools/verify/** remains the control (see docs/security).
++const RETIRED_STATUS = "RETIRED-ADVISORY-WITHDRAWN";
++const RETIRED_SCOPE = "772acd5353b772d972277b38c7c592f1e0f2ed603ed9786d5cd2ad7c543f3f68";
++const retiredHash = policy => createHash("sha256").update(JSON.stringify(canonical(Object.fromEntries(
++  ["status", "owner", "approvedBy", "repository", "advisory"].map(key => [key, policy[key]]))))).digest("hex");
++function assertRetirement(policy) { if (retiredHash(policy) !== RETIRED_SCOPE) throw new Error("Retirement record differs from the owner-approved retirement"); }
+ const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+   [...a].sort().every((value, index) => value === [...b].sort()[index]);
+ const range = value => typeof value === "string" ? value.replace(/\s/g, "") : "";
+@@ -140,7 +147,7 @@ function verifyProofInputs(policy, root, readGit = args => execFileSync("git", a
+       prior.approvedBy !== policy.approvedBy || prior.approvedAt !== policy.approvedAt || prior.activationEvidence !== null)
+     throw new Error("Proof does not preserve the conditionally approved inactive policy");
+ }
+-module.exports = { evaluate, scopeHash, localContext, verifyActivationEvidence, verifyProofInputs };
++module.exports = { evaluate, scopeHash, localContext, verifyActivationEvidence, verifyProofInputs, retiredHash, assertRetirement, RETIRED_SCOPE, RETIRED_STATUS };
+ 
+ async function main() {
+   if (process.argv.length !== 4 || process.argv[2] !== "--root") throw new Error("Usage: node dependency-audit-policy.cjs --root <repository>");
+@@ -158,6 +165,7 @@ async function main() {
+   const report = JSON.parse(audit.stdout);
+   const lock = JSON.parse(fs.readFileSync(path.join(frontend, "package-lock.json"), "utf8"));
+   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "picomatch-exception.json"), "utf8"));
++  if (policy.status === RETIRED_STATUS) assertRetirement(policy);
+   let advisory = null;
+   try {
+     advisory = await fetchJson(`https://api.github.com/advisories/${ID}`);
+diff --git a/tools/verify/dependency-audit-policy.test.cjs b/tools/verify/dependency-audit-policy.test.cjs
+index e68c83c..39068ff 100644
+--- a/tools/verify/dependency-audit-policy.test.cjs
++++ b/tools/verify/dependency-audit-policy.test.cjs
+@@ -3,7 +3,7 @@
+ const test = require("node:test");
+ const assert = require("node:assert/strict");
+ const proposed = require("./picomatch-exception.json");
+-const { evaluate, scopeHash, verifyActivationEvidence, verifyProofInputs } = require("./dependency-audit-policy.cjs");
++const { evaluate, scopeHash, verifyActivationEvidence, verifyProofInputs, retiredHash, assertRetirement, RETIRED_SCOPE } = require("./dependency-audit-policy.cjs");
+ const copy = value => structuredClone(value);
+ const ID = proposed.advisory;
+ function counts(report) {
+@@ -163,3 +163,38 @@ test("retired policy preserves high audit threshold and full lower-severity disc
+   counts(f.report); f.exit = 0;
+   assert.deepEqual(run(f), { ok: true, excepted: [], failures: [] });
+ });
++
++// ---- review addendum: retirement hardening ----
++test("only the exact retired status takes the strict path: every variant with a clean audit and the affected matcher still fails closed", () => {
++  for (const status of ["retired-advisory-withdrawn", "RETIRED", "", null, undefined]) {
++    const f = fixture(); f.policy.status = status; f.report.vulnerabilities = {}; counts(f.report); f.exit = 0; f.context.advisory = null;
++    const r = run(f); assert.equal(r.ok, false, String(status)); assert.deepEqual(r.excepted, []);
++  }
++});
++test("retired policy with High findings and a failing exit returns not ok, no exception and one failure per package", () => {
++  const f = fixture(); f.policy.status = "RETIRED-ADVISORY-WITHDRAWN";
++  const r = run(f);
++  assert.equal(r.ok, false); assert.deepEqual(r.excepted, []);
++  assert.deepEqual(r.failures.map(x => x.split(":")[0]).sort(), Object.keys(f.report.vulnerabilities).sort());
++});
++test("the committed policy file is the reviewed retirement record: scope hash unchanged and the retirement hash pinned", () => {
++  assert.equal(scopeHash(proposed), "974e885031fcfca8eff952c48b7791be9cacc9d934ddafdfaae264252e3eaa23");
++  assert.equal(proposed.status, "RETIRED-ADVISORY-WITHDRAWN");
++  assert.equal(retiredHash(proposed), RETIRED_SCOPE);
++  assert.doesNotThrow(() => assertRetirement(proposed));
++  for (const change of [{ owner: "someone" }, { approvedBy: "someone" }, { repository: "x/y" }, { advisory: "GHSA-0000-0000-0000" }, { status: "RETIRED" }])
++    assert.throws(() => assertRetirement({ ...copy(proposed), ...change }), /Retirement record differs/);
++});
++test("the policy validator accepts exactly the three known statuses", () => {
++  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "validate-picomatch-policy.cjs"), "utf8");
++  assert.match(source, /\["CONDITIONALLY-APPROVED-INACTIVE", "APPROVED", "RETIRED-ADVISORY-WITHDRAWN"\]\.includes\(policy\.status\)/);
++});
++test("no security gate is optional: required checks keep dependency-scan and both picomatch jobs and no workflow tolerates a failure", () => {
++  const fs = require("node:fs"), path = require("node:path");
++  const root = path.join(__dirname, "..", "..");
++  const required = JSON.parse(fs.readFileSync(path.join(root, ".github/required-checks.json"), "utf8")).checks.map(c => c.name);
++  for (const name of ["dependency-scan", "picomatch-policy-validation", "picomatch-artifact-inspection", "secret-scan", "ci-guard"]) assert.ok(required.includes(name), name);
++  for (const file of fs.readdirSync(path.join(root, ".github/workflows")).filter(f => f.endsWith(".yml")))
++    assert.doesNotMatch(fs.readFileSync(path.join(root, ".github/workflows", file), "utf8"), /continue-on-error:\s*true/i, file);
++  assert.doesNotMatch(fs.readFileSync(path.join(root, ".github/workflows/verification.yml"), "utf8"), /owner-approved exact development exception/);
++});
+diff --git a/tools/verify/inspect-production-artifacts.cjs b/tools/verify/inspect-production-artifacts.cjs
+index 51c7329..6498099 100644
+--- a/tools/verify/inspect-production-artifacts.cjs
++++ b/tools/verify/inspect-production-artifacts.cjs
+@@ -6,7 +6,7 @@ const path = require("node:path");
+ const { pathToFileURL } = require("node:url");
+ const { createHash } = require("node:crypto");
+ const { execFileSync, spawnSync } = require("node:child_process");
+-const { scopeHash } = require("./dependency-audit-policy.cjs");
++const { scopeHash, assertRetirement, RETIRED_STATUS: POLICY_RETIRED } = require("./dependency-audit-policy.cjs");
+ const SCOPE = "974e885031fcfca8eff952c48b7791be9cacc9d934ddafdfaae264252e3eaa23";
+ const forbiddenModule = id => /(?:^|\/)node_modules\/(?:picomatch|fdir|tinyglobby|vite|vitest|@vitejs\/plugin-react)(?:\/|$)/i.test(id.replaceAll("\\", "/"));
+ const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+@@ -57,8 +57,9 @@ function expectedNsisPayload(compiled) {
+   return { bytes: expected, markerOffset: offset };
+ }
+ // Exception-era control: while an exception is in force (or its state is anything but the explicit retirement) the inspected frontend/desktop/branding inputs must be
+-// EXACTLY the audited trees. After the advisory's retirement (strict full audit, zero exceptions, see docs/security/CONSOLIDATED-SECURITY-PROPOSAL.md) the strict audit passes or
+-// fails for ANY tree on its own, so the pin has no remaining purpose and would only block every legitimate change of those paths. Any other status, a missing status
++// EXACTLY the audited trees. After the advisory's retirement (strict full audit, zero exceptions, see docs/security/CONSOLIDATED-SECURITY-PROPOSAL.md) the strict audit decides on the
++// dependencies of whatever tree is built, and this inspection still enforces the forbidden-module blacklist on the real production graph, the written-asset inventory, the same-commit manifest and the installer payload
++// comparison, so the exact-tree pin has no remaining purpose and would only block every legitimate change of those paths. Any other status, a missing status
+ // or a different spelling keeps the pins (fail closed). Every other inspection (forbidden modules, written assets, installer payload bytes) is unchanged.
+ const RETIRED_STATUS = "RETIRED-ADVISORY-WITHDRAWN";
+ function frozenTreePins(policy) { return policy.status === RETIRED_STATUS ? {} : policy.trees; }
+@@ -76,6 +77,7 @@ async function main() {
+   const root = path.resolve(process.argv[4]);
+   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "picomatch-exception.json"), "utf8"));
+   assert.equal(scopeHash(policy), SCOPE, "Approved inputs changed");
++  if (policy.status === POLICY_RETIRED) assertRetirement(policy);   // the pins are lifted only for the exact, owner-approved retirement record
+   assertFrozenTrees(policy, tree => execFileSync("git", ["rev-parse", `HEAD:${tree}`], { cwd: root, encoding: "utf8" }).trim());
+   const app = path.join(root, "src/frontend/apps/web"), dist = path.join(app, "dist");
+   const config = JSON.parse(fs.readFileSync(path.join(root, "src/desktop/src-tauri/tauri.conf.json"), "utf8"));
+diff --git a/tools/verify/inspect-production-artifacts.test.cjs b/tools/verify/inspect-production-artifacts.test.cjs
+index 0acbca0..d916dfe 100644
+--- a/tools/verify/inspect-production-artifacts.test.cjs
++++ b/tools/verify/inspect-production-artifacts.test.cjs
+@@ -2,6 +2,7 @@
+ const test = require("node:test");
+ const assert = require("node:assert/strict");
+ const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload, frozenTreePins, assertFrozenTrees } = require("./inspect-production-artifacts.cjs");
++const { assertRetirement } = require("./dependency-audit-policy.cjs");
+ test("production inventory rejects each reviewed tool including nested and Windows paths", () => {
+   for (const name of ["picomatch", "fdir", "tinyglobby", "vite", "vitest", "@vitejs/plugin-react"])
+     for (const prefix of ["/workspace/node_modules/", "C:\\app\\node_modules\\vite\\node_modules\\"])
+@@ -55,3 +56,10 @@ test("main() delegates the pin check to assertFrozenTrees and no longer carries
+   assert.match(source, /assertFrozenTrees\(policy, tree => execFileSync\("git", \["rev-parse", `HEAD:\$\{tree\}`\]/);
+   assert.doesNotMatch(source, /for \(const \[tree, expected\] of Object\.entries\(policy\.trees\)\)/);
+ });
++
++test("the inspector lifts the pins only after verifying the reviewed retirement record", () => {
++  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
++  assert.match(source, /if \(policy\.status === POLICY_RETIRED\) assertRetirement\(policy\);/);
++  assert.ok(source.indexOf("assertRetirement(policy)") < source.indexOf("assertFrozenTrees(policy, tree =>"));
++  assert.throws(() => assertRetirement({ status: "RETIRED-ADVISORY-WITHDRAWN", owner: "attacker" }), /Retirement record differs/);
++});
