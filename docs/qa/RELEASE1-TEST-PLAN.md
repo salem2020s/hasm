@@ -1,6 +1,6 @@
 # HASM - Release 1 independent QA test plan (sections B, C, D of `docs/RELEASE1-ACCEPTANCE.md`)
 
-Status: QA planning record (documentation only), written against `main` = `219af25` (PR #68). Author: independent QA agent (Agent C). Nothing here changes scope or requirements. "Covered" means an automated test exists in the repository; it does NOT mean it was executed by this author (no .NET SDK and no PostgreSQL on 5433 were available in the QA environment). Tests are named by file and method under `tests/`.
+Status: QA planning record (documentation only), written against `main` = `3bbf66a` (PR #69 merged: pricing API and shared screens, 3.11 slice 2c). Author: independent QA agent (Agent C). Nothing here changes scope or requirements. "Covered" means an automated test exists in the repository; it does NOT mean it was executed by this author (no .NET SDK and no PostgreSQL on 5433 were available in the QA environment). Tests are named by file and method under `tests/`.
 
 ## 1. Section B - mandatory scenarios (SRS 21)
 
@@ -24,7 +24,7 @@ Status: QA planning record (documentation only), written against `main` = `219af
 | Company DB is the source of truth | `CompanyRuntimeIsolationTests`, `CompanyProvisioningTests` | Re-verify after backup/restore drill |
 | At most one financial/stock effect per business event | `StockPostingTests.Simultaneous_requests...`, `StockReversalTests.Simultaneous_reversal_requests_reverse_exactly_once`, `JournalTests.Posting_twice_is_idempotent_and_parallel_posts...`, `FiscalClosingTests.A_year_cannot_be_closed_twice_even_in_parallel...`, `ImportApprovalTests.Concurrent_applications_apply_the_batch_exactly_once`, `NegativeStockTests.Concurrent_receipts_settle_exactly_once...` | Commercial documents, vouchers, bank: not built |
 | Posted documents never changed or deleted | `JournalTests` (SQL-level), `StockPostingTests.Posting_records_are_append_only...`, `StockReversalTests...record_is_append_only` | Same for future document families |
-| No cross-company visibility | See 21.3; `BranchAccessTests`, `WarehouseAccessTests`, `InventoryCostingTests.Another_company_shares_nothing...`, `TaxApiTests`/`PricingApiTests` company selection | Pricing API has no explicit cross-company HTTP test (company DB is per company, so risk is low; add one test) |
+| No cross-company visibility | See 21.3; `BranchAccessTests`, `WarehouseAccessTests`, `InventoryCostingTests.Another_company_shares_nothing...`, `TaxApiTests`/`PricingApiTests` company selection | Pricing API (merged, PR #69) has no explicit cross-company HTTP test (company DB is per company, so risk is low; add one test) |
 | No posting into Final Closed periods; no approval bypass by automatic tasks | `JournalTests` period tests, `Automatic_entries_follow_the_same_policies...`, `StockPostingHardeningTests.Closed_periods_are_refused...` | Scheduler/recurring: not built |
 | No loss of drafts on licence expiry or disconnection | none found | Licensing (4.2) not built; add expiry and disconnect tests |
 | Separated state tracks for sales/purchasing documents | none | Phases 3.15-3.16 |
@@ -36,7 +36,7 @@ Status: QA planning record (documentation only), written against `main` = `219af
 | Category | Present | Missing |
 |----------|---------|---------|
 | Unit | `tests/unit/Hasm.Infrastructure.Tests` (~70 files), frontend vitest (441 tests on the pricing branch) | - |
-| Integration (PostgreSQL, exact counts) | `Hasm.Database.IntegrationTests`, registry in `.github/workflows/backend.yml` (1022 on main; raise-only) | CI-only here; local run needs 5433 cluster |
+| Integration (PostgreSQL, exact counts) | `Hasm.Database.IntegrationTests`, registry in `.github/workflows/backend.yml` (1025 on main after PR #69; raise-only) | CI-only here; local run needs 5433 cluster |
 | End-to-end Web and Desktop | `src/frontend/e2e/smoke.spec.ts` only; `desktop.yml` builds a debug binary | Full-stack E2E per module; desktop smoke beyond build (traceability 4.0 says open) |
 | General ledger | `JournalTests`, `LedgerReportTests`, `FinancialStatementTests`, `FiscalClosingTests`, `YearEndHardeningTests` | - |
 | Costing | `CostingMathTests`, `InventoryCostingTests`, `NegativeStockTests` | Back-dated recalculation (3.8D blocked) |
