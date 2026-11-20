@@ -20,6 +20,11 @@ public static class ImportEndpoints
         var limits = ImportOptions.FromConfiguration(app.Configuration);
         var g = app.MapGroup("/api/v1/company/imports").RequireAuthorization();
         g.MapGet("/adapters", Adapters);
+        g.MapGet("/templates", ListTemplates);
+        g.MapGet("/templates/{adapter}/{name}/history", TemplateHistory);
+        g.MapPost("/templates/{adapter}/{name}/retire", RetireTemplate).WithMetadata(new BodyLimit(4 * 1024));
+        g.MapPost("/{id:guid}/mapping/template", SaveTemplate).WithMetadata(new BodyLimit(4 * 1024));
+        g.MapPost("/{id:guid}/mapping/apply-template", ApplyTemplate).WithMetadata(new BodyLimit(4 * 1024));
         g.MapGet("/settings", GetSettings);
         g.MapPut("/settings", PutSettings).WithMetadata(new BodyLimit(4 * 1024));
         g.MapPost("/maintenance/run", Maintain);
@@ -163,6 +168,47 @@ public static class ImportEndpoints
             }),
             options = new { decimalSeparators = MappingOptions.Decimals, thousandsSeparators = MappingOptions.Thousands, dateFormats = MappingOptions.DateFormats },
         });
+    }
+
+    public sealed record TemplateSave(string? Name, long? ExpectedVersion);
+    public sealed record TemplateName(string? Name);
+    public sealed record TemplateRetire(long? ExpectedVersion);
+
+    private static object TemplateBody(ImportTemplateView t) => new { id = t.Id, adapter = t.Adapter, name = t.Name, version = t.Version, isRetired = t.IsRetired, content = t.Content, createdAtUtc = t.CreatedAtUtc };
+
+    private static async Task<IResult> ListTemplates(string? adapter, HttpContext http, AccessService access, ImportTemplateService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.ListAsync(actor!.UserId, actor.CompanyId, adapter, http.RequestAborted), v => new { templates = v.Select(TemplateBody) });
+    }
+
+    private static async Task<IResult> TemplateHistory(string adapter, string name, HttpContext http, AccessService access, ImportTemplateService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.HistoryAsync(actor!.UserId, actor.CompanyId, adapter, name, http.RequestAborted), v => new { versions = v.Select(TemplateBody) });
+    }
+
+    private static async Task<IResult> SaveTemplate(Guid id, TemplateSave? body, HttpContext http, AccessService access, ImportTemplateService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.SaveFromBatchAsync(actor!.UserId, actor.CompanyId, id, body?.Name, body?.ExpectedVersion, http.RequestAborted), TemplateBody);
+    }
+
+    private static async Task<IResult> ApplyTemplate(Guid id, TemplateName? body, HttpContext http, AccessService access, ImportTemplateService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.ApplyAsync(actor!.UserId, actor.CompanyId, id, body?.Name, http.RequestAborted), v => new { name = v.Name, version = v.Version, mapping = v.Mapping, unmatched = v.Unmatched });
+    }
+
+    private static async Task<IResult> RetireTemplate(string adapter, string name, TemplateRetire? body, HttpContext http, AccessService access, ImportTemplateService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.RetireAsync(actor!.UserId, actor.CompanyId, adapter, name, body?.ExpectedVersion, http.RequestAborted), TemplateBody);
     }
 
     private static async Task<IResult> SuggestMapping(Guid id, HttpContext http, AccessService access, ImportManagementService svc)
