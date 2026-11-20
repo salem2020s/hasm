@@ -442,6 +442,30 @@ export interface AllocatableCostCenter { id: string; code: string; nameAr: strin
 
 export interface AccountCostCenterRule { accountId: string; code: string; nameAr: string | null; nameEn: string | null; required: boolean; revision: number }
 export interface AccountCostCenterRulesResponse { accounts: AccountCostCenterRule[]; can: { configure: boolean } }
+// ---- Tax configuration (Phase 3.10). Treatment: 1 standard, 2 zero rated, 3 exempt, 4 not applicable. Class kind: 1 item, 2 party. Rounding mode: 1 half away from zero, 2 half even; level: 1 per line, 2 per document.
+export interface TaxRate { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface Tax { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string; rates: TaxRate[] }
+export interface TaxesResponse { taxes: Tax[]; can: { configure: boolean } }
+export interface TaxInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRateInput { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface TaxClass { id: string; kind: number; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number }
+export interface TaxClassesResponse { classes: TaxClass[]; can: { configure: boolean } }
+export interface TaxClassInput { kind: number; code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRule {
+  id: string; documentType: string; operation: string; itemClassId: string | null; partyClassId: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo: string | null; isActive: boolean; treatmentOverride: number | null; revision: number;
+}
+export interface TaxRulesResponse { rules: TaxRule[]; can: { configure: boolean } }
+export interface TaxRuleInput {
+  documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
+}
+export interface TaxPolicy { configured: boolean; id?: string; version?: number; moneyDecimals?: number; mode?: number; level?: number; createdAtUtc?: string }
+export interface TaxPolicyResponse { policy: TaxPolicy; can: { configure: boolean } }
+export interface TaxPolicyInput { moneyDecimals: number; mode: number; level: number }
+export interface TaxResolutionComponent { taxId: string; code: string; treatment: number; ratePercent: number; priority: number; includesInBase: string[]; ruleRef: string | null }
+export interface TaxResolution { policyVersion: number; policy: { moneyDecimals: number; mode: number; level: number }; components: TaxResolutionComponent[] }
+
 export interface CostCenterBranchRule { costCenterId: string; restricted: boolean; branchIds: string[]; revision: number }
 export interface CostCenterBranchRulesResponse { costCenters: CostCenterBranchRule[]; can: { configure: boolean } }
 export interface JournalLineInput {
@@ -1082,6 +1106,22 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
     setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
       request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
+    listTaxes: () => get<TaxesResponse>("/api/v1/company/taxes"),
+    createTax: (t: TaxInput) => request<Tax>("POST", "/api/v1/company/taxes", { body: t }),
+    updateTax: (id: string, t: TaxInput, revision: number) => request<Tax>("PUT", `/api/v1/company/taxes/${enc(id)}`, { body: t, ifMatch: revision }),
+    addTaxRate: (id: string, rate: TaxRateInput) => request<Tax>("POST", `/api/v1/company/taxes/${enc(id)}/rates`, { body: rate }),
+    listTaxClasses: () => get<TaxClassesResponse>("/api/v1/company/taxes/classes"),
+    createTaxClass: (c: TaxClassInput) => request<TaxClass>("POST", "/api/v1/company/taxes/classes", { body: c }),
+    updateTaxClass: (id: string, c: TaxClassInput, revision: number) => request<TaxClass>("PUT", `/api/v1/company/taxes/classes/${enc(id)}`, { body: c, ifMatch: revision }),
+    assignItemTaxClass: (itemId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/item-classes/${enc(itemId)}`, { body: { classId } }),
+    assignPartyTaxClass: (partyId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/party-classes/${enc(partyId)}`, { body: { classId } }),
+    listTaxRules: () => get<TaxRulesResponse>("/api/v1/company/taxes/rules"),
+    createTaxRule: (r: TaxRuleInput) => request<TaxRule>("POST", "/api/v1/company/taxes/rules", { body: r }),
+    updateTaxRule: (id: string, r: TaxRuleInput, revision: number) => request<TaxRule>("PUT", `/api/v1/company/taxes/rules/${enc(id)}`, { body: r, ifMatch: revision }),
+    getTaxPolicy: () => get<TaxPolicyResponse>("/api/v1/company/taxes/policy"),
+    addTaxPolicy: (p: TaxPolicyInput) => request<TaxPolicy>("POST", "/api/v1/company/taxes/policy", { body: p }),
+    resolveTaxes: (q: { documentType: string; operation: string; taxDate: string; itemId?: string; partyId?: string }) =>
+      get<TaxResolution>(`/api/v1/company/taxes/resolve?documentType=${enc(q.documentType)}&operation=${enc(q.operation)}&taxDate=${enc(q.taxDate)}${q.itemId ? `&itemId=${enc(q.itemId)}` : ""}${q.partyId ? `&partyId=${enc(q.partyId)}` : ""}`),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
     recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),
