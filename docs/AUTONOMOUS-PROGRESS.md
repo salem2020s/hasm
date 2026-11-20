@@ -90,6 +90,8 @@ Missing prerequisites (each to be built and merged before the slice that needs i
 
 ## Log
 
+* 2026-11-20 - PR #54 head 8de6c46: hosted CI green except the protected security gates (dependency-scan, picomatch-policy-validation, picomatch-artifact-inspection): postgres-integration 15m3s, backend, frontend, desktop-build, e2e-smoke, ci-guard, docs, secret-scan. Independent review of slices 2c/3 recorded (docs/review-records/PR-54-tax-slice3.md), six Medium fixed. Phase 3.9B started on branch feature/phase-3-9b-customers-suppliers (stacked on #54 and the #53 branch; company 0023, system 0025; #48's reservation released, it renumbers to 0024/0026). Owner decisions still open: picomatch patches (#51 then #55), Phase 3.8D X1-X8, OD-11 (3.8C).
+
 * 2026-11-20 - Phase 3.10 (PR #54, Draft): slices 2a/2b/2c/3 on branch feature/phase-3-10-tax-engine. Hosted CI on 4c33423 green except the known dependency-scan (security gate, owner approval pending). Slice 2c (adacba9): rule-base trigger, removal audit with previous class, rate lead as deployment policy (SRS has no limit). Slice 3: tax management API (no DELETE route) and the shared Web/Tauri screen (Tabs). Independent review of slices 2a/2b recorded in docs/review-records/PR-54-tax-slice2.md. Company migration 0022 / system 0024 are used by this branch; PR #48 keeps 0023/0025 reserved. NOT merged; slice 3 CI not yet verified at the time of this entry.
 * 2026-11-20 - Owner approval A granted: the three picomatch/pin patches were applied on branch security/picomatch-retirement-apply (D-047 supersedes D-046). Protected PR; not merged without explicit owner approval.
 * 2026-11-15 — Reconciled #27 (merged by the owner before this run), created this tracker; starting 3.7A.

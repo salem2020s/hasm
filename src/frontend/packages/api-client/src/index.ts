@@ -460,6 +460,17 @@ export interface TaxRuleInput {
   documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
   validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
 }
+// ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
+export interface PartyRole {
+  id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
+  controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
+}
+export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean } }
+export interface PartyRoleInput { partyId?: string; role?: number; paymentMode: number; termDays?: number | null; creditLimit?: number | null; controlAccountId?: string | null; representativeId?: string | null; isActive?: boolean }
+export interface SalesRepresentative { id: string; code: string; nameAr: string; nameEn: string | null; userId: string | null; isActive: boolean; revision: number }
+export interface SalesRepresentativesResponse { items: SalesRepresentative[]; can: { configure: boolean } }
+export interface SalesRepresentativeInput { code?: string; nameAr: string; nameEn?: string | null; userId?: string | null; isActive?: boolean }
+
 export interface TaxAssignment { subjectId: string; classId: string }
 export interface TaxAssignmentsResponse { assignments: TaxAssignment[]; can: { configure: boolean } }
 export interface TaxPolicy { configured: boolean; id?: string; version?: number; moneyDecimals?: number; mode?: number; level?: number; createdAtUtc?: string }
@@ -1108,6 +1119,12 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
     setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
       request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
+    listPartyRoles: (kind?: number) => get<PartyRolesResponse>(`/api/v1/company/party-roles${kind ? `?kind=${kind}` : ""}`),
+    createPartyRole: (r: PartyRoleInput) => request<PartyRole>("POST", "/api/v1/company/party-roles", { body: r }),
+    updatePartyRole: (id: string, r: PartyRoleInput, revision: number) => request<PartyRole>("PUT", `/api/v1/company/party-roles/${enc(id)}`, { body: r, ifMatch: revision }),
+    listSalesRepresentatives: () => get<SalesRepresentativesResponse>("/api/v1/company/sales-representatives"),
+    createSalesRepresentative: (r: SalesRepresentativeInput) => request<SalesRepresentative>("POST", "/api/v1/company/sales-representatives", { body: r }),
+    updateSalesRepresentative: (id: string, r: SalesRepresentativeInput, revision: number) => request<SalesRepresentative>("PUT", `/api/v1/company/sales-representatives/${enc(id)}`, { body: r, ifMatch: revision }),
     listTaxes: () => get<TaxesResponse>("/api/v1/company/taxes"),
     createTax: (t: TaxInput) => request<Tax>("POST", "/api/v1/company/taxes", { body: t }),
     updateTax: (id: string, t: TaxInput, revision: number) => request<Tax>("PUT", `/api/v1/company/taxes/${enc(id)}`, { body: t, ifMatch: revision }),
