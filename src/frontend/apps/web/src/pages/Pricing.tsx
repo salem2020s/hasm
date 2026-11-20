@@ -13,7 +13,8 @@ import { useReportUnsaved } from "../unsaved";
  * (revision fences, the policy version fence, append-only history, no deletion, ambiguity and customer-role checks); this screen only shows and submits. Nothing here ever deletes: lists, entries and rules are deactivated.
  * Customer GROUPS are not available yet: there is no customer-group registry (tracked in docs/INTEGRATION-STATUS.md), so scopes are customer, item or item group.
  */
-interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[] }
+interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; failed: boolean }
+const PICKER_LIMIT = 500;
 interface Data { policy: PricingPolicyResponse; lists: PriceListsResponse; discounts: DiscountRulesResponse; pickers: Pickers }
 const pad = (n: number) => String(n).padStart(2, "0");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };   // the local calendar day, not UTC
@@ -35,11 +36,13 @@ export function PricingPage() {
     try {
       const [policy, lists, discounts] = await Promise.all([auth.api.getPricingPolicy(), auth.api.listPriceLists(), auth.api.listDiscountRules()]);
       // pickers need the inventory and party-role view permissions: a user without them still sees the configuration (the pickers are then empty)
+      let failed = false;
+      const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
       const [units, groups, items, customers] = await Promise.all([
-        auth.api.listInventoryUnits().then((r) => r.units).catch(() => []), auth.api.listInventoryGroups().then((r) => r.groups).catch(() => []),
-        auth.api.listInventoryItems({ limit: 500 }).then((r) => r.items).catch(() => []), auth.api.listPartyRoles(1).then((r) => r.items).catch(() => []),
+        soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
+        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items)), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
       ]);
-      setData({ policy, lists, discounts, pickers: { units, groups, items, customers } }); setLoadError(null);
+      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, failed } }); setLoadError(null);
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pricing.error.")); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -57,6 +60,8 @@ export function PricingPage() {
       <PageHeader title={t("pricing.title")} description={t("pricing.subtitle")} />
       {loadError && <Banner kind="error" testId="pricing-load-error">{loadError}</Banner>}
       <Banner kind="info" testId="pricing-note">{t("pricing.note")}</Banner>
+      {data.pickers.failed && <Banner kind="warning" testId="pricing-pickers-failed">{t("pricing.pickers_unavailable")}</Banner>}
+      {data.pickers.items.length >= PICKER_LIMIT && <Banner kind="warning" testId="pricing-pickers-truncated">{t("pricing.pickers_truncated", { n: String(PICKER_LIMIT) })}</Banner>}
       <Card><Tabs label={t("pricing.tabs_label")} tabs={tabs} value={tab} onChange={setTab} testId="pricing-tabs" /></Card>
     </section>
   );
@@ -93,8 +98,6 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
   const p = data.policy.policy;
   const initial = () => ({ priceDecimals: String(p.priceDecimals), moneyDecimals: String(p.moneyDecimals), margin: p.minMarginPercent === null ? "" : String(p.minMarginPercent), action: String(p.marginAction), list: String(p.listPrecedence), discount: String(p.discountPrecedence) });
   const [form, setForm] = useState(initial);
-  const [seen, setSeen] = useState(p.version);
-  useEffect(() => { if (p.version !== seen) { setSeen(p.version); setForm(initial()); } }, [p.version]); // eslint-disable-line react-hooks/exhaustive-deps
   const base = initial();
   const isDirty = (Object.keys(base) as (keyof typeof base)[]).some((k) => base[k] !== form[k]);
   useReportUnsaved("pricing-policy", isDirty, t("pricing.tab.policy"));
@@ -156,7 +159,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
     if (!id) { setEntries([]); return; }
     try { setEntries((await auth.api.listPriceEntries(id)).entries); } catch (e) { if (!auth.handleError(e)) setEntries([]); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { void loadEntries(selected); }, [selected, loadEntries]);
+  useEffect(() => { void loadEntries(selected); setRepricing(null); }, [selected, loadEntries]);   // a half-edited price belongs to the list it was opened on
   const refreshEntries = async () => { await reload(); await loadEntries(selected); };
   const entryRunner = useRunner("pricing.error.", refreshEntries);
 
@@ -326,7 +329,7 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
               {(a) => <select {...a} value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })}><option value="">{t("pricing.choose")}</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>}
             </Field>
           )}
-          <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || Number.isNaN(num(form.percent)) || Number.isNaN(num(form.priority)) || (form.scope !== "all" && !form.targetId)} onClick={() => void create()}>{t("pricing.create_discount")}</button>
+          <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || Number.isNaN(num(form.percent)) || Number.isNaN(num(form.priority)) || bad(form.minQuantity) || (form.scope !== "all" && !form.targetId)} onClick={() => void create()}>{t("pricing.create_discount")}</button>
         </fieldset>
       )}
     </div>

@@ -75,6 +75,8 @@ describe("pricing administration screen", () => {
     await userEvent.click(form.getByRole("button", { name: A("pricing.policy.save") }));
     await waitFor(() => expect(save).toHaveBeenCalledWith({ priceDecimals: 2, moneyDecimals: 2, minMarginPercent: 10, marginAction: 2, listPrecedence: 1, discountPrecedence: 2 }, 2));
     expect(await screen.findByTestId("pricing-policy-conflict")).toBeInTheDocument();
+    expect(form.getByLabelText(label("pricing.policy.list_precedence"))).toHaveValue("1");                           // a conflict never discards what was typed
+    expect(form.getByLabelText(label("pricing.policy.discount_precedence"))).toHaveValue("2");
     expect(client.getPricingPolicy).toHaveBeenCalledTimes(2);                                                     // refreshed after the conflict
   });
 
@@ -126,6 +128,10 @@ describe("pricing administration screen", () => {
     await userEvent.type(form.getByLabelText(label("pricing.code")), "bulk");
     await userEvent.type(form.getByLabelText(label("pricing.name_ar")), "خصم الكمية");
     await userEvent.type(form.getByLabelText(label("pricing.percent")), "7.5");
+    await userEvent.type(form.getByLabelText(label("pricing.min_quantity")), "x");                                    // a mistyped minimum is never sent as 0
+    expect(form.getByRole("button", { name: A("pricing.create_discount") })).toBeDisabled();
+    await userEvent.clear(form.getByLabelText(label("pricing.min_quantity")));
+    await userEvent.type(form.getByLabelText(label("pricing.min_quantity")), "0");
     await userEvent.selectOptions(form.getByLabelText(label("pricing.scope")), "group");
     expect(form.getByRole("button", { name: A("pricing.create_discount") })).toBeDisabled();                         // a group scope needs its group
     await userEvent.selectOptions(form.getByLabelText(label("pricing.target")), "g1");
@@ -153,6 +159,12 @@ describe("pricing administration screen", () => {
     expect(screen.getByTestId("pricing-quote-net")).toHaveTextContent("8.5");
     expect(screen.getByTestId("pricing-quote-hash")).toHaveTextContent("aaaaaaaaaaaaaaaa");
     expect(screen.getByTestId("pricing-quote-trace")).toHaveTextContent("policy: list-precedence:priority-then-scope");
+  });
+
+  it("tells the user when a helper list could not be loaded instead of silently showing empty choices", async () => {
+    render({ listInventoryUnits: vi.fn().mockRejectedValue(apiError(403, "forbidden")) });
+    await go("#/company/pricing");
+    expect(await screen.findByTestId("pricing-pickers-failed")).toHaveTextContent(A("pricing.pickers_unavailable"));
   });
 
   it("shows a viewer the configuration without any form and keeps typed input when switching tabs", async () => {

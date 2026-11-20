@@ -118,7 +118,7 @@ public static class PricingEndpoints
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        if (body is null || body.Date is null || body.ItemId is null || body.UnitId is null || body.Quantity is null) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+        if (body is null || body.Date is null || body.ItemId is null || body.UnitId is null || body.Quantity is null || string.IsNullOrWhiteSpace(body.Currency)) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
         var request = new PricingRequest(body.Date.Value, body.Currency ?? "", body.ItemId.Value, body.ItemGroupId, body.UnitId.Value, body.Quantity.Value, body.CustomerId, null, body.UnitCost);
         return CompanyConfigurationEndpoints.Map(await svc.QuoteAsync(actor!.UserId, actor.CompanyId, request, body.Override, http.RequestAborted), SnapshotBody);
     }
