@@ -18,11 +18,12 @@ public static class TaxAuditEvents
 /// <summary>Kind of a tax class: items and parties are classified separately and a class never serves both.</summary>
 public enum TaxClassKind : short { Item = 1, Party = 2 }
 
-public sealed record TaxInput(string? Code, string? NameAr, string? NameEn, bool IsActive = true);
+/// <summary>IsActive: null = true on create and "unchanged" on update (an omitted flag never silently reactivates).</summary>
+public sealed record TaxInput(string? Code, string? NameAr, string? NameEn, bool? IsActive = null);
 public sealed record TaxView(Guid Id, string Code, string NameAr, string? NameEn, bool IsActive, long Revision, IReadOnlyList<TaxRateRecord> Rates, DateTimeOffset UpdatedAtUtc);
 public sealed record TaxRateInput(DateOnly EffectiveFrom, TaxTreatment Treatment, decimal RatePercent);
 
-public sealed record TaxClassInput(TaxClassKind Kind, string? Code, string? NameAr, string? NameEn, bool IsActive = true);
+public sealed record TaxClassInput(TaxClassKind Kind, string? Code, string? NameAr, string? NameEn, bool? IsActive = null);
 public sealed record TaxClassView(Guid Id, TaxClassKind Kind, string Code, string NameAr, string? NameEn, bool IsActive, long Revision);
 
 public sealed record TaxRuleInput(string? DocumentType, string? Operation, Guid? ItemClassId, Guid? PartyClassId, Guid TaxId, int Priority, IReadOnlyList<Guid>? IncludesTaxIds,

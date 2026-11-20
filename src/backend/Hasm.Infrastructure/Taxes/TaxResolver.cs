@@ -48,7 +48,7 @@ public static class TaxResolver
             && string.Equals(r.DocumentType, context.DocumentType, StringComparison.Ordinal) && string.Equals(r.Operation, context.Operation, StringComparison.Ordinal)
             && (r.ItemClassId is null || r.ItemClassId == context.ItemClassId) && (r.PartyClassId is null || r.PartyClassId == context.PartyClassId)).ToArray();
 
-        var chosen = new List<(TaxRuleRecord Rule, TaxDefinitionRecord Tax, TaxRateRecord Rate)>();
+        var chosen = new List<(TaxRuleRecord Rule, TaxDefinitionRecord Tax, TaxRateRecord? Rate)>();
         foreach (var group in candidates.GroupBy(r => r.TaxId).OrderBy(g => g.Key))
         {
             var best = group.Max(Specificity);
@@ -58,8 +58,9 @@ public static class TaxResolver
             var tax = definitions.SingleOrDefault(d => d.Id == rule.TaxId) ?? throw Refuse("unknown_tax");
             if (!tax.IsActive) throw Refuse("tax_inactive");
             if (rule.TreatmentOverride is { } over && (over == TaxTreatment.Standard || !Enum.IsDefined(over))) throw Refuse("invalid_tax_data");
-            var rate = rates.Where(r => r.TaxId == rule.TaxId && r.EffectiveFrom <= date).OrderByDescending(r => r.EffectiveFrom).FirstOrDefault() ?? throw Refuse("no_tax_rate");
-            if (rates.Count(r => r.TaxId == rule.TaxId && r.EffectiveFrom == rate.EffectiveFrom) != 1) throw Refuse("invalid_tax_data");   // two versions from the same date
+            var rate = rates.Where(r => r.TaxId == rule.TaxId && r.EffectiveFrom <= date).OrderByDescending(r => r.EffectiveFrom).FirstOrDefault();
+            if (rate is null && rule.TreatmentOverride is null) throw Refuse("no_tax_rate");     // an override replaces treatment AND rate, so it needs no dated version
+            if (rate is not null && rates.Count(r => r.TaxId == rule.TaxId && r.EffectiveFrom == rate.EffectiveFrom) != 1) throw Refuse("invalid_tax_data");   // two versions from the same date
             chosen.Add((rule, tax, rate));
         }
         if (chosen.GroupBy(c => c.Rule.Priority).Any(g => g.Count() > 1)) throw Refuse("duplicate_priority");
@@ -75,8 +76,8 @@ public static class TaxResolver
             }
             var includes = references.Where(id => ordered.Any(c => c.Tax.Id == id)).ToArray();   // an inapplicable referenced tax is not part of THIS line's base
             var overridden = rule.TreatmentOverride;                                                  // an override replaces BOTH treatment and rate (non-standard means rate 0)
-            components.Add(new TaxComponent(tax.Id, tax.Code, overridden ?? rate.Treatment, overridden is null ? rate.RatePercent : 0m, rule.Priority, includes,
-                $"rule:{rule.Id:N};rate:{tax.Id:N}@{rate.EffectiveFrom:yyyy-MM-dd}"));
+            components.Add(new TaxComponent(tax.Id, tax.Code, overridden ?? rate!.Treatment, overridden is null ? rate!.RatePercent : 0m, rule.Priority, includes,
+                $"rule:{rule.Id:N};rate:{tax.Id:N}@{(rate is null ? "override" : rate.EffectiveFrom.ToString("yyyy-MM-dd"))}"));
         }
         return components;
     }

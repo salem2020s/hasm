@@ -139,4 +139,14 @@ public class TaxResolverTests
         Assert.Equal(forward.Select(c => (c.TaxId, c.Treatment, c.RatePercent, c.Priority, c.RuleRef)), reversed.Select(c => (c.TaxId, c.Treatment, c.RatePercent, c.Priority, c.RuleRef)));
         Assert.Equal(TaxTreatment.Exempt, forward[1].Treatment);
     }
+
+    [Fact]
+    public void An_override_needs_no_dated_rate_but_a_plain_rule_still_does()
+    {
+        var exempt = Rule(Vat, 10, item: Medicine, over: TaxTreatment.Exempt);
+        var c = Assert.Single(Resolve(Ctx(item: Medicine), [], exempt));
+        Assert.Equal((TaxTreatment.Exempt, 0m), (c.Treatment, c.RatePercent));
+        Assert.EndsWith("@override", c.RuleRef);
+        Assert.Equal("no_tax_rate", Refusal(Ctx(), [], Rule(Vat, 10)));
+    }
 }

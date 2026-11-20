@@ -110,6 +110,7 @@ public class TaxConfigTests : InventoryTestBase
         Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(new DateOnly(2027, 1, 1), TaxTreatment.Standard, 5.1234567m)), "ratePercent", "rate_invalid");
         Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(new DateOnly(2027, 1, 1), TaxTreatment.Standard, 1000.01m)), "ratePercent", "rate_invalid");
         Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(new DateOnly(2027, 1, 1), (TaxTreatment)9, 0m)), "treatment", "treatment_invalid");
+        Invalid(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(new DateOnly(2062, 1, 1), TaxTreatment.Standard, 5m)), "effectiveFrom", "rate_too_far");   // a typo years ahead would block every later version for good
         Fails(await Tax.AddRateAsync(Admin.Id, Company.Id, Guid.NewGuid(), new TaxRateInput(Jan, TaxTreatment.Standard, 1m)), ConfigStatus.NotFound, "tax_not_found");
         var exempt = Ok(await Tax.AddRateAsync(Admin.Id, Company.Id, vat.Id, new TaxRateInput(new DateOnly(2027, 1, 1), TaxTreatment.Exempt, 0m)));
         Assert.Equal(3, exempt.Rates.Count);
@@ -177,6 +178,8 @@ public class TaxConfigTests : InventoryTestBase
         var r1 = Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 20, to: new DateOnly(2026, 12, 31), includes: [excise.Id])));
         Assert.Equal((1L, excise.Id), (r1.Revision, Assert.Single(r1.Rule.IncludesTaxIds!)));
         Fails(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 21, from: new DateOnly(2026, 12, 1))), ConfigStatus.Conflict, "rule_overlap");   // same tax and classification, overlapping dates
+        Fails(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(excise.Id, 20)), ConfigStatus.Conflict, "duplicate_priority");                            // two taxes could apply to one line at one priority
+        Fails(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(excise.Id, 25)), ConfigStatus.Conflict, "invalid_base_reference");                       // VAT (20) includes excise, so excise must come earlier
         Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 20, from: new DateOnly(2027, 1, 1))));                                               // the next period is fine
         Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 20, itemClass: food.Id, over: TaxTreatment.ZeroRated)));                             // another classification is fine
 
@@ -289,12 +292,19 @@ public class TaxConfigTests : InventoryTestBase
         Ok(await Tax.AssignItemClassAsync(Admin.Id, Company.Id, item, food.Id));
         Ok(await Tax.AssignPartyClassAsync(Admin.Id, Company.Id, party, exporter.Id));
         Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 10, itemClass: food.Id)));
-        Ok(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 10, partyClass: exporter.Id, over: TaxTreatment.Exempt)));
-        // an item-only and a party-only rule for the same tax are equally specific: the company must say which wins
-        Fails(await TaxMgmt.ResolveAsync(Admin.Id, Company.Id, Sales, Sell, item, party, Jan), ConfigStatus.Conflict, "ambiguous_tax_rule");
-        Assert.Single(Ok(await TaxMgmt.ResolveAsync(Admin.Id, Company.Id, Sales, Sell, item, null, Jan)).Components);                 // each alone resolves
-        Ok(await Tax.UpdateTaxAsync(Admin.Id, Company.Id, vat.Id, 1, new TaxInput(null, "ضريبة", null, false)));
+        // an item-only and a party-only rule for the same tax are equally specific: refused when written, so no document can ever hit the ambiguity
+        Fails(await Tax.CreateRuleAsync(Admin.Id, Company.Id, Rule(vat.Id, 10, partyClass: exporter.Id, over: TaxTreatment.Exempt)), ConfigStatus.Conflict, "rule_ambiguous");
+        Assert.Single(Ok(await TaxMgmt.ResolveAsync(Admin.Id, Company.Id, Sales, Sell, item, party, Jan)).Components);
+        var inactive = Ok(await Tax.UpdateTaxAsync(Admin.Id, Company.Id, vat.Id, 1, new TaxInput(null, "ضريبة", null, false)));
+        Assert.False(inactive.IsActive);
+        Ok(await Tax.UpdateTaxAsync(Admin.Id, Company.Id, vat.Id, 2, new TaxInput(null, "ضريبة ٢", null)));                          // an omitted flag never reactivates
+        Assert.False((await Tax.GetTaxAsync(Company.Id, vat.Id))!.IsActive);
         Fails(await TaxMgmt.ResolveAsync(Admin.Id, Company.Id, Sales, Sell, item, null, Jan), ConfigStatus.Conflict, "tax_inactive");
+        // the way out: the rule of the inactive tax can be switched off (but not newly activated)
+        var rule = Assert.Single(Ok(await TaxMgmt.ListRulesAsync(Admin.Id, Company.Id)));
+        Invalid(await Tax.UpdateRuleAsync(Admin.Id, Company.Id, rule.Rule.Id, rule.Revision, Rule(vat.Id, 10, itemClass: food.Id)), "taxId", "tax_inactive");
+        Ok(await Tax.UpdateRuleAsync(Admin.Id, Company.Id, rule.Rule.Id, rule.Revision, Rule(vat.Id, 10, itemClass: food.Id) with { IsActive = false }));
+        Assert.Empty(Ok(await TaxMgmt.ResolveAsync(Admin.Id, Company.Id, Sales, Sell, item, null, Jan)).Components);
     }
 
     [PostgresFact]

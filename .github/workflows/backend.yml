@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Tax schema files match the deterministic generator (Phase 3.10)
+        run: node tools/schema/company-0022-tax.cjs --check
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release

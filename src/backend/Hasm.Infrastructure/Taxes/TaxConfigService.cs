@@ -33,6 +33,9 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
     [GeneratedRegex("^[A-Z0-9][A-Z0-9._-]{0,29}$")] private static partial Regex CodePattern();
     [GeneratedRegex("^[a-z][a-z0-9_.-]{0,39}$")] private static partial Regex KeyPattern();
 
+    /// <summary>A rate version may be dated at most this many days ahead of today (planned changes), because versions can never be removed or reordered.</summary>
+    public const int MaxRateLeadDays = 366;
+
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static object Db<T>(T? v) where T : class => (object?)v ?? DBNull.Value;
     private static object Db<T>(T? v, bool _) where T : struct => v is null ? DBNull.Value : v.Value;
@@ -48,6 +51,10 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is TR.UqVersion or TV.UqVersion)
         {
             return ConfigResult<T>.Fail(ConfigStatus.Conflict, "version_conflict");
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation");   // a database guard refused a racing or inconsistent change: nothing was written
         }
     }
 
@@ -112,7 +119,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
             await using (var ins = new NpgsqlCommand($"INSERT INTO {TD.Table} ({TD.Id}, {TD.Code}, {TD.NameAr}, {TD.NameEn}, {TD.IsActive}, {TD.Revision}, {TD.CreatedBy}, {TD.CreatedAtUtc}, {TD.UpdatedAtUtc}) VALUES (@id, @c, @ar, @en, @a, 1, @by, @now, @now)", work.Connection, work.Transaction))
             {
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("c", n.Code); ins.Parameters.AddWithValue("ar", n.NameAr); ins.Parameters.AddWithValue("en", Db(n.NameEn));
-                ins.Parameters.AddWithValue("a", input.IsActive); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
+                ins.Parameters.AddWithValue("a", input.IsActive ?? true); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.TaxCreated, ActorUserId: actor, SubjectId: id, Detail: $"tax created code={n.Code}"), ct);
@@ -135,10 +142,10 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
             if (input.Code is { } c && !string.Equals(c.Trim(), cur.Code, StringComparison.OrdinalIgnoreCase)) throw Invalid("code", "code_immutable");
             await using (var upd = new NpgsqlCommand($"UPDATE {TD.Table} SET {TD.NameAr} = @ar, {TD.NameEn} = @en, {TD.IsActive} = @a, {TD.Revision} = {TD.Revision} + 1, {TD.UpdatedAtUtc} = @now WHERE {TD.Id} = @id", work.Connection, work.Transaction))
             {
-                upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", n.NameAr); upd.Parameters.AddWithValue("en", Db(n.NameEn)); upd.Parameters.AddWithValue("a", input.IsActive); upd.Parameters.AddWithValue("now", Now);
+                upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", n.NameAr); upd.Parameters.AddWithValue("en", Db(n.NameEn)); upd.Parameters.AddWithValue("a", input.IsActive ?? cur.IsActive); upd.Parameters.AddWithValue("now", Now);
                 await upd.ExecuteNonQueryAsync(ct);
             }
-            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.TaxUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax updated r{cur.Revision + 1} code={cur.Code} active={input.IsActive}"), ct);
+            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.TaxUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax updated r{cur.Revision + 1} code={cur.Code} active={input.IsActive ?? cur.IsActive}"), ct);
             return true;
         }, ct);
         return r.IsOk ? ConfigResult<TaxView>.Ok((await GetTaxAsync(companyId, id, ct))!) : ConfigResult<TaxView>.Fail(r.Status, r.Code!, r.CurrentRevision) with { Fields = r.Fields };
@@ -159,6 +166,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         var r = await Mutate(companyId, async work =>
         {
             var tax = (await LoadTaxes(work.Connection, work.Transaction, taxId, true, ct)).SingleOrDefault() ?? throw new Abort(ConfigStatus.NotFound, "tax_not_found");
+            if (input.EffectiveFrom > DateOnly.FromDateTime(Now).AddDays(MaxRateLeadDays)) throw Invalid("effectiveFrom", "rate_too_far");   // versions are never removed: a typo years ahead would block every later version
             if (tax.Rates.Count > 0 && tax.Rates.Max(x => x.EffectiveFrom) >= input.EffectiveFrom) throw Invalid("effectiveFrom", "rate_not_later");
             await using (var ins = new NpgsqlCommand($"INSERT INTO {TR.Table} ({TR.Id}, {TR.TaxId}, {TR.EffectiveFrom}, {TR.Treatment}, {TR.RatePercent}, {TR.CreatedBy}, {TR.CreatedAtUtc}) VALUES (@id, @t, @f, @tr, @r, @by, @now)", work.Connection, work.Transaction))
             {
@@ -208,7 +216,7 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
             await using (var ins = new NpgsqlCommand($"INSERT INTO {TC.Table} ({TC.Id}, {TC.Kind}, {TC.Code}, {TC.NameAr}, {TC.NameEn}, {TC.IsActive}, {TC.Revision}, {TC.CreatedBy}, {TC.CreatedAtUtc}, {TC.UpdatedAtUtc}) VALUES (@id, @k, @c, @ar, @en, @a, 1, @by, @now, @now)", work.Connection, work.Transaction))
             {
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("k", (short)input.Kind); ins.Parameters.AddWithValue("c", n.Code); ins.Parameters.AddWithValue("ar", n.NameAr);
-                ins.Parameters.AddWithValue("en", Db(n.NameEn)); ins.Parameters.AddWithValue("a", input.IsActive); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
+                ins.Parameters.AddWithValue("en", Db(n.NameEn)); ins.Parameters.AddWithValue("a", input.IsActive ?? true); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", now);
                 await ins.ExecuteNonQueryAsync(ct);
             }
             await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.ClassCreated, ActorUserId: actor, SubjectId: id, Detail: $"tax class created kind={(short)input.Kind} code={n.Code}"), ct);
@@ -234,10 +242,10 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
             if (input.Kind != cur.Kind && Enum.IsDefined(input.Kind) && input.Kind != 0) throw Invalid("kind", "kind_immutable");
             await using (var upd = new NpgsqlCommand($"UPDATE {TC.Table} SET {TC.NameAr} = @ar, {TC.NameEn} = @en, {TC.IsActive} = @a, {TC.Revision} = {TC.Revision} + 1, {TC.UpdatedAtUtc} = @now WHERE {TC.Id} = @id", work.Connection, work.Transaction))
             {
-                upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", n.NameAr); upd.Parameters.AddWithValue("en", Db(n.NameEn)); upd.Parameters.AddWithValue("a", input.IsActive); upd.Parameters.AddWithValue("now", Now);
+                upd.Parameters.AddWithValue("id", id); upd.Parameters.AddWithValue("ar", n.NameAr); upd.Parameters.AddWithValue("en", Db(n.NameEn)); upd.Parameters.AddWithValue("a", input.IsActive ?? cur.IsActive); upd.Parameters.AddWithValue("now", Now);
                 await upd.ExecuteNonQueryAsync(ct);
             }
-            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.ClassUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax class updated r{cur.Revision + 1} code={cur.Code} active={input.IsActive}"), ct);
+            await work.AppendAuditAsync(new AuditEventData(TaxAuditEvents.ClassUpdated, ActorUserId: actor, SubjectId: id, Detail: $"tax class updated r{cur.Revision + 1} code={cur.Code} active={input.IsActive ?? cur.IsActive}"), ct);
             return true;
         }, ct);
         if (!r.IsOk) return ConfigResult<TaxClassView>.Fail(r.Status, r.Code!, r.CurrentRevision) with { Fields = r.Fields };
@@ -331,7 +339,8 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
 
         var taxes = (await LoadTaxes(work.Connection, work.Transaction, null, false, ct)).ToDictionary(t => t.Id);
         if (!taxes.TryGetValue(input.TaxId, out var tax)) throw Invalid("taxId", "tax_not_found");
-        if (!tax.IsActive) throw Invalid("taxId", "tax_inactive");
+        if (!tax.IsActive && input.IsActive) throw Invalid("taxId", "tax_inactive");   // an inactive tax stays referenced by old rules, which may be switched off but not newly activated
+        await LoadTaxes(work.Connection, work.Transaction, input.TaxId, true, ct);          // lock the tax row so concurrent rule writes for it are serialized (overlap and order checks below)
         foreach (var inc in includes) if (!taxes.ContainsKey(inc)) throw Invalid("includesTaxIds", "tax_not_found");
         var classes = (await LoadClasses(work.Connection, work.Transaction, null, false, ct)).ToDictionary(c => c.Id);
         if (input.ItemClassId is { } ic && (!classes.TryGetValue(ic, out var icv) || icv.Kind != TaxClassKind.Item)) throw Invalid("itemClassId", "class_kind_mismatch");
@@ -348,6 +357,15 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
                 var overlap = x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && input.ValidFrom <= (x.ValidTo ?? DateOnly.MaxValue);
                 if (overlap) throw new Abort(ConfigStatus.Conflict, "rule_overlap");
             }
+            // what the resolver would refuse for a line that matches both rules is refused here, when the rule is written
+            var peers = (await LoadRules(work.Connection, work.Transaction, null, false, doc, op, ct)).Select(v => v.Rule)
+                .Where(x => x.Id != selfId && x.IsActive && x.ValidFrom <= (input.ValidTo ?? DateOnly.MaxValue) && input.ValidFrom <= (x.ValidTo ?? DateOnly.MaxValue)
+                            && (x.ItemClassId is null || input.ItemClassId is null || x.ItemClassId == input.ItemClassId) && (x.PartyClassId is null || input.PartyClassId is null || x.PartyClassId == input.PartyClassId)).ToArray();
+            var specificity = (input.ItemClassId is null ? 0 : 1) + (input.PartyClassId is null ? 0 : 1);
+            if (peers.Any(x => x.TaxId == input.TaxId && ((x.ItemClassId is null ? 0 : 1) + (x.PartyClassId is null ? 0 : 1)) == specificity)) throw new Abort(ConfigStatus.Conflict, "rule_ambiguous");
+            if (peers.Any(x => x.TaxId != input.TaxId && x.Priority == input.Priority)) throw new Abort(ConfigStatus.Conflict, "duplicate_priority");
+            if (peers.Any(x => includes.Contains(x.TaxId) && x.Priority >= input.Priority) || peers.Any(x => x.IncludesTaxIds!.Contains(input.TaxId) && input.Priority >= x.Priority))
+                throw new Abort(ConfigStatus.Conflict, "invalid_base_reference");
         }
     }
 
