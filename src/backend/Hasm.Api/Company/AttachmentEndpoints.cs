@@ -122,7 +122,7 @@ public static class AttachmentEndpoints
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { rewrapped = v.Rewrapped, skipped = v.Skipped, failed = v.Failed });
+        return Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { rewrapped = v.Rewrapped, skipped = v.Skipped, failed = v.Failed, retainedUnderOtherKeys = v.RetainedUnderOtherKeys, oldKeysMayBeRetired = v.OldKeysMayBeRetired });
     }
 
     private static async Task<IResult> Verify(HttpContext http, AccessService access, AttachmentManagementService svc)

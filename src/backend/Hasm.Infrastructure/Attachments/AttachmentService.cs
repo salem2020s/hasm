@@ -105,7 +105,12 @@ public static class AttachmentSubjects
 public sealed record AttachmentView(Guid Id, string SubjectKind, Guid SubjectId, string FileName, string ContentType, long SizeBytes, string Sha256, bool IsSensitive, bool IsRemoved, string? RemovalReason, long Revision, DateTimeOffset CreatedAtUtc);
 public sealed record AttachmentContent(AttachmentView Attachment, byte[] Bytes);
 public sealed record AttachmentCapabilities(bool View, bool Upload, bool Delete, bool SensitiveView, bool SensitiveUpload);
-public sealed record RewrapOutcome(int Rewrapped, int Skipped, int Failed);
+/// <summary><see cref="RetainedUnderOtherKeys"/>: sensitive attachments that were REMOVED (their bytes are retained, and a removed row never changes again) whose envelope is still under a master key other than the active one. Such a key must NOT be retired: the retained files could never be decrypted again.</summary>
+public sealed record RewrapOutcome(int Rewrapped, int Skipped, int Failed, int RetainedUnderOtherKeys = 0)
+{
+    /// <summary>True only when nothing is left under a non-active key: every active file was rewrapped (or already current), none failed and no retained removed file needs another key.</summary>
+    public bool OldKeysMayBeRetired => Failed == 0 && RetainedUnderOtherKeys == 0;
+}
 
 /// <summary>
 /// The result of verifying a company's attachment set against its stored files (the proof after a restore or before a backup is relied on). Lists carry attachment ids only (never names or paths).
@@ -377,7 +382,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     }
 
     /// <summary>
-    /// Key rotation: re-wraps the data key of every ACTIVE sensitive attachment whose envelope is not under the active master key (the file bytes are replaced atomically, the key id recorded and audited).
+    /// Key rotation: re-wraps the data key of every ACTIVE sensitive attachment whose envelope is not under the active master key (removed attachments keep their bytes and their key id and are only COUNTED as <see cref="RewrapOutcome.RetainedUnderOtherKeys"/>, so a key still needed by them is never reported as retirable) (the file bytes are replaced atomically, the key id recorded and audited).
     /// The envelope itself names its key, so a crash between the file replacement and the database update leaves a readable file. Nothing is decrypted to disk and no plaintext is retained.
     /// </summary>
     public async Task<RewrapOutcome> RewrapAsync(Guid actor, Guid companyId, CancellationToken ct = default)
@@ -408,7 +413,10 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
             }
             catch (Exception ex) when (ex is CryptographicException or EncryptionUnavailableException or IOException) { failed++; await RewrapFailure(actor, companyId, row.View.Id, ex is EncryptionUnavailableException eu ? eu.Code : ex.GetType().Name); }
         }
-        return new RewrapOutcome(done, skipped, failed);
+        int retained;
+        await using (var conn = await resolver.OpenAsync(companyId, ct))
+            retained = (await Load(conn, null, $"{AT.Sensitivity} = 2 AND {AT.State} <> 1", _ => { }, false, ct)).Count(r => r.KeyId is null || r.KeyId != active);
+        return new RewrapOutcome(done, skipped, failed, retained);
     }
 
     private async Task RewrapFailure(Guid actor, Guid companyId, Guid id, string reason)

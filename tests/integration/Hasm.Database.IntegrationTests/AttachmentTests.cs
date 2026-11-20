@@ -193,6 +193,32 @@ public class AttachmentTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task A_removed_sensitive_file_keeps_its_key_in_use_so_the_old_key_is_never_reported_as_retirable()
+    {
+        await Prepare();
+        var kept = Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes(" KEPT")).ToArray(), sensitive: true, name: "kept.pdf"));
+        var gone = Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes(" GONE")).ToArray(), sensitive: true, name: "gone.pdf"));
+        Ok(await Svc.RemoveAsync(Admin.Id, Company.Id, gone.Id, gone.Revision, "obsolete", true));                          // removed: the bytes stay, under k1, and the row never changes again
+        Assert.True((await Svc.RewrapAsync(Admin.Id, Company.Id)).OldKeysMayBeRetired);                                    // k1 is still the active key: nothing is under another key
+
+        ring.Add("k2", RandomNumberGenerator.GetBytes(32));
+        ring.Activate("k2");
+        var outcome = await Svc.RewrapAsync(Admin.Id, Company.Id);
+        Assert.Equal((1, 0, 0, 1), (outcome.Rewrapped, outcome.Skipped, outcome.Failed, outcome.RetainedUnderOtherKeys));   // the active file moved to k2; the removed one cannot
+        Assert.False(outcome.OldKeysMayBeRetired);                                                                          // so k1 must be kept
+        Assert.Equal("k1", await Sql<string>($"SELECT {AT.KeyId} FROM {AT.Table} WHERE {AT.Id} = '{gone.Id}'"));
+        var report = await Svc.VerifyAsync(Admin.Id, Company.Id);
+        Assert.Contains("k1", report.KeyIdsInUse);                                                                               // the verification report names the key that is still needed
+        Assert.True(report.IsClean);
+
+        Assert.True(ring.Remove("k1"));                                                                                     // retiring it anyway fails closed and visibly
+        var after = await Svc.VerifyAsync(Admin.Id, Company.Id);
+        Assert.False(after.IsClean);
+        Assert.Equal([gone.Id], after.KeyUnavailable);
+        Assert.Contains(" KEPT", Encoding.ASCII.GetString(Ok(await Svc.OpenAsync(Admin.Id, Company.Id, kept.Id, true)).Bytes));   // the rewrapped file is unaffected
+    }
+
+    [PostgresFact]
     public async Task Key_rotation_drill_rewraps_every_sensitive_file_under_the_new_key_and_the_old_key_can_then_be_retired()
     {
         await Prepare();
