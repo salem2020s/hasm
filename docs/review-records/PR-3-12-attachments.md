@@ -21,4 +21,16 @@
 | L6 | Low | Each failed read of a corrupt file adds an audit row. | Accepted (a flood needs an authorized user and a corrupt file; rate limiting is a platform follow-up). |
 | L7 | Low | The removal dialog ignores an empty reason silently. | Accepted (the server also requires it). |
 
-Checked without defect: CSRF (custom header, SameSite=Strict, JSON + If-Match on removal), download headers, hiding of sensitive files, encryption context binding and re-wrap crash window, file store names and company directories, schema regex and trigger, runtime privileges, permission catalog and preset count, CI registry (now 1002), translation parity.
+Checked without defect: CSRF (custom header, SameSite=Strict, JSON + If-Match on removal), download headers, hiding of sensitive files, encryption context binding and re-wrap crash window, file store names and company directories, schema regex and trigger, runtime privileges, permission catalog and preset count, CI registry (now 1003), translation parity.
+
+## Second independent review - full diff against main after the integration of #53/#54/#56 (2026-11-20, head 70fbe87)
+
+Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context); code reading only, it did not run the PostgreSQL suite. **Verdict: no Critical, no High.** Verified without defect: company isolation (company only from the session), generated storage names and company directory, download authorization and headers, magic-byte allow-list (no HTML/SVG), sanitized names, size limits and CSRF, removal concurrency, migration 0024/0026 (additive, no delete/truncate, runtime SELECT/INSERT/UPDATE only, contiguous after 0023/0025), registry raise-only (989 -> 1003).
+
+| # | Sev | Finding | Disposition |
+|---|-----|---------|-------------|
+| M1 | Medium | Removed sensitive attachments are never re-wrapped; the old master key cannot be retired while any exists. | Follow-up (owner decision on key retirement): either a narrow trigger exception for re-wrapping removed rows or keep old keys; until decided the drill documentation must say the old key stays available. Fail-closed today (`KeyUnavailable`). |
+| M2 | Medium | ASP.NET spools multipart parts over 64 KB to the OS temp directory unencrypted. | Follow-up: stream or relocate the temp path; deployment requirement (encrypted temp disk) recorded in docs/INTEGRATION-STATUS.md. |
+| M3 | Medium | A file is held in memory 2-3 times per request; `MaxFileBytes` is configurable up to 512 MB (default 25 MB). | Follow-up: lower hard cap and concurrency limit. Default configuration is safe. |
+| M4 | Medium | Record said registry 1002; workflow says 1003. | Fixed in this commit. |
+| Lows | Low | 403 vs 404 permission oracle; ZIP-prefix check for docx/xlsx (accepted L1); stale `*.att.tmp-*` files not swept; sensitive file names stored in clear; non-JSON 413 handling in the UI; only sensitive downloads audited; re-wrap bumps revision. | Recorded as follow-ups; none blocks. |
