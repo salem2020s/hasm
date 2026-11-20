@@ -15,7 +15,7 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #63 | `8f2ccaa` | 3.9C slice 1 import mapping templates (company 0025) |
 | #52 | `371adb3` | costing guard tests |
 | #58 | `84614cf` | 3.11 slice 1 pure pricing engine |
-| #59 | `eb9dfea` | this handoff (earlier revision) |
+| #59 | `eb9dfea` | integration status and handoff (earlier revision) |
 | #64 | `acf66bb` | 3.9C slice 2 party import adapter (3.9C complete) |
 | #65 | `3d13007` | 3.11 slice 2a configurable price-list and discount precedence (decision P resolved) |
 | #66 | `23963e6` | attachment key-retirement safety (decision K resolved) |
@@ -29,7 +29,7 @@ Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). Post
 | #48 | `feature/phase-3-8d-impact-preview` | BLOCKED on owner decisions X1-X8 (X1 would relax a database safeguard); internal replay checkpoint, execution disabled; number any migration from company 0026 / system 0027 on rebase |
 | #51, #55 | security proposals | SUPERSEDED and inert (applied by #61); not to be merged; may be closed by the owner |
 | #62 | `integration/chain-with-security` | VALIDATION ONLY; never merge |
-| #59 | `docs/integration-status` | this file (docs only) |
+| #67 | `docs/handoff-after-3-9c` | this handoff (docs only; the table excludes the PR that carries it once merged) |
 
 ## Owner-decision register (each recorded once; fail-closed while open)
 
