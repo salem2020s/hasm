@@ -2,6 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload, frozenTreePins, assertFrozenTrees } = require("./inspect-production-artifacts.cjs");
+const { assertRetirement } = require("./dependency-audit-policy.cjs");
 test("production inventory rejects each reviewed tool including nested and Windows paths", () => {
   for (const name of ["picomatch", "fdir", "tinyglobby", "vite", "vitest", "@vitejs/plugin-react"])
     for (const prefix of ["/workspace/node_modules/", "C:\\app\\node_modules\\vite\\node_modules\\"])
@@ -54,4 +55,11 @@ test("main() delegates the pin check to assertFrozenTrees and no longer carries 
   const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
   assert.match(source, /assertFrozenTrees\(policy, tree => execFileSync\("git", \["rev-parse", `HEAD:\$\{tree\}`\]/);
   assert.doesNotMatch(source, /for \(const \[tree, expected\] of Object\.entries\(policy\.trees\)\)/);
+});
+
+test("the inspector lifts the pins only after verifying the reviewed retirement record", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
+  assert.match(source, /if \(policy\.status === POLICY_RETIRED\) assertRetirement\(policy\);/);
+  assert.ok(source.indexOf("assertRetirement(policy)") < source.indexOf("assertFrozenTrees(policy, tree =>"));
+  assert.throws(() => assertRetirement({ status: "RETIRED-ADVISORY-WITHDRAWN", owner: "attacker" }), /Retirement record differs/);
 });

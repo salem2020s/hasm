@@ -6,7 +6,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createHash } = require("node:crypto");
 const { execFileSync, spawnSync } = require("node:child_process");
-const { scopeHash } = require("./dependency-audit-policy.cjs");
+const { scopeHash, assertRetirement, RETIRED_STATUS: POLICY_RETIRED } = require("./dependency-audit-policy.cjs");
 const SCOPE = "974e885031fcfca8eff952c48b7791be9cacc9d934ddafdfaae264252e3eaa23";
 const forbiddenModule = id => /(?:^|\/)node_modules\/(?:picomatch|fdir|tinyglobby|vite|vitest|@vitejs\/plugin-react)(?:\/|$)/i.test(id.replaceAll("\\", "/"));
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -57,8 +57,9 @@ function expectedNsisPayload(compiled) {
   return { bytes: expected, markerOffset: offset };
 }
 // Exception-era control: while an exception is in force (or its state is anything but the explicit retirement) the inspected frontend/desktop/branding inputs must be
-// EXACTLY the audited trees. After the advisory's retirement (strict full audit, zero exceptions, see docs/security/CONSOLIDATED-SECURITY-PROPOSAL.md) the strict audit passes or
-// fails for ANY tree on its own, so the pin has no remaining purpose and would only block every legitimate change of those paths. Any other status, a missing status
+// EXACTLY the audited trees. After the advisory's retirement (strict full audit, zero exceptions, see docs/security/CONSOLIDATED-SECURITY-PROPOSAL.md) the strict audit decides on the
+// dependencies of whatever tree is built, and this inspection still enforces the forbidden-module blacklist on the real production graph, the written-asset inventory, the same-commit manifest and the installer payload
+// comparison, so the exact-tree pin has no remaining purpose and would only block every legitimate change of those paths. Any other status, a missing status
 // or a different spelling keeps the pins (fail closed). Every other inspection (forbidden modules, written assets, installer payload bytes) is unchanged.
 const RETIRED_STATUS = "RETIRED-ADVISORY-WITHDRAWN";
 function frozenTreePins(policy) { return policy.status === RETIRED_STATUS ? {} : policy.trees; }
@@ -76,6 +77,7 @@ async function main() {
   const root = path.resolve(process.argv[4]);
   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "picomatch-exception.json"), "utf8"));
   assert.equal(scopeHash(policy), SCOPE, "Approved inputs changed");
+  if (policy.status === POLICY_RETIRED) assertRetirement(policy);   // the pins are lifted only for the exact, owner-approved retirement record
   assertFrozenTrees(policy, tree => execFileSync("git", ["rev-parse", `HEAD:${tree}`], { cwd: root, encoding: "utf8" }).trim());
   const app = path.join(root, "src/frontend/apps/web"), dist = path.join(app, "dist");
   const config = JSON.parse(fs.readFileSync(path.join(root, "src/desktop/src-tauri/tauri.conf.json"), "utf8"));
