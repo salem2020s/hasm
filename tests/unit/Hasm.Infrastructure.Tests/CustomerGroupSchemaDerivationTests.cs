@@ -9,7 +9,7 @@ namespace Hasm.Infrastructure.Tests;
 /// <summary>
 /// The opaque names of company migration 0027 (customer groups) are DERIVED, not invented: prefix + the first 8 hex digits of SHA-256("hasm.company.0027.customer-groups.v1:" + logical token), exactly as
 /// <c>tools/schema/company-0027-customer-groups.cjs</c> generates them. These tests re-derive every name from the committed dictionary, prove uniqueness against every other name, and pin the additive
-/// shape of the migration (the only DROP is the replaced discount tie index, which is recreated under a NEW generated name: names are never reused).
+/// shape of the migration (no DROP: the migration loader forbids it, so the 0026 discount tie index is kept).
 /// </summary>
 public class CustomerGroupSchemaDerivationTests
 {
@@ -46,16 +46,13 @@ public class CustomerGroupSchemaDerivationTests
     }
 
     [Fact]
-    public void The_migration_is_additive_forward_only_replaces_one_index_under_a_new_name_and_never_grants_or_seeds()
+    public void The_migration_is_additive_forward_only_has_no_drop_keeps_the_0026_tie_index_and_never_grants_or_seeds()
     {
         var sql = Regex.Replace(MigrationScript.LoadEmbeddedCompany().Single(s => s.Version == 27).Sql, "--[^\n]*", "");
         Assert.DoesNotMatch(@"\bGRANT\b", sql);
         Assert.DoesNotMatch(@"\bTRUNCATE\s+TABLE\b", sql);
-        var drops = Regex.Matches(sql, @"\bDROP\s+\w+\s+\w+").Select(m => m.Value).ToList();
-        Assert.Equal([$"DROP INDEX {CompanySchema.Map["DiscountRule.UqActiveKey"]}"], drops);                                       // the only removal: the old active-tie index
-        Assert.NotEqual(CompanySchema.Map["DiscountRule.UqActiveKey"], CompanySchema.Map["DiscountRuleGroupScope.UqActiveKey"]);    // its replacement has a NEW generated name
-        Assert.Contains($"CREATE UNIQUE INDEX {CompanySchema.Map["DiscountRuleGroupScope.UqActiveKey"]} ON {CompanySchema.Map["DiscountRule"]}", sql);
-        Assert.DoesNotContain($"CREATE UNIQUE INDEX {CompanySchema.Map["DiscountRule.UqActiveKey"]}", sql);                         // the old name is never reused
+        Assert.DoesNotMatch(@"\bDROP\b", sql);
+        Assert.DoesNotContain(CompanySchema.Map["DiscountRule.UqActiveKey"], sql);                                                  // the 0026 tie index is left exactly as it is
         Assert.DoesNotMatch(@"\b(INSERT\s+INTO|DELETE\s+FROM)\s+t_", Regex.Replace(sql, @"CREATE FUNCTION.*?\$\$;", "", RegexOptions.Singleline));   // nothing is seeded or rewritten outside the guard functions
         foreach (var table in Tables)
         {

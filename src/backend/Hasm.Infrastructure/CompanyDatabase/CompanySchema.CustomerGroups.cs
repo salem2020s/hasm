@@ -56,7 +56,6 @@ public static partial class CompanySchema
         public const string CustomerGroupId = "c_2a3bedc2";
         public const string FkGroup = "k_84c65bb7";
         public const string CkScope = "k_812d07a0";
-        public const string UqActiveKey = "k_c912a6df";
     }
 
     private static IReadOnlyDictionary<string, string> CustomerGroupMap { get; } = new Dictionary<string, string>
@@ -98,6 +97,5 @@ public static partial class CompanySchema
         ["DiscountRuleGroupScope.CustomerGroupId"] = DiscountRuleGroupScope.CustomerGroupId,
         ["DiscountRuleGroupScope.FkGroup"] = DiscountRuleGroupScope.FkGroup,
         ["DiscountRuleGroupScope.CkScope"] = DiscountRuleGroupScope.CkScope,
-        ["DiscountRuleGroupScope.UqActiveKey"] = DiscountRuleGroupScope.UqActiveKey,
     };
 }

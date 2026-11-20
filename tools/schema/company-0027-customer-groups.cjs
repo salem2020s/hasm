@@ -34,7 +34,7 @@ const TEMPLATE = `-- Migration 0027: customer groups (Phase 3.11). Forward-only,
 --   * groups and assignments are never removed; a group's code and creation data never change; every change advances the revision by one;
 --   * a party has at most one assignment row (primary key on the party), so it belongs to at most one group at a time;
 --   * a price list or discount rule is scoped to a customer OR a customer group, never both (the engine refuses both); the group of a price list or rule is immutable (a different group is a new list or rule);
---   * two ACTIVE discount rules never share customer, group, item scope, priority, minimum quantity and start (the earlier tie index, now including the group).
+--   * the earlier tie index of 0026 (two ACTIVE rules never share customer, item scope, priority, minimum quantity and start) is kept: it also refuses a group rule that shares those keys with a general rule or another group's rule (fail-closed, never too permissive).
 
 CREATE TABLE {{CustomerGroup}} (
     {{CustomerGroup.Id}} uuid NOT NULL,
@@ -125,15 +125,10 @@ BEGIN
 END;
 $$;
 
--- discount rules: the optional group scope, and the active-tie index REPLACED by one that includes the group (new generated name: names are never reused)
+-- discount rules: the optional group scope. The active-tie index of migration 0026 is KEPT unchanged (the migration loader forbids DROP): it does not include the group, so it is stricter than needed (fail-closed): see docs/PHASE-3.11.md
 ALTER TABLE [[DiscountRule.Table]] ADD COLUMN {{DiscountRuleGroupScope.CustomerGroupId}} uuid NULL;
 ALTER TABLE [[DiscountRule.Table]] ADD CONSTRAINT {{DiscountRuleGroupScope.FkGroup}} FOREIGN KEY ({{DiscountRuleGroupScope.CustomerGroupId}}) REFERENCES {{CustomerGroup}} ({{CustomerGroup.Id}});
 ALTER TABLE [[DiscountRule.Table]] ADD CONSTRAINT {{DiscountRuleGroupScope.CkScope}} CHECK ([[DiscountRule.CustomerId]] IS NULL OR {{DiscountRuleGroupScope.CustomerGroupId}} IS NULL);
-
-DROP INDEX [[DiscountRule.UqActiveKey]];
-CREATE UNIQUE INDEX {{DiscountRuleGroupScope.UqActiveKey}} ON [[DiscountRule.Table]] (COALESCE([[DiscountRule.CustomerId]], '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE({{DiscountRuleGroupScope.CustomerGroupId}}, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE([[DiscountRule.ItemId]], '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE([[DiscountRule.ItemGroupId]], '00000000-0000-0000-0000-000000000000'::uuid), [[DiscountRule.Priority]], [[DiscountRule.MinQuantity]], [[DiscountRule.ValidFrom]]) WHERE [[DiscountRule.IsActive]];
 
 CREATE OR REPLACE FUNCTION [[DiscountRule.FnGuard]]() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

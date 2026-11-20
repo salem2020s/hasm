@@ -182,7 +182,9 @@ public class CustomerGroupTests : InventoryTestBase
         Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("OFFD", 1, 5m, group: off.Id)), "customerGroupId", "customer_group_inactive");
         Invalid(await Pricing.UpdateDiscountAsync(Admin.Id, Company.Id, rule.Id, 1, Disc("GD", 1, 10m, group: b.Id)), "scope", "scope_immutable");
         Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("GD2", 1, 20m, group: a.Id)), "priority", "ambiguous_rule");            // the same group, priority, quantity and start tie
-        Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("GD3", 1, 20m, group: b.Id)));                                              // another group never ties
+        // the 0026 tie index does not know the group (the migration loader forbids DROP), so it is STRICTER than needed: another group (or a general rule) with the same keys is refused too (fail-closed); a different priority is accepted
+        Invalid(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("GD3", 1, 20m, group: b.Id)), "priority", "ambiguous_rule");
+        Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("GD3", 2, 20m, group: b.Id)));
         Ok(await Pricing.CreateDiscountAsync(Admin.Id, Company.Id, Disc("CD", 1, 20m, customer)));                                                  // nor does a customer rule
         Assert.Equal("P0001", await Fails($"UPDATE {DR.Table} SET {DRG.CustomerGroupId} = '{b.Id}', {DR.Revision} = {DR.Revision} + 1 WHERE {DR.Code} = 'GD'"));
         Assert.Equal("23514", await Fails($"INSERT INTO {DR.Table} ({DR.Id}, {DR.Code}, {DR.NameAr}, {DR.Priority}, {DR.ValidFrom}, {DR.Percent}, {DR.CustomerId}, {DRG.CustomerGroupId}, {DR.Revision}, {DR.CreatedBy}, {DR.CreatedAtUtc}, {DR.UpdatedAtUtc}) " +

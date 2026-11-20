@@ -8,7 +8,7 @@
 --   * groups and assignments are never removed; a group's code and creation data never change; every change advances the revision by one;
 --   * a party has at most one assignment row (primary key on the party), so it belongs to at most one group at a time;
 --   * a price list or discount rule is scoped to a customer OR a customer group, never both (the engine refuses both); the group of a price list or rule is immutable (a different group is a new list or rule);
---   * two ACTIVE discount rules never share customer, group, item scope, priority, minimum quantity and start (the earlier tie index, now including the group).
+--   * the earlier tie index of 0026 (two ACTIVE rules never share customer, item scope, priority, minimum quantity and start) is kept: it also refuses a group rule that shares those keys with a general rule or another group's rule (fail-closed, never too permissive).
 
 CREATE TABLE t_3198d6e8 (
     c_d69a5fd6 uuid NOT NULL,
@@ -99,15 +99,10 @@ BEGIN
 END;
 $$;
 
--- discount rules: the optional group scope, and the active-tie index REPLACED by one that includes the group (new generated name: names are never reused)
+-- discount rules: the optional group scope. The active-tie index of migration 0026 is KEPT unchanged (the migration loader forbids DROP): it does not include the group, so it is stricter than needed (fail-closed): see docs/PHASE-3.11.md
 ALTER TABLE t_98209637 ADD COLUMN c_2a3bedc2 uuid NULL;
 ALTER TABLE t_98209637 ADD CONSTRAINT k_84c65bb7 FOREIGN KEY (c_2a3bedc2) REFERENCES t_3198d6e8 (c_d69a5fd6);
 ALTER TABLE t_98209637 ADD CONSTRAINT k_812d07a0 CHECK (c_267fdd7a IS NULL OR c_2a3bedc2 IS NULL);
-
-DROP INDEX k_7396728f;
-CREATE UNIQUE INDEX k_c912a6df ON t_98209637 (COALESCE(c_267fdd7a, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(c_2a3bedc2, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(c_27971215, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(c_1561271a, '00000000-0000-0000-0000-000000000000'::uuid), c_13ac6fbc, c_4aa76d4e, c_8d69b845) WHERE c_8e780ef0;
 
 CREATE OR REPLACE FUNCTION f_86f87c19() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
