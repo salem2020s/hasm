@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { useAuth } from "../auth";
 import { Banner, Card, Field, Loading, PageHeader } from "../components";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
+import { AttachmentsPanel } from "./AttachmentsPanel";
 import { TaxClassPicker } from "./TaxClassPicker";
 
 /**
@@ -263,6 +264,7 @@ function PartyEditor({ editor, caps, onClose, onChanged, onSwitch }: { editor: E
       ),
     },
     ...(doc && auth.can("company.tax.view") ? [{ id: "tax", label: t("tax.tab.class"), content: <TaxClassPicker kind="party" subjectId={doc.id} /> } as TabItem] : []),
+    ...(doc && auth.can("company.attachments.view") ? [{ id: "attachments", label: t("att.tab"), content: <AttachmentsPanel kind="local_party" subjectId={doc.id} /> } as TabItem] : []),
     ...(doc ? [{
       id: "requests", label: t("pty.tab.requests"),
       content: (

@@ -7,6 +7,7 @@ import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { navigate } from "../router";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
+import { AttachmentsPanel } from "./AttachmentsPanel";
 import { TaxClassPicker } from "./TaxClassPicker";
 import { blankToNull, groupTree, invFieldErrors, invName, unitLabel } from "./inventoryCommon";
 
@@ -378,6 +379,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
     { id: "units", label: t("inv.item.tab.units"), content: unitsPanel, invalid: invalid.has("units") },
     ...(goods ? [{ id: "tracking", label: t("inv.item.tab.tracking"), content: tracking, invalid: invalid.has("tracking") } as TabItem] : []),
     ...(item && auth.can("company.tax.view") ? [{ id: "tax", label: t("tax.tab.class"), content: <TaxClassPicker kind="item" subjectId={item.id} /> } as TabItem] : []),
+    ...(item && auth.can("company.attachments.view") ? [{ id: "attachments", label: t("att.tab"), content: <AttachmentsPanel kind="inventory_item" subjectId={item.id} /> } as TabItem] : []),
     ...(item ? [{ id: "barcodes", label: t("inv.item.tab.barcodes"), content: <BarcodesPanel item={item} units={units} canAdd={caps.barcodesCreate} canActivate={caps.barcodesActivate} /> } as TabItem] : []),
   ];
   const activeTab = tabs.some((x) => x.id === tab) ? tab : "general";
