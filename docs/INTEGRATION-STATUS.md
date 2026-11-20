@@ -15,6 +15,8 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #57 | `feature/phase-3-12-attachments` | `ecc5c03` | 3.12 attachments and key management | #56 (stacked) | all complete checks pass except the 3 security gates; PostgreSQL pending at the time of writing | `docs/review-records/PR-3-12-attachments.md` |
 | #58 | `feature/phase-3-11-pricing-engine` | `9fe12af` | 3.11 slice 1: pure pricing engine and snapshot | main | previous head `3617721`: all pass except `dependency-scan`; CI on `9fe12af` running | `docs/review-records/PR-3-11-pricing-slice1.md` (no Critical/High; 5 Medium fixed or decided) |
 | #61 | `security/picomatch-retirement-apply` | `326d1cf` | PROTECTED: the three owner-approved patches applied (approval A, 2026-11-20), D-047, independent review record | main | `dependency-scan`, `picomatch-policy-validation`, secret scan, docs, guard self-test pass (real Node 24/Linux); `ci-guard` FAILS only for the missing owner flag (see below); Windows `picomatch-artifact-inspection` pending at the time of writing | `docs/review-records/PR-security-picomatch-apply.md` (APPROVE; no Critical/High) |
+| #63 | `feature/phase-3-9c-party-import` | see PR | 3.9C slice 1: reusable import mapping templates (company migration 0025) | #57 (stacked) | local: unit 929+, PostgreSQL 7/7 template tests, frontend 433; hosted CI pending | independent review pending |
+| #62 | `integration/chain-with-security` | `8552693` | VALIDATION ONLY (do not merge): chain + #61 | main | see evidence above | n/a |
 | #59 | `docs/integration-status` | see PR | this handoff (docs only) | main | docs-only checks | n/a |
 | #60 | `docs/claude-md-autonomy` | see PR | CLAUDE.md autonomy and integration principles (PROTECTED file: owner merges) | main | docs-only checks | n/a |
 | #48 | `feature/phase-3-8d-impact-preview` | `1e8f477` | 3.8D internal replay checkpoint (no financial execution) | main | all pass except `dependency-scan` | decisions X1-X8 pending; execution stays disabled |
@@ -32,9 +34,15 @@ main (fe44321: company 0021, system 0023)
  |- #52 tests, #51/#55 inert security
 ```
 
-Migration versions MUST be contiguous (the loader refuses gaps), so the numbers follow the merge order, not the PR number: **company 0022 -> 0023 -> 0024, system 0024 -> 0025 -> 0026**. #48 holds no migration yet; when it adds one it takes the next free numbers (company 0025, system 0027) and its pinned counts move with it. #58's persistence slice also takes the next free numbers after the chain. Names are generated (`tools/schema/company-00NN-*.cjs`, checked by CI) and never reused.
+Migration versions MUST be contiguous (the loader refuses gaps), so the numbers follow the merge order, not the PR number: **company 0022 -> 0023 -> 0024 -> 0025 (#63 templates), system 0024 -> 0025 -> 0026**. #48 holds no migration yet; when it adds one it takes the next free numbers (company 0025, system 0027) and its pinned counts move with it. #58's persistence slice also takes the next free numbers after the chain. Names are generated (`tools/schema/company-00NN-*.cjs`, checked by CI) and never reused.
 
 Known textual conflicts when branches meet (all expected and mechanical): `.github/workflows/backend.yml` (the PostgreSQL registry count and class list: sum the added counts) and `docs/AUTONOMOUS-PROGRESS.md` (log entries: keep both). `git merge-tree` shows no other conflict between any pair of open branches (checked 2026-11-20).
+
+## Merge-readiness evidence (2026-11-20)
+
+* **#61 `326d1cf` (the three owner-approved patches):** hosted checks on the exact head: `dependency-scan` PASS (real Node 24/Linux strict audit, zero exceptions), `picomatch-policy-validation` PASS, `picomatch-artifact-inspection` PASS (4m42s, real Windows Web/Tauri artifact inspection), `secret-scan`, `docs-traceability`, `guard-selftest` PASS. `ci-guard` FAILS for the single, expected reason (the protected-file owner flag, below). Independent full-diff review: APPROVE, no Critical/High (`docs/review-records/PR-security-picomatch-apply.md`).
+* **#62 `8552693` (validation only: chain #53-#57 + #61):** `dependency-scan`, both picomatch jobs (including the Windows inspection of the tree with ALL frontend changes), backend, frontend, desktop, e2e, secret scan, docs and guard self-test PASS; `ci-guard` fails only for the same owner flag; PostgreSQL integration was still running when this was written. This proves that every frontend change of the chain passes the retired gates once #61 is applied.
+* **#60 `501d82f` (CLAUDE.md, owner-approved as documentation):** `ci-guard`, secret scan, docs and guard self-test PASS; `dependency-scan` fails only because `main` still has the old gate.
 
 ## Security PR #61: the one remaining gate
 
