@@ -14,6 +14,7 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 | #56 | `feature/phase-3-9b-customers-suppliers` | `6aee2f7` | 3.9B customers, suppliers, representatives | #53 + #54 (stacked) | all pass except the 3 security gates | `docs/review-records/PR-3-9b-customers-suppliers.md` |
 | #57 | `feature/phase-3-12-attachments` | `ecc5c03` | 3.12 attachments and key management | #56 (stacked) | all complete checks pass except the 3 security gates; PostgreSQL pending at the time of writing | `docs/review-records/PR-3-12-attachments.md` |
 | #58 | `feature/phase-3-11-pricing-engine` | `9fe12af` | 3.11 slice 1: pure pricing engine and snapshot | main | previous head `3617721`: all pass except `dependency-scan`; CI on `9fe12af` running | `docs/review-records/PR-3-11-pricing-slice1.md` (no Critical/High; 5 Medium fixed or decided) |
+| #61 | `security/picomatch-retirement-apply` | `326d1cf` | PROTECTED: the three owner-approved patches applied (approval A, 2026-11-20), D-047, independent review record | main | `dependency-scan`, `picomatch-policy-validation`, secret scan, docs, guard self-test pass (real Node 24/Linux); `ci-guard` FAILS only for the missing owner flag (see below); Windows `picomatch-artifact-inspection` pending at the time of writing | `docs/review-records/PR-security-picomatch-apply.md` (APPROVE; no Critical/High) |
 | #59 | `docs/integration-status` | see PR | this handoff (docs only) | main | docs-only checks | n/a |
 | #60 | `docs/claude-md-autonomy` | see PR | CLAUDE.md autonomy and integration principles (PROTECTED file: owner merges) | main | docs-only checks | n/a |
 | #48 | `feature/phase-3-8d-impact-preview` | `1e8f477` | 3.8D internal replay checkpoint (no financial execution) | main | all pass except `dependency-scan` | decisions X1-X8 pending; execution stays disabled |
@@ -34,6 +35,12 @@ main (fe44321: company 0021, system 0023)
 Migration versions MUST be contiguous (the loader refuses gaps), so the numbers follow the merge order, not the PR number: **company 0022 -> 0023 -> 0024, system 0024 -> 0025 -> 0026**. #48 holds no migration yet; when it adds one it takes the next free numbers (company 0025, system 0027) and its pinned counts move with it. #58's persistence slice also takes the next free numbers after the chain. Names are generated (`tools/schema/company-00NN-*.cjs`, checked by CI) and never reused.
 
 Known textual conflicts when branches meet (all expected and mechanical): `.github/workflows/backend.yml` (the PostgreSQL registry count and class list: sum the added counts) and `docs/AUTONOMOUS-PROGRESS.md` (log entries: keep both). `git merge-tree` shows no other conflict between any pair of open branches (checked 2026-11-20).
+
+## Security PR #61: the one remaining gate
+
+`ci-guard` fails on #61 with exactly one reason: "protected verification files changed without the owner approval flag (CI_CHANGE_APPROVED)". The flag is the repository label `ci-change-approved`, which the guard reads from the PR. The owner granted approval A in conversation; recording it as that label is an action the agent was **not permitted to take** (the auto-mode classifier denied it as undermining oversight) and does not retry or work around. **Owner action: add the label `ci-change-approved` to PR #61** (only after reading the exact diff, which is the three approved patches). Then re-run the failed `ci-guard` job; all other required checks on #61 already pass or are running.
+
+`integration/chain-with-security` is a validation branch (the feature chain #53-#57 head plus the #61 branch merged) used only to prove that the chain passes the retired gates on hosted CI; it has no PR and is not a merge candidate.
 
 ## Merge sequence (each step needs the owner's explicit approval and exact-head CI)
 
@@ -68,6 +75,7 @@ After each merge: verify the merge commit on `main`, update this file and `docs/
 | OD-11 | Phase 3.8C lots/serials/expiry/reservations decision | 3.8C not started |
 | R | Retention/purge of removed attachments | default in force: bytes of removed attachments are kept; nothing purged |
 | Q | Per-company attachment quota and malware scanning | not built; size limit and content checks only |
+| S | Bundler/desktop config hardening of the artifact inspector (aliases outside node_modules, externals/workers, platform Tauri configs and TAURI_CONFIG, build hooks; see `PR-security-picomatch-apply.md` M1-M5) | recorded residual risk; none of these controls is claimed to exist |
 | C | Add a mandatory Rust (cargo) dependency audit job | no Rust audit exists (pre-existing gap); not added without approval of the gate change |
 
 ## Next development tasks (no approval needed)
