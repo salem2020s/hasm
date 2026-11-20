@@ -125,7 +125,7 @@ public static class AttachmentEndpoints
         if (http.Request.ContentLength is { } len && len > limit) return CompanyConfigurationEndpoints.Error(413, "file_too_large");
         if (http.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = limit;
         // a sender must keep sending: a minimum data rate frees the connection of a stalled upload (Kestrel; the overall deadline below applies on every host)
-        if (http.Features.Get<IHttpMinRequestBodyDataRateFeature>() is { } rate) rate.MinDataRate = new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(16 * 1024, TimeSpan.FromSeconds(10));
+        if (http.Features.Get<Microsoft.AspNetCore.Server.Kestrel.Core.Features.IHttpMinRequestBodyDataRateFeature>() is { } rate) rate.MinDataRate = new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(16 * 1024, TimeSpan.FromSeconds(10));
         if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(http.Request.ContentType, out var mediaType)
             || !mediaType.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase)) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
         var boundary = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(mediaType.Boundary).Value;
