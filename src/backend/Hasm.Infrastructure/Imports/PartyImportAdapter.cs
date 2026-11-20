@@ -121,7 +121,7 @@ public sealed class PartyImportAdapter(PartyService parties) : IImportAdapter
             var (local, identity, issues) = Validate(ToRow(op.RowNo, o));
             if (local is null || identity is null || issues.Count > 0) throw new ImportApplyException("party_invalid", $"row {op.RowNo}: party_invalid ({string.Join(',', issues.Select(i => $"{i.Field}:{i.Code}"))})");
             try { await parties.CreateInWorkAsync(context.Work, context.Actor, local, identity, ct); created++; }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { throw new ImportApplyException("code_taken", $"row {op.RowNo}: code_taken"); }
+            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == LP.UniqueCode) { throw new ImportApplyException("code_taken", $"row {op.RowNo}: code_taken"); }
         }
         return new ImportApplyResult(new JsonObject { ["created"] = created, ["pendingSharedIdentityRequests"] = created });
     }

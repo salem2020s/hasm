@@ -140,9 +140,10 @@ public class PartyImportTests : ImportTestBase
         Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantImportApproverOfflineAsync(user.Login, Company.Id));
         var a = Ok(await Imports.DecideAsync(user.Id, Company.Id, sub.Id, sub.Revision, true, null));
         var result = await IMg.ApplyAsync(Admin.Id, Company.Id, a.Id, a.Revision);
-        Assert.NotEqual(ImportStatus.Applied, result.IsOk ? result.Value!.Status : (ImportStatus?)null);
+        Assert.Equal((ConfigStatus.Conflict, "simulated_failure"), (result.Status, result.Code));
         Assert.Equal(0L, await Count(LP.Table));
         Assert.Equal(0L, await Count(PR.Table));
+        Assert.Equal(ImportStatus.Failed, (await Reload(a.Id)).Status);
     }
 
     [PostgresFact]
