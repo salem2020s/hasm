@@ -1,5 +1,6 @@
 using System.Net;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Inventory;
@@ -143,6 +144,7 @@ public class PricingApiTests : HttpApiTestBase
 
         // a second company with its own administrator, signed in and with ITS company selected
         var other = await ReadyCompany();
+        Credentials.Set(other.Id, new CompanyCredential(CompanyRuntimeRole.NameFor(other.PhysicalDatabaseName), "unused-in-single-principal-tests"));   // the test resolver reaches every company with the single test principal
         var otherAdmin = await NewAdminOf(other);
         var b = await SignIn(otherAdmin, selectCompany: false);
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, "/api/v1/session/company", new { companyId = other.Id }, b)).Status);
