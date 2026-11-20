@@ -141,6 +141,8 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.PriceList.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.PriceEntry.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.DiscountRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CustomerGroup.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CustomerGroupMember.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
