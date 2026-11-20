@@ -153,7 +153,10 @@ public class PricingApiTests : HttpApiTestBase
         Assert.Equal(HttpStatusCode.OK, theirs.Status);
         Assert.Equal(0, theirs.Json.GetProperty("priceLists").GetArrayLength());                      // nothing of company A is listed
         Assert.DoesNotContain(listId.ToString(), theirs.Body);
-        Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Base}/price-lists/{listId}/entries", cookie: b)).Status);
+        var theirEntries = await Send(HttpMethod.Get, $"{Base}/price-lists/{listId}/entries", cookie: b);        // an unknown list id lists nothing (200 with an empty array by design), never company A's entries
+        Assert.Equal(HttpStatusCode.OK, theirEntries.Status);
+        Assert.Equal(0, theirEntries.Json.GetProperty("entries").GetArrayLength());
+        Assert.DoesNotContain(entryId.ToString(), theirEntries.Body);
         Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/price-lists/{listId}", new { nameAr = "اختراق", priority = 9, validFrom = "2026-01-01" }, b, ifMatch: "\"1\"")).Status);
         Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/entries/{entryId}", new { unitPrice = 1 }, b, ifMatch: "\"1\"")).Status);
 
