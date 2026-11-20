@@ -462,7 +462,7 @@ export interface TaxRuleInput {
 }
 // ---- Attachments (Phase 3.12): files kept on the server, reached only through the authorized endpoints.
 export type AttachmentSubjectKind = "local_party" | "inventory_item";
-export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string; isSensitive: boolean; revision: number; createdAtUtc: string }
+export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string | null; isSensitive: boolean; revision: number; createdAtUtc: string }
 export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
 export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
 

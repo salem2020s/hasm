@@ -238,7 +238,7 @@ public class AttachmentTests : InventoryTestBase
         Assert.Equal(new AttachmentCapabilities(false, false, false, false, false), await Mgmt.CapabilitiesAsync(outsider.Id, Company.Id));
         Assert.Equal(before, await Count(Company, AT.Table));
 
-        var (editor, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete], ScopeKind.Company, null);
+        var (editor, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete, PermissionCatalog.Codes.PartiesView], ScopeKind.Company, null);
         Assert.Single(Ok(await Mgmt.ListAsync(editor.Id, Company.Id, "local_party", party)));                               // the sensitive one is invisible
         Ok(await Mgmt.OpenAsync(editor.Id, Company.Id, normal.Id));
         Fails(await Mgmt.OpenAsync(editor.Id, Company.Id, secret.Id), ConfigStatus.NotFound, "attachment_not_found");         // looks exactly like a missing file
@@ -247,12 +247,77 @@ public class AttachmentTests : InventoryTestBase
         Ok(await Mgmt.UploadAsync(editor.Id, Company.Id, "local_party", party, "n.pdf", "application/pdf", Pdf, false));
         Assert.Equal(new AttachmentCapabilities(true, true, true, false, false), await Mgmt.CapabilitiesAsync(editor.Id, Company.Id));
 
-        var (officer, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsSensitiveView, PermissionCatalog.Codes.AttachmentsSensitiveUpload, PermissionCatalog.Codes.AttachmentsUpload], ScopeKind.Company, null);
+        var (officer, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsSensitiveView, PermissionCatalog.Codes.AttachmentsSensitiveUpload, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.PartiesView], ScopeKind.Company, null);
         Assert.Equal(3, Ok(await Mgmt.ListAsync(officer.Id, Company.Id, "local_party", party)).Count);
         Ok(await Mgmt.OpenAsync(officer.Id, Company.Id, secret.Id));
         Ok(await Mgmt.UploadAsync(officer.Id, Company.Id, "local_party", party, "s2.pdf", "application/pdf", Pdf, true));
         Fails(await Mgmt.RemoveAsync(officer.Id, Company.Id, secret.Id, 1, "x"), ConfigStatus.Forbidden, "forbidden");           // removal is its own permission
         Fails(await Mgmt.RewrapAsync(editor.Id, Company.Id), ConfigStatus.Forbidden, "forbidden");                               // key rotation handles sensitive files
         Assert.Equal(new RewrapOutcome(0, 2, 0), Ok(await Mgmt.RewrapAsync(officer.Id, Company.Id)));
+    }
+
+    [PostgresFact]
+    public async Task Review_hardening_names_types_truncation_orphans_hash_exposure_and_the_owning_module_permission()
+    {
+        await Prepare();
+        // bidirectional overrides, zero-width and separators never survive in a label; control characters become underscores
+        Assert.Equal("invoicefdp.exe", AttachmentService.SanitizeFileName("invoice\u202Efdp.exe"));
+        Assert.Equal("ab.pdf", AttachmentService.SanitizeFileName("a\u200Bb\u2028.pdf"));
+        Assert.Null(AttachmentService.SanitizeFileName("\u200B\u200B"));
+        Assert.Equal("a_b.pdf", AttachmentService.SanitizeFileName("a\u0085b.pdf"));
+        // truncation never splits a surrogate pair (a lone surrogate would break the insert)
+        var emoji = new string('a', 199) + "\U0001F600";
+        var cut = AttachmentService.SanitizeFileName(emoji)!;
+        Assert.True(cut.Length <= 200 && !char.IsHighSurrogate(cut[^1]));
+        Ok(await Svc.UploadAsync(Admin.Id, Company.Id, "local_party", party, emoji + ".pdf", "application/pdf", Pdf, false));
+        // a content type may carry parameters; Windows labels a .csv as application/vnd.ms-excel
+        Ok(await Svc.UploadAsync(Admin.Id, Company.Id, "local_party", party, "t.csv", "text/csv; charset=utf-8", Encoding.UTF8.GetBytes("a,b"), false));
+        var csv = Ok(await Svc.UploadAsync(Admin.Id, Company.Id, "local_party", party, "x.csv", "application/vnd.ms-excel", Encoding.UTF8.GetBytes("a,b"), false));
+        Assert.Equal("text/csv", csv.ContentType);
+        Invalid(await Svc.UploadAsync(Admin.Id, Company.Id, "local_party", party, "x.xls", "application/vnd.ms-excel", Encoding.UTF8.GetBytes("a,b"), false), "contentType", "content_type_not_allowed");
+
+        // the plaintext digest of a sensitive file is not copied into the audit trail
+        var secret = Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes(" DIGEST")).ToArray(), sensitive: true, name: "d.pdf"));
+        var detail = await Sql<string>($"SELECT {Audit_.Detail} FROM {Audit_.Table} WHERE {Audit_.EventType} = {AttachmentAuditEvents.Uploaded} ORDER BY {Audit_.Seq} DESC LIMIT 1");
+        Assert.Contains("sha256=withheld", detail);
+        Assert.DoesNotContain(secret.Sha256[..16], detail);
+
+        // a truncated or malformed ciphertext is an integrity failure like any other tampering
+        var path = StoredPath(secret.Id);
+        var full = await File.ReadAllBytesAsync(path);
+        await File.WriteAllBytesAsync(path, full[..(full.Length / 2)]);
+        Fails(await Svc.OpenAsync(Admin.Id, Company.Id, secret.Id, true), ConfigStatus.Conflict, "integrity_failure");
+        await File.WriteAllBytesAsync(path, [1, 2, 3]);
+        Fails(await Svc.OpenAsync(Admin.Id, Company.Id, secret.Id, true), ConfigStatus.Conflict, "integrity_failure");
+        Assert.Equal(2L, await Events(AttachmentAuditEvents.IntegrityFailure));
+        await File.WriteAllBytesAsync(path, full);
+
+        // a failed rewrap is audited and counted, never silent
+        ring.Add("k2", RandomNumberGenerator.GetBytes(32)); ring.Activate("k2");
+        File.Delete(path);
+        var outcome = await Svc.RewrapAsync(Admin.Id, Company.Id);
+        Assert.True(outcome.Failed >= 1);
+        Assert.True(await Events(AttachmentAuditEvents.RewrapFailed) >= 1);
+
+        // orphans: a file no row names is swept once it is old enough; referenced and fresh files stay
+        var companyDir = Path.Combine(dir, Company.Id.ToString("N"));
+        var oldOrphan = AttachmentFileStore.NewName(); var freshOrphan = AttachmentFileStore.NewName();
+        Store.Create(Company.Id, oldOrphan, [1]); Store.Create(Company.Id, freshOrphan, [2]);
+        File.SetLastWriteTimeUtc(Path.Combine(companyDir, oldOrphan), DateTime.UtcNow.AddHours(-3));
+        var kept = Directory.GetFiles(companyDir, "*.att").Length - 2;
+        Assert.Equal(1, await Svc.SweepOrphansAsync(Admin.Id, Company.Id, TimeSpan.FromHours(1)));
+        Assert.False(Store.Exists(Company.Id, oldOrphan));
+        Assert.True(Store.Exists(Company.Id, freshOrphan));
+        Assert.Equal(kept + 1, Directory.GetFiles(companyDir, "*.att").Length);
+        Assert.Equal(1L, await Events(AttachmentAuditEvents.OrphansSwept));
+
+        // an attachment is never reachable by someone who may not see the record it belongs to
+        var normal = Ok(await Up(name: "o.pdf"));
+        var (blind, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete], ScopeKind.Company, null);
+        Fails(await Mgmt.ListAsync(blind.Id, Company.Id, "local_party", party), ConfigStatus.Forbidden, "forbidden");
+        Fails(await Mgmt.OpenAsync(blind.Id, Company.Id, normal.Id), ConfigStatus.Forbidden, "forbidden");
+        Fails(await Mgmt.UploadAsync(blind.Id, Company.Id, "local_party", party, "a.pdf", "application/pdf", Pdf, false), ConfigStatus.Forbidden, "forbidden");
+        Fails(await Mgmt.RemoveAsync(blind.Id, Company.Id, normal.Id, 1, "x"), ConfigStatus.Forbidden, "forbidden");
+        Fails(await Mgmt.SweepOrphansAsync(blind.Id, Company.Id), ConfigStatus.Forbidden, "forbidden");
     }
 }

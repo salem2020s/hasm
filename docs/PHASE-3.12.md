@@ -34,9 +34,14 @@ Stacked on PR #56 (3.9B: company 0023, system 0025), which is stacked on PR #54 
 
 ## Tests
 
-3 unit (names) + 7 PostgreSQL service tests (`AttachmentTests`: plain and encrypted storage, validation matrix, traversal and company isolation, tamper/swap/missing-file/missing-key, removal and database guards, rotation drill with key retirement and recovery, authorization) + 5 HTTP tests (`AttachmentApiTests`: authentication and company selection, end-to-end upload/download/removal with hardened headers, malformed and oversized uploads, sensitive visibility, 503 without a key); registry 989 -> 1001; 5 component tests (`attachments.test.tsx`).
+3 unit (names) + 7 PostgreSQL service tests (`AttachmentTests`: plain and encrypted storage, validation matrix, traversal and company isolation, tamper/swap/missing-file/missing-key, removal and database guards, rotation drill with key retirement and recovery, authorization) + 5 HTTP tests (`AttachmentApiTests`: authentication and company selection, end-to-end upload/download/removal with hardened headers, malformed and oversized uploads, sensitive visibility, 503 without a key); registry 989 -> 1002; 5 component tests (`attachments.test.tsx`).
+
+## Review hardening (docs/review-records/PR-3-12-attachments.md)
+
+Upload is authorized before the body is buffered; the file is written before the transaction (no lock during I/O) and removed only when no row exists; `POST /api/v1/company/attachments/maintenance/sweep` removes orphan files older than one hour; every decryption failure other than a missing key is an audited integrity failure; names lose bidirectional/zero-width/format characters and are truncated on a character boundary; the plaintext digest of a sensitive file is neither returned nor audited; list, upload, download and removal also require the owning module's view permission (parties, items); a charset parameter is accepted and a Windows-labelled .csv is read as text/csv.
 
 ## Open owner decisions (blocker register)
 
 * **Retention of removed attachments:** the bytes of a removed attachment are kept. A purge policy (and the backup-retention interplay) needs an owner decision; nothing is deleted until then.
+* **Per-company quota and malware scanning:** not built; both are owner/deployment decisions.
 * **Per-record authorization:** attachment access is company-wide by permission in this phase; per-branch or per-document scoping follows the commercial document framework (3.13).

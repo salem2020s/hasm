@@ -161,8 +161,10 @@ public class AttachmentApiTests : HttpApiTestBase
         var normal = await Upload(cookie, Pdf, "n.pdf");
         var normalId = normal.Json.GetProperty("id").GetGuid();
         Assert.Equal(Pdf, (await Download(cookie, secretId)).Bytes);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, secret.Json.GetProperty("sha256").ValueKind);                       // the plaintext digest of a sensitive file is never returned
+        Assert.Equal(System.Text.Json.JsonValueKind.String, normal.Json.GetProperty("sha256").ValueKind);
 
-        var (editor, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete], ScopeKind.Company, null);
+        var (editor, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete, PermissionCatalog.Codes.PartiesView], ScopeKind.Company, null);
         var editorCookie = await SignIn(editor);
         var list = await Send(HttpMethod.Get, $"{Base}?subjectKind=local_party&subjectId={party}", cookie: editorCookie);
         Assert.Equal(1, list.Json.GetProperty("items").GetArrayLength());

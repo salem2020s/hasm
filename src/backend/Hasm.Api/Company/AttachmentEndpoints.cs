@@ -43,11 +43,12 @@ public static class AttachmentEndpoints
         g.MapGet("/{id:guid}/content", Download);
         g.MapPost("/{id:guid}/remove", Remove).WithMetadata(new BodyLimit());
         g.MapPost("/maintenance/rewrap", Rewrap);
+        g.MapPost("/maintenance/sweep", Sweep);
     }
 
     private static object Body(AttachmentView v) => new
     {
-        id = v.Id, subjectKind = v.SubjectKind, subjectId = v.SubjectId, fileName = v.FileName, contentType = v.ContentType, sizeBytes = v.SizeBytes, sha256 = v.Sha256, isSensitive = v.IsSensitive, revision = v.Revision, createdAtUtc = v.CreatedAtUtc,
+        id = v.Id, subjectKind = v.SubjectKind, subjectId = v.SubjectId, fileName = v.FileName, contentType = v.ContentType, sizeBytes = v.SizeBytes, sha256 = v.IsSensitive ? null : v.Sha256, isSensitive = v.IsSensitive, revision = v.Revision, createdAtUtc = v.CreatedAtUtc,
     };
 
     private static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null)
@@ -81,6 +82,8 @@ public static class AttachmentEndpoints
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
+        // authorize BEFORE the body is buffered: a user without the upload permission cannot make the server spool a large form
+        if (!(await svc.CapabilitiesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted)).Upload) return CompanyConfigurationEndpoints.Error(403, "forbidden");
         var limit = options.MaxFileBytes + FormOverhead;
         if (http.Request.ContentLength is { } len && len > limit) return CompanyConfigurationEndpoints.Error(413, "file_too_large");
         if (http.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = limit;
@@ -119,6 +122,13 @@ public static class AttachmentEndpoints
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
         return Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { rewrapped = v.Rewrapped, skipped = v.Skipped, failed = v.Failed });
+    }
+
+    private static async Task<IResult> Sweep(HttpContext http, AccessService access, AttachmentManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return Map(await svc.SweepOrphansAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { removed = v });
     }
 
     private static async Task<IResult> Remove(Guid id, RemoveRequest? body, HttpContext http, AccessService access, AttachmentManagementService svc)
