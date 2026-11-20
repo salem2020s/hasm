@@ -13,8 +13,8 @@ namespace Hasm.Infrastructure.Imports;
 /// <summary>Business audit events of import mapping templates (company stream). Persisted codes: never renumber.</summary>
 public static class ImportTemplateAuditEvents
 {
-    public const short Saved = 1110;
-    public const short Retired = 1111;
+    public const short Saved = 1700;
+    public const short Retired = 1701;
 }
 
 /// <summary>
@@ -42,7 +42,7 @@ public static class ImportTemplateContent
                 if (normalized.Count(n => n == normalized[c]) > 1) { errors.Add(new($"mapping.fields.{key}.column", "header_ambiguous")); continue; }
                 node["header"] = header;
             }
-            if (map.Default is { } d) node["default"] = d;
+            if (map.Default is { } d) { if (d.Length > 400) { errors.Add(new($"mapping.fields.{key}.default", "default_too_long")); continue; } node["default"] = d; }
             if (node.Count == 0) continue;                                                      // a field with neither a source nor a default is simply not part of the template
             fields[key] = node;
         }
@@ -113,10 +113,18 @@ public sealed class ImportTemplateService(AccessService access, CompanyDatabaseR
 
     private sealed class Abort(ConfigStatus status, string code, long? current = null) : Exception(code) { public ConfigResult<T> To<T>() => ConfigResult<T>.Fail(status, code, current); }
 
+    /// <summary>A template name: Unicode NFC, trimmed, 1-100 characters, no control, format (bidirectional overrides, zero-width), separator, private-use or unassigned characters and not made of dots only (such a name could not be addressed in a URL and two lookalike names would be different templates).</summary>
     private static string? CleanName(string? name)
     {
-        var n = name?.Trim();
-        return string.IsNullOrEmpty(n) || n.Length > 100 || n.Any(char.IsControl) ? null : n;
+        var n = name?.Normalize(NormalizationForm.FormC).Trim();
+        if (string.IsNullOrEmpty(n) || n.Length > 100 || n.All(c => c == '.')) return null;
+        foreach (var rune in n.EnumerateRunes())
+        {
+            var cat = Rune.GetUnicodeCategory(rune);
+            if (cat is System.Globalization.UnicodeCategory.Control or System.Globalization.UnicodeCategory.Format or System.Globalization.UnicodeCategory.LineSeparator or System.Globalization.UnicodeCategory.ParagraphSeparator
+                or System.Globalization.UnicodeCategory.PrivateUse or System.Globalization.UnicodeCategory.OtherNotAssigned or System.Globalization.UnicodeCategory.Surrogate || rune == Rune.ReplacementChar) return null;
+        }
+        return n;
     }
 
     private static ImportTemplateView Map(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2), r.GetInt32(3), r.GetBoolean(4), JsonNode.Parse(r.GetString(5))!, r.GetFieldValue<DateTimeOffset>(6));
@@ -142,9 +150,11 @@ public sealed class ImportTemplateService(AccessService access, CompanyDatabaseR
     {
         var adapter = adapters.Find(adapterCode);
         if (adapter is null || !await MayAsync(user, company, PermissionCatalog.Codes.ImportsView, adapter.ViewPermission, ct)) return Denied<IReadOnlyList<ImportTemplateView>>();
+        var clean = CleanName(name);
+        if (clean is null) return ConfigResult<IReadOnlyList<ImportTemplateView>>.Ok([]);
         await using var conn = await resolver.OpenAsync(company, ct);
         await using var q = new NpgsqlCommand($"SELECT {Cols} FROM {IT.Table} WHERE {IT.Adapter} = @a AND {IT.Name} = @n ORDER BY {IT.Version} DESC", conn);
-        q.Parameters.AddWithValue("a", adapterCode); q.Parameters.AddWithValue("n", name);
+        q.Parameters.AddWithValue("a", adapterCode); q.Parameters.AddWithValue("n", clean);
         var rows = new List<ImportTemplateView>();
         await using var r = await q.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) rows.Add(Map(r));
@@ -165,6 +175,7 @@ public sealed class ImportTemplateService(AccessService access, CompanyDatabaseR
         try
         {
             var id = Guid.NewGuid();
+            ImportTemplateView? inserted = null;
             await transactions.ExecuteAsync(company, async work =>
             {
                 // serialize every writer of ONE template: the version is assigned under this lock
@@ -177,14 +188,15 @@ public sealed class ImportTemplateService(AccessService access, CompanyDatabaseR
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("a", adapter); ins.Parameters.AddWithValue("n", name); ins.Parameters.AddWithValue("v", curVersion + 1); ins.Parameters.AddWithValue("ret", retire);
                 ins.Parameters.AddWithValue("c", content!.ToJsonString()); ins.Parameters.AddWithValue("by", actor); ins.Parameters.AddWithValue("now", clock.GetUtcNow().UtcDateTime);
                 await ins.ExecuteNonQueryAsync(ct);
+                inserted = await LatestAsync(work.Connection, work.Transaction, adapter, name, ct);          // under the template lock the latest row IS this one
                 await work.AppendAuditAsync(new AuditEventData(retire ? ImportTemplateAuditEvents.Retired : ImportTemplateAuditEvents.Saved, ActorUserId: actor, SubjectId: id, Detail: $"import mapping template {(retire ? "retired" : "saved")} adapter={adapter} name={name} v{curVersion + 1}"), ct);
                 return true;
             }, ct);
-            await using var conn = await resolver.OpenAsync(company, ct);
-            return ConfigResult<ImportTemplateView>.Ok((await LatestAsync(conn, null, adapter, name, ct))!);
+            return ConfigResult<ImportTemplateView>.Ok(inserted!);
         }
         catch (Abort a) { return a.To<ImportTemplateView>(); }
         catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.UniqueViolation or PostgresErrorCodes.RaiseException) { return ConfigResult<ImportTemplateView>.Fail(ConfigStatus.Conflict, "version_conflict"); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.CheckViolation) { return ConfigResult<ImportTemplateView>.Invalid([new FieldError("template", "invalid")]); }
     }
 
     /// <summary>Saves the CURRENT mapping of a batch as the next version of the named template (0 = a new template).</summary>
@@ -209,7 +221,9 @@ public sealed class ImportTemplateService(AccessService access, CompanyDatabaseR
     {
         var adapter = adapters.Find(adapterCode);
         if (adapter is null || !await MayAsync(user, company, PermissionCatalog.Codes.ImportsUpload, adapter.UploadPermission, ct)) return Denied<ImportTemplateView>();
-        return await AppendAsync(user, company, adapter.Code, name, expectedVersion, null, retire: true, ct);
+        var clean = CleanName(name);
+        if (clean is null) return ConfigResult<ImportTemplateView>.Invalid([new FieldError("name", "name_invalid")]);
+        return await AppendAsync(user, company, adapter.Code, clean, expectedVersion, null, retire: true, ct);
     }
 
     /// <summary>Resolves the latest non-retired version of a template against the headers of a staged batch and returns the mapping to PRE-FILL (nothing is written to the batch: the caller submits it through the ordinary, validated mapping step).</summary>

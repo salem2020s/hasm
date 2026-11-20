@@ -36,7 +36,7 @@ public class ImportTemplateTests : ImportTestBase
     }
     private static void Fails<T>(ConfigResult<T> r, ConfigStatus status, string code) { Assert.Equal((status, code), (r.Status, r.Code)); }
     private static void Invalid<T>(ConfigResult<T> r, string field, string code) { Assert.Equal(ConfigStatus.Invalid, r.Status); Assert.Contains(r.Fields!, f => f.Field == field && f.Code == code); }
-    private Task<long> TemplateEvents() => Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} IN (1110, 1111)");
+    private Task<long> TemplateEvents() => Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} IN (1700, 1701)");
 
     [PostgresFact]
     public async Task A_mapping_is_saved_by_header_name_and_applies_to_a_file_with_the_columns_in_another_order_without_skipping_validation()
@@ -153,5 +153,21 @@ public class ImportTemplateTests : ImportTestBase
         var (blind, _) = await Member([PermissionCatalog.Codes.ImportsView], ScopeKind.Company, null);
         Assert.Empty(Ok(await Tpl.ListAsync(blind.Id, Company.Id, null)));                                                      // without the adapter's own view permission its templates are invisible
         Assert.Equal(1L, await Count(Company, IT.Table));
+    }
+
+    [PostgresFact]
+    public async Task Names_are_normalized_unaddressable_or_lookalike_names_are_refused_and_the_response_is_the_row_that_was_saved()
+    {
+        await Prepare();
+        var b = await Mapped("code,name,qty\nA1,Alpha,5\n", Map(0, 1, 2));
+        foreach (var bad in new[] { "..", ".", "Sheet​", "‮sheet", "a\u0085b" })
+            Invalid(await Tpl.SaveFromBatchAsync(Admin.Id, Company.Id, b.Id, bad, 0), "name", "name_invalid");
+        Invalid(await Tpl.RetireAsync(Admin.Id, Company.Id, "items", "..", 1), "name", "name_invalid");
+        Assert.Empty(Ok(await Tpl.HistoryAsync(Admin.Id, Company.Id, "items", "..")));
+        // NFC: the composed and the decomposed spelling are ONE template
+        var composed = Ok(await Tpl.SaveFromBatchAsync(Admin.Id, Company.Id, b.Id, "café", 0));
+        var again = Ok(await Tpl.SaveFromBatchAsync(Admin.Id, Company.Id, b.Id, "café", 1));
+        Assert.Equal((composed.Name, 2), (again.Name, again.Version));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(DISTINCT {IT.Name}) FROM {IT.Table}"));
     }
 }

@@ -79,4 +79,13 @@ public class ImportTemplateContentTests
         Assert.NotNull(parsed); Assert.Empty(errors);
         Assert.NotEmpty(ImportMapping.Parse(m2, Fields, 2).Errors);                                              // required "name" unmapped: the ordinary validation refuses it
     }
+
+    [Fact]
+    public void A_default_longer_than_the_stored_limit_cannot_be_saved_so_it_can_never_make_a_template_unusable()
+    {
+        Assert.Contains(ImportTemplateContent.FromMapping(Mapping(("code", 0, new string('x', 401))), ["Code"]).Errors, e => e.Code == "default_too_long");
+        var (ok, errors) = ImportTemplateContent.FromMapping(Mapping(("code", 0, new string('x', 400))), ["Code"]);
+        Assert.Empty(errors);
+        Assert.Empty(ImportTemplateContent.Validate(ok, Fields));
+    }
 }

@@ -358,6 +358,7 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
   const [tplName, setTplName] = useState("");
   const [tplPick, setTplPick] = useState("");
   const [tplNote, setTplNote] = useState<string | null>(null);
+  const [tplBusy, setTplBusy] = useState(false);          // a double click must not send two saves on the same version
   const loadTemplates = useCallback(async () => { try { setTemplates((await auth.api.listImportTemplates(batch.adapter)).templates); } catch { setTemplates([]); } }, [auth.api, batch.adapter]);
   useEffect(() => { void loadTemplates(); }, [loadTemplates]);
 
@@ -406,7 +407,7 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
           {(a) => <select {...a} value={state.date} onChange={(e) => setState({ ...state, date: e.target.value })}>{defs.options.dateFormats.map((x) => <option key={x} value={x}>{x}</option>)}</select>}
         </Field>
       </div>
-      <fieldset disabled={act.busy} data-testid="imp-templates">
+      <fieldset disabled={act.busy || tplBusy} data-testid="imp-templates">
         <legend>{t("imp.tpl.title")}</legend>
         <p className="hint">{t("imp.tpl.hint")}</p>
         <div className="form-row">
@@ -414,11 +415,13 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
             {(a) => <select {...a} value={tplPick} onChange={(e) => { setTplPick(e.target.value); setTplNote(null); }}><option value="">{t("imp.map_none")}</option>{templates.filter((x) => !x.isRetired).map((x) => <option key={x.id} value={x.name}>{x.name} (v{x.version})</option>)}</select>}
           </Field>
           <button type="button" disabled={!tplPick} data-testid="imp-tpl-apply" onClick={() => void (async () => {
+            setTplBusy(true);
             try {
               const res = await auth.api.applyImportTemplate(batch.id, tplPick);
               setState(fromMapping(res.mapping));
               setTplNote(res.unmatched.length === 0 ? t("imp.tpl.applied") : t("imp.tpl.applied_unmatched", { n: String(res.unmatched.length), fields: res.unmatched.map((k) => { const d = defs.fields.find((f) => f.key === k); return d ? localName(d, locale) : k; }).join("، ") }));
             } catch (e) { if (!auth.handleError(e)) act.setError(importError(tRef.current, e)); }
+            finally { setTplBusy(false); }
           })()}>{t("imp.tpl.apply")}</button>
         </div>
         {tplNote && <p role="status" data-testid="imp-tpl-note">{tplNote}</p>}
@@ -427,11 +430,13 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
             {(a) => <input {...a} value={tplName} maxLength={100} onChange={(e) => setTplName(e.target.value)} />}
           </Field>
           <button type="button" disabled={!batch.mapping || tplName.trim() === ""} data-testid="imp-tpl-save" onClick={() => void (async () => {
+            setTplBusy(true);
             try {
               const current = templates.find((x) => x.name === tplName.trim())?.version ?? 0;
               await auth.api.saveImportTemplate(batch.id, tplName.trim(), current);
               setTplNote(t("imp.tpl.saved")); setTplName(""); await loadTemplates();
             } catch (e) { if (!auth.handleError(e)) { act.setError(importError(tRef.current, e)); await loadTemplates(); } }
+            finally { setTplBusy(false); }
           })()}>{t("imp.tpl.save")}</button>
         </div>
       </fieldset>

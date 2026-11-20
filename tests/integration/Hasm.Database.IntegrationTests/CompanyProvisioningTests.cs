@@ -32,7 +32,7 @@ public class CompanyProvisioningTests : PostgresTestBase
         return c;
     }
 
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0025_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0026_extra.sql", sql);
     private static IReadOnlyList<MigrationScript> WithExtra(string sql) => [.. MigrationScript.LoadEmbeddedCompany(), Extra(sql)];
 
     private async Task<bool> DatabaseExists(string name)
