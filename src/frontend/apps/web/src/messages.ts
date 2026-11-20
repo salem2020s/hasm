@@ -11,6 +11,7 @@ import { negstockAr, negstockEn } from "./messages.negstock";
 import { taxAr, taxEn } from "./messages.tax";
 import { partyRolesAr, partyRolesEn } from "./messages.partyroles";
 import { attachmentsAr, attachmentsEn } from "./messages.attachments";
+import { impTplAr, impTplEn } from "./messages.imptpl";
 import { partyAr, partyEn } from "./messages.party";
 
 export const catalog: Catalog = {
@@ -1249,5 +1250,7 @@ Object.assign(catalog.ar, partyRolesAr);
 Object.assign(catalog.en, partyRolesEn);
 Object.assign(catalog.ar, attachmentsAr);
 Object.assign(catalog.en, attachmentsEn);
+Object.assign(catalog.ar, impTplAr);
+Object.assign(catalog.en, impTplEn);
 Object.assign(catalog.ar, partyAr);
 Object.assign(catalog.en, partyEn);
