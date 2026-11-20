@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
 import { localName, useRunner } from "../ledgerCommon";
+import { parseDecimalInput } from "../numberInput";
 import { useReportUnsaved } from "../unsaved";
 
 /**
@@ -15,11 +16,7 @@ interface Data { taxes: TaxesResponse; classes: TaxClassesResponse; rules: TaxRu
 const TREATMENTS = [1, 2, 3, 4];
 const pad = (n: number) => String(n).padStart(2, "0");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };   // the local calendar day, not UTC
-/** Parses what a user types, accepting Arabic-Indic and Persian digits and a comma or Arabic decimal separator; NaN when it is not a number (never sent to the server). */
-const num = (s: string) => {
-  const v = s.trim().replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/[,٫]/g, ".");
-  return v === "" ? Number.NaN : Number(v);
-};
+const num = parseDecimalInput;
 const bad = (s: string) => s.trim() !== "" && Number.isNaN(num(s));
 const blank = (v: string) => (v.trim() === "" ? null : v.trim());
 
