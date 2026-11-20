@@ -77,7 +77,7 @@ public class FiscalMigrationTests : FiscalTestBase
     public async Task A_freshly_provisioned_company_has_the_calendar_tables_and_no_data_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(26L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(27L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Calendar().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Fy.Table));
         Assert.Equal(0L, await Count(Company, Fp.Table));
@@ -93,7 +93,7 @@ public class FiscalMigrationTests : FiscalTestBase
         await Sql("CREATE TABLE zz_existing (a int); INSERT INTO zz_existing VALUES (7)", legacy);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], outcome.Applied);
+        Assert.Equal([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(0L, await Count(legacy, Fy.Table));                          // nothing is seeded
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
@@ -109,7 +109,7 @@ public class FiscalMigrationTests : FiscalTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 5), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Fy.Table}', '{Fp.Table}', '{Fh.Table}')", legacy));
-        Assert.Equal(5L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(6L, await Count(legacy, SystemSchema.MigrationJournalTable));
     }
 
     [PostgresFact]

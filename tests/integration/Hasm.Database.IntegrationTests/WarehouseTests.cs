@@ -59,7 +59,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
     public async Task A_freshly_provisioned_company_has_the_warehouse_tables_and_no_warehouse_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(26L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(27L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Warehouses().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Wh.Table));
         Assert.Equal(0L, await Count(Company, Wr.Table));
@@ -75,7 +75,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
         var branchRowsBefore = await Count(legacy, Br.Table);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], outcome.Applied);
+        Assert.Equal([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(branchRowsBefore, await Count(legacy, Br.Table));
         Assert.Equal(0L, await Count(legacy, Wh.Table));                          // nothing is seeded
@@ -93,7 +93,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 4), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Wh.Table}', '{Wr.Table}')", legacy));
-        Assert.Equal(4L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(5L, await Count(legacy, SystemSchema.MigrationJournalTable));
         // The branch triggers of 0004 are untouched by the failed attempt (the deferred link trigger was never attached to the branch table).
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM pg_trigger WHERE tgname = '{Wh.LinkBranchTrigger}'", legacy));
     }

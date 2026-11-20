@@ -76,7 +76,7 @@ public class BranchMigrationTests : BranchTestBase
     public async Task A_freshly_provisioned_company_has_exactly_one_active_main_branch_with_recorded_provenance()
     {
         await Prepare();
-        Assert.Equal(26L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(27L, await Count(Company, SystemSchema.MigrationJournalTable));
         var main = Assert.Single(await Branches().ListAsync(Company.Id));
         Assert.Equal("MAIN", main.Data.Code);
         Assert.Equal(MainArabic, main.Data.NameAr);                      // logical Unicode order
@@ -102,7 +102,7 @@ public class BranchMigrationTests : BranchTestBase
 
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], outcome.Applied);
+        Assert.Equal([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(1L, await Count(legacy, Br.Table));
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
@@ -122,9 +122,9 @@ public class BranchMigrationTests : BranchTestBase
         await StartCompanies();
         var legacy = await ReadyCompany([.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version <= 2)]);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
-        Assert.Equal([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], outcome.Applied);
+        Assert.Equal([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], outcome.Applied);
         Assert.Equal(1L, await Count(legacy, Br.Table));
-        Assert.Equal(26L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(27L, await Count(legacy, SystemSchema.MigrationJournalTable));
     }
 
     [PostgresFact]
@@ -138,7 +138,7 @@ public class BranchMigrationTests : BranchTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= 3), broken]).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Failed, outcome.Status);
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name IN ('{Br.Table}', '{Rv.Table}')", legacy));
-        Assert.Equal(3L, await Count(legacy, SystemSchema.MigrationJournalTable));
+        Assert.Equal(4L, await Count(legacy, SystemSchema.MigrationJournalTable));
         // ... and the real migration still applies afterwards.
         Assert.Equal(CompanyMigrationStatus.Migrated, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);
         Assert.Equal(1L, await Count(legacy, Br.Table));
