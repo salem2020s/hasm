@@ -460,6 +460,12 @@ export interface TaxRuleInput {
   documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
   validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
 }
+// ---- Attachments (Phase 3.12): files kept on the server, reached only through the authorized endpoints.
+export type AttachmentSubjectKind = "local_party" | "inventory_item";
+export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string; isSensitive: boolean; revision: number; createdAtUtc: string }
+export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
+export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
+
 // ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
 export interface PartyRole {
   id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
@@ -781,8 +787,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   const enc = encodeURIComponent;
 
   /** Downloads a file (CSV report). Same transport rules as every other call; a failure is reported with the server's short error code. */
-  async function download(path: string): Promise<Blob> {
-    const headers: Record<string, string> = { Accept: "text/csv" };
+  async function download(path: string, accept = "text/csv"): Promise<Blob> {
+    const headers: Record<string, string> = { Accept: accept };
     if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
     const response = await fetchImpl(`${root}${path}`, { method: "GET", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store" });
     if (!response.ok) {
@@ -1119,6 +1125,24 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
     setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
       request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
+    getAttachmentCapabilities: () => get<AttachmentCapabilities>("/api/v1/company/attachments/capabilities"),
+    listAttachments: (subjectKind: AttachmentSubjectKind, subjectId: string) => get<AttachmentsResponse>(`/api/v1/company/attachments?subjectKind=${enc(subjectKind)}&subjectId=${enc(subjectId)}`),
+    uploadAttachment: async (subjectKind: AttachmentSubjectKind, subjectId: string, file: Blob, fileName: string, sensitive: boolean): Promise<Attachment> => {
+      const form = new FormData();
+      form.append("subjectKind", subjectKind); form.append("subjectId", subjectId); form.append("sensitive", sensitive ? "true" : "false"); form.append("file", file, fileName);
+      const headers: Record<string, string> = { Accept: "application/json", "X-Hasm-Request": "1" };      // the browser sets the multipart boundary
+      if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+      const response = await fetchImpl(`${root}/api/v1/company/attachments`, { method: "POST", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store", body: form });
+      if (!response.ok) {
+        let payload: { error?: string; fields?: { field: string; code: string }[] } = {};
+        try { payload = (await response.json()) as typeof payload; } catch { /* non-JSON error body */ }
+        if (response.status === 401) options.onUnauthenticated?.();
+        throw new ApiError(response.status, payload.error ?? "request_failed", { fields: payload.fields });
+      }
+      return (await response.json()) as Attachment;
+    },
+    downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
+    removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     listPartyRoles: (kind?: number) => get<PartyRolesResponse>(`/api/v1/company/party-roles${kind ? `?kind=${kind}` : ""}`),
     createPartyRole: (r: PartyRoleInput) => request<PartyRole>("POST", "/api/v1/company/party-roles", { body: r }),
     updatePartyRole: (id: string, r: PartyRoleInput, revision: number) => request<PartyRole>("PUT", `/api/v1/company/party-roles/${enc(id)}`, { body: r, ifMatch: revision }),
