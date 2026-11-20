@@ -23,3 +23,8 @@ What it does **not** catch (all Medium; none is new in kind - the pins only made
 Lows: the blacklist is a fixed seven-name list (new dependencies are judged only by known advisories); `picomatch-validation.yml` header lines still say "conditional-policy validation / mandatory until activation" (a comment in a protected file; a job NAME is a required-check name and is not renamed); the D-046 row is superseded by D-047 rather than rewritten; `expiresAt` stays in the retired JSON (inert, bound by the scope hash).
 
 These residuals are recorded in `docs/INTEGRATION-STATUS.md` as decision S (bundler/desktop config hardening) next to decision C; neither is claimed to exist.
+
+## Final approval and verification evidence (2026-11-20)
+
+* Head 326d1cf: label `ci-change-approved` present on PR #61 (owner approval A covers the three patches exactly; not re-requested). The independent review above stands (APPROVE, no Critical/High).
+* All hosted jobs for the labelled run were green on 326d1cf; the one red `ci-guard` entry on that SHA is a historical run that kept the pre-label event. This documentation-only commit creates a fresh head so every mandatory check, including ci-guard with the label, is evaluated on a single new SHA. No security patch or protected tool changed.
