@@ -25,3 +25,9 @@ Sources: SRS 8.1-8.4 (several price lists and deterministic, configurable priori
 
 * **Units and currency.** The quantity is expressed in the unit being priced (an entry exists per unit; conversion between units is the caller's job before pricing); the price currency is the document currency (a list is in one currency; conversion is the document framework's job); `UnitCost` must be in the same unit and currency. Reversible; revisit with the document framework (3.13).
 * **Override** results name `manual-override` for the replaced price or discount; the replaced rule and value stay in the trace. **Resolution integrity:** the price rule reference is mandatory and a discount needs its rule reference. **Exactness:** the line amount is computed on integers and rounded once. **Snapshot v1** is defined by an explicit field list and pinned by a golden hash; adding a field requires a new snapshot version. Tests: 17.
+
+## Owner decision P (recorded once) and slice-2 requirements
+
+**P - pricing selection defaults.** Slice 1 implements these as reversible defaults: scope specificity (customer, group, general) before list priority; exactly one discount applies, none stack; an item entry beats an item-group entry; a quantity tier is a floor. SRS 8.1 calls the rules "configurable". Slice 1 has no persistence, API or UI, so nothing is schema-bound. **Slice 2 (pricing persistence) does not start until the owner confirms or changes these defaults** (tracked in `docs/INTEGRATION-STATUS.md`); the agent continues with other independent tasks meanwhile.
+
+**Slice-2 requirements from the review:** margin basis is the rounded unit net price and must be stated in the UI and API; a Warn/RequireApproval below-minimum result needs an approval record before it is sealed; price lists and discount rules are validated on write (customer XOR group, ValidFrom <= ValidTo) so one malformed row cannot block pricing.

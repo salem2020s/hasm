@@ -18,3 +18,13 @@
 | L7 | Low | Nothing binds the resolution to the request; the result trace array is mutable. | Accepted for this slice (the persistence slice builds the resolution from the request); recorded. |
 
 Tests added: 5 (`PricingReviewTests`: golden hash and culture, snapshot tamper matrix, resolution integrity and override record, limits/margins/exact line amounts, tie and data validation). Total 17.
+
+## Re-review - full diff against main (2026-11-20, head 57e4206)
+
+Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; it ran nothing and could not compare against SRS 8.1-8.4 because the SRS is not in the worktree). **No Critical, no High; two Medium, seven Low.** Confirmed: no floating point, clock or culture; exact decimal and BigInteger arithmetic with a single rounding and overflow refusal; margin control never silently skipped (missing cost under Block/RequireApproval refuses; an override cannot bypass the margin); the snapshot hash covers explicit canonical fields and `Verify` recalculates; zero/negative quantity and empty lists are refused; 17 unit tests.
+
+| # | Sev | Finding | Disposition |
+|---|-----|---------|-------------|
+| M1 | Medium | Selection rules (scope specificity before list priority; exactly one discount, no stacking; item entry before item-group entry; quantity tier as a floor) are documented reversible defaults but have no owner-recorded decision; SRS 8.1 says "configurable". | Handled: this slice is a pure engine with no migration, API or persistence, so nothing is schema-bound. Recorded ONCE as owner decision **P** in `docs/PHASE-3.11.md`; slice 2 (persistence) must not start until the owner confirms or changes the defaults. Fail-closed: nothing consumes the engine yet. |
+| M2 | Medium | Margin is computed on the rounded unit net price (undocumented basis); a below-minimum result under Warn/RequireApproval is sealed without an approval record (caller's job). | Documented in `docs/PHASE-3.11.md` as a slice-2 requirement. |
+| Lows | Low | One malformed active list blocks all pricing (persistence must validate on write); Calculate trusts rule refs (accepted L7); mutable trace array (hash is tamper-evident); Guid.Empty and untrimmed currency accepted; no control-character check on the override reason; margin below -100% possible when cost exceeds price. | Recorded for slice 2; none blocks. |
