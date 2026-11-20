@@ -36,14 +36,21 @@ public sealed class AttachmentOptions
     public const long HardMaxFileBytes = 100L * 1024 * 1024;
     /// <summary>Uploads served at the same time by this process; further uploads are refused with 503 (<c>upload_busy</c>) instead of queueing memory. Bounds worst-case upload memory to about this many files.</summary>
     public int MaxConcurrentUploads { get; init; } = 4;
+    /// <summary>Uploads one user may have in flight at once (so one user cannot take every slot).</summary>
+    public int MaxConcurrentUploadsPerUser { get; init; } = 2;
+    /// <summary>Overall deadline of one upload request in seconds (a slow or stalled sender frees its slot); the route also demands a minimum data rate.</summary>
+    public int UploadTimeoutSeconds { get; init; } = 120;
 
     public static AttachmentOptions FromConfiguration(IConfiguration configuration)
     {
         string? Get(string key) => string.IsNullOrWhiteSpace(configuration[$"{SectionName}:{key}"]) ? null : configuration[$"{SectionName}:{key}"]!.Trim();
         var defaults = new AttachmentOptions();
-        var max = long.TryParse(Get("MaxFileBytes"), out var m) && m is > 0 and <= HardMaxFileBytes ? m : defaults.MaxFileBytes;
+        // a configured size above the hard cap is clamped to the cap; an unusable value (zero, negative, not a number) falls back to the default
+        var max = long.TryParse(Get("MaxFileBytes"), out var m) && m > 0 ? Math.Min(m, HardMaxFileBytes) : defaults.MaxFileBytes;
         var concurrent = int.TryParse(Get("MaxConcurrentUploads"), out var c) && c is >= 1 and <= 32 ? c : defaults.MaxConcurrentUploads;
-        return new AttachmentOptions { StorageDirectory = Get("StorageDirectory"), MaxFileBytes = max, MaxConcurrentUploads = concurrent };
+        var perUser = int.TryParse(Get("MaxConcurrentUploadsPerUser"), out var u) && u >= 1 ? Math.Min(u, concurrent) : Math.Min(defaults.MaxConcurrentUploadsPerUser, concurrent);
+        var timeout = int.TryParse(Get("UploadTimeoutSeconds"), out var t) && t is >= 10 and <= 900 ? t : defaults.UploadTimeoutSeconds;
+        return new AttachmentOptions { StorageDirectory = Get("StorageDirectory"), MaxFileBytes = max, MaxConcurrentUploads = concurrent, MaxConcurrentUploadsPerUser = perUser, UploadTimeoutSeconds = timeout };
     }
 }
 
@@ -319,6 +326,8 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     /// Removes stored files that no row names and that are older than <paramref name="minAge"/> (a crash between writing a file and committing its row leaves one; the age keeps a file that is being uploaded right now).
     /// Returns the number removed; audited. Rows and their files are never touched.
     /// </summary>
+    public static readonly TimeSpan MinSweepAge = TimeSpan.FromMinutes(5);
+
     public async Task<int> SweepOrphansAsync(Guid actor, Guid companyId, TimeSpan minAge, CancellationToken ct = default)
     {
         HashSet<string> known;
@@ -329,6 +338,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
             await using var rd = await q.ExecuteReaderAsync(ct);
             while (await rd.ReadAsync(ct)) known.Add(rd.GetString(0));
         }
+        if (minAge < MinSweepAge) minAge = MinSweepAge;                  // never a zero or negative age: a file being uploaded right now must survive
         var cutoff = DateTime.UtcNow - minAge;
         var removed = store.SweepTemporaryFiles(companyId, cutoff);      // stale *.att.tmp-* leftovers of a crashed write (never a live one: the age keeps it)
         foreach (var (name, written) in store.List(companyId))
