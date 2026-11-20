@@ -33,7 +33,7 @@ Migrations on `main`: **company 0001-0025, system 0001-0026** (contiguous). Post
 |----|----------|-------------------|
 | X1-X8 | Phase 3.8D decisions | #48 stays a checkpoint; no financial execution; no safeguard changed |
 | OD-11 | Phase 3.8C lots/serials/expiry/reservations | 3.8C not started |
-| P | Pricing selection defaults (scope before priority, one discount no stacking, item before group, quantity tier as floor; `docs/PHASE-3.11.md`) | pricing persistence (3.11 slice 2) does not start |
+| P | RESOLVED by the owner directive 2026-11-20: precedence is company-configurable, defaults = slice 1; no stacking offered | slice 2a (engine policy) implemented; persistence is slice 2b |
 | R | Retention/purge of removed attachments | bytes of removed attachments are kept |
 | Q | Per-company attachment quota and malware scanning | not built |
 | K | Key retirement for removed sensitive attachments (review of #57 M1) | removed sensitive files stay under the old key, which must stay available; fail-closed `KeyUnavailable` |

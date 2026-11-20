@@ -12,11 +12,28 @@ public enum MarginAction { Warn = 1, RequireApproval = 2, Block = 3 }
 public enum MarginStatus { NotEvaluated = 0, Ok = 1, BelowMinimum = 2 }
 
 /// <summary>
+/// How competing price lists are ordered (company-configurable; owner decision P). <see cref="ScopeThenPriority"/> (default): customer list, then group list, then general list; list priority only decides among lists
+/// of the same scope. <see cref="PriorityThenScope"/>: list priority decides first (lower first); scope specificity only breaks ties between lists of equal priority. Either way the order is total and deterministic.
+/// </summary>
+public enum PriceListPrecedence { ScopeThenPriority = 1, PriorityThenScope = 2 }
+
+/// <summary>
+/// How competing discount rules are ordered (company-configurable). <see cref="SpecificityThenPriority"/> (default): customer specificity, then item specificity, then priority. <see cref="PriorityThenSpecificity"/>:
+/// priority first (lower first), then customer and item specificity. Discounts never stack in either mode: exactly one applies (stacking is not an approved requirement and is not offered).
+/// </summary>
+public enum DiscountPrecedence { SpecificityThenPriority = 1, PriorityThenSpecificity = 2 }
+
+/// <summary>
 /// The company's pricing policy. <see cref="PriceDecimals"/> is the scale of a unit price (0-6), <see cref="MoneyDecimals"/> the scale of a line amount (0-6); both round half away from zero, ONCE.
 /// A <see cref="MinMarginPercent"/> of null disables the margin control; with a minimum set, a missing cost is refused (<c>cost_unavailable</c>) when the action is Block or RequireApproval, because
 /// a control that silently skips itself is not a control.
 /// </summary>
-public sealed record PricingPolicy(int PriceDecimals, int MoneyDecimals, decimal? MinMarginPercent = null, MarginAction Action = MarginAction.Warn);
+public sealed record PricingPolicy(int PriceDecimals, int MoneyDecimals, decimal? MinMarginPercent = null, MarginAction Action = MarginAction.Warn,
+    PriceListPrecedence ListPrecedence = PriceListPrecedence.ScopeThenPriority, DiscountPrecedence DiscountPrecedence = DiscountPrecedence.SpecificityThenPriority)
+{
+    /// <summary>True when both precedences are the defaults of slice 1 (a snapshot of such a policy keeps the v1 form and hash).</summary>
+    public bool HasDefaultPrecedence => ListPrecedence == PriceListPrecedence.ScopeThenPriority && DiscountPrecedence == DiscountPrecedence.SpecificityThenPriority;
+}
 
 /// <summary>A price list. Scope: for ONE customer, for a customer group, or general (both null). Both set is invalid data. Lower <see cref="Priority"/> wins among lists of equal scope.</summary>
 public sealed record PriceListRecord(Guid Id, string Code, int Priority, string Currency, DateOnly ValidFrom, DateOnly? ValidTo, bool IsActive, Guid? CustomerId = null, Guid? CustomerGroupId = null);

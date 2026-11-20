@@ -15,6 +15,9 @@ public sealed record PricingSnapshot(string Version, PricingPolicy Policy, Prici
 public static class PricingSnapshots
 {
     public const string CurrentVersion = "pricing-snapshot-v1";
+    /// <summary>The form of a snapshot whose policy has a NON-default precedence (the precedences are part of the sealed content). Snapshots of default-precedence policies stay v1 with their historical hash.</summary>
+    public const string PrecedenceVersion = "pricing-snapshot-v2";
+    private static string VersionFor(PricingPolicy p) => p.HasDefaultPrecedence ? CurrentVersion : PrecedenceVersion;
 
     private sealed class CanonicalDecimal : JsonConverter<decimal>
     {
@@ -31,7 +34,9 @@ public static class PricingSnapshots
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
         {
             Version = version,
-            Policy = new { policy.PriceDecimals, policy.MoneyDecimals, policy.MinMarginPercent, Action = (int)policy.Action },
+            Policy = version == CurrentVersion
+                ? (object)new { policy.PriceDecimals, policy.MoneyDecimals, policy.MinMarginPercent, Action = (int)policy.Action }
+                : new { policy.PriceDecimals, policy.MoneyDecimals, policy.MinMarginPercent, Action = (int)policy.Action, ListPrecedence = (int)policy.ListPrecedence, DiscountPrecedence = (int)policy.DiscountPrecedence },
             Request = new { request.Date, request.Currency, request.ItemId, request.ItemGroupId, request.UnitId, request.Quantity, request.CustomerId, request.CustomerGroupId, request.UnitCost },
             Resolved = new { resolved.ListUnitPrice, resolved.PriceRuleRef, resolved.DiscountPercent, resolved.DiscountRuleRef, Trace = Trace(resolved.Trace) },
             Override = over is null ? null : new { over.UnitPrice, over.DiscountPercent, over.Reason },
@@ -43,13 +48,14 @@ public static class PricingSnapshots
     {
         var result = PricingEngine.Calculate(policy, request, resolved, over);
         var copy = resolved with { Trace = resolved.Trace.ToArray().AsReadOnly() };
-        return new(CurrentVersion, policy, request, copy, over, result, Hash(CurrentVersion, policy, request, copy, over, result));
+        var version = VersionFor(policy);
+        return new(version, policy, request, copy, over, result, Hash(version, policy, request, copy, over, result));
     }
 
     /// <summary>True only when the version is known, the stored hash matches the stored content AND recalculating from the stored values reproduces the stored result exactly.</summary>
     public static bool Verify(PricingSnapshot snapshot)
     {
-        if (snapshot is null || snapshot.Version != CurrentVersion || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved?.Trace is null || snapshot.Result?.Trace is null) return false;
+        if (snapshot is null || snapshot.Policy is null || snapshot.Version != VersionFor(snapshot.Policy) || snapshot.Policy is null || snapshot.Request is null || snapshot.Resolved?.Trace is null || snapshot.Result?.Trace is null) return false;
         try
         {
             if (!string.Equals(snapshot.ContentHash, Hash(snapshot.Version, snapshot.Policy, snapshot.Request, snapshot.Resolved, snapshot.Override, snapshot.Result), StringComparison.Ordinal)) return false;

@@ -24,7 +24,7 @@ public static class PricingEngine
         if (policy is null) throw Refuse("invalid_policy");
         if (policy.PriceDecimals is < 0 or > MaxDecimals || policy.MoneyDecimals is < 0 or > MaxDecimals) throw Refuse("invalid_policy");
         if (policy.MinMarginPercent is { } m && (m < -1000m || m > 100m || !Scale(m, 4))) throw Refuse("invalid_policy");
-        if (!Enum.IsDefined(policy.Action)) throw Refuse("invalid_policy");
+        if (!Enum.IsDefined(policy.Action) || !Enum.IsDefined(policy.ListPrecedence) || !Enum.IsDefined(policy.DiscountPrecedence)) throw Refuse("invalid_policy");
     }
 
     private static void ValidateRequest(PricingRequest r)
@@ -39,12 +39,17 @@ public static class PricingEngine
     private static bool InRange(DateOnly date, DateOnly from, DateOnly? to) => from <= date && (to is null || date <= to);
 
     /// <summary>Selects the price and the discount. Lists, entries and rules are DATA of the company: invalid or ambiguous data is refused, never guessed.</summary>
-    public static ResolvedPricing Resolve(PricingRequest request, IReadOnlyList<PriceListRecord> lists, IReadOnlyList<PriceEntryRecord> entries, IReadOnlyList<DiscountRuleRecord> discounts)
+    public static ResolvedPricing Resolve(PricingRequest request, IReadOnlyList<PriceListRecord> lists, IReadOnlyList<PriceEntryRecord> entries, IReadOnlyList<DiscountRuleRecord> discounts, PricingPolicy? policy = null)
     {
         ValidateRequest(request);
+        if (policy is not null) ValidatePolicy(policy);
+        var listPrecedence = policy?.ListPrecedence ?? PriceListPrecedence.ScopeThenPriority;
+        var discountPrecedence = policy?.DiscountPrecedence ?? DiscountPrecedence.SpecificityThenPriority;
         if (lists is null || entries is null || discounts is null) throw Refuse("invalid_request");
         var currency = request.Currency.Trim().ToUpperInvariant();
         var trace = new List<TraceStep>();
+        if (listPrecedence != PriceListPrecedence.ScopeThenPriority) trace.Add(new("policy", "list-precedence:priority-then-scope", "applied"));
+        if (discountPrecedence != DiscountPrecedence.SpecificityThenPriority) trace.Add(new("policy", "discount-precedence:priority-then-specificity", "applied"));
 
         // ---- price
         var eligible = new List<(PriceListRecord List, int Scope)>();
@@ -57,7 +62,10 @@ public static class PricingEngine
             else if (l.CustomerGroupId is { } g) { if (g != request.CustomerGroupId) continue; eligible.Add((l, 1)); }
             else eligible.Add((l, 0));
         }
-        foreach (var (list, _) in eligible.OrderByDescending(x => x.Scope).ThenBy(x => x.List.Priority).ThenByDescending(x => x.List.ValidFrom).ThenBy(x => x.List.Code, StringComparer.Ordinal).ThenBy(x => x.List.Id))
+        var orderedLists = listPrecedence == PriceListPrecedence.ScopeThenPriority
+            ? eligible.OrderByDescending(x => x.Scope).ThenBy(x => x.List.Priority)
+            : eligible.OrderBy(x => x.List.Priority).ThenByDescending(x => x.Scope);
+        foreach (var (list, _) in orderedLists.ThenByDescending(x => x.List.ValidFrom).ThenBy(x => x.List.Code, StringComparer.Ordinal).ThenBy(x => x.List.Id))
         {
             foreach (var bad in entries.Where(e => e.PriceListId == list.Id))
                 if (bad.MinQuantity < 0 || !Scale(bad.MinQuantity, 10) || (bad.ItemId is not null && bad.ItemGroupId is not null) || (bad.ItemId is null && bad.ItemGroupId is null)) throw Refuse("invalid_price");
@@ -74,12 +82,12 @@ public static class PricingEngine
             if (e0.UnitPrice < 0 || e0.UnitPrice > MaxPrice || !Scale(e0.UnitPrice, MaxDecimals)) throw Refuse("invalid_price");
             var priceRef = $"{listRef};tier:{tier.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
             trace.Add(new("price", priceRef, "selected"));
-            return ResolveDiscount(request, e0.UnitPrice, priceRef, discounts, trace);
+            return ResolveDiscount(request, e0.UnitPrice, priceRef, discounts, trace, discountPrecedence);
         }
         throw Refuse("no_price");
     }
 
-    private static ResolvedPricing ResolveDiscount(PricingRequest request, decimal price, string priceRef, IReadOnlyList<DiscountRuleRecord> discounts, List<TraceStep> trace)
+    private static ResolvedPricing ResolveDiscount(PricingRequest request, decimal price, string priceRef, IReadOnlyList<DiscountRuleRecord> discounts, List<TraceStep> trace, DiscountPrecedence precedence)
     {
         var applicable = new List<(DiscountRuleRecord Rule, int Customer, int Item)>();
         foreach (var d in discounts)
@@ -99,7 +107,9 @@ public static class PricingEngine
             applicable.Add((d, cs, its));
         }
         if (applicable.Count == 0) { trace.Add(new("discount", "none", "no_applicable_rule")); return new(price, priceRef, 0m, null, trace.ToArray()); }
-        var ordered = applicable.OrderByDescending(x => x.Customer).ThenByDescending(x => x.Item).ThenBy(x => x.Rule.Priority).ThenByDescending(x => x.Rule.MinQuantity)
+        var ordered = (precedence == DiscountPrecedence.SpecificityThenPriority
+            ? applicable.OrderByDescending(x => x.Customer).ThenByDescending(x => x.Item).ThenBy(x => x.Rule.Priority)
+            : applicable.OrderBy(x => x.Rule.Priority).ThenByDescending(x => x.Customer).ThenByDescending(x => x.Item)).ThenByDescending(x => x.Rule.MinQuantity)
             .ThenByDescending(x => x.Rule.ValidFrom).ThenBy(x => x.Rule.Code, StringComparer.Ordinal).ThenBy(x => x.Rule.Id).ToList();
         var first = ordered[0];
         if (ordered.Count > 1)
