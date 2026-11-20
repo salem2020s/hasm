@@ -24,6 +24,26 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 
 Migrations on `main`: **company 0001-0026, system 0001-0027** (contiguous). PostgreSQL registry: 1022 tests on `main` (1025 on the 3.11 slice 2c branch) (`.github/workflows/backend.yml`, raise-only). Next free numbers: company 0027, system 0028. PR #48's branch predates these merges (its tree ends at company 0021 and system 0023); when it is rebased onto `main`, any migration it adds must be numbered from company 0027 / system 0028 and its pinned counts re-reconciled (checked against its head `1e8f477` on 2026-11-20).
 
+## Cloud team handoff (2026-11-20, lead = Claude Cloud; recover from here after a reset or usage limit)
+
+Local CLI handed leadership to the cloud lead after PR #69 (merge `3bbf66a`). No PR below is merged; every one needs: independent full-diff review of the EXACT head recorded in `docs/review-records/`, all required checks green on that head (REST check-runs; GraphQL is blocked in the cloud), merge with the head SHA pinned. Cloud sandbox has no .NET SDK: CI is the compiler, so push early and fix from job logs.
+
+| Agent | Task | Branch / PR | Next step |
+|-------|------|-------------|-----------|
+| A | 3.11 customer groups (company 0027, no system migration) | `feature/phase-3-11-customer-groups`, #75 | finish service/API/screens/tests; address C's schema review (new generated name for the tie index, service-side customer-role and active-group checks, 0027 `--check` CI step, server-derived group in quotes) |
+| B | 4.3 backup/restore (no migration) | `feature/phase-4-3-backup-restore`, #70 | CI on `4c95366`; pg_dump/restore coordination; import-file keys (covered or documented); re-review by C |
+| C | independent QA/review | `docs/qa-release1-test-plan`, #71 (docs) | review final heads of #72, #74, #73, #70, #75 |
+| D | 4.1 TOTP primitive (#72) and backend follow-ups (#74) | `feature/phase-4-1-identity` `6a8df7c`, `feature/backend-followups-1` `eb0106d` | CI, then C re-review of those heads; refresh review records to the final heads |
+| E | frontend follow-ups | `feature/frontend-followups-1`, #73 | apply C's Medium fixes and the Arabic wording decision in one push; then review record |
+
+Migration reservations: company 0027 = A (confirmed); company 0028 unassigned; system 0028 reserved for 4.1 enrolment (needs owner decisions below). Shared `backend.yml` PostgreSQL registry: each PR raises it by its own new test count; the lead recomputes after each merge (raise-only).
+
+Owner decisions recorded: **Arabic label for retiring an import template = "إيقاف استخدام القالب"** (owner, PR #73). OPEN (owner, Phase 4.1; fail-closed, nothing implemented beyond the TOTP primitive): (1) MFA enforcement scope and whether it can be disabled; (2) key protecting TOTP secrets (file-encryption ring or a dedicated key); (3) lost-authenticator recovery (recovery codes vs administrative reset) and its audit/approval; (4) emergency account (creation, use, custody, alerting, relation to MFA); (5) second approval (which operations, approver, expiry); (6) optional AD/Kerberos (environment, no test infrastructure).
+
+Review findings still to close: #74 (gate/deadline/memory/tests fixed in `eb0106d`, re-review pending; 403 to 404 and the 100 MB cap are behaviour changes); #72 (CAS replay, throttling, key-ring storage tests required by the enforcement slice); #73 (SearchPicker reload/a11y; PR-69 M2 pricing pickers NOT closed until a screen adopts SearchPicker); #70 (company-id bound on restore fixed; import-file keys); #75 (see above). Pricing follow-ups recorded: quote must not trust client `itemGroupId`/`unitCost` when 3.13 seals documents; customer/unit/group pickers lack truncation notices.
+
+Next after merges (approved, unblocked): A pricing follow-ups then 3.13 once 3.11 is complete; B import-file rewrap retirability report, then 4.4 (needs 4.3); D backend follow-ups; E adopt SearchPicker on non-pricing screens when a screen needs it. Blocked: 3.8C (OD-11), 3.8D (X1-X8), 4.1 enforcement (above).
+
 ## Open pull requests
 
 | PR | Branch | Status |
