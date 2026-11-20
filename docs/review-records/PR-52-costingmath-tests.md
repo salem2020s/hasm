@@ -9,3 +9,7 @@
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** merge readiness depends on the owner: the failing dependency-scan gate is not bypassed here and the PR is not merged.
 * **Verdict:** approve (test-only change); merge only with explicit owner approval and a green required-check set.
+
+## Independent review - full diff against main (2026-11-20, head 24e01bf)
+
+Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context). **No findings; approve.** No production code changed (test file plus this record). The assertions match `CostingMath` (Scale: whole <= 0, part <= 0 or amount < 0; Proportion: amount < 0, part < 0 or part > whole, reached before the part == whole shortcut); each assertion fails if its guard is removed, so the tests are not vacuous. Low: the Proportion `whole <= 0` guard and the zero-part behavior remain untested (already noted above).
