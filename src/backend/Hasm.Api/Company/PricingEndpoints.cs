@@ -41,6 +41,11 @@ public static class PricingEndpoints
         g.MapGet("/discounts", ListDiscounts);
         g.MapPost("/discounts", CreateDiscount).WithMetadata(new BodyLimit());
         g.MapPut("/discounts/{id:guid}", UpdateDiscount).WithMetadata(new BodyLimit());
+        g.MapGet("/customer-groups", ListGroups);
+        g.MapPost("/customer-groups", CreateGroup).WithMetadata(new BodyLimit());
+        g.MapPut("/customer-groups/{id:guid}", UpdateGroup).WithMetadata(new BodyLimit());
+        g.MapGet("/customer-assignments", ListAssignments);
+        g.MapPut("/customer-assignments/{partyId:guid}", SetAssignment).WithMetadata(new BodyLimit());
         g.MapPost("/quote", Quote).WithMetadata(new BodyLimit());
     }
 
@@ -49,13 +54,15 @@ public static class PricingEndpoints
         version = p.Version, isDefault = p.IsDefault, priceDecimals = p.Policy.PriceDecimals, moneyDecimals = p.Policy.MoneyDecimals, minMarginPercent = p.Policy.MinMarginPercent,
         marginAction = (short)p.Policy.Action, listPrecedence = (short)p.Policy.ListPrecedence, discountPrecedence = (short)p.Policy.DiscountPrecedence, createdAtUtc = p.CreatedAtUtc,
     };
-    private static object ListBody(PriceListView l) => new { id = l.Id, code = l.Code, nameAr = l.NameAr, nameEn = l.NameEn, priority = l.Priority, currency = l.Currency, validFrom = l.ValidFrom, validTo = l.ValidTo, isActive = l.IsActive, customerId = l.CustomerId, revision = l.Revision, updatedAtUtc = l.UpdatedAtUtc };
+    private static object ListBody(PriceListView l) => new { id = l.Id, code = l.Code, nameAr = l.NameAr, nameEn = l.NameEn, priority = l.Priority, currency = l.Currency, validFrom = l.ValidFrom, validTo = l.ValidTo, isActive = l.IsActive, customerId = l.CustomerId, customerGroupId = l.CustomerGroupId, revision = l.Revision, updatedAtUtc = l.UpdatedAtUtc };
     private static object EntryBody(PriceEntryView e) => new { id = e.Id, priceListId = e.PriceListId, itemId = e.ItemId, itemGroupId = e.ItemGroupId, unitId = e.UnitId, minQuantity = e.MinQuantity, unitPrice = e.UnitPrice, isActive = e.IsActive, revision = e.Revision, updatedAtUtc = e.UpdatedAtUtc };
     private static object DiscountBody(DiscountRuleView d) => new
     {
         id = d.Id, code = d.Code, nameAr = d.NameAr, nameEn = d.NameEn, priority = d.Priority, validFrom = d.ValidFrom, validTo = d.ValidTo, isActive = d.IsActive, percent = d.Percent, minQuantity = d.MinQuantity,
-        customerId = d.CustomerId, itemId = d.ItemId, itemGroupId = d.ItemGroupId, revision = d.Revision, updatedAtUtc = d.UpdatedAtUtc,
+        customerId = d.CustomerId, customerGroupId = d.CustomerGroupId, itemId = d.ItemId, itemGroupId = d.ItemGroupId, revision = d.Revision, updatedAtUtc = d.UpdatedAtUtc,
     };
+    private static object GroupBody(CustomerGroupView v) => new { id = v.Id, code = v.Code, nameAr = v.NameAr, nameEn = v.NameEn, isActive = v.IsActive, revision = v.Revision, updatedAtUtc = v.UpdatedAtUtc };
+    private static object AssignmentBody(CustomerGroupAssignmentView v) => new { partyId = v.PartyId, customerGroupId = v.CustomerGroupId, customerGroupCode = v.CustomerGroupCode, revision = v.Revision };
     private static object SnapshotBody(PricingSnapshot s) => new
     {
         version = s.Version, contentHash = s.ContentHash,
@@ -87,6 +94,11 @@ public static class PricingEndpoints
     private static Task<IResult> ListDiscounts(HttpContext http, AccessService access, PricingManagementService svc) =>
         Read(http, access, svc, (u, c) => svc.ListDiscountsAsync(u, c, http.RequestAborted), (v, can) => new { discounts = v.Select(DiscountBody), can = new { configure = can } });
 
+    private static Task<IResult> ListGroups(HttpContext http, AccessService access, PricingManagementService svc) =>
+        Read(http, access, svc, (u, c) => svc.ListCustomerGroupsAsync(u, c, http.RequestAborted), (v, can) => new { customerGroups = v.Select(GroupBody), can = new { configure = can } });
+    private static Task<IResult> ListAssignments(HttpContext http, AccessService access, PricingManagementService svc) =>
+        Read(http, access, svc, (u, c) => svc.ListAssignmentsAsync(u, c, http.RequestAborted), (v, can) => new { assignments = v.Select(AssignmentBody), can = new { configure = can } });
+
     private static async Task<IResult> Write<T>(HttpContext http, AccessService access, bool needsRevision, Func<Guid, Guid, long?, Task<ConfigResult<T>>> call, Func<T, object> body, Func<T, long?>? revision)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
@@ -111,7 +123,15 @@ public static class PricingEndpoints
     private static Task<IResult> UpdateDiscount(Guid id, DiscountRuleInput? body, HttpContext http, AccessService access, PricingManagementService svc) =>
         Write(http, access, true, (u, c, rev) => svc.UpdateDiscountAsync(u, c, id, rev, body, http.RequestAborted), DiscountBody, d => d.Revision);
 
-    /// <summary>The quote body: the priced line and an optional override. The override (price and/or discount with a mandatory reason) additionally needs <c>company.pricing.override</c>.</summary>
+    private static Task<IResult> CreateGroup(CustomerGroupInput? body, HttpContext http, AccessService access, PricingManagementService svc) =>
+        Write(http, access, false, (u, c, _) => svc.CreateCustomerGroupAsync(u, c, body, http.RequestAborted), GroupBody, v => v.Revision);
+    private static Task<IResult> UpdateGroup(Guid id, CustomerGroupInput? body, HttpContext http, AccessService access, PricingManagementService svc) =>
+        Write(http, access, true, (u, c, rev) => svc.UpdateCustomerGroupAsync(u, c, id, rev, body, http.RequestAborted), GroupBody, v => v.Revision);
+    /// <summary>If-Match carries the assignment revision looked at (0 = the customer was never assigned).</summary>
+    private static Task<IResult> SetAssignment(Guid partyId, CustomerGroupAssignmentInput? body, HttpContext http, AccessService access, PricingManagementService svc) =>
+        Write(http, access, true, (u, c, rev) => svc.SetAssignmentAsync(u, c, partyId, rev, body, http.RequestAborted), AssignmentBody, v => v.Revision);
+
+    /// <summary>The quote body (the customer group is never accepted from the caller: the server derives it from the customer's stored assignment, and the item group from the item): the priced line and an optional override. The override (price and/or discount with a mandatory reason) additionally needs <c>company.pricing.override</c>.</summary>
     public sealed record QuoteRequest(DateOnly? Date, string? Currency, Guid? ItemId, Guid? ItemGroupId, Guid? UnitId, decimal? Quantity, Guid? CustomerId, decimal? UnitCost, PriceOverride? Override);
 
     private static async Task<IResult> Quote(QuoteRequest? body, HttpContext http, AccessService access, PricingManagementService svc)
