@@ -76,7 +76,7 @@ public class SystemDatabaseTests : PostgresTestBase
     public async Task Failed_migration_rolls_back_completely()
     {
         await Init();
-        var bad = MigrationScript.Parse("0027_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
+        var bad = MigrationScript.Parse("0028_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
         var scripts = MigrationScript.LoadEmbedded().Append(bad).ToList();
         var runner = new MigrationRunner(Options.BuildSystemConnectionString(admin: true));
 
