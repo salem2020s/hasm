@@ -294,7 +294,7 @@ public sealed class BackupSetTests : IDisposable
         Assert.Equal(new[] { EnvelopeEncryptor.KeyIdOf(File.ReadAllBytes(Path.Combine(s.Source, s.Sensitive))) }, m.KeyIdsRequired);
         var path = Path.Combine(P("set"), BackupSet.ManifestFileName);
         var json = File.ReadAllText(path);
-        var stripped = System.Text.RegularExpressions.Regex.Replace(json, "\"nonEnvelopeFilesWithMagic\":\\s*\\d+\\s*,?\\s*", "");
+        var stripped = System.Text.RegularExpressions.Regex.Replace(json, ",\\s*\"nonEnvelopeFilesWithMagic\":\\s*\\d+", "");
         Assert.DoesNotContain("nonEnvelopeFilesWithMagic", stripped);
         File.WriteAllText(path, stripped);
         var read = BackupSet.ReadManifest(P("set"));

@@ -264,6 +264,7 @@ public static class BackupSet
         var cur = RealPathOnce(path);
         for (var i = 0; i < 40; i++)
         {
+            if (cur.Length == 0) return cur;       // the file system root
             var next = RealPathOnce(cur);          // a resolved target may itself pass through further links: repeat until stable
             if (string.Equals(next, cur, StringComparison.Ordinal)) return cur;
             cur = next;
