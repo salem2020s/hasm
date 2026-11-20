@@ -91,6 +91,8 @@ Missing prerequisites (each to be built and merged before the slice that needs i
 ## Log
 
 * 2026-11-20 - Phase 3.11 slice 1 (pure pricing engine and snapshot) on branch feature/phase-3-11-pricing-engine, independent of the stacked branches (no migration). Persistence, API and UI follow after the 3.9B merge.
+* 2026-11-20 - Phase 3.9C slice 1 (reusable import mapping templates, OD-9 default) on branch feature/phase-3-9c-party-import, stacked on #57 (company 0025). Party adapter is slice 2.
+
 * 2026-11-20 - Phase 3.9B opened as Draft PR #56 (independent review recorded, 5 Medium fixed or documented). Phase 3.12 (attachments and key management) on branch feature/phase-3-12-attachments, stacked on #56 (company 0024, system 0026): backend, hardened API, key rotation drill, shared UI tab; independent review pending. Open owner decision added: retention of removed attachments (bytes are kept meanwhile).
 
 * 2026-11-20 - PR #54 head 8de6c46: hosted CI green except the protected security gates (dependency-scan, picomatch-policy-validation, picomatch-artifact-inspection): postgres-integration 15m3s, backend, frontend, desktop-build, e2e-smoke, ci-guard, docs, secret-scan. Independent review of slices 2c/3 recorded (docs/review-records/PR-54-tax-slice3.md), six Medium fixed. Phase 3.9B started on branch feature/phase-3-9b-customers-suppliers (stacked on #54 and the #53 branch; company 0023, system 0025; #48's reservation released, it renumbers to 0024/0026). Owner decisions still open: picomatch patches (#51 then #55), Phase 3.8D X1-X8, OD-11 (3.8C).

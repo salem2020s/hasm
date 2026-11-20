@@ -32,6 +32,8 @@ jobs:
         run: node tools/schema/company-0023-party-roles.cjs --check
       - name: Attachment schema files match the deterministic generator (Phase 3.12)
         run: node tools/schema/company-0024-attachments.cjs --check
+      - name: Import-template schema files match the deterministic generator (Phase 3.9C)
+        run: node tools/schema/company-0025-import-templates.cjs --check
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
@@ -115,7 +117,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1003 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1011 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -201,5 +203,7 @@ jobs:
                 "PartyRoleTests": 7, "PartyRoleApiTests": 3,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
                 "AttachmentTests": 9, "AttachmentApiTests": 5,
+                # Phase 3.9C reusable import mapping templates (company migration 0025).
+                "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
