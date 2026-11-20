@@ -119,7 +119,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1025 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1026 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -206,7 +206,7 @@ jobs:
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
-                "PartyRoleTests": 7, "PartyRoleApiTests": 3,
+                "PartyRoleTests": 8, "PartyRoleApiTests": 3,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
                 "AttachmentTests": 10, "AttachmentApiTests": 5,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).

@@ -32,12 +32,18 @@ public sealed class AttachmentOptions
     /// <summary>Absolute directory outside any web root (disk, SMB or NFS mount); a sub-directory per company is created owner-only. Required.</summary>
     public string? StorageDirectory { get; init; }
     public long MaxFileBytes { get; init; } = 25L * 1024 * 1024;
+    /// <summary>The configurable ceiling of <see cref="MaxFileBytes"/>: a file is held in memory several times per request, so the hard cap is deliberately low (a larger configured value falls back to the default).</summary>
+    public const long HardMaxFileBytes = 100L * 1024 * 1024;
+    /// <summary>Uploads served at the same time by this process; further uploads are refused with 503 (<c>upload_busy</c>) instead of queueing memory. Bounds worst-case upload memory to about this many files.</summary>
+    public int MaxConcurrentUploads { get; init; } = 4;
 
     public static AttachmentOptions FromConfiguration(IConfiguration configuration)
     {
         string? Get(string key) => string.IsNullOrWhiteSpace(configuration[$"{SectionName}:{key}"]) ? null : configuration[$"{SectionName}:{key}"]!.Trim();
-        var max = long.TryParse(Get("MaxFileBytes"), out var m) && m is > 0 and <= 512L * 1024 * 1024 ? m : new AttachmentOptions().MaxFileBytes;
-        return new AttachmentOptions { StorageDirectory = Get("StorageDirectory"), MaxFileBytes = max };
+        var defaults = new AttachmentOptions();
+        var max = long.TryParse(Get("MaxFileBytes"), out var m) && m is > 0 and <= HardMaxFileBytes ? m : defaults.MaxFileBytes;
+        var concurrent = int.TryParse(Get("MaxConcurrentUploads"), out var c) && c is >= 1 and <= 32 ? c : defaults.MaxConcurrentUploads;
+        return new AttachmentOptions { StorageDirectory = Get("StorageDirectory"), MaxFileBytes = max, MaxConcurrentUploads = concurrent };
     }
 }
 
@@ -86,6 +92,21 @@ public sealed partial class AttachmentFileStore(AttachmentOptions options, Encry
     public byte[]? Read(Guid companyId, string name) { var p = PathOf(companyId, name); return File.Exists(p) ? File.ReadAllBytes(p) : null; }
     public bool Exists(Guid companyId, string name) => File.Exists(PathOf(companyId, name));
     public bool Delete(Guid companyId, string name) { var p = PathOf(companyId, name); if (!File.Exists(p)) return false; File.Delete(p); return true; }
+
+    [GeneratedRegex("^[0-9a-f]{32}\\.att\\.tmp-[0-9a-f]{32}$", RegexOptions.CultureInvariant)] private static partial Regex TempNamePattern();
+
+    /// <summary>Removes stale temporary write files (<c>&lt;name&gt;.att.tmp-&lt;guid&gt;</c>) last written before <paramref name="cutoffUtc"/>: a crash between creating the temporary file and moving it leaves one. Returns the number removed.</summary>
+    public int SweepTemporaryFiles(Guid companyId, DateTime cutoffUtc)
+    {
+        var removed = 0;
+        foreach (var f in new DirectoryInfo(Directory(companyId)).EnumerateFiles("*.att.tmp-*").Where(f => TempNamePattern().IsMatch(f.Name) && f.LastWriteTimeUtc <= cutoffUtc))
+        {
+            try { f.Delete(); removed++; }
+            catch (IOException) { }                      // in use right now (a live write): left for the next sweep
+            catch (UnauthorizedAccessException) { }
+        }
+        return removed;
+    }
 
     /// <summary>The stored files of a company with their last write time (UTC), for the orphan sweep. Only well-formed names are listed.</summary>
     public IReadOnlyList<(string Name, DateTime LastWriteUtc)> List(Guid companyId) =>
@@ -308,7 +329,8 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
             await using var rd = await q.ExecuteReaderAsync(ct);
             while (await rd.ReadAsync(ct)) known.Add(rd.GetString(0));
         }
-        var cutoff = DateTime.UtcNow - minAge; var removed = 0;
+        var cutoff = DateTime.UtcNow - minAge;
+        var removed = store.SweepTemporaryFiles(companyId, cutoff);      // stale *.att.tmp-* leftovers of a crashed write (never a live one: the age keeps it)
         foreach (var (name, written) in store.List(companyId))
         {
             if (known.Contains(name) || written > cutoff) continue;
@@ -507,7 +529,8 @@ public sealed class AttachmentManagementService(AccessService access, Attachment
     public async Task<ConfigResult<AttachmentContent>> OpenAsync(Guid user, Guid company, Guid id, CancellationToken ct = default)
     {
         if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsView, ct)) return Denied<AttachmentContent>();
-        if (await attachments.GetAsync(company, id, ct) is { } meta && !await CanSeeOwner(user, company, meta.SubjectKind, ct)) return Denied<AttachmentContent>();
+        // a record the caller may not see looks exactly like a missing one (404, never 403): no existence oracle by id
+        if (await attachments.GetAsync(company, id, ct) is { } meta && !await CanSeeOwner(user, company, meta.SubjectKind, ct)) return ConfigResult<AttachmentContent>.Fail(ConfigStatus.NotFound, "attachment_not_found");
         var sensitive = await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveView, ct);
         var r = await attachments.OpenAsync(user, company, id, sensitive, ct);
         // a sensitive file the caller may not read looks exactly like a missing one (no existence probing)
@@ -538,7 +561,7 @@ public sealed class AttachmentManagementService(AccessService access, Attachment
     public async Task<ConfigResult<AttachmentView>> RemoveAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
     {
         if (!await Can(user, company, PermissionCatalog.Codes.AttachmentsDelete, ct)) return Denied<AttachmentView>();
-        if (await attachments.GetAsync(company, id, ct) is { } meta && !await CanSeeOwner(user, company, meta.SubjectKind, ct)) return Denied<AttachmentView>();
+        if (await attachments.GetAsync(company, id, ct) is { } meta && !await CanSeeOwner(user, company, meta.SubjectKind, ct)) return ConfigResult<AttachmentView>.Fail(ConfigStatus.NotFound, "attachment_not_found");
         var sensitive = await Can(user, company, PermissionCatalog.Codes.AttachmentsSensitiveView, ct);
         var r = await attachments.RemoveAsync(user, company, id, revision, reason, sensitive, ct);
         return r.Status == ConfigStatus.Forbidden ? ConfigResult<AttachmentView>.Fail(ConfigStatus.NotFound, "attachment_not_found") : r;

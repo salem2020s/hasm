@@ -115,6 +115,28 @@ public class PartyRoleTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task A_representative_user_link_must_be_a_member_of_the_company_but_an_unchanged_stale_link_stays_editable_and_deactivatable()
+    {
+        await Prepare();
+        // Through the permission-checked service: a user who is not a member of the company is refused on create and on a changed link.
+        var stranger = Guid.NewGuid();
+        Invalid(await RolesMgmt.CreateRepresentativeAsync(Admin.Id, Company.Id, new SalesRepresentativeInput("R1", "مندوب", null, stranger)), "userId", "user_not_member");
+        Assert.Equal(0L, await Count(Company, SR.Table));
+        var member = Ok(await RolesMgmt.CreateRepresentativeAsync(Admin.Id, Company.Id, new SalesRepresentativeInput("R1", "مندوب", null, Admin.Id)));
+        Assert.Equal(Admin.Id, member.UserId);
+        Invalid(await RolesMgmt.UpdateRepresentativeAsync(Admin.Id, Company.Id, member.Id, member.Revision, new SalesRepresentativeInput(null, "مندوب", null, stranger)), "userId", "user_not_member");
+        // No link needs no membership.
+        var unlinked = Ok(await RolesMgmt.CreateRepresentativeAsync(Admin.Id, Company.Id, new SalesRepresentativeInput("R2", "مندوب 2", null, null)));
+        Assert.Null(unlinked.UserId);
+        // A link stored earlier (the user has since left the company) is not re-checked when unchanged: the representative stays editable and deactivatable.
+        var stale = Ok(await Roles.CreateRepresentativeAsync(Admin.Id, Company.Id, new SalesRepresentativeInput("R3", "قديم", null, stranger)));
+        var renamed = Ok(await RolesMgmt.UpdateRepresentativeAsync(Admin.Id, Company.Id, stale.Id, stale.Revision, new SalesRepresentativeInput(null, "قديم معدل", null, stranger)));
+        Assert.Equal("قديم معدل", renamed.NameAr);
+        var off = Ok(await RolesMgmt.UpdateRepresentativeAsync(Admin.Id, Company.Id, stale.Id, renamed.Revision, new SalesRepresentativeInput(null, "قديم معدل", null, stranger, false)));
+        Assert.False(off.IsActive);
+    }
+
+    [PostgresFact]
     public async Task Sales_representatives_are_unique_revision_fenced_never_removed_and_only_active_ones_serve_customers()
     {
         await Prepare();

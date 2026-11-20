@@ -15,12 +15,21 @@ public static class AttachmentSetup
     {
         var options = AttachmentOptions.FromConfiguration(configuration);
         services.AddSingleton(options);
+        services.AddSingleton(new UploadGate(options.MaxConcurrentUploads));
         services.AddSingleton(sp => new AttachmentFileStore(options, sp.GetRequiredService<EncryptionOptions>()));
         services.AddSingleton(sp => new AttachmentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<AttachmentFileStore>(),
             sp.GetRequiredService<EnvelopeEncryptor>(), options, sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new AttachmentManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<AttachmentService>()));
         return services;
     }
+}
+
+/// <summary>Non-blocking limit on concurrent uploads (each holds a bounded in-memory copy of its file).</summary>
+public sealed class UploadGate(int max)
+{
+    private readonly SemaphoreSlim semaphore = new(max, max);
+    public bool TryEnter() => semaphore.Wait(0);
+    public void Exit() => semaphore.Release();
 }
 
 /// <summary>
@@ -79,30 +88,79 @@ public static class AttachmentEndpoints
         return Results.Json(new { items = r.Value!.Select(Body), can = new { upload = caps.Upload, delete = caps.Delete, sensitiveUpload = caps.SensitiveUpload } });
     }
 
-    private static async Task<IResult> Upload(HttpContext http, AccessService access, AttachmentManagementService svc, AttachmentOptions options)
+    private const int MaxFieldBytes = 4096;
+
+    /// <summary>Reads at most <paramref name="max"/> bytes; null when the stream is longer. The caller never holds more than the bounded copy.</summary>
+    private static async Task<byte[]?> ReadBounded(Stream s, long max, CancellationToken ct)
+    {
+        using var ms = new MemoryStream();
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            int n;
+            while ((n = await s.ReadAsync(buffer.AsMemory(), ct)) > 0)
+            {
+                if (ms.Length + n > max) return null;
+                ms.Write(buffer, 0, n);
+            }
+        }
+        finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
+        return ms.ToArray();
+    }
+
+    private static async Task<IResult> Upload(HttpContext http, AccessService access, AttachmentManagementService svc, AttachmentOptions options, UploadGate gate)
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        // authorize BEFORE the body is buffered: a user without the upload permission cannot make the server spool a large form
+        // authorize BEFORE the body is read: a user without the upload permission cannot make the server read a large form
         if (!(await svc.CapabilitiesAsync(actor!.UserId, actor.CompanyId, http.RequestAborted)).Upload) return CompanyConfigurationEndpoints.Error(403, "forbidden");
         var limit = options.MaxFileBytes + FormOverhead;
         if (http.Request.ContentLength is { } len && len > limit) return CompanyConfigurationEndpoints.Error(413, "file_too_large");
         if (http.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } f) f.MaxRequestBodySize = limit;
-        if (!http.Request.HasFormContentType) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
-        IFormCollection form;
-        try { form = await http.Request.ReadFormAsync(http.RequestAborted); }
-        catch (Exception ex) when (ex is InvalidDataException or BadHttpRequestException or IOException) { return CompanyConfigurationEndpoints.Error(413, "file_too_large"); }
-        var file = form.Files.Count == 1 ? form.Files[0] : null;
-        byte[]? bytes = null;
-        if (file is not null)
+        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(http.Request.ContentType, out var mediaType)
+            || !mediaType.MediaType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase)) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+        var boundary = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(mediaType.Boundary).Value;
+        if (string.IsNullOrEmpty(boundary) || boundary.Length > 200) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+        // bound the number of uploads held in memory at once (a refused upload is retried by the client)
+        if (!gate.TryEnter()) return CompanyConfigurationEndpoints.Error(503, "upload_busy");
+        try
         {
-            if (file.Length > options.MaxFileBytes) return CompanyConfigurationEndpoints.Error(413, "file_too_large");
-            await using var s = file.OpenReadStream(); using var ms = new MemoryStream();
-            await s.CopyToAsync(ms, http.RequestAborted); bytes = ms.ToArray();
+            // The multipart body is streamed section by section: the file is held only as one bounded in-memory copy and NOTHING is spooled to the operating-system temporary directory (no plaintext on disk).
+            var reader = new Microsoft.AspNetCore.WebUtilities.MultipartReader(boundary, http.Request.Body) { HeadersLengthLimit = 16 * 1024, BodyLengthLimit = limit };
+            var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            byte[]? bytes = null; string? fileName = null, fileType = null; var files = 0;
+            try
+            {
+                while (await reader.ReadNextSectionAsync(http.RequestAborted) is { } section)
+                {
+                    if (!Microsoft.Net.Http.Headers.ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var cd)
+                        || !cd.DispositionType.Equals("form-data", StringComparison.OrdinalIgnoreCase)) continue;
+                    var name = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(cd.Name).Value ?? "";
+                    var isFile = !string.IsNullOrEmpty(cd.FileName.Value) || !string.IsNullOrEmpty(cd.FileNameStar.Value);
+                    if (isFile)
+                    {
+                        if (++files > 1) { await section.Body.CopyToAsync(Stream.Null, http.RequestAborted); continue; }      // more than one file is refused by the service as "no file"
+                        bytes = await ReadBounded(section.Body, options.MaxFileBytes, http.RequestAborted);
+                        if (bytes is null) return CompanyConfigurationEndpoints.Error(413, "file_too_large");
+                        fileName = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(string.IsNullOrEmpty(cd.FileNameStar.Value) ? cd.FileName : cd.FileNameStar).Value;
+                        fileType = section.ContentType;
+                    }
+                    else
+                    {
+                        var raw = await ReadBounded(section.Body, MaxFieldBytes, http.RequestAborted);
+                        if (raw is null) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+                        fields[name] = System.Text.Encoding.UTF8.GetString(raw);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is InvalidDataException or BadHttpRequestException or IOException) { return CompanyConfigurationEndpoints.Error(413, "file_too_large"); }
+            if (files != 1) { bytes = null; fileName = null; fileType = null; }
+            fields.TryGetValue("subjectKind", out var subjectKind);
+            Guid? subjectId = fields.TryGetValue("subjectId", out var sidText) && Guid.TryParse(sidText, out var sid) ? sid : null;
+            var sensitive = fields.TryGetValue("sensitive", out var sensitiveText) && string.Equals(sensitiveText, "true", StringComparison.OrdinalIgnoreCase);
+            return Map(await svc.UploadAsync(actor!.UserId, actor.CompanyId, subjectKind, subjectId, fileName, fileType, bytes, sensitive, http.RequestAborted), Body, v => v.Revision);
         }
-        Guid? subjectId = Guid.TryParse(form["subjectId"], out var sid) ? sid : null;
-        var sensitive = string.Equals(form["sensitive"], "true", StringComparison.OrdinalIgnoreCase);
-        return Map(await svc.UploadAsync(actor!.UserId, actor.CompanyId, form["subjectKind"], subjectId, file?.FileName, file?.ContentType, bytes, sensitive, http.RequestAborted), Body, v => v.Revision);
+        finally { gate.Exit(); }
     }
 
     private static async Task<IResult> Download(Guid id, HttpContext http, AccessService access, AttachmentManagementService svc)

@@ -331,7 +331,14 @@ public class AttachmentTests : InventoryTestBase
         Store.Create(Company.Id, oldOrphan, [1]); Store.Create(Company.Id, freshOrphan, [2]);
         File.SetLastWriteTimeUtc(Path.Combine(companyDir, oldOrphan), DateTime.UtcNow.AddHours(-3));
         var kept = Directory.GetFiles(companyDir, "*.att").Length - 2;
-        Assert.Equal(1, await Svc.SweepOrphansAsync(Admin.Id, Company.Id, TimeSpan.FromHours(1)));
+        // a crashed write leaves "<name>.att.tmp-<guid>": the stale one is swept with the orphans, a fresh one (a live write) and a foreign-named file stay
+        var staleTemp = Path.Combine(companyDir, AttachmentFileStore.NewName() + ".tmp-" + Guid.NewGuid().ToString("N"));
+        var freshTemp = Path.Combine(companyDir, AttachmentFileStore.NewName() + ".tmp-" + Guid.NewGuid().ToString("N"));
+        var foreign = Path.Combine(companyDir, "notes.att.tmp-keep");
+        File.WriteAllBytes(staleTemp, [3]); File.WriteAllBytes(freshTemp, [4]); File.WriteAllBytes(foreign, [5]);
+        File.SetLastWriteTimeUtc(staleTemp, DateTime.UtcNow.AddHours(-3)); File.SetLastWriteTimeUtc(foreign, DateTime.UtcNow.AddHours(-3));
+        Assert.Equal(2, await Svc.SweepOrphansAsync(Admin.Id, Company.Id, TimeSpan.FromHours(1)));
+        Assert.False(File.Exists(staleTemp)); Assert.True(File.Exists(freshTemp)); Assert.True(File.Exists(foreign));
         Assert.False(Store.Exists(Company.Id, oldOrphan));
         Assert.True(Store.Exists(Company.Id, freshOrphan));
         Assert.Equal(kept + 1, Directory.GetFiles(companyDir, "*.att").Length);
@@ -341,9 +348,12 @@ public class AttachmentTests : InventoryTestBase
         var normal = Ok(await Up(name: "o.pdf"));
         var (blind, _) = await Member([PermissionCatalog.Codes.AttachmentsView, PermissionCatalog.Codes.AttachmentsUpload, PermissionCatalog.Codes.AttachmentsDelete], ScopeKind.Company, null);
         Fails(await Mgmt.ListAsync(blind.Id, Company.Id, "local_party", party), ConfigStatus.Forbidden, "forbidden");
-        Fails(await Mgmt.OpenAsync(blind.Id, Company.Id, normal.Id), ConfigStatus.Forbidden, "forbidden");
+        // a record the caller may not see looks exactly like a missing one (no 403-vs-404 existence oracle by id)
+        Fails(await Mgmt.OpenAsync(blind.Id, Company.Id, normal.Id), ConfigStatus.NotFound, "attachment_not_found");
+        Fails(await Mgmt.OpenAsync(blind.Id, Company.Id, Guid.NewGuid()), ConfigStatus.NotFound, "attachment_not_found");
         Fails(await Mgmt.UploadAsync(blind.Id, Company.Id, "local_party", party, "a.pdf", "application/pdf", Pdf, false), ConfigStatus.Forbidden, "forbidden");
-        Fails(await Mgmt.RemoveAsync(blind.Id, Company.Id, normal.Id, 1, "x"), ConfigStatus.Forbidden, "forbidden");
+        Fails(await Mgmt.RemoveAsync(blind.Id, Company.Id, normal.Id, 1, "x"), ConfigStatus.NotFound, "attachment_not_found");
+        Fails(await Mgmt.RemoveAsync(blind.Id, Company.Id, Guid.NewGuid(), 1, "x"), ConfigStatus.NotFound, "attachment_not_found");
         Fails(await Mgmt.SweepOrphansAsync(blind.Id, Company.Id), ConfigStatus.Forbidden, "forbidden");
     }
 
