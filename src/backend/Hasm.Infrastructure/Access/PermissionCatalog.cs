@@ -149,6 +149,8 @@ public sealed partial class PermissionCatalog
         // update the company-local fields; submit a proposal to change shared data (or to propose again after a rejection); configure = synchronize the request log and run the reconciliation.
         // No company permission approves: the central approval belongs to identity administrators (docs/PHASE-3.9A.md D1).
         new("company.parties", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Configure]),
+        // Tax engine configuration (3.10, system migration 0024): company-wide. View taxes, rate versions, classes, rules and the rounding policy; configure = create and change them (audited; rate and policy versions are append-only).
+        new("company.tax", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
     ]);
 
     public static class Codes
@@ -266,6 +268,8 @@ public sealed partial class PermissionCatalog
         public const string PartiesUpdate = "company.parties.update";
         public const string PartiesSubmit = "company.parties.submit";
         public const string PartiesConfigure = "company.parties.configure";
+        public const string TaxView = "company.tax.view";
+        public const string TaxConfigure = "company.tax.configure";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
