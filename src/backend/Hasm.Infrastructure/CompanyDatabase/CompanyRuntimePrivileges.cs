@@ -124,6 +124,18 @@ public static class CompanyRuntimePrivileges
         // Party registry (Phase 3.9A): local parties and the request log (outbox) are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates.
         (CompanySchema.LocalParty.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.PartyRequest.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Tax engine configuration (Phase 3.10 slice 2b): taxes, classes and rules are never deleted (PostgreSQL refuses it); rate and policy versions are append-only; assignments and rule bases may be replaced.
+        (CompanySchema.TaxDefinition.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxRateVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.TaxClass.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxItemClass.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.TaxPartyClass.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.TaxRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxRuleBase.Table, ["SELECT", "INSERT", "DELETE"]),
+        (CompanySchema.TaxPolicyVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.SalesRepresentative.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.PartyRole.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Attachment.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

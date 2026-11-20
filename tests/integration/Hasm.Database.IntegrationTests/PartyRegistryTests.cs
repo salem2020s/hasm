@@ -51,8 +51,8 @@ public abstract class PartyTestBase : HttpApiTestBase
     protected static void Fails<T>(ConfigResult<T> r, ConfigStatus status, string code) => Assert.Equal((status, code), (r.Status, r.Code));
     protected static void Invalid<T>(ConfigResult<T> r, string field, string code) { Assert.Equal(ConfigStatus.Invalid, r.Status); Assert.Contains(r.Fields!, f => f.Field == field && f.Code == code); }
 
-    protected static SharedIdentityInput Id_(string nameAr = "شركة النور", string? tax = "300-111", string? reg = null, int kind = 1, int? status = null, string? note = null) =>
-        new(kind, nameAr, "Al Noor Co", tax, reg, status, note);
+    protected static SharedIdentityInput Id_(string nameAr = "شركة النور", string? tax = "300-111", string? reg = null, int kind = 1, int? status = null, string? note = null, long? viewed = null) =>
+        new(kind, nameAr, "Al Noor Co", tax, reg, status, note, viewed);
     protected static LocalPartyInput Local(string code, SharedIdentityInput? identity = null, string name = "النور") => new(code, name, "local note", true, identity ?? Id_());
 
     protected Task<LocalPartyView> NewParty(string code, SharedIdentityInput? identity = null, Guid? company = null, UserRecord? by = null) =>
@@ -108,6 +108,25 @@ public class PartyRegistryTests : PartyTestBase
     }
 
     [PostgresFact]
+    public async Task A_change_must_carry_the_shared_revision_the_user_viewed_and_it_must_still_be_current()
+    {
+        await PrepareParties();
+        var p = await NewParty("CV-1");
+        await Approve(p.Requests[0].Id);
+        await Parties.SyncAsync(Admin.Id, Company.Id);
+        var cur = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, p.Id));
+        Assert.Equal(1L, cur.Identity!.Revision);
+        Fails(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("جديد")), ConfigStatus.PreconditionRequired, "shared_revision_required");
+        var stale = await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("جديد", viewed: 7));
+        Fails(stale, ConfigStatus.PreconditionFailed, "shared_revision_conflict");
+        Assert.Equal(1L, stale.CurrentRevision);                                                       // the client learns the revision that is current
+        var after = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, p.Id));
+        Assert.Equal((cur.Revision, null), (after.Revision, (object?)after.OpenRequest));              // a refused proposal changes nothing and queues nothing
+        var accepted = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("جديد", viewed: cur.Identity.Revision)));
+        Assert.Equal(1L, accepted.OpenRequest!.BasedOnRevision);                                      // based on exactly what the user saw
+    }
+
+    [PostgresFact]
     public async Task Change_proposals_and_rejections_go_through_the_central_queue_with_separation_of_duties()
     {
         await PrepareParties();
@@ -116,7 +135,7 @@ public class PartyRegistryTests : PartyTestBase
         await Parties.SyncAsync(Admin.Id, Company.Id);
         var cur = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, p.Id));
 
-        var proposed = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("شركة النور الحديثة", tax: " 300-111 ", reg: "cr 9", note: "new legal name")));
+        var proposed = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("شركة النور الحديثة", tax: " 300-111 ", reg: "cr 9", note: "new legal name", viewed: cur.Identity!.Revision)));
         var change = proposed.OpenRequest!;
         Assert.Equal(((int)PartyRequestKind.Change, "300-111", "CR9"), (change.Kind, change.TaxNumber, change.RegistrationNumber));        // normalized
         Fails(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, proposed.Revision, Id_()), ConfigStatus.Conflict, "request_open");      // one open request per party
@@ -198,7 +217,7 @@ public class PartyRegistryTests : PartyTestBase
         await Parties.SyncAsync(Admin.Id, Company.Id);
         var cur = Ok(await PMgmt.GetAsync(Admin.Id, Company.Id, p.Id));
         cur = Ok(await PMgmt.UpdateAsync(Admin.Id, Company.Id, p.Id, cur.Revision, new LocalPartyInput("AU-1", "x", null, false)));
-        cur = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("تغيير")));
+        cur = Ok(await PMgmt.ProposeAsync(Admin.Id, Company.Id, p.Id, cur.Revision, Id_("تغيير", viewed: cur.Identity!.Revision)));
         var pid = await ProposalOf(cur.OpenRequest!.Id);
         var v = Ok(await Registry.GetProposalAsync(Central.Id, pid));
         Ok(await Registry.RejectAsync(Central.Id, pid, v.Revision, "no"));
@@ -409,6 +428,12 @@ public class PartyApiTests : PartyTestBase
         // the shared identity exposes identifying data only: no balance, company list or other company's data
         Assert.Equal(["globalPartyId", "kind", "legalNameAr", "legalNameEn", "registrationNumber", "revision", "status", "taxNumber"], identity.EnumerateObject().Select(x => x.Name).Order());
         Assert.DoesNotContain("balance", read.Body, StringComparison.OrdinalIgnoreCase);
+        // a CHANGE must name the shared revision the user viewed: absent -> 428 shared_revision_required, stale -> 412 shared_revision_conflict naming the CURRENT SHARED revision
+        var local = Etag(read);
+        var missing = await Send(HttpMethod.Post, $"/api/v1/company/parties/{id}/propose", new { kind = 1, legalNameAr = "تغيير", status = 1 }, cookie, ifMatch: local);
+        Assert.Equal((HttpStatusCode.PreconditionRequired, "shared_revision_required"), (missing.Status, missing.Json.GetProperty("error").GetString()));
+        var outdated = await Send(HttpMethod.Post, $"/api/v1/company/parties/{id}/propose", new { kind = 1, legalNameAr = "تغيير", status = 1, viewedSharedRevision = 9 }, cookie, ifMatch: local);
+        Assert.Equal((HttpStatusCode.PreconditionFailed, "shared_revision_conflict", 1), (outdated.Status, outdated.Json.GetProperty("error").GetString(), outdated.Json.GetProperty("currentSharedRevision").GetInt32()));
         var list = await Send(HttpMethod.Get, "/api/v1/company/parties?search=API", cookie: cookie);
         Assert.Equal(1, list.Json.GetProperty("total").GetInt32());
         var rec = await Send(HttpMethod.Post, "/api/v1/company/parties/reconcile?repair=false", null, cookie);
