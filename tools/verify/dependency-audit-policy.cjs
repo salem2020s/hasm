@@ -14,6 +14,13 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const scopeHash = policy => createHash("sha256").update(JSON.stringify(canonical(Object.fromEntries(
   ["owner", "repository", "advisory", "source", "vulnerableRange", "expiresAt", "trees", "findings"].map(key => [key, policy[key]]))))).digest("hex");
+// The retirement is a reviewed, owner-approved state. Its identifying fields are bound to a hash so that editing the status to the retired value (which also lifts the frozen-tree pins) cannot be done together
+// with a different owner, approver, repository or advisory without failing here. The hash cannot make the edit itself impossible: review of tools/verify/** remains the control (see docs/security).
+const RETIRED_STATUS = "RETIRED-ADVISORY-WITHDRAWN";
+const RETIRED_SCOPE = "772acd5353b772d972277b38c7c592f1e0f2ed603ed9786d5cd2ad7c543f3f68";
+const retiredHash = policy => createHash("sha256").update(JSON.stringify(canonical(Object.fromEntries(
+  ["status", "owner", "approvedBy", "repository", "advisory"].map(key => [key, policy[key]]))))).digest("hex");
+function assertRetirement(policy) { if (retiredHash(policy) !== RETIRED_SCOPE) throw new Error("Retirement record differs from the owner-approved retirement"); }
 const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
   [...a].sort().every((value, index) => value === [...b].sort()[index]);
 const range = value => typeof value === "string" ? value.replace(/\s/g, "") : "";
@@ -38,6 +45,9 @@ function evaluate(report, exitCode, lock, policy, context) {
       (exitCode === 1 && counts.high + counts.critical === 0))
     return { ok: false, excepted, failures: ["Audit counts/exit status disagree"] };
   const blocking = rows.filter(([, finding]) => ["high", "critical"].includes(finding.severity));
+  // Permanent strict mode: retirement authorizes ZERO exceptions, including this advisory.
+  if (policy?.status === "RETIRED-ADVISORY-WITHDRAWN")
+    return { ok: blocking.length === 0, excepted, failures: blocking.map(([name]) => `${name}: High/Critical vulnerability blocks strict audit`) };
   if (!blocking.length) {
     if (lock?.packages?.["node_modules/picomatch"]?.version === "4.0.7")
       return { ok: false, excepted, failures: ["Known affected matcher unexpectedly missing from audit findings"] };
@@ -137,7 +147,7 @@ function verifyProofInputs(policy, root, readGit = args => execFileSync("git", a
       prior.approvedBy !== policy.approvedBy || prior.approvedAt !== policy.approvedAt || prior.activationEvidence !== null)
     throw new Error("Proof does not preserve the conditionally approved inactive policy");
 }
-module.exports = { evaluate, scopeHash, localContext, verifyActivationEvidence, verifyProofInputs };
+module.exports = { evaluate, scopeHash, localContext, verifyActivationEvidence, verifyProofInputs, retiredHash, assertRetirement, RETIRED_SCOPE, RETIRED_STATUS };
 
 async function main() {
   if (process.argv.length !== 4 || process.argv[2] !== "--root") throw new Error("Usage: node dependency-audit-policy.cjs --root <repository>");
@@ -155,6 +165,7 @@ async function main() {
   const report = JSON.parse(audit.stdout);
   const lock = JSON.parse(fs.readFileSync(path.join(frontend, "package-lock.json"), "utf8"));
   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "picomatch-exception.json"), "utf8"));
+  if (policy.status === RETIRED_STATUS) assertRetirement(policy);
   let advisory = null;
   try {
     advisory = await fetchJson(`https://api.github.com/advisories/${ID}`);

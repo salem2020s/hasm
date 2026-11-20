@@ -1,7 +1,8 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload } = require("./inspect-production-artifacts.cjs");
+const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload, frozenTreePins, assertFrozenTrees } = require("./inspect-production-artifacts.cjs");
+const { assertRetirement } = require("./dependency-audit-policy.cjs");
 test("production inventory rejects each reviewed tool including nested and Windows paths", () => {
   for (const name of ["picomatch", "fdir", "tinyglobby", "vite", "vitest", "@vitejs/plugin-react"])
     for (const prefix of ["/workspace/node_modules/", "C:\\app\\node_modules\\vite\\node_modules\\"])
@@ -33,4 +34,32 @@ test("NSIS integrity predicts only Tauri's unique bundle marker and preserves ev
   }
   for (const input of [Buffer.from("no marker"), Buffer.concat([compiled, compiled]), bytes, Buffer.concat([compiled, bytes])])
     assert.throws(() => expectedNsisPayload(input));
+});
+
+test("frozen source pins are lifted ONLY by the explicit retirement status and every other state keeps them", () => {
+  const trees = { "src/frontend": "a", "src/desktop": "b", "assets/branding": "c" };
+  const reader = actual => tree => actual[tree];
+  // retired: nothing is read and any tree content is accepted (the strict full audit decides on its own)
+  assert.deepEqual(frozenTreePins({ status: "RETIRED-ADVISORY-WITHDRAWN", trees }), {});
+  assertFrozenTrees({ status: "RETIRED-ADVISORY-WITHDRAWN", trees }, () => { throw new Error("must not read a tree"); });
+  // every other status (including a missing one and a different spelling) enforces the exact pins
+  for (const status of ["APPROVED", "CONDITIONALLY-APPROVED-INACTIVE", "retired-advisory-withdrawn", "RETIRED", "", undefined, null]) {
+    assert.deepEqual(frozenTreePins({ status, trees }), trees);
+    assertFrozenTrees({ status, trees }, reader(trees));
+    for (const tree of Object.keys(trees)) assert.throws(() => assertFrozenTrees({ status, trees }, reader({ ...trees, [tree]: "changed" })), /Frozen source tree changed/);
+  }
+  assert.throws(() => assertFrozenTrees({ status: "APPROVED" }, reader(trees)), /Frozen source pins are missing/);   // a policy without trees cannot silently pass
+  assert.throws(() => assertFrozenTrees({ status: "APPROVED", trees: [] }, reader(trees)), /Frozen source pins are missing/);
+});
+test("main() delegates the pin check to assertFrozenTrees and no longer carries its own unconditional loop", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
+  assert.match(source, /assertFrozenTrees\(policy, tree => execFileSync\("git", \["rev-parse", `HEAD:\$\{tree\}`\]/);
+  assert.doesNotMatch(source, /for \(const \[tree, expected\] of Object\.entries\(policy\.trees\)\)/);
+});
+
+test("the inspector lifts the pins only after verifying the reviewed retirement record", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
+  assert.match(source, /if \(policy\.status === POLICY_RETIRED\) assertRetirement\(policy\);/);
+  assert.ok(source.indexOf("assertRetirement(policy)") < source.indexOf("assertFrozenTrees(policy, tree =>"));
+  assert.throws(() => assertRetirement({ status: "RETIRED-ADVISORY-WITHDRAWN", owner: "attacker" }), /Retirement record differs/);
 });

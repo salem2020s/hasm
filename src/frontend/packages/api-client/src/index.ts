@@ -442,6 +442,49 @@ export interface AllocatableCostCenter { id: string; code: string; nameAr: strin
 
 export interface AccountCostCenterRule { accountId: string; code: string; nameAr: string | null; nameEn: string | null; required: boolean; revision: number }
 export interface AccountCostCenterRulesResponse { accounts: AccountCostCenterRule[]; can: { configure: boolean } }
+// ---- Tax configuration (Phase 3.10). Treatment: 1 standard, 2 zero rated, 3 exempt, 4 not applicable. Class kind: 1 item, 2 party. Rounding mode: 1 half away from zero, 2 half even; level: 1 per line, 2 per document.
+export interface TaxRate { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface Tax { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string; rates: TaxRate[] }
+export interface TaxesResponse { taxes: Tax[]; can: { configure: boolean } }
+export interface TaxInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRateInput { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface TaxClass { id: string; kind: number; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number }
+export interface TaxClassesResponse { classes: TaxClass[]; can: { configure: boolean } }
+export interface TaxClassInput { kind: number; code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRule {
+  id: string; documentType: string; operation: string; itemClassId: string | null; partyClassId: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo: string | null; isActive: boolean; treatmentOverride: number | null; revision: number;
+}
+export interface TaxRulesResponse { rules: TaxRule[]; can: { configure: boolean } }
+export interface TaxRuleInput {
+  documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
+}
+// ---- Attachments (Phase 3.12): files kept on the server, reached only through the authorized endpoints.
+export type AttachmentSubjectKind = "local_party" | "inventory_item";
+export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string | null; isSensitive: boolean; revision: number; createdAtUtc: string }
+export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
+export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
+
+// ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
+export interface PartyRole {
+  id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
+  controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
+}
+export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean } }
+export interface PartyRoleInput { partyId?: string; role?: number; paymentMode: number; termDays?: number | null; creditLimit?: number | null; controlAccountId?: string | null; representativeId?: string | null; isActive?: boolean }
+export interface SalesRepresentative { id: string; code: string; nameAr: string; nameEn: string | null; userId: string | null; isActive: boolean; revision: number }
+export interface SalesRepresentativesResponse { items: SalesRepresentative[]; can: { configure: boolean } }
+export interface SalesRepresentativeInput { code?: string; nameAr: string; nameEn?: string | null; userId?: string | null; isActive?: boolean }
+
+export interface TaxAssignment { subjectId: string; classId: string }
+export interface TaxAssignmentsResponse { assignments: TaxAssignment[]; can: { configure: boolean } }
+export interface TaxPolicy { configured: boolean; id?: string; version?: number; moneyDecimals?: number; mode?: number; level?: number; createdAtUtc?: string }
+export interface TaxPolicyResponse { policy: TaxPolicy; can: { configure: boolean } }
+export interface TaxPolicyInput { moneyDecimals: number; mode: number; level: number }
+export interface TaxResolutionComponent { taxId: string; code: string; treatment: number; ratePercent: number; priority: number; includesInBase: string[]; ruleRef: string | null }
+export interface TaxResolution { policyVersion: number; policy: { moneyDecimals: number; mode: number; level: number }; components: TaxResolutionComponent[] }
+
 export interface CostCenterBranchRule { costCenterId: string; restricted: boolean; branchIds: string[]; revision: number }
 export interface CostCenterBranchRulesResponse { costCenters: CostCenterBranchRule[]; can: { configure: boolean } }
 export interface JournalLineInput {
@@ -607,7 +650,7 @@ export interface StocktakeCapabilities { view: string[]; create: string[]; updat
 export type PartyKind = 1 | 2;
 export type PartyLinkState = 1 | 2 | 3;
 export interface SharedIdentity { globalPartyId: string; kind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status: 1 | 2; revision: number }
-export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null }
+export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null; viewedSharedRevision?: number | null }
 export interface PartyRequest {
   id: string; kind: 1 | 2; status: 1 | 2 | 3; outcome: 1 | 2 | 3 | null; partyKind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null;
   proposedStatus: 1 | 2; note: string | null; attempts: number; lastAttemptAtUtc: string | null; lastErrorCode: string | null; createdBy: string; createdAtUtc: string; deliveredAtUtc: string | null; completedAtUtc: string | null;
@@ -744,8 +787,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   const enc = encodeURIComponent;
 
   /** Downloads a file (CSV report). Same transport rules as every other call; a failure is reported with the server's short error code. */
-  async function download(path: string): Promise<Blob> {
-    const headers: Record<string, string> = { Accept: "text/csv" };
+  async function download(path: string, accept = "text/csv"): Promise<Blob> {
+    const headers: Record<string, string> = { Accept: accept };
     if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
     const response = await fetchImpl(`${root}${path}`, { method: "GET", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store" });
     if (!response.ok) {
@@ -952,7 +995,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     proposeParty: (id: string, identity: SharedIdentityInput, revision: number) => request<LocalParty>("POST", `/api/v1/company/parties/${enc(id)}/propose`, { body: identity, ifMatch: revision }),
     syncParties: () => request<PartySyncResult>("POST", "/api/v1/company/parties/sync"),
     reconcileParties: (repair: boolean) => request<PartyReconciliation>("POST", `/api/v1/company/parties/reconcile?repair=${repair}`),
-    listPartyProposals: (status?: 1 | 2 | 3) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals${status ? `?status=${status}` : ""}`),
+    listPartyProposals: (status?: 1 | 2 | 3, offset = 0, limit = 25) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
     getPartyProposal: (id: string) => get<PartyProposal>(`/api/v1/admin/parties/proposals/${enc(id)}`),
     approvePartyProposal: (id: string, linkTo: string | null, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/approve`, { body: { linkTo }, ifMatch: revision }),
     rejectPartyProposal: (id: string, note: string, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
@@ -1082,6 +1125,48 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
     setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
       request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
+    getAttachmentCapabilities: () => get<AttachmentCapabilities>("/api/v1/company/attachments/capabilities"),
+    listAttachments: (subjectKind: AttachmentSubjectKind, subjectId: string) => get<AttachmentsResponse>(`/api/v1/company/attachments?subjectKind=${enc(subjectKind)}&subjectId=${enc(subjectId)}`),
+    uploadAttachment: async (subjectKind: AttachmentSubjectKind, subjectId: string, file: Blob, fileName: string, sensitive: boolean): Promise<Attachment> => {
+      const form = new FormData();
+      form.append("subjectKind", subjectKind); form.append("subjectId", subjectId); form.append("sensitive", sensitive ? "true" : "false"); form.append("file", file, fileName);
+      const headers: Record<string, string> = { Accept: "application/json", "X-Hasm-Request": "1" };      // the browser sets the multipart boundary
+      if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+      const response = await fetchImpl(`${root}/api/v1/company/attachments`, { method: "POST", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store", body: form });
+      if (!response.ok) {
+        let payload: { error?: string; fields?: { field: string; code: string }[] } = {};
+        try { payload = (await response.json()) as typeof payload; } catch { /* non-JSON error body */ }
+        if (response.status === 401) options.onUnauthenticated?.();
+        throw new ApiError(response.status, payload.error ?? "request_failed", { fields: payload.fields });
+      }
+      return (await response.json()) as Attachment;
+    },
+    downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
+    removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
+    listPartyRoles: (kind?: number) => get<PartyRolesResponse>(`/api/v1/company/party-roles${kind ? `?kind=${kind}` : ""}`),
+    createPartyRole: (r: PartyRoleInput) => request<PartyRole>("POST", "/api/v1/company/party-roles", { body: r }),
+    updatePartyRole: (id: string, r: PartyRoleInput, revision: number) => request<PartyRole>("PUT", `/api/v1/company/party-roles/${enc(id)}`, { body: r, ifMatch: revision }),
+    listSalesRepresentatives: () => get<SalesRepresentativesResponse>("/api/v1/company/sales-representatives"),
+    createSalesRepresentative: (r: SalesRepresentativeInput) => request<SalesRepresentative>("POST", "/api/v1/company/sales-representatives", { body: r }),
+    updateSalesRepresentative: (id: string, r: SalesRepresentativeInput, revision: number) => request<SalesRepresentative>("PUT", `/api/v1/company/sales-representatives/${enc(id)}`, { body: r, ifMatch: revision }),
+    listTaxes: () => get<TaxesResponse>("/api/v1/company/taxes"),
+    createTax: (t: TaxInput) => request<Tax>("POST", "/api/v1/company/taxes", { body: t }),
+    updateTax: (id: string, t: TaxInput, revision: number) => request<Tax>("PUT", `/api/v1/company/taxes/${enc(id)}`, { body: t, ifMatch: revision }),
+    addTaxRate: (id: string, rate: TaxRateInput) => request<Tax>("POST", `/api/v1/company/taxes/${enc(id)}/rates`, { body: rate }),
+    listTaxClasses: () => get<TaxClassesResponse>("/api/v1/company/taxes/classes"),
+    createTaxClass: (c: TaxClassInput) => request<TaxClass>("POST", "/api/v1/company/taxes/classes", { body: c }),
+    updateTaxClass: (id: string, c: TaxClassInput, revision: number) => request<TaxClass>("PUT", `/api/v1/company/taxes/classes/${enc(id)}`, { body: c, ifMatch: revision }),
+    listItemTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/item-classes"),
+    listPartyTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/party-classes"),
+    assignItemTaxClass: (itemId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/item-classes/${enc(itemId)}`, { body: { classId } }),
+    assignPartyTaxClass: (partyId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/party-classes/${enc(partyId)}`, { body: { classId } }),
+    listTaxRules: () => get<TaxRulesResponse>("/api/v1/company/taxes/rules"),
+    createTaxRule: (r: TaxRuleInput) => request<TaxRule>("POST", "/api/v1/company/taxes/rules", { body: r }),
+    updateTaxRule: (id: string, r: TaxRuleInput, revision: number) => request<TaxRule>("PUT", `/api/v1/company/taxes/rules/${enc(id)}`, { body: r, ifMatch: revision }),
+    getTaxPolicy: () => get<TaxPolicyResponse>("/api/v1/company/taxes/policy"),
+    addTaxPolicy: (p: TaxPolicyInput) => request<TaxPolicy>("POST", "/api/v1/company/taxes/policy", { body: p }),
+    resolveTaxes: (q: { documentType: string; operation: string; taxDate: string; itemId?: string; partyId?: string }) =>
+      get<TaxResolution>(`/api/v1/company/taxes/resolve?documentType=${enc(q.documentType)}&operation=${enc(q.operation)}&taxDate=${enc(q.taxDate)}${q.itemId ? `&itemId=${enc(q.itemId)}` : ""}${q.partyId ? `&partyId=${enc(q.partyId)}` : ""}`),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
     recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),
