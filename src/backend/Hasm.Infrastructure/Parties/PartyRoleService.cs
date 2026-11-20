@@ -301,6 +301,32 @@ public sealed class PartyRoleManagementService(AccessService access, PartyRoleSe
     public Task<ConfigResult<PartyRoleView>> CreateRoleAsync(Guid user, Guid company, PartyRoleInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.PartyRolesConfigure, () => roles.CreateRoleAsync(user, company, input, ct), ct);
     public Task<ConfigResult<PartyRoleView>> UpdateRoleAsync(Guid user, Guid company, Guid id, long? revision, PartyRoleInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.PartyRolesConfigure, () => roles.UpdateRoleAsync(user, company, id, revision, input, ct), ct);
     public Task<ConfigResult<IReadOnlyList<SalesRepresentativeView>>> ListRepresentativesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, PermissionCatalog.Codes.SalesRepsView, () => roles.ListRepresentativesAsync(company, ct), ct);
-    public Task<ConfigResult<SalesRepresentativeView>> CreateRepresentativeAsync(Guid user, Guid company, SalesRepresentativeInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.SalesRepsConfigure, () => roles.CreateRepresentativeAsync(user, company, input, ct), ct);
-    public Task<ConfigResult<SalesRepresentativeView>> UpdateRepresentativeAsync(Guid user, Guid company, Guid id, long? revision, SalesRepresentativeInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.SalesRepsConfigure, () => roles.UpdateRepresentativeAsync(user, company, id, revision, input, ct), ct);
+    /// <summary>
+    /// A representative's optional user link must name an ACTIVE user with an active membership of this company (system database; there is no cross-database foreign key).
+    /// On update, an unchanged link is not re-checked, so a representative whose user was later deactivated or removed stays editable and deactivatable.
+    /// </summary>
+    private async Task<IReadOnlyList<FieldError>?> CheckUserLinkAsync(Guid company, Guid? userId, Guid? unchangedFrom, CancellationToken ct)
+    {
+        if (userId is null || userId == unchangedFrom) return null;
+        var companies = await access.ListAccessibleCompaniesAsync(userId.Value, ct);
+        return companies.Contains(company) ? null : [new FieldError("userId", "user_not_member")];
+    }
+
+    public async Task<ConfigResult<SalesRepresentativeView>> CreateRepresentativeAsync(Guid user, Guid company, SalesRepresentativeInput? input, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.SalesRepsConfigure, ct)) return Denied<SalesRepresentativeView>();
+        if (await CheckUserLinkAsync(company, input?.UserId, null, ct) is { } bad) return ConfigResult<SalesRepresentativeView>.Invalid(bad);
+        return await roles.CreateRepresentativeAsync(user, company, input, ct);
+    }
+
+    public async Task<ConfigResult<SalesRepresentativeView>> UpdateRepresentativeAsync(Guid user, Guid company, Guid id, long? revision, SalesRepresentativeInput? input, CancellationToken ct = default)
+    {
+        if (!await Can(user, company, PermissionCatalog.Codes.SalesRepsConfigure, ct)) return Denied<SalesRepresentativeView>();
+        if (input?.UserId is { } linked)
+        {
+            var current = (await roles.ListRepresentativesAsync(company, ct)).FirstOrDefault(r => r.Id == id)?.UserId;
+            if (await CheckUserLinkAsync(company, linked, current, ct) is { } bad) return ConfigResult<SalesRepresentativeView>.Invalid(bad);
+        }
+        return await roles.UpdateRepresentativeAsync(user, company, id, revision, input, ct);
+    }
 }

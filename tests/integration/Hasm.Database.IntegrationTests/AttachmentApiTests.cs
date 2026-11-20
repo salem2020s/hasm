@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Attachments;
 using Hasm.Infrastructure.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,13 +20,14 @@ public class AttachmentApiTests : HttpApiTestBase
     private string dir = null!;
     private Guid party;
 
-    private async Task Start(bool keyUnavailable = false, string? maxBytes = null)
+    private async Task Start(bool keyUnavailable = false, string? maxBytes = null, (string Key, string Value)[]? settings = null)
     {
         dir = Path.Combine(Path.GetTempPath(), "hasm-att-api-" + Guid.NewGuid().ToString("N"));
         await StartApi(configure: b =>
         {
             b.UseSetting("Hasm:Attachments:StorageDirectory", dir);
             if (maxBytes is not null) b.UseSetting("Hasm:Attachments:MaxFileBytes", maxBytes);
+            foreach (var (key, value) in settings ?? []) b.UseSetting("Hasm:Attachments:" + key, value);
             b.ConfigureServices(s =>
             {
                 s.AddSingleton<KekRing>(new InMemoryKekRing("k1") { Unavailable = keyUnavailable });
@@ -148,6 +150,121 @@ public class AttachmentApiTests : HttpApiTestBase
         Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(json)).StatusCode);                                  // not multipart
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {AT.Table}"));
         Assert.False(Directory.Exists(dir) && Directory.GetFiles(dir, "*.att", SearchOption.AllDirectories).Length > 0);
+    }
+
+    // ---- hand-built multipart bodies (boundary fixed) for the streaming-upload tests ----
+    private const string Bnd = "xHASMx";
+    private static byte[] Ascii(string s) => Encoding.UTF8.GetBytes(s);
+    private static byte[] Field(string name, string value) => Ascii($"--{Bnd}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n");
+    private static byte[] FilePart(byte[] data, string file = "doc.pdf") => [.. Ascii($"--{Bnd}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file}\"\r\nContent-Type: application/pdf\r\n\r\n"), .. data, .. Ascii("\r\n")];
+    private static byte[] End => Ascii($"--{Bnd}--\r\n");
+    private byte[] Standard() => [.. Field("subjectKind", "local_party"), .. Field("subjectId", party.ToString()), .. Field("sensitive", "false")];
+
+    /// <summary>A body sent without Content-Length (chunked); the part after <c>first</c> is withheld until <c>gate</c> completes.</summary>
+    private sealed class Streamed : HttpContent
+    {
+        private readonly byte[] first, rest; private readonly Task gate;
+        public Streamed(byte[] first, byte[] rest, Task gate)
+        {
+            this.first = first; this.rest = rest; this.gate = gate;
+            Headers.ContentType = new MediaTypeHeaderValue("multipart/form-data") { Parameters = { new NameValueHeaderValue("boundary", Bnd) } };
+        }
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await stream.WriteAsync(first); await stream.FlushAsync();
+            await gate;
+            await stream.WriteAsync(rest);
+        }
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
+
+    private async Task<ApiResponse> Raw(string cookie, HttpContent content)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, Base) { Content = content };
+        request.Headers.Add("X-Hasm-Request", "1"); request.Headers.Add("Cookie", $"{CookieName}={cookie}");
+        using var response = await client.SendAsync(request);
+        return new ApiResponse(response.StatusCode, response.Headers, await response.Content.ReadAsStringAsync());
+    }
+
+    private Task<ApiResponse> RawBody(string cookie, byte[] body, bool chunked)
+    {
+        if (chunked) return Raw(cookie, new Streamed(body, [], Task.CompletedTask));
+        var content = new ByteArrayContent(body);
+        content.Headers.ContentType = new MediaTypeHeaderValue("multipart/form-data") { Parameters = { new NameValueHeaderValue("boundary", Bnd) } };
+        return Raw(cookie, content);
+    }
+
+    private static async Task WaitFor(Func<bool> condition)
+    {
+        for (var i = 0; i < 500 && !condition(); i++) await Task.Delay(20);
+        Assert.True(condition(), "condition not reached in time");
+    }
+
+    [PostgresFact]
+    public async Task An_upload_in_flight_holds_its_slot_per_user_and_a_busy_upload_is_refused_with_503_until_it_is_released()
+    {
+        await Start(settings: [("MaxConcurrentUploads", "3"), ("MaxConcurrentUploadsPerUser", "1")]);
+        var cookie = await SignIn(Admin);
+        var gate = factory!.Services.GetRequiredService<UploadGate>();
+        var release = new TaskCompletionSource();
+        var held = Raw(cookie, new Streamed(Field("subjectKind", "local_party"), [.. Field("subjectId", party.ToString()), .. Field("sensitive", "false"), .. FilePart(Pdf), .. End], release.Task));
+        await WaitFor(() => gate.InUse == 1);
+        var busy = await Upload(cookie, Pdf, "second.pdf");                                    // the same user, a second concurrent upload
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, busy.Status);
+        Assert.Equal("upload_busy", busy.Error);
+        Assert.Equal(1, gate.InUse);
+        release.SetResult();
+        var done = await held;
+        Assert.Equal(HttpStatusCode.OK, done.Status);
+        await WaitFor(() => gate.InUse == 0);
+        Assert.Equal(HttpStatusCode.OK, (await Upload(cookie, Pdf, "third.pdf")).Status);     // the slot is free again
+        Assert.Equal(2L, await Sql<long>($"SELECT count(*) FROM {AT.Table}"));
+    }
+
+    [PostgresFact]
+    public async Task Hostile_multipart_bodies_are_refused_without_storing_anything()
+    {
+        await Start(maxBytes: "5000");
+        var cookie = await SignIn(Admin);
+        var gate = factory!.Services.GetRequiredService<UploadGate>();
+        // a non-file field larger than the field limit
+        var bigField = await RawBody(cookie, [.. Field("subjectKind", new string('a', 5000)), .. Field("subjectId", party.ToString()), .. FilePart(Pdf), .. End], chunked: false);
+        Assert.Equal(HttpStatusCode.BadRequest, bigField.Status);
+        // two file parts: no single file
+        var two = await RawBody(cookie, [.. Standard(), .. FilePart(Pdf), .. FilePart(Pdf, "other.pdf"), .. End], chunked: false);
+        Assert.Equal(HttpStatusCode.BadRequest, two.Status);
+        // too many parts
+        var many = await RawBody(cookie, [.. Standard(), .. Enumerable.Range(0, 20).SelectMany(i => Field("f" + i, "x")), .. FilePart(Pdf), .. End], chunked: false);
+        Assert.Equal(HttpStatusCode.BadRequest, many.Status);
+        // truncated body (the closing boundary and the file never arrive)
+        var truncated = await RawBody(cookie, [.. Field("subjectKind", "local_party"), .. Ascii($"--{Bnd}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.pdf\"\r\n\r\n%PDF-1.4 cut")], chunked: false);
+        Assert.Equal(HttpStatusCode.BadRequest, truncated.Status);
+        // not multipart content at all, under a multipart content type
+        Assert.Equal(HttpStatusCode.BadRequest, (await RawBody(cookie, Ascii("this is not a multipart body"), chunked: false)).Status);
+        // an oversize file sent chunked (no Content-Length to check up front) is still refused with 413
+        var chunkedBig = await RawBody(cookie, [.. Standard(), .. FilePart([.. Pdf, .. new byte[6000]]), .. End], chunked: true);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, chunkedBig.Status);
+        Assert.Equal("file_too_large", chunkedBig.Error);
+        // the same file within the limit, chunked, is accepted
+        Assert.Equal(HttpStatusCode.OK, (await RawBody(cookie, [.. Standard(), .. FilePart(Pdf), .. End], chunked: true)).Status);
+        Assert.Equal(0, gate.InUse);
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {AT.Table}"));
+    }
+
+    [PostgresFact]
+    public async Task The_upload_slot_is_released_after_every_failure_so_a_single_slot_keeps_working()
+    {
+        await Start(maxBytes: "5000", settings: [("MaxConcurrentUploads", "1"), ("MaxConcurrentUploadsPerUser", "1")]);
+        var cookie = await SignIn(Admin);
+        var gate = factory!.Services.GetRequiredService<UploadGate>();
+        Assert.Equal(HttpStatusCode.BadRequest, (await RawBody(cookie, Ascii("garbage"), chunked: false)).Status);                                  // malformed
+        Assert.Equal(0, gate.InUse);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await Upload(cookie, [.. Pdf, .. new byte[6000]])).Status);                            // too large
+        Assert.Equal(0, gate.InUse);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Upload(cookie, Pdf, type: "application/x-msdownload")).Status);                             // refused by validation
+        Assert.Equal(0, gate.InUse);
+        Assert.Equal(HttpStatusCode.OK, (await Upload(cookie, Pdf)).Status);                                                                        // the only slot still works
+        Assert.Equal(0, gate.InUse);
     }
 
     [PostgresFact]

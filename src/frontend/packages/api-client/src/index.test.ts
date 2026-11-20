@@ -463,3 +463,21 @@ describe("ledger endpoints (Phase 3.2B)", () => {
     expect(call(fetchMock, 1).url).toContain("excludeClosing=true");
   });
 });
+
+describe("api client: import template routes (odd names)", () => {
+  it("encodes / % ? # and spaces in template names and adapter codes for retire", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "t" })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    for (const name of ["a/b", "50%", "why?", "tag#1", "two words"]) await client.retireImportTemplate("chart/of?accounts", name, 3);
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string);
+    expect(urls).toEqual([
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/a%2Fb/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/50%25/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/why%3F/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/tag%231/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/two%20words/retire",
+    ]);
+    for (const u of urls) { const parsed = new URL(u); expect(parsed.search).toBe(""); expect(parsed.hash).toBe(""); expect(parsed.pathname.split("/").length).toBe(9); }
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toEqual({ expectedVersion: 3 });
+  });
+});
