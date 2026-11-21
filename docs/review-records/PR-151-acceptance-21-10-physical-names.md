@@ -1,10 +1,10 @@
 # Independent review record
 
 * **Pull request:** #151 (acceptance scenario 21.10 and the schema-upgrade test: opaque physical names and intact schema on new, upgraded and restored databases; test-only)
-* **Head SHA reviewed (full 40 characters):** ed5808fb667a0c405771066870a82774879f6d51 (round 1; the fix delta ed5808f..5f3c8b0 awaits the reviewer's confirmation)
+* **Head SHA reviewed (full 40 characters):** 8d74e9d969962aca62a71f816b665d10e9e98456 (round 1 reviewed ed5808fb667a0c405771066870a82774879f6d51; the fix delta ed5808f..8d74e9d confirmed)
 * **Reviewer context:** Agent G, a separate agent; the author is Agent C. Not the author's own context.
 * **Scope read:** the full diff of the PR against `origin/main`: the test class `PhysicalNamingAcceptanceTests`, the registry entry, `tools/roadmap/requirements.js` and the regenerated `docs/RELEASE1-TRACEABILITY.md`.
-* **Checks run (commands and results):** by the reviewer, see the reviewer line below. By the author: isolated runner `PhysicalNamingAcceptanceTests` 3/3 at ed5808f and again at 896f10c (after the fixes); hosted CI on ed5808f all green, including postgres-integration; main's ci-guard, check-docs, scan-secrets and `generate.js --check` pass at 5f3c8b0.
+* **Checks run (commands and results):** by the reviewer, see the reviewer lines below. By the author: isolated runner `PhysicalNamingAcceptanceTests` 3/3 at ed5808f and again at 896f10c (after the fixes); hosted CI on ed5808f all green, including postgres-integration; main's ci-guard, check-docs, scan-secrets and `generate.js --check` pass at 5f3c8b0.
 * **Findings:** 0 Critical, 0 High, 2 Medium, 3 Low.
 
 | ID | Severity | Location | Problem | Resolution |
@@ -17,6 +17,10 @@
 
 Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent review of Draft PR #151 PhysicalNamingAcceptanceTests (SRS 21.10/18.4): catalog coverage complete, CHECK normalisation cannot hide a real change, integrity rules enforced by the database not the test, no acceptance overclaim"; Head SHA reviewed ed5808fb667a0c405771066870a82774879f6d51; executed: full diff vs origin/main read, isolated PostgreSQL PhysicalNamingAcceptanceTests 3/3 passed, mutations (triggers disabled → test a fails; CHECK constant changed after restore → test c fails), CHECK-normalisation regex probe (constant and typmod changes detected; precedence regrouping and cast add/remove/type changes masked), migrations grepped for uncovered object kinds (none today); verdict request changes; findings M1 (21.10 MERGED overclaims: system-database upgrade/restore not covered, restore leg uses the unencrypted path), M2 (CHECK normalisation masks precedence and cast changes), L1 (no guard for uncovered catalog object kinds), L2 (main-branch probe refused by the revision rule), L3 (misleading restore message; registry count to reconcile with #149).
 
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm the #151 fix delta ed5808f..8d74e9d: round-trip CHECK comparison cannot mask a real change, negative controls committed and asserting failure, no acceptance overclaim"; Head SHA reviewed 8d74e9d969962aca62a71f816b665d10e9e98456; executed: delta diff read (test, requirements.js, regenerated traceability, record), generate.js --check OK, isolated PostgreSQL PhysicalNamingAcceptanceTests 3/3 passed (committed precedence and cast controls included); verdict approve; findings M1, M2, L1, L2, L3 fixed; no new findings beyond a Low note (Record.ExceptionAsync also accepts an exception from Structure itself).
+
+* **Follow-up (Low, from the 8d74e9d confirmation; not fixed in this PR):** the negative controls use `Record.ExceptionAsync`, which would also pass if `Structure` itself threw; the controls should assert the comparison's own failure (an `XunitException` from `AssertSameStructure` naming the mutated constraint).
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** the reviewer's confirmation of the fix delta ed5808f..5f3c8b0, and hosted CI on the new head (pending at the time of writing).
-* **Verdict:** request changes (round 1); the fixes await the reviewer's confirmation
+* **NOT VERIFIED:** nothing open for this review; hosted CI on 8d74e9d is the merge-time evidence (checked at the merge turn).
+* **Verdict:** approve
