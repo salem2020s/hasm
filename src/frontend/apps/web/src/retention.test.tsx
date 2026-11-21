@@ -418,14 +418,112 @@ describe("attachment retention screen", () => {
       expect(screen.queryByRole("combobox", { name: E("ret.hold.record") })).toBeNull();
     });
 
-    it("keeps the typed attachment id with the hint to copy it from the Eligibility preview", async () => {
+    const G1 = "00000000-0000-4000-8000-000000000001", G8 = "00000000-0000-4000-8000-000000000008", G9 = "00000000-0000-4000-8000-000000000009";
+    const removed = (id: string, over: Record<string, unknown> = {}) => ({ attachmentId: id, subjectKind: "local_party", subjectId: "p1", isSensitive: false, removedAtUtc: "2026-02-03T00:00:00Z", reason: "retention_basis_pending", eligibleAtUtc: null, holdId: null, policyVersion: null, ...over });
+    const filtered = (items: unknown[]) => vi.fn().mockImplementation(async (_o?: number, _l?: number, f?: { subjectKind?: string; subjectId?: string }) => ({ ...previewData, items: f?.subjectId ? items : previewData.items, total: f?.subjectId ? items.length : previewData.total }));
+
+    it("keeps the typed attachment id as a fallback, with the hint to copy it from the Eligibility preview", async () => {
       localStorage.setItem("hasm.locale", "en");
       const client = render();
       await openHoldForm("3");
+      await userEvent.click(screen.getByRole("button", { name: E("ret.hold.attachment_use_id") }));
       expect(screen.getByText(E("ret.hold.attachment_hint"))).toBeInTheDocument();
       fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.hold.attachment_id")}`)), { target: { value: "a1" } });
       await reasonAndPlace();
       await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 3, reason: "Dispute", reference: null, subjectKind: null, subjectId: null, attachmentId: "a1" }));
+    });
+
+    it("picks the record, then one of its removed attachments from the filtered preview (ids and dates only)", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const previewRetention = filtered([removed("11111111-aaaa-bbbb-cccc-000000000001"), removed("22222222-aaaa-bbbb-cccc-000000000002", { isSensitive: true })]);
+      const listParties = vi.fn().mockResolvedValue({ parties: [{ ...party, id: G1 }], total: 1 });
+      const client = render({ listParties, previewRetention }, caps(), [...perms, "company.parties.view"]);
+      await openHoldForm("3");
+      expect(screen.getByText(E("ret.hold.attachment_pick_record"))).toBeInTheDocument();                       // no record yet: nothing to list
+      expect(screen.queryByRole("combobox", { name: E("ret.hold.attachment") })).toBeNull();
+      const record = await screen.findByRole("combobox", { name: E("ret.hold.record") });
+      await waitFor(() => expect(within(record).getByRole("option", { name: /P1/ })).toBeInTheDocument());
+      await userEvent.selectOptions(record, G1);
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.attachment") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /11111111/ })).toBeInTheDocument());
+      expect(previewRetention).toHaveBeenCalledWith(0, 50, { subjectKind: "local_party", subjectId: G1 });    // the ids-only filter, bounded
+      expect(within(box).getByRole("option", { name: new RegExp(E("ret.preview.sensitive")) })).toBeInTheDocument();
+      expect(screen.queryByText(/\.pdf/)).toBeNull();                                                          // never a file name
+      await userEvent.selectOptions(box, "22222222-aaaa-bbbb-cccc-000000000002");
+      await reasonAndPlace();
+      await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 3, reason: "Dispute", reference: null, subjectKind: null, subjectId: null, attachmentId: "22222222-aaaa-bbbb-cccc-000000000002" }));
+    });
+
+    it("lists the removed attachments of a typed record id when the user cannot search records, and clears the choice when the record changes", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const previewRetention = filtered([removed("33333333-aaaa-bbbb-cccc-000000000003")]);
+      render({ previewRetention });                                                                              // no parties.view: typed record id
+      await openHoldForm("3");
+      fireEvent.change(await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`)), { target: { value: G9 } });
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.attachment") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /33333333/ })).toBeInTheDocument());
+      expect(previewRetention).toHaveBeenCalledWith(0, 50, { subjectKind: "local_party", subjectId: G9 });
+      await userEvent.selectOptions(box, "33333333-aaaa-bbbb-cccc-000000000003");
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`)), { target: { value: G8 } });
+      await waitFor(() => expect(previewRetention).toHaveBeenCalledWith(0, 50, { subjectKind: "local_party", subjectId: G8 }));
+      expect(await screen.findByRole("combobox", { name: E("ret.hold.attachment") })).toHaveValue("");          // the earlier attachment is no longer selected
+    });
+
+    it("switches between the picker and the typed id without keeping a stale choice", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      render();
+      await openHoldForm("3");
+      await userEvent.click(screen.getByRole("button", { name: E("ret.hold.attachment_use_id") }));
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.hold.attachment_id")}`)), { target: { value: "a1" } });
+      await userEvent.click(screen.getByRole("button", { name: E("ret.hold.attachment_use_picker") }));
+      expect(screen.getByText(E("ret.hold.attachment_pick_record"))).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: E("ret.hold.attachment_use_id") }));
+      expect(screen.getByLabelText(new RegExp(`^${E("ret.hold.attachment_id")}`))).toHaveValue("");           // the typed value was not kept
+    });
+
+    it("sends no preview request while the typed record id is not a complete GUID (no 400 per keystroke) and loads once it is", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const previewRetention = filtered([removed("44444444-aaaa-bbbb-cccc-000000000004")]);
+      render({ previewRetention });
+      await openHoldForm("3");
+      const typed = await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`));
+      const callsWithFilter = () => previewRetention.mock.calls.filter((c) => c[2] !== undefined).length;
+      for (const partial of ["0", "00000000-0000", "00000000-0000-4000-8000-00000000000", "not-a-guid"]) {
+        fireEvent.change(typed, { target: { value: partial } });
+        expect(screen.getByText(E("ret.hold.attachment_pick_record"))).toBeInTheDocument();
+        expect(screen.queryByRole("combobox", { name: E("ret.hold.attachment") })).toBeNull();
+        expect(screen.queryByText(E("picker.error"))).toBeNull();
+      }
+      expect(callsWithFilter()).toBe(0);                                                                          // nothing was requested for a partial id
+      fireEvent.change(typed, { target: { value: G1 } });
+      expect(await screen.findByRole("combobox", { name: E("ret.hold.attachment") })).toBeInTheDocument();
+      await waitFor(() => expect(callsWithFilter()).toBe(1));
+    });
+
+    it("shows each attachment's eligibility reason, hides the search box and points to the typed id when more are listed than shown", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const previewRetention = vi.fn().mockImplementation(async (_o?: number, _l?: number, f?: { subjectId?: string }) => f?.subjectId
+        ? { ...previewData, total: 120, items: [removed("55555555-aaaa-bbbb-cccc-000000000005", { reason: "legal_hold" }), removed("66666666-aaaa-bbbb-cccc-000000000006", { reason: "already_purged" })] }
+        : previewData);
+      render({ previewRetention });
+      await openHoldForm("3");
+      fireEvent.change(await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`)), { target: { value: G1 } });
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.attachment") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: new RegExp(E("ret.reason.legal_hold")) })).toBeInTheDocument());
+      expect(within(box).getByRole("option", { name: new RegExp(E("ret.reason.already_purged")) })).toBeInTheDocument();   // shown with its reason, not hidden: the server holds any existing attachment
+      expect(screen.queryByRole("searchbox", { name: new RegExp(E("ret.hold.attachment")) })).toBeNull();                  // no search box (the preview cannot be searched)
+      expect(screen.getByText(new RegExp(`Showing 2 of 120\\. ${E("ret.hold.attachment_more")}`))).toBeInTheDocument();                                          // and it does not say "refine the search"
+      expect(screen.queryByText(E("picker.refine"))).toBeNull();
+    });
+
+    it("shows a retryable error, not a broken picker, when the filtered preview cannot be read", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const previewRetention = vi.fn().mockImplementation(async (_o?: number, _l?: number, f?: { subjectId?: string }) => { if (f?.subjectId) throw apiError(500, "internal"); return previewData; });
+      render({ previewRetention });
+      await openHoldForm("3");
+      fireEvent.change(await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`)), { target: { value: G1 } });
+      expect(await screen.findByText(E("picker.error"))).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: E("picker.retry") })).toBeInTheDocument();
     });
 
     it("shows the Arabic picker, the Arabic fallback hint and the Arabic attachment hint", async () => {
@@ -439,6 +537,8 @@ describe("attachment retention screen", () => {
       expect(await screen.findByText(A("ret.hold.record_unavailable"))).toBeInTheDocument();                                            // the Arabic fallback hint
       expect(screen.getByLabelText(new RegExp(`^${A("ret.hold.subject_id")}`))).toBeInTheDocument();
       fireEvent.change(screen.getByLabelText(A("ret.hold.scope"), { selector: "select" }), { target: { value: "3" } });
+      expect(await screen.findByText(A("ret.hold.attachment_pick_record"))).toBeInTheDocument();                                        // the Arabic "choose the record first"
+      await userEvent.click(screen.getByRole("button", { name: A("ret.hold.attachment_use_id") }));                                     // the hint belongs to the typed-id fallback
       expect(await screen.findByText(A("ret.hold.attachment_hint"))).toBeInTheDocument();                                               // the Arabic attachment hint
     });
 
