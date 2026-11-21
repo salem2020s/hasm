@@ -35,7 +35,7 @@ public static class StockAdjustmentEndpoints
         var g = app.MapGroup("/api/v1/company/stock-adjustments").RequireAuthorization();
         g.MapGet("/{id:guid}", Get);
         g.MapPost("/{id:guid}/posting", Post).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/reversal", Reverse).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/reversal", Reverse).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
     internal static object Body(StockAdjustmentView a) => new

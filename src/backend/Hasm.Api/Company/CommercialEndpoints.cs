@@ -48,7 +48,7 @@ public static class CommercialEndpoints
         g.MapPost("/{id:guid}/reject", Reject).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         // S2: links between approved documents (company.commercialdocs.update on the TARGET document's branch; reading needs view). No DELETE or PUT: a link is append-only. Production registers no link pair until 3.15/3.16.
-        g.MapPost("/links", CreateLink).WithMetadata(new BodyLimit());
+        g.MapPost("/links", CreateLink).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/{id:guid}/links", ListLinks);
         g.MapGet("/{id:guid}/line-quantities", LineQuantities);
     }
