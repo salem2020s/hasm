@@ -47,8 +47,13 @@ export interface AuthValue {
    * does not count. For hiding or disabling a control on a branch-scoped document; the server still decides.
    */
   canOnBranch(permission: string, branchId: string): boolean;
-  /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
+  /** True when the user holds this ROLE in ANY grant, whatever its scope. NOT the server's rule for an approval stage (see hasRoleOnBranch); kept for controls that only ask whether a role is held at all. */
   hasRole(roleId: string): boolean;
+  /**
+   * True when the user holds this ROLE for ONE branch, like the server's stage authority: through a company-wide assignment or an assignment for exactly this branch. The role held for another branch, a warehouse or
+   * a cost center does not count. Only for showing or hiding a control on a role-bound approval stage; the server decides.
+   */
+  hasRoleOnBranch(roleId: string, branchId: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -251,6 +256,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     canAny: (p) => anyPermissions.has(p),
     canOnBranch: (p, branchId) => permissions.has(p) || (branchPermissions.get(branchId)?.has(p) ?? false),
     hasRole: (r) => roleGrants.some((g) => g.roleId === r),
+    hasRoleOnBranch: (r, branchId) => roleGrants.some((g) => g.roleId === r && (g.scope === "company" || (g.scope === "branch" && g.scopeId === branchId))),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
   }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, adoptEnrolledSession, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
 

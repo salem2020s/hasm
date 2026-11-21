@@ -197,7 +197,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   const plan = approvals?.plan ?? [];
   const openStage = plan.find((p) => p.approved < p.required);
   const decidedByMe = !!approvals && approvals.decisions.some((d) => d.approver === auth.user?.id);
-  const stageRoleMissing = !!openStage?.roleId && !auth.hasRole(openStage.roleId);
+  // a role-bound stage is decided (approved OR rejected) only by a holder of its role for the DOCUMENT'S branch: company-wide, or for that very branch
+  const stageRoleMissing = !!doc && !!openStage?.roleId && !auth.hasRoleOnBranch(openStage.roleId, doc.branchId);
   const planComplete = plan.length > 0 && !openStage;
   const notEligible: "decided" | "role" | "complete" | null = decidedByMe ? "decided" : planComplete ? "complete" : stageRoleMissing ? "role" : null;
   // Approve and Reject are scoped to the DOCUMENT'S branch on the server (a company-wide grant, or a grant for that very branch): a grant for another branch must not show them.
@@ -384,7 +385,7 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
           {doc && status === 2 && can("company.commercialdocs.submit") && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawCommercialDocument(doc.id, rev), t("commdoc.withdrawn"))}>{t("commdoc.withdraw")}</button>}
           {doc && status === 2 && canDecide && !notEligible && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined}
             onClick={() => void act(() => auth.api.approveCommercialDocument(doc.id, rev), (r) => ((r as CommercialDocument).status === 3 ? t("commdoc.approved") : t("commdoc.decision_recorded")))}>{t("commdoc.approve")}</button>}
-          {doc && status === 2 && canDecide && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
+          {doc && status === 2 && canDecide && !stageRoleMissing && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
           {doc && status !== 5 && can("company.commercialdocs.cancel") && <button type="button" className="danger" data-testid="cancel-document" disabled={busy} onClick={() => { setReason(""); setReasonError(null); setDialog("cancel"); }}>{t("commdoc.cancel_document")}</button>}
         </div>
         {doc && status === 2 && mine && canDecide && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
