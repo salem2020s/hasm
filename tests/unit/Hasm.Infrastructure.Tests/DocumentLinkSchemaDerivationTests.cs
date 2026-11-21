@@ -65,6 +65,14 @@ public class DocumentLinkSchemaDerivationTests
     }
 
     [Fact]
+    public void The_registry_lists_its_effective_link_pairs_in_a_stable_order_and_production_lists_none()
+    {
+        Assert.Empty(new CommercialDocumentTypeRegistry([]).LinkPairs);
+        var registry = new CommercialDocumentTypeRegistry(["order_x", "delivery_x"], [("order_x", "delivery_x", CommercialLinkKind.Invoices), ("order_x", "delivery_x", CommercialLinkKind.Fulfils), ("order_x", "ghost", CommercialLinkKind.Fulfils)]);
+        Assert.Equal([new LinkPairView("order_x", "delivery_x", 1), new LinkPairView("order_x", "delivery_x", 2)], registry.LinkPairs);   // sorted, and a pair naming an unregistered type is not listed
+    }
+
+    [Fact]
     public void The_registry_allows_only_registered_link_pairs_and_production_registers_none()
     {
         var empty = new CommercialDocumentTypeRegistry([]);

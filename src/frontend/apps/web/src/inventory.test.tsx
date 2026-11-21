@@ -2,6 +2,7 @@ import type { InventoryBarcode, InventoryCapabilities, InventoryGroup, Inventory
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { catalog } from "./messages";
 import { ALL_PERMISSIONS, apiError, renderApp, signedIn } from "./test-utils";
 
 const go = async (hash: string) => {
@@ -455,6 +456,31 @@ describe("Arabic-Indic digits in numeric fields", () => {
     await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), "٣");
     await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
     await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
+  });
+
+  it.each([["۳", "Persian"], ["٣", "Arabic-Indic"]])("accepts the decimals digit %s (%s) and sends 3", async (text) => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), text);
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
+  });
+
+  it.each(["٧", "x"])("refuses the invalid decimals value %s: nothing is sent", async (text) => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), text);
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(await screen.findByText(catalog.ar["inv.field.out_of_range"]!)).toBeInTheDocument();
+    expect(client.createInventoryUnit).not.toHaveBeenCalled();
   });
 });
 

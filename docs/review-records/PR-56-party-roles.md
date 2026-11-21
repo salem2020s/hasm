@@ -1,6 +1,6 @@
 # Independent review - PR #56, Phase 3.9B customers and suppliers (party roles)
 
-* Reviewed: the full diff against `origin/main` at `2ec1b83` (37 files). Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context, not given the author's reasoning). Method: code reading; it did not run the PostgreSQL suite. Verdict: **APPROVE, no Critical, no High.** Two Medium, three Low.
+* Reviewed: the full diff against `origin/main` at `2ec1b83` (37 files). Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context, not given the author's reasoning). Method: code reading; it did not run the PostgreSQL suite. Verdict: **APPROVE, no Critical, no High.** Two Medium, three Low.
 * Verified by the reviewer: registry raise-only (979 -> 989 = PartyRoleTests 7 + PartyRoleApiTests 3); migrations contiguous (company 0022 -> 0023, system 0024 -> 0025); 0023 additive with immutability, TRUNCATE and revision triggers; company scope only from the session, company-wide permission checks, no DELETE route, If-Match with 428; FOR UPDATE and revision conflicts; credit limit stored as data only (no enforcement invented); one audit event per write; shared Web/Tauri screen with Tabs and RTL/LTR.
 
 | # | Sev | Finding | Disposition |

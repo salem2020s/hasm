@@ -673,8 +673,632 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
 * **D-119, credential revocations after a system restore (M6, round 2 L-c).** A reference to the canonical D-106 and D-107; it binds the Phase 4.3 full-installation restore and slice 7.
 * The other review items amend D-089 (passphrases, M3/L4), D-090 (L1), D-092 (coverage, refusals and key status, M1/M5), D-094 (every key directory, overlap checks, TOTP KEK and audit key checks, M4) and D-095 (L2).
 
+### Recorded as built (implementation of slice 5)
+* **System-stream audit event codes, block 2010-2019** (lead allocation). Before use the registry was checked: retention (R, E) holds 2000-2009 and commercial documents 1900-1999, and nothing used 2010-2019 on main or on any open branch.
+  * 2010: trial restore.
+  * 2011: recovery test.
+  * 2012: key export.
+  * 2013: signing key generated.
+  * 2014-2019: reserved for slices 6 and 7.
+  * Persisted codes; never renumbered.
+* **Interim mode (G round 1, L5).** Until the Phase 4.1 administrative-tool login (D-099) exists, `backup-recovery-keygen`, `backup-signing-keygen` and `backup-keys` run under operating-system access without a named administrator with MFA. This is the second dated limitation in RELEASE1-ACCEPTANCE G (through the roadmap generator).
+* **Implementation status (code PR, branch `feature/phase-4-3-slice5-impl`).** Built as planned:
+  * `RecoveryKeys`, `RecoveryKit` and `backup-recovery-keygen` (D-089); `Hbe1` (D-090); `BackupSigningKeys`, `SigningTrust` and the detached `.sig` (D-092); `SignedDocuments` (version-2 manifests encrypted and signed over their ciphertext, the signed `run.status.json`; M1, L-b, L-d);
+  * `EncryptedSets` and the encrypted `backup-company` / `backup-run`: `pg_dump` stdout piped into HBE1, attachments encrypted file by file, no plaintext at rest (D-091), every stored file checked against its signed digest (D-116); the canary (D-117);
+  * `KeyExport` and `backup-keys` (D-087, D-094, M4, N2), `backup-signing-keygen`;
+  * the encrypted trial restore (streaming decryption into `pg_restore`, attachments into a private staging folder) and `RecoveryTestService` / `backup-recovery-test` with `recovery-test.json` and `recovery_untested` (D-085, D-117, N1);
+  * the DEV/TEST guard (D-095, L2) with the `UNENCRYPTED-DEV-TEST-ONLY` marker in unencrypted sets and runs;
+  * the system audit events 2010-2013 (`BackupAudit`; operator `os:<account>`, database TAGS only; fail closed);
+  * the per-table secret-store rule (D-120): `SystemSchema.SecretStoreTables` maps each table to `AlwaysExcluded` or `IncludedOnlyInEncryptedRuns`, `BackupRunService.SystemDumpExclusionsFor(encrypted)` applies it, and the #104 pin test checks the rule in both modes and that any TOTP table is encrypted-only. Phase 4.1 S1 has not merged, so no TOTP table exists yet: whichever merges second adds it as `IncludedOnlyInEncryptedRuns` (the pin test enforces this).
+* **Deviations from the plan text (no change of decision):**
+  * `backup-signing-keygen` takes no argument: the key id is derived (`sk-` + 16 hex of SHA-256 over the public key), like the recovery key id, so an id can never be mistyped or reused.
+  * The trust anchor of the restore commands is `--signing-trust <signing-trust.json>` (the kit's status list: `active`, `retired` with `retiredUtc`, `compromised`; M5, L-d). `--signing-public-key <pem>` remains, trusting one key as active.
+  * `recovery-test.json` is not signed: the proof is the canary PREIMAGE checked against the SIGNED status (N1); a signature by the server key would add nothing and would tie the test to the signing private key.
+  * `backup-recovery-test` refuses an unencrypted run in every case (`unencrypted_run`): it has no recovery key to prove. `trial-restore-company` accepts an unencrypted set only under the reader's acknowledgement, as planned.
+  * The backup root is an argument of `backup-run`, not a setting, so `backup-keys` refuses a destination that is, or lies inside, a run folder or a folder that holds run folders (`destination_in_backup_root`), besides the planned overlap checks.
+  * `backup-keys` also writes a READABLE copy of the trust list (`signing-trust.json`, public keys only) for the recovery kit.
+  * The TOTP KEK-id check of the recovery test (M4) has nothing to check until Phase 4.1 creates `user_totp`; the attachment and audit key ids are checked.
+* **Review of #128 by Agent C (fixed):**
+  * **H1:** a version-1 (unencrypted, unsigned) company set planted in an encrypted run was restored by the recovery test. Now `CompanyBackupService.TrialRestoreAsync` itself refuses a version-1 set unless its caller passes `allowUnencrypted` from its own DEV/TEST acknowledgement, and always inside a run. The recovery test refuses every company set that is not encrypted (`unencrypted_set_refused`).
+  * **L1:** each company set must belong to the run (`run_mismatch`), and the company folders must match the signed status (`company_sets_mismatch`).
+  * **L2:** unit tests for an off-curve ephemeral point (`hbe_malformed`) and for a first chunk that fails authentication (nothing released).
+  * **L3:** refused trial restores and recovery tests are audited too (2010/2011 with `outcome=refused` and the code).
+  * **L4:** `backup-keys` parses every signing public key at write time (`key_file_invalid`).
+* **Not built here (later slices):** writing the key export back to disk (only verified: decrypt and compare the ids) belongs to the full-installation restore and the cutover (slice 7); retention and deletion (slice 6).
+* **Tests:** unit tests for every unit above (HBE1, keys, signatures and trust, signed documents and proof, guard and pin, encrypted sets, key export, status rules); a new PostgreSQL class `EncryptedBackupTests` (6 tests): an encrypted run with no plaintext at rest, trial restore with the private key equal to the source, forged/unsigned/swapped sets refused before `pg_restore`, `backup-keys` and `backup-signing-keygen` audited and recoverable, the recovery test end to end turning `backup-status` green, and encryption by default with the DEV/TEST path. The existing suites keep their counts and run with the DEV/TEST acknowledgement.
+
 ### Owner decisions this slice relies on (not re-asked)
 D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
+
+## Slice 6: retention and deletion of backup runs (D-086) - PLAN (docs only)
+Sources:
+* owner decision D-086 (retention and deletion), which this slice implements exactly;
+* the related owner decisions D-082 (removed-attachment retention, register item K), D-080(6) (independent approval for key retirement and restore), D-081 (cutover, slice 7) and D-085 (encrypted backups);
+* lead decision D-114 (attachment-retention holds on backups, `docs/PHASE-R-attachment-retention.md` section 8);
+* SRS 16.
+
+Builds on slices 4 and 5 (encrypted, signed runs; PR #128). Decision ids D-130..D-139 (allocated by the lead; technical defaults under D-048, chosen fail-closed). Risk: **Critical** (deleting a backup is irreversible).
+
+### What D-086 requires, and where each requirement is met
+| D-086 requirement | Met by |
+|---|---|
+| Daily: keep AT LEAST the latest 7; weekly: AT LEAST the latest 4; configuration may raise these, never lower them | D-132 (minimums; a lower value is a configuration error, never clamped) |
+| Month-end and fiscal-year-end backups follow a company-approved legal policy; the default is no automatic deletion | D-131 (classification), D-133 (no legal policy is built in this slice: they are never deleted automatically); owner question Q1 |
+| Classification by the company fiscal calendar and explicitly configured time-zone rules | D-131 |
+| Never automatically delete the last recoverable backup, a backup under legal hold, or one needed by an active recovery chain | D-133 (recoverable), D-134 (legal holds, including D-114), D-135 (recovery chains) |
+| Audit records, retention preview, safe-deletion validation | D-139 (audit 2014-2019), D-136 (preview and validation) |
+| Automatic deletion inactive until the encryption, retention and restore safeguards are complete and independently tested | D-137 (three enforcement layers; activation only by an owner-instructed PR) |
+
+### Scope
+* **In scope:**
+  * classification and keep rules;
+  * the retention preview with a reason for every run;
+  * backup legal holds and recovery-chain pins;
+  * safe-deletion validation;
+  * the deletion executor, built but INACTIVE (D-137);
+  * the audit events;
+  * the key inventory in the signed run status, for the key-retirement report (D-138).
+* **Not in scope:**
+  * the company legal policy for month-end and year-end runs (owner questions Q1-Q3; until answered those runs are never deleted automatically);
+  * releasing a backup legal hold (it needs the Phase 4.1 named login and independent approval; until then a hold can be placed, never released);
+  * off-site or second destinations (none exist);
+  * standalone `backup-company` sets outside a backup root (operator-managed; never touched);
+  * the cutover (slice 7);
+  * key retirement itself (a report only).
+* **One system migration** (backup holds and recovery-chain pins). Its number is requested from the lead when the implementation starts. Migration numbers are contiguous and taken in merge order.
+* No API and no UI in this slice: the commands run through the administrative tool, under the interim mode of slice 5.
+
+### Retention model
+* **D-130, unit of retention: the whole run.** A run is one folder `<root>/<run id>/`: the system dump, one set per company, the signed `run.status.json`, the canary and possibly `recovery-test.json`. Retention keeps or deletes whole runs only.
+  * Every set inside a run is listed in signed documents (the run status names its companies; the manifests name every file). Deleting one company set would make the run fail verification, so it is never done.
+  * A run is KEPT when any rule keeps it, for any company in it or for the system part. It is eligible for deletion only when no rule keeps it for any part.
+  * Standalone sets written by `backup-company` outside a root, kit material, key exports and every folder or file whose name is not a run id are never touched.
+  * Alternative rejected: per-company deletion inside a run. It breaks the signed run, and a run is the unit of a full-installation restore.
+* **D-131, classification (fiscal calendar and explicit time-zone rules).** Every complete run is classified separately for each company it contains, and for the system part.
+  * **Instant of a run:** the run's window `[startedUtc, finishedUtc]`, read from the VERIFIED signed `run.status.json` (slice 5). Retention never decrypts anything and never needs the recovery private key.
+  * **Time zones:**
+    * Daily and weekly classification of a company uses the company's configured time zone (company settings).
+    * Period-end and year-end classification uses the time zone recorded on the fiscal year (`FiscalYear.TimeZone`, fixed when the year is created).
+    * The system part uses `Hasm__Backup__Retention__InstallationTimeZone`, which is required.
+    * Ids are IANA ids resolved by .NET `TimeZoneInfo`.
+    * **The server's local time zone is never used** (pinned by a test).
+    * An unknown or unresolvable id makes the classification of that part `classification_unknown`, and the run is kept.
+    * Review L1 of #130: a company time zone that is not configured, as well as an unknown or unresolvable one, gives `classification_unknown` and the run is kept.
+  * **Boundaries:**
+    * A local date turns into an instant at local 00:00 of the following day.
+    * A local time skipped by a daylight-saving change becomes the first valid instant after it.
+    * A repeated local time takes the EARLIER instant.
+    * Conversion from an instant to a local date is unambiguous.
+    * Unit tests use zones with a midnight daylight-saving change.
+  * **Daily backup of a company:** on each local calendar day, the newest recoverable run (D-133) whose `startedUtc` falls on that day. Further runs of the same day are not daily backups.
+  * **Weekly backup:** in each week, the newest recoverable run. The week is ISO 8601 (Monday start, ISO week-year); the start day is configurable (`Hasm__Backup__Retention__WeekStart`). This is a technical default, not a legal one.
+  * **Period-end backup (D-086 "month-end"):** for every boundary B, the run is a period-end backup when it is either:
+    * the newest recoverable run with `startedUtc < B` (the last one before the end); or
+    * the oldest recoverable run with `finishedUtc >= B` (the first one after the end, which contains the final postings of the period).
+    * The boundaries B are the end of every fiscal period of the company's fiscal calendar AND the end of every calendar month in the company's time zone.
+    * Keeping both sides of every boundary is the fail-closed reading. Which one the law means is owner question Q2, and whether calendar months count in addition to fiscal periods is Q3.
+    * A run whose window spans B is both.
+  * **Fiscal-year-end backup:** the same rule at the end of every fiscal year of the company (`FiscalYear.EndDate` + 1 day, local 00:00 in the year's time zone).
+  * **Gaps and unknowns:**
+    * A run date not covered by any fiscal year of the company (no calendar configured, a gap, or later than the last year created) is `classification_unknown` for period-end and year-end, and the run is KEPT.
+    * A company that is not Ready, not registered any more, or whose database cannot be read is `classification_unknown`, and all of its runs are kept (owner question Q5).
+* **D-132, minimums (daily at least 7, weekly at least 4).**
+  * `Hasm__Backup__Retention__DailyKeep` defaults to 7 and `Hasm__Backup__Retention__WeeklyKeep` to 4.
+  * A value below 7 or 4, non-numeric, or above 10 000 is a configuration error (`retention_below_minimum` / `retention_config_invalid`, exit 3). It is **never clamped silently**.
+  * The constants 7 and 4 are pinned by a unit test. Lowering them needs a new owner decision.
+  * "Latest 7 daily" means the 7 most recent local days that HAVE a recoverable run of that company, each represented by its daily backup. These are not the last 7 calendar days, so missed days never shrink the history kept. The same applies to "latest 4 weekly".
+  * Daily and weekly sets may overlap; a run is kept if either rule keeps it.
+* **D-133, recoverable, and the last recoverable backup.**
+  * A run counts as a recoverable backup of company X only when all of the following hold:
+    * it is complete;
+    * its `run.status.json` verifies with the server's signing public keys;
+    * X's outcome in it is `ok` (`ok_missing_keys` does not count);
+    * it is encrypted (no DEV/TEST acknowledgement);
+    * its recovery key id has at least one PASSED recovery test on some run (`recovery-test.json`, slice 5).
+  * The system part counts when the run's verdict is not `failed`, under the same signature, encryption and recovery-test conditions.
+  * Runs that are not recoverable never COUNT toward a minimum, and they are not deleted automatically either:
+    * incomplete or unreadable runs (as in slice 4);
+    * runs whose status does not verify (`status_unverifiable`: for example a signing key removed after a compromise; kept as evidence and reported);
+    * unencrypted DEV/TEST runs;
+    * runs encrypted to a recovery key that was never tested.
+  * Hard keeps, independent of the counts:
+    * the newest recoverable run of every company and of the system ("last recoverable backup");
+    * the newest run with a passed recovery test for each recovery key id that a retained run uses (so deletion never turns `backup-status` back to `recovery_untested`, and the key stays proven);
+    * the newest complete run overall.
+  * **Month-end and year-end runs are never deleted automatically in this slice** (D-086 default, `legal_policy_absent`). Building the company legal policy waits for owner questions Q1-Q3.
+* **D-134, legal holds.**
+  * **Backup legal holds (new):** a row in a system table `backup_legal_hold`, append-only (guard trigger; never deleted or updated except the release columns once).
+    * Scope: one run (`run id`), or one company with an optional date range of run start (`company id`, `from`, `to`; open ends allowed). A reason is required; the placing operator and the time are recorded.
+    * Placing is protective and immediate: `backup-hold-place (--run <id> | --company <id> [--from <date>] [--to <date>]) --reason <text>` writes audit 2018.
+    * **Releasing is not available in this slice** (`hold_release_unavailable`). It needs a named administrator and independent approval (two persons), which the administrative tool gets only with the Phase 4.1 login and approval framework. Audit code 2019 is reserved for it. Until then a hold is permanent; an erroneous hold costs storage only.
+  * **Holds from attachment retention (D-114, D-110):**
+    * A hold on an already-purged attachment marks the retained backup sets that contain it as held. Until the Phase R backup inventory exists (R4), D-114 says every retained backup set counts as held: while the company's attachment-retention schema has any such hold and the inventory is unavailable, every run is kept (`d114_hold`).
+    * **Default (owner question Q4):** ANY active attachment legal hold of a company (company-wide, record or attachment scope) keeps every run that contains that company (`attachment_hold`).
+    * A company whose hold tables do not exist yet (migration level below Phase R) can have no holds. A company whose hold tables exist but cannot be read keeps all of its runs (`hold_check_failed`).
+  * Holds are read at preview time AND again immediately before each deletion.
+* **D-135, active recovery chains.** Every run is a full, self-contained backup (no increments), so a chain is the run plus what is needed to read and use it. A run is pinned while any of these holds:
+  * a trial restore or a recovery test from it is running. These now take a shared advisory lock (run-lock namespace of slice 4, object 1) for their duration, and deletion takes it exclusively, so the two are mutually exclusive;
+  * a kept trial database references it (a `*.trial-*.json` file inside the run);
+  * it is the newest recovery-tested run of a recovery key in use (D-133);
+  * a row of the new system table `backup_retention_pin` references it and has not expired. Slice 7 writes these rows: the safety backup taken before a cutover (D-081), pinned for its rollback window. Slice 6 creates the table and honours it. Pins are append-only and expire only by their own `expiresUtc`.
+  * If incremental backups are ever introduced, the base and every increment form one chain and are kept together. That would need a decision of its own.
+* **Exclusions from deletion that are not keep rules:**
+  * a run folder that contains an unexpected file (`run_not_clean`: anything except the slice 5 files and `recovery-test.json`);
+  * a symbolic link anywhere in the run (`symbolic_link_refused`);
+  * a run outside the resolved root.
+
+  These are reported and kept.
+
+### Preview, validation and deletion (D-136)
+* **`backup-retention-plan <root> [--json <file>]`** (new; read-only for files; reads the system and company databases):
+  * classifies every run and prints, per run, its id, its window, the class tags per company (`daily`, `weekly`, `period_end`, `year_end`, `unknown`), and either the keep reasons or `eligible`;
+  * the JSON form is for monitoring and for an operator's record; it carries the plan hash (SHA-256 over the sorted eligible run ids and their status hashes);
+  * it writes audit 2014 (counts by reason and the plan hash);
+  * exit 0 with the plan printed, 3 configuration, 1 failure.
+  * The slice 4 `backup-retention-preview --keep-last` stays as it is: a database-free count preview, documented as NOT the D-086 policy. Nothing is removed.
+* **`backup-retention-apply <root>`** (new; INACTIVE, D-137) is the only deletion path, and it is the "automatic deletion" of D-086 (meant for the operating-system scheduler after `backup-run`). There is no manual deletion command, and no override for held, pinned, month-end, year-end or last-recoverable runs (owner question Q6). Every execution:
+  1. checks the activation gate (D-137); while inactive it writes audit 2017 `retention_deletion_inactive` and stops, exit 3, deleting nothing;
+  2. takes the slice 4 run lock (no backup runs meanwhile) and the restore lock exclusively (no trial restore or recovery test meanwhile), with bounded waits (`run_in_progress`, exit 4);
+  3. **requires current, healthy backups:** `backup-status` of the root must be `ok` (exit 0). Never delete while backups are failing, stale, partial, untested or unreadable (`backups_not_current`);
+  4. **clock sanity:** refuses when now is earlier than the newest run's `finishedUtc` or than the last deletion recorded (`clock_inconsistent`);
+  5. computes the plan and applies the **mass-deletion brake**: it refuses when the plan would delete more than `Hasm__Backup__Retention__MaxDeletionsPerRun` runs (default 7, at most 31), or more than half of the complete runs (`deletion_volume_suspicious`, audit 2017). A changed clock, calendar or configuration must never empty a root in one night;
+  6. for each eligible run, oldest first, **re-validates immediately before touching it:**
+     * the status signature verifies, and its hash equals the hash in the computed plan;
+     * holds and pins are re-read;
+     * classification is recomputed over the CURRENT root;
+     * the invariants still hold AFTER the simulated removal: every company and the system keep their last recoverable run and their minimums, and every recovery key in use keeps a tested run;
+     * the run is clean (no unexpected files and no symbolic links), and its path is inside the resolved root.
+
+     Any failure skips that run with audit 2017 and the reason; the others continue;
+  7. **deletes audit-first and resumably:**
+     * writes audit 2015 (run id, status hash, the keep-rule evaluation, operator or `scheduler`) and commits it;
+     * copies `run.status.json` and its `.sig` to the tombstone folder `<root>/.retention/tombstones/<run id>/` (owner-only);
+     * renames the run folder to `<run id>.deleting-<16 hex>`, so it is no longer a run;
+     * deletes that folder recursively, refusing to follow links;
+     * writes audit 2016 (files, bytes, tombstone path).
+
+     A crash leaves a `.deleting-*` folder. It is never a run, the next execution completes it (audit 2016 with `resumed`), and `backup-status` reports it (`retention_deletion_incomplete`, exit 8). When audit 2015 cannot be written, nothing is touched;
+  8. exit codes: 0 done (possibly nothing eligible), 8 done with skipped runs, 3 inactive or configuration, 4 a run or restore in progress, 1 failure.
+* **Signed sets, slice 5 (what deletion does to them):**
+  * Every run is signed on its own: there is no hash chain or reference across runs. Deleting a run therefore never invalidates the signature, manifest or proof of any other run, and every remaining run stays verifiable with the kit's trust list exactly as before.
+  * Deletion touches only files inside the run folder. It never touches the signing keys, the trust list, the key exports or the recovery kit.
+  * **The tombstone keeps the deleted run's signed `run.status.json` and its `.sig`.** These are small, contain no names, and are readable and verifiable with the same trust list. Together with audit events 2015 and 2016, which carry the SHA-256 of both files, they prove which authentic run existed and when it was deleted. A gap in the run history is therefore explained, never silent. Tombstones are never deleted by HASM (owner question Q7).
+  * Deletion is not cryptographic erasure. The ciphertext was encrypted to the recovery key that also protects every other run (D-085), so a copy that survives elsewhere (storage remnants, a snapshot of the volume, an off-site copy made by the operator) stays decryptable by the key holder. Per-class or per-period recovery keys would allow erasure by key destruction; that would be a change of D-085, recorded as a possible follow-up for the owner, not proposed here.
+* **Monitoring:** `backup-status` adds `retention_deletion_incomplete` (exit 8). A deleted run never counts toward `company_missed_runs`, which counts only consecutive complete runs.
+
+### Automatic deletion stays INACTIVE: how it is enforced (D-137)
+Three independent layers. Any one of them alone keeps deletion off.
+1. **Code gate.** `BackupRetention.AutomaticDeletionActivated` is a compile-time `const bool` that is `false` in this slice. `backup-retention-apply` checks it first.
+   * A unit test pins the value to `false`. Changing it is a code change in a reviewed PR, the **activation PR**.
+   * **The agents never self-merge the activation PR:** it enables an irreversible production operation (CLAUDE.md), so it merges only on an explicit owner instruction recorded in the INTEGRATION-STATUS owner-decision register.
+   * The activation PR must show, in its review record:
+     * (a) the safeguards are complete:
+       * encryption and signing (slice 5, merged);
+       * this slice merged;
+       * the restore safeguards: the slice 7 cutover with its safety backup pinned, plus the Phase R4 backup inventory, or the D-114 hold that keeps every run until it exists;
+     * (b) they were independently tested:
+       * an independent review of the deletion path;
+       * a recorded drill: from a root with more than the minimums, a preview, then a deletion on a disposable copy, then a recovery test of a remaining month-end run that passes.
+2. **Runtime prerequisites**, checked on EVERY execution even with the code gate on:
+   * encryption configured and no DEV/TEST acknowledgement (`unencrypted_ack` refused);
+   * the retention configuration is valid (D-132);
+   * every hold source is readable;
+   * the restore safeguards are detectable: the pin table exists (this slice's migration is applied) and the slice 7 cutover schema is present (`restore_safeguards_missing` otherwise);
+   * backups are current and recovery-tested (step 3 above).
+3. **Explicit opt-in per installation.** `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups` (exact value; anything else is a configuration error). Absent means preview only.
+   * A unit test pins that no repository configuration or installer template sets it, as for D-095.
+
+**Where the gate is checked (review M1 of #130).** The code gate (1) and the opt-in (3) are checked inside the deletion executor itself, in the lowest-level routine that renames or deletes a run folder, not only in the command. The internal test seam is the only path that can supply a test-only override, it is reachable only from the test assemblies, and a unit test asserts that every non-test entry point refuses while the gate is off.
+
+**What is tested while inactive:**
+* `backup-retention-apply` refuses, writes 2017 and deletes nothing.
+* The executor's validation and deletion steps are tested through an internal test seam, on disposable roots only. The seam is `internal`, visible only to the test assemblies; the command line has no path to it.
+* A unit test calls every non-test entry point that reaches the executor (the command handler and the public service method) and asserts that each refuses while the gate is off, and that the executor's own rename and delete routine refuses without the seam's override.
+
+Alternative rejected: not building the executor until activation. The activation PR would then introduce untested irreversible code at the last moment. Building it now, gated, lets review and tests cover it twice.
+
+### Interaction with key retirement (register item K, D-082, D-080(6); D-138)
+* **Key inventory in the signed status.**
+  * `run.status.json` version 2 adds, per company, the attachment master-key ids its set needs (`keyIdsRequired`, today only inside the encrypted manifest). At run level it adds the audit key ids of the system and company streams and of every business stream in the run (read as key ids only).
+  * These are key ids, not secrets, and the server can read them unattended without the recovery private key. Version 1 statuses (slice 5) stay readable; their key needs are `unknown`.
+  * **Review M2 of #130:** A retained run's key needs are `unknown` when its status is version 1, does not verify (`status_unverifiable`), is missing or unreadable, or the run is incomplete; any `unknown` run makes the report false (`backup_inventory_incomplete`).
+* **Key-retirement report** (consumed by the key-management phase and by Phase R4; retirement itself needs independent approval under D-080(6) and is not built here):
+  * An attachment master key or audit key is retirable only when:
+    * no live row needs it (the existing `oldKeysMayBeRetired` rule; for attachments, the D-114/R rule that a purged row still counts until R4);
+    * AND no RETAINED run lists it;
+    * AND no retained run has `unknown` key needs (version 1, unverifiable, missing or unreadable status, or an incomplete run; `backup_inventory_incomplete` makes the answer false: fail closed).
+  * Runs that are held, pinned, month-end or year-end are retained, so their keys stay needed for as long as they are kept. **Keys follow the backups, never the reverse.**
+* **Recovery keys (`rk-`):** the report lists, per recovery key id, the retained runs encrypted to it. An old recovery private key may be destroyed only when no retained run and no retained key export is encrypted to it (`recovery_key_still_needed`). The operator's kit procedure in `docs/DEVELOPMENT.md` is extended accordingly.
+* **Signing keys (`sk-`):** retiring a signing key (kit status `retired` with a date) does not affect retained runs signed before that date, and deletion needs no private signing key. A COMPROMISED key's runs fail verification on a server whose key directory no longer trusts it. They are `status_unverifiable`: kept, never counted, and reported for the operator.
+* **Key exports** live in the recovery kit, outside the root, and are never deleted by HASM. The preview lists, per retained run, the recovery key id and the key ids it needs, so the operator knows which kit material must be kept.
+* **Deletion never retires, destroys or rewraps a key.** It is the step that may later make a key retirable. The order is always: runs deleted (audited), then the report, then independent approval, then retirement.
+
+### Audit events (system stream, block 2014-2019; D-139)
+| Code | Event | Detail (codes, ids, counts and hashes only; never names or paths of databases) |
+|---|---|---|
+| 2014 | `BackupRetentionEvaluated` | operator, root tag (SHA-256 prefix of the resolved root), run counts by keep reason, eligible count, plan hash |
+| 2015 | `BackupDeletionStarted` | run id, status hash, signing key id, recovery key id, the rule evaluation, operator or `scheduler` |
+| 2016 | `BackupDeleted` | run id, status hash, files, bytes, tombstone written, `resumed` flag |
+| 2017 | `BackupDeletionRefused` | run id or `*`, reason (`retention_deletion_inactive`, `backups_not_current`, `deletion_volume_suspicious`, `clock_inconsistent`, a validation code) |
+| 2018 | `BackupLegalHoldPlaced` | hold id, scope, run id or company id and date range, reason length (the reason text is stored in the hold row, not in the event) |
+| 2019 | `BackupLegalHoldReleased` | reserved; release is not available until the Phase 4.1 approval framework |
+
+* Persisted codes, never renumbered; the registry is checked again before use.
+* This uses the last six codes of the 2010-2019 block that slice 5 reserved for slices 6 and 7. **Slice 7 requests a new block from the lead.**
+* Every command fails closed when its event cannot be written. For a deletion, nothing is touched without event 2015.
+
+### Commands (summary)
+* `backup-retention-plan <root> [--json <file>]`: preview, audited; usable while deletion is inactive.
+* `backup-retention-apply <root>`: INACTIVE (D-137).
+* `backup-hold-place (--run <id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text>`.
+* `backup-hold-list`.
+* No release command (D-134).
+* Interim mode: operating-system access, as for the slice 5 key commands (the dated limitation of RELEASE1-ACCEPTANCE G covers it). The implementation adds a dated limitation "automatic backup deletion inactive (D-086, D-137); backups accumulate and storage is managed by the operator" through the roadmap generator.
+
+### Exact tests (implementation PR)
+* **Unit tests:**
+  * Time zones:
+    * instant-to-local-date conversion and boundary construction, including a zone with a daylight-saving change at midnight (skipped and repeated local midnight);
+    * a pin that `TimeZoneInfo.Local` is never used;
+    * an unknown zone, and a company whose time zone is not configured, give `classification_unknown`, and the run is kept (L1).
+  * Fiscal calendar:
+    * monthly periods, a non-calendar fiscal year, 13 periods and 4-4-5 periods;
+    * the last-before and first-after rule at every boundary, a run spanning a boundary, calendar month-ends added;
+    * a date outside every fiscal year gives `unknown`, and the run is kept.
+  * Minimums:
+    * 7 and 4 pinned; 6 and 3 refused (exit 3, never clamped); higher values honoured;
+    * days without a run do not shrink the kept history;
+    * several runs per day: only the representative counts.
+  * Recoverable runs (D-133):
+    * `ok_missing_keys`, unverifiable, unencrypted, untested-key and incomplete runs never count and are never deleted;
+    * the last recoverable run per company and for the system is kept;
+    * the newest tested run per recovery key is kept.
+  * Holds and pins:
+    * run, company and date-range holds;
+    * the D-114 rule (any purged-attachment hold without the inventory keeps every run);
+    * an attachment hold keeps the company's runs;
+    * an unreadable hold source keeps everything;
+    * a pin until `expiresUtc`;
+    * a kept-trial file inside a run pins it.
+  * Validation:
+    * the brake (count and half);
+    * `backups_not_current`, `clock_inconsistent`;
+    * `run_not_clean`, a symbolic link, a path outside the root;
+    * a status hash that changed since the plan.
+  * The gate:
+    * `AutomaticDeletionActivated == false` pinned;
+    * the opt-in variable absent from every repository configuration;
+    * apply refuses with 2017 and nothing deleted;
+    * every non-test entry point refuses while the gate is off, and the executor's own rename/delete routine refuses without the seam's override (M1).
+  * Executor (internal seam, temporary roots):
+    * audit-first ordering (an audit failure deletes nothing);
+    * tombstone written and verifiable;
+    * rename then delete;
+    * resume of a `.deleting-*` folder;
+    * `backup-status` reports an incomplete deletion.
+  * Key inventory:
+    * a version 2 status carries the ids; version 1, an unverifiable status, a missing or unreadable status and an incomplete run each give `unknown` (M2);
+    * any `unknown` run makes the report false with `backup_inventory_incomplete`;
+    * a key needed only by a held month-end run is not retirable.
+* **PostgreSQL** (new class, about 7 tests; the registry is raised at push time and the lead is told the count):
+  * a preview over real runs with companies whose fiscal calendars and time zones differ, and the classes asserted;
+  * holds placed with audit 2018, and honoured; release refused;
+  * an active attachment-retention hold (when the Phase R tables exist on main; otherwise the "no tables, no holds" path) keeps the company's runs;
+  * apply refuses while inactive (2017, nothing deleted);
+  * the executor through the seam deletes exactly the eligible run of a disposable root (2015, 2016, tombstone), and a recovery test of a remaining run still passes;
+  * apply refuses while the run lock or the restore lock is held;
+  * the migration's append-only guards on the hold and pin tables.
+
+### Decisions (D-130..D-139, recorded in `docs/DECISIONS.md`, status planned)
+D-130 unit of retention; D-131 classification; D-132 minimums; D-133 recoverable runs and hard keeps; D-134 legal holds; D-135 recovery chains and pins; D-136 preview, validation and deletion; D-137 inactive enforcement; D-138 key inventory and key retirement; D-139 audit codes.
+
+### Owner questions (legal or retention policy; not decided here; the safe default applies until answered)
+* **Q1. Legal policy for month-end and fiscal-year-end runs:**
+  * the retention period;
+  * who in the company approves it (author and approver distinct, as for attachment retention D-108);
+  * whether an approved policy may ever let HASM delete such runs automatically.
+
+  **Default: never deleted automatically; no policy model is built until answered.**
+* **Q2. Which run is "the" month-end backup:** the last one before the boundary, or the first one after it (which contains the final postings)? **Default: both are kept.**
+* **Q3. Calendar month-ends in addition to fiscal period ends** (they differ for 4-4-5, 13-period or quarterly calendars). **Default: both kinds of boundary are kept.**
+* **Q4. Do attachment legal holds extend to backups?** D-114 covers holds on already-purged attachments. **Default: any active attachment hold of a company keeps every run containing that company.**
+* **Q5. Runs of companies that are no longer Ready or registered** (closed, archived, failed). **Default: all of their runs are kept.**
+* **Q6. An authorised manual deletion path** for protected runs (for example an erasure obligation that reaches backups). **Default: none; protected runs cannot be deleted through HASM.**
+* **Q7. How long tombstones and the deletion audit are kept.** **Default: forever.**
+
+Each question's default is the preserving one. An answer that relaxes one is an owner decision recorded in the register, and its implementation follows the PR rules.
+
+### Owner decisions this slice relies on (not re-asked)
+D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 (pins only; the cutover is slice 7), D-085, D-114.
+
+## Slice 7: live company restore (cutover) with acknowledgement, independent approval and a new audit checkpoint epoch (D-081) - PLAN (docs only)
+Sources:
+* owner decision **D-081**: a live company restore requires explicit acknowledgement, independent administrative approval and comprehensive audit. Cutover creates a new audit checkpoint epoch while the previous audit chain is preserved and verified; epoch rotation never conceals earlier audit failures or bypasses tamper detection. Required: pre-cutover validation, a secure backup taken before cutover, consistent database and attachment restoration, runtime permissions, a rollback plan and post-restore integrity checks;
+* **D-080(6)** (independent approval for restore operations) and **D-118** (trial restore and the recovery test are restore operations);
+* the Phase 4.1 independent-approval framework (`docs/PHASE-4.1.md` section 7, slice S4: operation `restore.execute`, "the 4.3 slice integrates it"; S8 wires it);
+* D-099 (named administrator with MFA in the administrative tool), D-102 (notifications), D-106, D-107 and D-119 (restore effects on credentials);
+* the code of slices 3-6: `CompanyBackupService.TrialRestoreAsync`, `EncryptedSets`, `SignedDocuments`, `RecoveryTestService`, `BackupRetentionPin`, `RestoreSafeguards.CutoverAvailable`, `AuditTrail` / `AuditVerifier` / `FileCheckpointStore`.
+
+Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after review round 1 of #143; technical defaults under D-048, chosen fail-closed). Audit block 2020-2029 (allocated). **Depends on #134** (slice 6): `RestoreSafeguards.CutoverAvailable` and the `backup_retention_pin` table come from it (review L5 of #143). Risk: **Critical**: it replaces live financial data and changes the audit-integrity mechanism.
+
+### Scope
+* **In scope:** the restore of ONE company's database and attachment folder from an encrypted, signed company set (slice 5), replacing the live ones.
+  * the request with a typed acknowledgement;
+  * the independent approval through the Phase 4.1 framework;
+  * pre-cutover validation and a pinned, encrypted safety backup;
+  * the switch, which is journaled, resumable and reversible;
+  * runtime permissions and post-restore integrity checks;
+  * the new checkpoint epoch of the company's business audit stream;
+  * the rollback window;
+  * the system and business audit events.
+* **Not in scope (later slice 8, "full-installation restore"):**
+  * restoring the SYSTEM database or a whole run;
+  * its credential effects (D-106, D-107, D-119: logins blocked until post-backup revocations are re-applied, and an installation-id change makes users `RecoveryRequired`);
+  * system-stream epochs.
+
+  A company cutover changes no user, credential, session, membership or role, and no EFFECTIVE permission. Its only writes to the system database are:
+  * its own records: the `restore_cutover` journal, the registry state, the retention pin and the system audit events;
+  * the soft revocation of scoped role assignments that are ALREADY INERT in live (D-152, step 3.5). This removes nothing anyone can use.
+
+  Users, credentials, memberships, roles, the registry row and the company's access stream (`company:<id>`) otherwise stay live. So D-106 and D-107 are NOT triggered by this slice. This is stated, not assumed: a test pins that a cutover writes nothing to the user, session or credential tables, and that its only role-assignment changes are the D-152 revocations (review M7 of #143).
+* Unencrypted (DEV/TEST) sets are never cut over, whatever the acknowledgement: `unencrypted_set_refused`.
+* No UI in this slice (administrative tool, like the other 4.3 commands). The API exposes nothing new.
+
+### Dependencies and the gate (D-144)
+* **The independent approval comes ONLY from the Phase 4.1 framework** (`admin_approval_request`, operation `restore.execute`, approver independent of the requester, MFA-fresh, bound to `payload_hash`, single use, expiry, restore-epoch expiry). This slice adds no second approval mechanism.
+* **`RestoreSafeguards.CutoverAvailable`** (slice 6, today `false`) is the code gate of every cutover entry point. It is also layer 2 of the slice 6 deletion gate. It stays `false` until ALL of these are on main:
+  * this slice's engine;
+  * the 4.1 approval framework (S4) with the D-099 named-administrator login in the administrative tool;
+  * the S8 wiring of `restore.execute`.
+
+  Until then every cutover command refuses (`restore_cutover_unavailable`, audited 2027). The engine is tested through an internal test seam, as in slice 6 (the gate is checked in the lowest-level switch routine too; review M1 of #130 applies).
+* **Implementation split:**
+  * **7a** builds the engine, the epochs and the journal behind the gate. It can merge before S4.
+  * **7b** (with 4.1 S8) wires `restore.execute` and the named login.
+  * Flipping `CutoverAvailable` is its own PR. Agents never self-merge that PR: it needs an explicit owner instruction (owner question Q3) and a recorded drill.
+
+### The procedure
+1. **Request** (`restore-cutover-request <set-dir> <company-id> --recovery-key <file> --signing-trust <file> [--passphrase-stdin]`, by a named administrator; D-099):
+   * The set is verified as in slice 5: signatures, stored digests, run id. Then it is restored into a NEW, unregistered database and a staging attachment folder ON THE SAME FILESYSTEM as live storage (the rename in step 3.7 must be atomic), using the slice 3 trial-restore path, KEPT.
+   * The copy is migrated FORWARD to this installation's company level when it is older (Q5 default; a newer set is refused, as today).
+   * **What-would-be-lost pre-checks (D-153; F1-F3):** the lost-tail classification, the numbering comparison (counters and issued and voided numbers) and the fiscal-state comparison of step 3.6 run here against live; any accounting loss refuses the request by default (Q7, Q9).
+   * **Live chain pre-check (Q4 default):** a live business stream that does not verify refuses the request.
+   * The slice 3 checks run against the LIVE system database: shared links, attachment rows against files, migration compatibility. The copy's business audit stream is verified as an authentic PREFIX of the live stream's checkpoints (D-147); a copy that is not a prefix is refused (`restore_set_not_a_prefix`).
+   * **Typed acknowledgement:** the requester types the company id, the source run id (or set id) and the phrase `replace live company data`. Its SHA-256 is recorded.
+   * An approval request (`restore.execute`) is filed with a canonical payload:
+     * company id;
+     * the set's signed manifest hash and run id;
+     * the copy's database tag and migration level;
+     * the restored business-stream head (seq, hash);
+     * the live stream's verification verdict and head at request time;
+     * the acknowledgement hash.
+   * Audit 2020. Nothing live has changed. The request expires (framework default); an expired request drops its prepared copy through the slice 3 kept-trial path (audit 2028).
+2. **Independent approval** (4.1 framework): another named administrator, MFA-fresh, approves the exact payload. Audit: the framework's own events.
+3. **Execute** (`restore-cutover-execute <request-id>`, by a named administrator, attributed). Under the company provisioning lock, the backup run lock and the restore lock (no backup, retention, trial restore, migration or runtime grant of this company meanwhile):
+   1. **Re-validate and CLAIM the approval (review M1 of #143):**
+      * the approval is valid and unconsumed, and the payload hash matches;
+      * the prepared copy is unchanged (its tag and its business-stream head);
+      * the live company is Ready;
+      * the gate is open.
+
+      Then, in ONE system transaction under the framework's row lock, the request is claimed: `restore_cutover` becomes `Switching`, with a unique constraint of one cutover per approval request, and the approval is marked consumed (`Executed` in the framework). Audit events 2021 (approval consumed) and 2022 (started) are written in that same transaction.
+      * From the claim on, the cutover FINISHES or REVERSES whatever the expiry. Expiry only stops claims that have not started.
+      * A reversed cutover leaves its approval consumed, and a retry needs a NEW request and approval.
+
+      This deviates from the PHASE-4.1 section 7 rule that "a failed execution leaves the request `Approved` and retryable": a cutover is a multi-step operation whose first steps change live state, so retrying under the same approval is not safe. The deviation is recorded here as part of the S8 contract for `restore.execute`, and S8 implements it.
+   2. **Block the company:** a new registry state `Restoring` (system migration). The API resolves only `Ready` companies, so every request now gets the generic `503`. The engine waits out the 15-second state cache (production blocker 5) and then terminates the remaining sessions of the live database (`pg_terminate_backend` for that database only).
+   3. **Verify the live business stream** (read-only `AuditVerifier`) and record its verdict and head (V_old, seq_old, hash_old). A verdict other than Verified stops the cutover here (Q4 default; `live_chain_not_verified`, audit 2027, then the reversal of step 2). Whatever the owner decides for Q4, a failed verdict is never hidden: it is recorded in the epoch (D-147).
+   4. **Safety backup (D-146):**
+      * an ENCRYPTED, signed `backup-company` of the live company into the backup root's cutover folder;
+      * pinned in `backup_retention_pin` with a NON-EXPIRING pin kind (kind 3, `lost_tail_evidence`) until the owner decides otherwise (review M2 of #143). It holds the only copy of the lost tail of the parent epoch, so its pin never lapses with the rollback window;
+      * its run id recorded.
+
+      If it cannot be taken, the cutover stops before anything is switched (owner question Q1 for a live database that is lost).
+   5. **Company-scope revocations stay applied (D-152, review H1 of #143).**
+      * Branches, warehouses and cost centers carry an `ActivationEpoch`. The system-side scoped role assignments record the epoch they were made under. An assignment is effective only while its entity is active AND its epoch equals the recorded one.
+      * A restored copy carries the OLDER epochs and active states, so a grant made inert by a change after the backup point would come back to life.
+      * **Mechanism: system-side revocation of inert scoped assignments.** This is a lead decision under D-048 (review M7 of #143). It replaces the earlier in-copy deactivate/reactivate cycles, which collided with company safeguards: the immediate main-branch CHECK of 0004 (M6), the cost-center tree trigger of 0008 (M6) and the negative-obligation warehouse trigger of 0020 (M7). It is security-preserving: there is no company-database write, no trigger bypass and no new migration.
+        * **When:** after quiescing, under the company provisioning lock, after the step 6 checks have passed and immediately before the switch (step 7).
+        * **What:** the engine reads every branch, warehouse and cost center of the LIVE database: its epoch and its active flag. It then soft-revokes on the system side every not-yet-revoked branch-, warehouse- and cost-center-scoped assignment of the company that is NOT effective in live:
+          * its recorded epoch differs from the entity's live epoch; or
+          * the entity is inactive in live; or
+          * the entity is missing from live.
+        * **The inactive case is needed for cost centers.** A cost-center epoch is bumped only on REactivation (0009). So a cost center deactivated after the backup keeps its epoch: its grants are inert in live only because it is inactive, and they would revive in a copy where it is still active.
+        * **How:** the existing soft revocation (revoked at / revoked by; rows are never deleted), attributed to the executing named administrator (D-099).
+        * **Why this changes no effective permission:** every revoked assignment is already PERMANENTLY inert in live. A reactivation always bumps the epoch, so none of them could ever become effective again in live. The impact is that inert grants disappear permanently, which is already their effect.
+        * **What remains:** only assignments effective in live (recorded epoch = live epoch, entity active). After the cutover such an assignment stays effective only where the restored entity has the same epoch and is active; that entity has not changed state since the backup point. Where the restored epoch differs, the assignment becomes inert. This fails closed: administrators re-grant.
+        * **Cost-center coverage (self-review of the redesign).** A cost-center grant covers the cost center AND its descendants in the CURRENT tree, and cost centers can be moved (Phase 3.2C). So a restored tree can place under a granted cost center a descendant that live had moved out. **Default: REFUSED** when an assignment that stays effective would cover, in the copy, a cost center it does not cover in live (`cost_center_scope_widened`). A refusal changes no permission, and the alternative of revoking a grant that is effective in live is left to the owner (Q8).
+        * **Atomicity and journal:** the revocations, the journal step's `done` record and ONE system event per cutover, **2029 `RestoreInertScopedAssignmentsRevoked`**, are written in ONE system transaction. The event lists the assignment ids and, per entity, the entity id, the recorded epoch and the live epoch (ids and numbers only). On resume, a step without `done` was rolled back and is recomputed from the live state; a step with `done` is not repeated.
+        * **Reversal:** a later reversal of the cutover (step 9, resume BACK) does NOT un-revoke. The revoked rows were inert in live, the old database is live again, and they stay inert.
+        * **Assignment writes are blocked meanwhile:** the company is `Restoring` (the API resolves only `Ready` companies), and the implementation refuses any assignment write of a company in `Restoring` (tested). The step 9 post-check re-evaluates at switch time.
+        * **Any failure refuses the cutover** (`inert_assignment_revocation_failed`, audit 2027), and so does **a live epoch or active flag that cannot be read** (`live_epoch_unreadable`). A live database that cannot be read never yields "no grants to protect".
+        * **No company-database writes in this step:** the copy's business stream keeps its restored head seq_r, and its branch, warehouse and cost-center rows are unchanged. So a company with an open negative-stock obligation (company migration 0020) is cut over normally (M7).
+      * This applies D-106's principle ("revocations after the backup point stay applied") at company scope. It is a security-preserving default, not new policy, and is listed as owner question Q8 with this default.
+   6. **What the restore would lose (D-153, review H2 of #143 and the accounting review F1-F4 by Agent F; owner questions Q7 and Q9).** The copy rolls back everything the live company did after the restore point. That is accounting policy, so it is the owner's decision. Until the owner decides, the preserving defaults below REFUSE the cutover whenever the restore would lose accounting history.
+      * **Quiesced comparison (F4).** The comparisons below run at request, and again at execution AFTER quiescing (registry `Restoring`, sessions terminated, `ALLOW_CONNECTIONS false`, under the company provisioning lock), and once more immediately before the switch. A number issued, or a period closed, between request and switch is caught.
+      * **Lost-tail classification (F1).**
+        * The D-147 head comparison identifies the live business-audit events after the restored head (seq_r+1..seq_old).
+        * Each event type is classified by a code-defined table as ACCOUNTING or not. Accounting types are: number issue or void; journal post, reverse or cancel; cost operations; stock posting, reversal or adjustment; negative-stock settlements; fiscal period or year state; exchange rates; approval decisions. An event type the table does not know counts as accounting (fail closed).
+        * **Default: REFUSED when the lost tail contains ANY accounting event** (`accounting_events_after_restore_point`).
+        * The request shows the approver a per-type inventory of the lost tail (counts per event type), and that inventory is part of the `restore.execute` payload hash.
+      * **Numbering (H2, F3).**
+        * The live and the copy's `NumberCounter` AND `NumberIssue` rows are compared, including the voided flags, per series key (document type, branch, fiscal year).
+        * A series key present only in live counts as advanced. A number voided in the lost tail (a cancelled approved document) would come back un-voided.
+        * **Default: REFUSED on any difference** (`numbers_issued_after_restore_point`).
+      * **Fiscal state (F2).**
+        * Every fiscal period's and year's status and revision, the year-close and carry-forward state and the pending reopen requests are compared between live and the copy. A period closed (possibly reported or filed) after the restore point would otherwise come back Open.
+        * **Default: REFUSED on any difference** (`fiscal_state_differs`; owner question Q9).
+      * **System-side references to lost company data (warning).** Party-registry identities, links and proposals (the request outbox) that refer to a local party absent from the copy are reported (`party_reference_target_missing`, count), next to `shared_links_missing_locally` (slice 3) and `scope_target_missing` (L6).
+      * **Note for operators: revision ETags and idempotency keys.**
+        * Revision counters roll back with the copy, and all sessions are terminated. A client still holding a lost-tail ETag could later match a DIFFERENT revision with the same number (an ABA risk, Low); clients must reload after a cutover.
+        * Client idempotency keys of lost-tail requests are forgotten. A retry creates the document again, which is desired, because it was lost.
+      * **Owner options (not decided here).**
+        * Q7 option "advance and void" for numbering is sound ONLY under these conditions (from Agent F's review):
+          1. ROWS, not a jump: one issued-then-voided `NumberIssue` row per skipped number, with a reserved sentinel document id (the cutover id, never a real document) and the reason "lost in restore cutover <id>". No guard is weakened.
+          2. The live maxima are taken per series key from the QUIESCED live database (F4), including keys only in live and voided numbers.
+          3. The void ranges are listed in the request and in the approval payload hash.
+          4. A post-check confirms every counter is at or above the live maximum and every skipped number exists as a void row.
+          5. An operational re-entry procedure (owner or legal): documents of the lost tail that were communicated externally are re-entered under NEW numbers, cross-referenced to the voided ones, from the pinned safety backup.
+          6. F1 and F2 still apply: voiding numbers fixes numbering only.
+        * The Q9 option for fiscal state: re-apply the live closures to the copy before the switch. Never reopen anything.
+   7. **Switch (D-145), journaled step by step in the new system table `restore_cutover`:**
+      * Before the termination in step 2, `ALTER DATABASE <live> WITH ALLOW_CONNECTIONS false`, so no new session can arrive between termination and rename (review L2 of #143).
+      * `ALTER DATABASE <live> RENAME TO <retained, generated opaque name>`, then `ALTER DATABASE <copy> RENAME TO <live name>`. The registry row, the runtime role name and the credential stay valid because the physical name is unchanged.
+      * The runtime role's grants on the RETAINED database are revoked (CONNECT included), so the retained copy is reachable only by the administrator (L2).
+      * The attachment folder: `rename(live, retained)`, then `rename(staging, live)`.
+      * **Resume rules (review L1 of #143):** every step is recorded before (`intent`) and after (`done`) it runs. `restore-cutover-resume <id>` decides from the OBSERVED state, not from the journal alone: which database names exist, which folder names exist, `ALLOW_CONNECTIONS`, the grants.
+        * Up to and including the database renames, the rule is BACK: restore the original names, re-allow connections, state Ready, audit 2024.
+        * From the completed renames on, the rule is FORWARD: finish the grants, post-checks and epoch.
+        * An epoch file that already exists for this cutover id is REUSED, never duplicated.
+        * Never by hand.
+   8. **Runtime permissions:** `grant-company-runtime` on the switched database (the restored copy has no grants: `--no-privileges`), then the runtime login and the schema gate are verified.
+   9. **Post-restore integrity checks (read-only):**
+      * the slice 3 checks again on the switched database;
+      * the business stream verified as a prefix of the previous epoch (D-147);
+      * every attachment row checked against its file;
+      * the migration level and checksums;
+      * **no revival (D-152):** every scoped assignment of the company that is effective against the switched database was effective in live at cutover time: recorded epoch = live epoch and the entity active in live. No cost-center assignment covers a cost center it did not cover in live;
+      * **no numbering series is behind the live maximum, no issued or voided number differs, and the fiscal state equals live** (D-153; F2, F3);
+      * **warning check (review L6 of #143):** system-side scope assignments that point at a branch, warehouse or cost center missing from the restored copy are reported (`scope_target_missing`, count). They are inert anyway.
+
+      **Any failure here reverses step 7 from the journal** (the old database and folder are live again, the epoch is NOT rotated), sets the state back to Ready and writes audit 2024. The approval stays consumed (M1).
+   10. **New checkpoint epoch (D-147):** the epoch-start checkpoint is written, then the business-stream event 2026 is the first event of the new epoch in the switched database. The system-stream events 2026 and 2023 carry:
+      * the old and new heads;
+      * V_old;
+      * the epoch numbers;
+      * the safety-backup run id;
+      * the retained database tag.
+   11. **Ready:** the state returns to `Ready`, `restore_cutover` becomes `Completed`, and audit 2023 (completed) is written in the same transaction. Notifications go out per D-102.
+4. **Rollback window (D-149):**
+   * The retained database, the retained folder and the pinned safety backup stay for the window (owner question Q2).
+   * `restore-cutover-rollback <cutover-id>` is a restore operation with its own `restore.execute` approval, and it runs the FULL procedure (review M3 of #143):
+     * live verification;
+     * a safety backup of the outgoing (restored) company with its non-expiring evidence pin;
+     * the revocation of inert scoped assignments (D-152, against the epochs and active flags of the outgoing live database) and the D-153 checks (lost-tail accounting events, numbering including voided numbers, fiscal state), after quiescing (review R1 by Agent F);
+     * the journaled switch, KEEPING the outgoing database and folder as retained;
+     * runtime grants and post-checks;
+     * ANOTHER epoch whose parent is the epoch the retained database belongs to.
+
+     Events written in between remain in the preserved epoch, in the outgoing database and in the system stream. Audit 2025.
+   * The end of the window only expires the pin. Removing the retained database and folder is not built (owner question Q2).
+
+### Checkpoint epochs (D-147): how the previous chain stays preserved and verified
+Today a restored company database rolls its business stream back while the external checkpoints stay ahead (`tail_truncated`, and every later write is refused with `audit_stream_truncated`). An epoch is the controlled, audited answer: never an edit of checkpoint files.
+* **Files:** the checkpoint file of a stream (one JSON-lines file per stream, named by a hash of the stream key) stays as it is and becomes epoch 0. Each cutover appends a NEW file `<hash>.e<n>.hcp` for epoch n. Old files are never modified, truncated or deleted.
+* **The epoch-start checkpoint** is the first line of epoch n, a new checkpoint format version. It is authenticated with the checkpoint key and carries:
+  * the epoch number and the parent epoch;
+  * the restored head (seq_r, hash_r);
+  * the parent epoch's LAST checkpoint MAC, so removing or replacing an epoch file breaks the chain between epochs;
+  * the cutover id and the approval request id;
+  * the parent epoch's verdict (V_old) with its failure codes.
+* **Prefix rule:**
+  * The restored stream 1..seq_r must equal the parent epoch's checkpointed history wherever a parent checkpoint exists at or below seq_r (same hash).
+  * When the parent has NO checkpoint at or below seq_r, the prefix cannot be proven and the request is refused (`restore_prefix_unprovable`; review L3 of #143).
+  * In addition, at request and before the switch, the restored head (seq_r, hash_r) is compared DIRECTLY with the live stream's record at seq_r (L3).
+  * This is checked at request, again before the switch, and by every later verification. A restore cannot smuggle in a forged history (`restore_set_not_a_prefix` / `epoch_prefix_mismatch`).
+* **Binding (review M4 of #143):** every epoch from 1 on must be bound to a `restore_cutover` row in state `Completed` or `RolledBack`, AND to the system-stream event 2026 carrying the same cutover id, approval request id and heads. `audit-verify` reports `Failed` (`epoch_unbound`) for an epoch without both. Writing an epoch file by hand therefore never yields a verified stream.
+* **Verifier** (`audit-verify`):
+  * It verifies the current epoch as today, plus the prefix rule and the inter-epoch chain.
+  * It ALWAYS reports the history: `epoch 0: <verdict at rotation, its failure codes>; epoch 1: ...`.
+  * A failed earlier epoch keeps the overall verdict at `Failed` (exit 6) until an auditor reviews it. The epoch record cannot clear it: "never conceals earlier audit failures".
+  * The lost tail of the parent epoch (seq_r+1..seq_old) is preserved in TWO places: the pinned safety backup (non-expiring pin, M2), and the retained database while it exists (review M2 of #143). `audit-verify --epoch <n> --from-set <safety set>` or `--from-retained <cutover id>` verifies it against the parent epoch's file.
+* **Runtime** (`AuditTrail`): before the first write of a transaction it reads the newest epoch file. A stream shorter than the newest epoch's last checkpoint is still `audit_stream_truncated`: an epoch is never inferred, only created by the cutover.
+* **System and company streams are not rotated by this slice:** the system database is not restored.
+* Alternative rejected: re-anchoring the restored head in the same file with `--establish-baseline`. It would make the restored state the trusted baseline and hide the lost tail; the anchor command refuses this, rightly.
+
+### Persistence (one system migration; its number is allocated by the lead at implementation)
+* **`restore_cutover`** (append-only):
+  * the request id, company id, set reference (run id, signed manifest hash), prepared copy tag, acknowledgement hash and approval request id;
+  * the steps journal (step, state, at);
+  * the old and new heads, V_old, the epochs, the safety-backup run id, the retained database tag and the retained folder name;
+  * the status, a closed set: `Prepared|Approved|Switching|Completed|Reversed|Failed|RolledBack|Expired`.
+  * Status transitions are guarded by a trigger; nothing is ever deleted.
+* The registry state CHECK gains `Restoring`; the provisioning and migration services treat it as busy.
+* The `backup_retention_pin` kind CHECK (from #134) gains kind 3 (`lost_tail_evidence`, non-expiring: `expires_at` may be the far future or NULL, chosen at implementation with the slice 6 guard).
+* `restore_cutover` has a unique constraint on the approval request id (M1).
+* No company migration.
+
+### Audit (system stream; business stream for 2026; D-150)
+| Code | Event | Detail (ids, codes, hashes, tags; never names or paths) |
+|---|---|---|
+| 2020 | `RestoreCutoverRequested` | operator, company, run id, manifest hash, copy tag, restored head, live verdict, acknowledgement hash, approval request id |
+| 2021 | `RestoreCutoverApproved` | approval request id, approver (as recorded by the framework), payload hash; written when consumed |
+| 2022 | `RestoreCutoverStarted` | cutover id, live head and V_old, safety-backup run id |
+| 2023 | `RestoreCutoverCompleted` | cutover id, old/new heads, parent/new epoch, retained database tag |
+| 2024 | `RestoreCutoverReversed` | cutover id, the failed step and code (automatic reversal before the epoch rotation) |
+| 2025 | `RestoreCutoverRolledBack` | cutover id, rollback approval id, new epoch |
+| 2026 | `AuditEpochStarted` | stream, epoch, parent epoch, restored head, parent verdict and failure codes (in the system stream AND as the first event of the new epoch in the business stream) |
+| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`, `restore_prefix_unprovable`, `numbers_issued_after_restore_point`, `accounting_events_after_restore_point`, `fiscal_state_differs`, `live_chain_not_verified`, `inert_assignment_revocation_failed`, `live_epoch_unreadable`, `cost_center_scope_widened`) |
+| 2028 | `RestoreCutoverExpired` | request id (the prepared copy is dropped) |
+| 2029 | `RestoreInertScopedAssignmentsRevoked` | cutover id, the revoked assignment ids, and per entity its id, the recorded epoch and the live epoch (review M7 of #143; ids and numbers only) |
+
+* Every step fails closed when its event cannot be written.
+* The detail carries database TAGS only.
+
+### Exact tests (implementation PR)
+* **Unit tests:**
+  * the epoch file format and MAC chain (version pinned with a golden test, like format 1);
+  * inter-epoch linking (a removed, replaced or reordered epoch file is detected);
+  * the prefix rule (equal, shorter, diverging);
+  * the verifier always reporting a failed earlier epoch (exit 6) after a rotation;
+  * the runtime never inferring an epoch;
+  * the journal state machine (every crash point resumes forward or backward);
+  * the gate (`CutoverAvailable == false` pinned; every entry point refuses; the lowest-level switch routine refuses without the seam; no production use of the seam);
+  * the typed acknowledgement;
+  * the payload canonicalization and hash;
+  * refusal of unencrypted sets.
+* **PostgreSQL** (isolated runner; about 8 tests; the registry is raised at push time):
+  * the request prepares a copy and changes nothing live;
+  * the seam execute switches the database and the folder, re-applies grants, verifies, rotates the epoch, writes 2020-2023 and 2026, and the company serves the restored data;
+  * a post-check failure reverses the switch (old data live, no epoch, 2024);
+  * crash-resume at each journal step;
+  * a forged or non-prefix set is refused;
+  * a live stream that did not verify is recorded in the epoch and stays reported as Failed;
+  * rollback through a second approval creates another epoch and restores the old data;
+  * concurrent backup, retention, trial restore, migration and runtime grant are blocked while `Restoring`;
+  * nothing in the user, session or credential tables changes, and the only role-assignment changes are the D-152 revocations of assignments inert in live;
+  * H1: grant a branch-scoped role, deactivate the branch, cut over to a pre-deactivation set; the grant stays ineffective (and a warehouse and cost-center variant);
+  * M7 (D-152 redesign):
+    * grant a branch-scoped role, deactivate and reactivate the branch (live epoch +2), cut over to a pre-deactivation set: the grant stays ineffective, the inert row is soft-revoked and listed in ONE system event 2029 with its recorded and live epochs; an assignment effective in live stays effective where the restored epoch is equal, and becomes inert where it differs;
+    * a warehouse with an open negative-stock obligation (company migration 0020): the cutover proceeds;
+    * the MAIN branch, and a PARENT cost center with active children: the cutover proceeds, and their inert grants are revoked;
+    * a cost center deactivated after the backup (same epoch, inactive in live): its grant is revoked;
+    * a cost center moved out from under a granted cost center after the backup: refused (`cost_center_scope_widened`);
+    * no company-database write: the copy's head stays seq_r and its branch, warehouse and cost-center rows are unchanged;
+    * a resume after a crash inside the step recomputes it; a reversal does not un-revoke;
+    * an assignment write for a company in `Restoring` is refused;
+    * a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
+  * H2/F3: issue a document number after the backup, request a cutover; it is refused (`numbers_issued_after_restore_point`), and the post-check fails on a forced bypass through the seam. Likewise for a number VOIDED after the backup, and for a series key that exists only in live;
+  * F1: post (stock posting of an already approved document) after the backup; the request is refused (`accounting_events_after_restore_point`) and shows the per-type inventory; an unknown business event type counts as accounting;
+  * F2: soft-close a period after the backup; the request is refused (`fiscal_state_differs`);
+  * F4: a number issued between request and execution is caught by the execution-time comparison after quiescing;
+  * M1: an approval claimed then reversed is consumed (a retry needs a new request); a claim after expiry is refused; a claimed cutover past its expiry still finishes;
+  * M4: an epoch file without its Completed row and 2026 event verifies as Failed (`epoch_unbound`);
+  * L2: no session can connect to the live database between termination and rename; the retained database refuses the runtime role.
+
+### Decisions (D-143..D-151; recorded in `docs/DECISIONS.md`, status planned)
+D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework); D-152 company-scope revocations stay applied (inert scoped assignments revoked on the system side; Q8); D-153 what a restore may lose (lost-tail accounting events, numbering incl. issued and voided numbers, fiscal state; refuse by default after quiescing; Q7, Q9).
+
+### Open questions for the owner (not decided here; the safe default applies until answered)
+* **Q1. The live database is lost or unreadable**, so no pre-cutover safety backup can be taken. **Default: the cutover is refused.** A disaster variant without the safety backup (with the gap recorded) would need the owner's decision. **Note (F5):** consequently a company whose live database is corrupt or unreadable cannot be cut over in slice 7 at all, because every what-would-be-lost check (Q4, Q7, Q9) needs a readable live database. That case needs the later full-installation path or an owner-approved procedure.
+* **Q2. How long the rollback window lasts, and what happens to the replaced database and folder after it.** **Default: a 7-day window; the replaced database and folder are never removed automatically.** Removal would need a separately approved, audited step that is not built.
+* **Q3. Who may turn cutovers on.** **Default: only an activation PR merged on the owner's explicit instruction**, after a recorded drill (as for the 4.3-ACT deletion activation).
+* **Q4. Cutover when the live audit chain does not verify** (corruption may be the very reason for the restore). **Default: REFUSED (review L4 of #143).** The option for the owner: allowed only when the approver re-types every failure code, with the failure reported forever (D-081: never concealed).
+* **Q5. A set from an older migration level.** **Default: migrated forward on the prepared copy BEFORE the switch, with the checks run after migration;** a newer set is refused.
+* **Q6. Who is notified, and how.** **Default: per D-102 (audit and in-app to every company administrator of the company, and to the identity administrators).**
+* **Q7. What may a restore lose?** (review H2 of #143; accounting review F1 and F3).
+  * **PRESERVING DEFAULT: nothing of accounting.** The cutover is REFUSED whenever the lost tail contains any accounting event, or any numbering series (counter, issued or voided number) differs from live.
+  * The option for numbering: advance and void, ONLY under conditions 1-6 of step 3.6.
+  * **Note for the owner:** while Q7 refuses, ANY company that has done accounting work (for example issued a document number) since its backup point cannot be cut over at all. Its lost work must be re-entered or recovered under a separate policy.
+  * **Accounting configuration counts as accounting** (review Low of #143). The preserving default classifies configuration that drives accounting as an accounting event, so its loss refuses the cutover. This covers: chart and account settings, tax configuration, inventory-accounting versions, statement mappings, numbering rules, closing settings and approval policies. The owner may narrow this list.
+* **Q8. Company-scope revocations after the backup point** (review H1 and M7 of #143).
+  * **Default: before the switch, every branch-, warehouse- and cost-center-scoped assignment that is already inert in live is soft-revoked on the system side.** Assignments effective in live stay; they become inert where the restored epoch differs, which fails closed (administrators re-grant). A cost-center grant whose coverage the restored tree would widen refuses the cutover.
+  * **This is security-preserving:** no permission is added, and none that live has is revived. Its only impact is that inert grants disappear permanently, which is already their effect, since a reactivation always bumps the epoch.
+  * **No alternative is needed for the owner.** The owner may still choose to revoke instead of refuse for a widened cost-center coverage.
+* **Q9. Fiscal state after the backup point** (accounting review F2). **PRESERVING DEFAULT: REFUSE the cutover when any fiscal period or year state, its revision, the year-close state or a pending reopen request differs between live and the copy.** The option for the owner: re-apply the live closures to the copy before the switch; never reopen anything.
+
+### Owner decisions this slice relies on (not re-asked)
+D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system restore here), D-085..D-088.
 
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
@@ -682,6 +1306,6 @@ D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention
 * Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling (by the operating system), monitoring and measured durations: slice 4 (implemented). Set encryption and retention: owner package 4.3-2.
 
 ## BLOCKED / owner decisions
-* Audited restore acknowledgement and a new checkpoint epoch after a company restore (`docs/DEVELOPMENT.md`, restore limitations): policy needs an owner decision.
+* Audited restore acknowledgement and a new checkpoint epoch after a company restore: decided (D-081); planned in slice 7 (D-143..D-151). Cutovers stay unavailable (`RestoreSafeguards.CutoverAvailable = false`) until the engine, the Phase 4.1 approval framework (S4/S8) and an owner-instructed activation are in place; owner questions Q1-Q6 of slice 7.
 * Retention/purge of removed attachments (decision R).
-* Set encryption and authentication, automatic deletion of backups (retention), and the key-directory export: OWNER package 4.3-2 (slice 4 plan). Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
+* Set encryption and authentication and the key-directory export: decided (D-085, D-087, D-088), slice 5. Retention and deletion of backups: decided (D-086), planned in slice 6; automatic deletion stays INACTIVE until its activation PR (D-137), and the month-end/year-end legal policy waits for owner questions Q1-Q3 of slice 6. Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.

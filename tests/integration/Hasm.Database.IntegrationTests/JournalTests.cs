@@ -674,6 +674,113 @@ public class JournalReversalTests : JournalTestBase
 
 public class JournalDatabaseInvariantTests : JournalTestBase
 {
+    /// <summary>Runs the statements in ONE transaction as the owner and returns the PostgreSQL message of the failure (null = committed).</summary>
+    private async Task<string?> MessageOf(params string[] statements)
+    {
+        await using var conn = new NpgsqlConnection(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName));
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        try { foreach (var st in statements) { await using var cmd = new NpgsqlCommand(st, conn, tx); await cmd.ExecuteNonQueryAsync(); } await tx.CommitAsync(); return null; }
+        catch (PostgresException ex) { return ex.MessageText; }
+    }
+
+    private string PostBySql(Guid entry, string number) =>
+        $"UPDATE {Je.Table} SET {Je.Status} = 4, {Je.Number} = '{number}', {Je.PostedBy} = '{Checker3}', {Je.PostedAt} = now(), {Je.Period} = '{Year.Periods[2].Id}' WHERE {Je.Id} = '{entry}'";
+
+    private static string ApproveBySql(Guid entry, int status = 3) =>
+        $"UPDATE {Je.Table} SET {Je.Status} = {status}, {Je.SubmittedBy} = '{Maker}', {Je.SubmittedAt} = now() WHERE {Je.Id} = '{entry}'";
+
+    private async Task<long> LatestRateId(string currency) => (await RateSvc.OverviewAsync(Company.Id))!.Currencies.Single(c => c.CurrencyCode == currency).LatestId;
+
+    /// <summary>
+    /// The posting guard of company migration 0009 (<c>f_ba4c6a0d</c> with p_post, plus the approval gate) against a DIRECT writer: an entry approved through the service, whose world changed afterwards, cannot be moved
+    /// to Posted by an UPDATE either. Each case changes exactly one rule and asserts PostgreSQL's own message; the entry stays Approved. A control proves the statement itself is a valid posting.
+    /// </summary>
+    [PostgresFact]
+    public async Task PostgreSQL_refuses_the_Posted_transition_of_an_approved_entry_that_no_longer_meets_a_posting_rule_whoever_writes()
+    {
+        await PrepareJournal();
+        async Task Refused(JournalEntryView approved, string message, params string[] before)
+        {
+            Assert.Equal(JournalStatus.Approved, approved.Header.Status);
+            Assert.Equal(message, await MessageOf([.. before, PostBySql(approved.Header.Id, "SQL-X")]));
+            Assert.Equal(JournalStatus.Approved, (await Reload(approved.Header.Id)).Header.Status);                              // nothing changed
+        }
+        // control: the same statement posts an approved entry that meets every rule
+        var control = await Submitted(Simple("2026-03-10", 10m));
+        Assert.Null(await MessageOf(PostBySql(control.Header.Id, "SQL-1")));
+        Assert.Equal(JournalStatus.Posted, (await Reload(control.Header.Id)).Header.Status);
+
+        // an account deactivated after the approval
+        var inactive = await NewAccount("1201", "asset");
+        var e1 = await Submitted(Entry("2026-03-10", Dr(inactive.Id, 5m), Cr(Sales.Id, 5m)));
+        Ok(await ChartDomain.DeactivateAsync(Admin.Id, Company.Id, inactive.Id, inactive.Revision));
+        await Refused(e1, "every account must be active and postable");
+
+        // an account turned into a group (not postable) after the approval
+        var grouped = await NewAccount("1202", "asset");
+        var e2 = await Submitted(Entry("2026-03-10", Dr(grouped.Id, 5m), Cr(Sales.Id, 5m)));
+        Ok(await ChartDomain.UpdateDetailsAsync(Admin.Id, Company.Id, grouped.Id, grouped.Revision, new AccountDetailsInput(grouped.NameAr, grouped.NameEn, null, true, grouped.CurrencyPolicy.ToString().ToLowerInvariant(), grouped.CurrencyCode)));
+        await Refused(e2, "every account must be active and postable");
+
+        // an account whose currency policy became base-only after a USD line was approved on it
+        var e3 = await Submitted(Entry("2026-03-10", Dr(AnyAcc.Id, 100m, "USD"), Cr(Sales.Id, 71m)));
+        Ok(await ChartDomain.UpdateDetailsAsync(Admin.Id, Company.Id, AnyAcc.Id, AnyAcc.Revision, new AccountDetailsInput(AnyAcc.NameAr, AnyAcc.NameEn, null, null, "base", null)));
+        await Refused(e3, "a line currency violates the currency policy of its account");
+
+        // a line currency disabled for the company (in the same transaction as the posting attempt)
+        var e4 = await Submitted(Entry("2026-03-10", Dr(UsdOnly.Id, 100m, "USD"), Cr(Sales.Id, 71m)));
+        await Refused(e4, "a line currency is not enabled for the company", $"UPDATE {Cc.Table} SET {Cc.Enabled} = false, {Cc.Revision} = {Cc.Revision} + 1 WHERE {Cc.Code} = 'USD'");
+
+        // a newer effective rate entered after the approval: the applied rate is stale
+        var e5 = await Submitted(Entry("2026-03-10", Dr(UsdOnly.Id, 100m, "USD"), Cr(Sales.Id, 71m)));
+        Ok(await RateSvc.EnterAsync(Admin.Id, Company.Id, await LatestRateId("USD"), new ExchangeRateInput("USD", 0.75m, new DateOnly(2026, 3, 1), null)));
+        await Refused(e5, "the applied exchange rate is no longer the effective rate");
+
+        // an approval policy introduced after the approval: the required approvals for this revision are missing
+        var e6 = await Submitted(Simple("2026-03-11", 20m));
+        await NewPolicy();
+        await Refused(e6, "the required approvals for this revision are missing");
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Je.Table} WHERE {Je.Status} = 4"));                          // only the control was posted
+    }
+
+    /// <summary>
+    /// The same guard at the earlier gate: a DRAFT whose lines break double entry, whose header total disagrees with its lines, or whose foreign line carries a rate that is not its rate record's, cannot be moved to
+    /// Submitted or Approved by an UPDATE (so it can never reach Posted: Posted is reachable only from Approved, and the lines of a submitted entry are immutable). PostgreSQL's own message for each case.
+    /// </summary>
+    [PostgresFact]
+    public async Task PostgreSQL_refuses_to_submit_or_approve_an_unbalanced_mistotalled_or_misrated_draft_whoever_writes()
+    {
+        await PrepareJournal();
+        async Task Refused(JournalEntryView draft, string message, params string[] statements)
+        {
+            Assert.Equal(message, await MessageOf(statements));
+            Assert.Equal(JournalStatus.Draft, (await Reload(draft.Header.Id)).Header.Status);
+        }
+
+        // unbalanced in base currency: one line raised by 1 (debit 101, credit 100), then approved or submitted directly
+        var d1 = await Draft(Simple("2026-03-10", 100m));
+        var debit = d1.Lines.Single(l => l.BaseDebit > 0);
+        var unbalance = $"UPDATE {Jl.Table} SET {Jl.Debit} = 101, {Jl.BaseDebit} = 101 WHERE {Jl.Id} = '{debit.Id}'";
+        await Refused(d1, "the entry is not balanced in base currency", unbalance, ApproveBySql(d1.Header.Id));
+        await Refused(d1, "the entry is not balanced in base currency", unbalance, ApproveBySql(d1.Header.Id, status: 2));
+
+        // the recorded base total disagrees with the (balanced) lines
+        var d2 = await Draft(Simple("2026-03-10", 100m));
+        await Refused(d2, "the recorded base total does not match the lines",
+            $"UPDATE {Je.Table} SET {Je.BaseTotal} = {Je.BaseTotal} + 1, {Je.Status} = 3, {Je.SubmittedBy} = '{Maker}', {Je.SubmittedAt} = now() WHERE {Je.Id} = '{d2.Header.Id}'");
+
+        // a USD line whose rate is not the rate of the rate record it names (base amounts left balanced)
+        var d3 = await Draft(Entry("2026-03-10", Dr(UsdOnly.Id, 100m, "USD"), Cr(Sales.Id, 71m)));
+        var usd = d3.Lines.Single(l => l.Currency == "USD");
+        await Refused(d3, "the applied rate does not match its rate record", $"UPDATE {Jl.Table} SET {Jl.Rate} = 0.72 WHERE {Jl.Id} = '{usd.Id}'", ApproveBySql(d3.Header.Id));
+
+        // and once approved, the lines can no longer be unbalanced, so Posted is never reached with them
+        var approved = await Submitted(Simple("2026-03-10", 100m));
+        Assert.NotNull(await MessageOf($"UPDATE {Jl.Table} SET {Jl.Debit} = 101, {Jl.BaseDebit} = 101 WHERE {Jl.Id} = '{approved.Lines.Single(l => l.BaseDebit > 0).Id}'"));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Je.Table} WHERE {Je.Status} IN (2, 3, 4) AND {Je.Id} IN ('{d1.Header.Id}', '{d2.Header.Id}', '{d3.Header.Id}')"));   // none of the refused drafts left Draft
+    }
+
     [PostgresFact]
     public async Task PostgreSQL_checks_line_and_header_shape_for_direct_writes()
     {

@@ -82,6 +82,10 @@ public sealed record BackupRunReport(int Version, string RunId, DateTimeOffset S
 public static class BackupRunFiles
 {
     public const string ReportFileName = "run.json";
+    public const string UnencryptedMarker = "UNENCRYPTED-DEV-TEST-ONLY";
+    public const string CanaryFileName = "canary.hbe";
+    public const string CanaryPurpose = "canary";
+    public const string RunKind = "run";
     public const string SystemFolder = "system";
     public const string CompaniesFolder = "companies";
     public const int ReportVersion = 1;
@@ -101,7 +105,7 @@ public static class BackupRunFiles
         IsRunId(runId) && DateTime.TryParseExact(runId[..16], "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t)
             ? new DateTimeOffset(t, TimeSpan.Zero) : null;
 
-    internal static bool IsCode(string? s) => s is not null && CodePattern.IsMatch(s);
+    public static bool IsCode(string? s) => s is not null && CodePattern.IsMatch(s);
 
     /// <summary>Creates <paramref name="path"/> exclusively and owner-only via a temporary file, then renames it into place.</summary>
     internal static void WriteOwnerOnlyAtomically(string path, byte[] content)
@@ -150,10 +154,17 @@ public sealed class BackupRunService
     internal const int RunLockNamespace = 0x48425255;
 
     /// <summary>
-    /// The secret-store tables whose DATA is excluded from the system dump, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; the Phase 4.1 TOTP
-    /// table is added to both in the slice that creates it.
+    /// Every secret-store table with its report label, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; which of them a dump excludes
+    /// follows the per-table rule (<see cref="SystemDumpExclusionsFor"/>, D-120). The Phase 4.1 TOTP table is added to both, as included only in encrypted runs, in the slice that creates it.
     /// </summary>
-    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table")];
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table")];
+
+    /// <summary>
+    /// The secret-store tables whose DATA a system dump excludes (D-120, per-table rule of <see cref="SystemSchema.SecretStoreTables"/>): an unencrypted DEV/TEST run excludes every one; an encrypted run
+    /// excludes only the <see cref="SecretStoreBackupRule.AlwaysExcluded"/> ones.
+    /// </summary>
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusionsFor(bool encrypted) =>
+        [.. SystemDumpExclusions.Where(e => !encrypted || SystemSchema.SecretStoreTables[e.LogicalTable] == SecretStoreBackupRule.AlwaysExcluded)];
 
     private readonly HasmDatabaseOptions options;
     private readonly AttachmentOptions attachments;
@@ -163,32 +174,36 @@ public sealed class BackupRunService
     private readonly CompanyBackupService companies;
     private readonly CompanyRegistry registry;
 
-    public BackupRunService(HasmDatabaseOptions options, AttachmentOptions attachments, EncryptionOptions encryption, TimeProvider? clock = null, string? pgBinDirectory = null)
+    private readonly IReadOnlyList<string?> protectedDirectories;
+
+    public BackupRunService(HasmDatabaseOptions options, AttachmentOptions attachments, EncryptionOptions encryption, TimeProvider? clock = null, string? pgBinDirectory = null,
+        IReadOnlyList<string?>? protectedDirectories = null)
     {
+        this.protectedDirectories = protectedDirectories ?? [];
         this.options = options;
         this.attachments = attachments;
         this.encryption = encryption;
         this.clock = clock ?? TimeProvider.System;
         tool = new PgBackupTool(options, pgBinDirectory);
-        companies = new CompanyBackupService(options, attachments, encryption, this.clock, pgBinDirectory);
+        companies = new CompanyBackupService(options, attachments, encryption, this.clock, pgBinDirectory, protectedDirectories: this.protectedDirectories);
         registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
     }
 
     /// <summary>Refuses a root that is not absolute or overlaps the attachment root or the key directory (both directions); the attachment storage must be configured.</summary>
-    internal static string CheckRoot(string root, AttachmentOptions attachments, EncryptionOptions encryption)
+    internal static string CheckRoot(string root, AttachmentOptions attachments, EncryptionOptions encryption, IReadOnlyList<string?>? protectedDirectories = null)
     {
         if (!Path.IsPathFullyQualified(root)) throw new BackupException("path_not_absolute");
         if (attachments.StorageDirectory is not { } storage || !Path.IsPathFullyQualified(storage)) throw new BackupException("attachment_storage_not_configured");
         var resolved = BackupSet.RealPath(root);
-        foreach (var protectedDir in new[] { storage, encryption.KeyDirectory })
+        foreach (var protectedDir in new[] { storage, encryption.KeyDirectory }.Concat(protectedDirectories ?? []))
             if (protectedDir is not null && (BackupSet.IsInside(resolved, BackupSet.RealPath(protectedDir)) || BackupSet.IsInside(BackupSet.RealPath(protectedDir), resolved))) throw new BackupException("destination_overlaps_source");
         return resolved;
     }
 
     /// <summary>Runs one backup of the installation into a new owner-only folder under <paramref name="root"/> and returns its report (also written as <c>run.json</c>, last).</summary>
-    public async Task<(BackupRunReport Report, string RunDirectory)> RunAsync(string root, CancellationToken ct = default)
+    public async Task<(BackupRunReport Report, string RunDirectory)> RunAsync(string root, BackupMaterial? material = null, CancellationToken ct = default)
     {
-        var resolved = CheckRoot(root, attachments, encryption);
+        var resolved = CheckRoot(root, attachments, encryption, protectedDirectories);
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
         await using (var lk = new NpgsqlCommand("SELECT pg_try_advisory_lock(@ns, 0)", lockConn))
@@ -198,7 +213,7 @@ public sealed class BackupRunService
         }
         // review L3: the run lock is a SESSION lock; a periodic no-op keeps the idle lock connection from being closed by idle_session_timeout or an idle network path while the dumps run
         var keepAlive = new SessionKeepAlive(lockConn, KeepAliveInterval);
-        try { return await RunLockedAsync(resolved, lockConn, keepAlive, ct); }
+        try { return await RunLockedAsync(resolved, lockConn, keepAlive, material, ct); }
         finally
         {
             await keepAlive.DisposeAsync();
@@ -210,7 +225,7 @@ public sealed class BackupRunService
     /// <summary>Interval of the no-op on the lock connection (review L3); <c>idle_session_timeout</c> of the admin role must be 0 or longer than twice this.</summary>
     internal static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(30);
 
-    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, NpgsqlConnection lockConn, SessionKeepAlive keepAlive, CancellationToken ct)
+    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, NpgsqlConnection lockConn, SessionKeepAlive keepAlive, BackupMaterial? material, CancellationToken ct)
     {
         var started = clock.GetUtcNow();
         var watch = clock.GetTimestamp();
@@ -218,9 +233,9 @@ public sealed class BackupRunService
         var runId = BackupRunFiles.NewRunId(started);
         var runDir = Path.Combine(root, runId);
         CompanyBackupService.CreatePrivateDirectory(runDir, "run_exists", "run_not_private");
-        var excluded = SystemDumpExclusions.Select(e => e.Label).ToList();
+        var excluded = SystemDumpExclusionsFor(material is not null).Select(e => e.Label).ToList();
 
-        var system = await BackupSystemAsync(runDir, ct);
+        var system = material is null ? await BackupSystemAsync(runDir, ct) : await BackupSystemEncryptedAsync(runDir, runId, material, ct);
         var clientMajor = await tool.ClientMajorAsync("pg_dump", ct);
 
         var outcomes = new List<RunCompany>();
@@ -231,7 +246,7 @@ public sealed class BackupRunService
         foreach (var company in await registry.ListAsync(ct))
         {
             if (company.State != ProvisioningState.Ready) { skipped++; continue; }
-            outcomes.Add(await BackupCompanyAsync(company.Id, Path.Combine(companiesDir, company.Id.ToString("N")), missing, ct));
+            outcomes.Add(await BackupCompanyAsync(company.Id, Path.Combine(companiesDir, company.Id.ToString("N")), missing, material, runId, ct));
         }
 
         // review L6: stop the keep-alive, then check SYNCHRONOUSLY that this session still holds the run lock before the verdict (a loss in the last keep-alive interval is not missed)
@@ -239,9 +254,15 @@ public sealed class BackupRunService
         var lockHeld = !keepAlive.Failed && await IsRunLockHeldAsync(lockConn);
         var (verdict, warnings) = ComputeVerdict(system, outcomes, lockHeld);
         var finished = clock.GetUtcNow();
-        var report = new BackupRunReport(BackupRunFiles.ReportVersion, runId, started, finished, (long)clock.GetElapsedTime(watch).TotalMilliseconds, system, outcomes, skipped, verdict, [.. missing], excluded, clientMajor, false,
+        var report = new BackupRunReport(BackupRunFiles.ReportVersion, runId, started, finished, (long)clock.GetElapsedTime(watch).TotalMilliseconds, system, outcomes, skipped, verdict, [.. missing], excluded, clientMajor, material is not null,
             warnings);
-        BackupRunFiles.WriteReport(runDir, report);
+        if (material is null)
+        {
+            // D-095: an unencrypted run is DEV/TEST only and marked as such
+            BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(runDir, BackupRunFiles.UnencryptedMarker), "This run is NOT encrypted: DEV/TEST only (D-088, D-095).\n"u8.ToArray());
+            BackupRunFiles.WriteReport(runDir, report);
+        }
+        else await WriteEncryptedRunAsync(runDir, report, material, ct);
         return (report, runDir);
     }
 
@@ -270,6 +291,54 @@ public sealed class BackupRunService
         catch (Exception) { return false; }   // the session, and with it the lock, may be gone
     }
 
+    /// <summary>
+    /// Slice 5: the encrypted run report (<c>run.json.hbe</c>, a version-2 manifest of kind <c>run</c> that also names the canary), the canary (D-117: 32 random bytes encrypted to the recovery key; only
+    /// its hash leaves memory, in the signed status) and, LAST, the readable signed <c>run.status.json</c> that marks the run complete.
+    /// </summary>
+    private async Task WriteEncryptedRunAsync(string runDir, BackupRunReport report, BackupMaterial material, CancellationToken ct)
+    {
+        var canary = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        string canaryHash;
+        EncryptedFileEntry canaryEntry;
+        try
+        {
+            canaryHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(canary));
+            canaryEntry = await EncryptedSets.EncryptToFileAsync(new MemoryStream(canary), runDir, BackupRunFiles.CanaryFileName, BackupRunFiles.CanaryPurpose, material.Recovery, ct);
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(canary); }
+        var runManifest = new ManifestV2(ManifestV2.CurrentVersion, BackupRunFiles.RunKind, report.RunId, null, report.StartedUtc, material.Recovery.KeyId, material.Signer.KeyId, [canaryEntry], Run: report);
+        await SignedDocuments.WriteManifestAsync(runDir, runManifest, material.Recovery, material.Signer, ct);
+        var status = new RunStatus(RunStatus.CurrentVersion, RunStatus.KindValue, report.RunId, report.StartedUtc, report.FinishedUtc, report.DurationMs, report.Verdict,
+            report.Companies.Count(c => c.Outcome == "ok"), report.Companies.Count(c => c.Outcome == "ok_missing_keys"), report.Companies.Count(c => c.Outcome == "busy"),
+            report.Companies.Count(c => c.Outcome == "failed"), report.Skipped, material.Recovery.KeyId, material.Signer.KeyId, canaryHash, report.Excluded, report.Warnings ?? [], true,
+            [.. report.Companies.Select(c => new RunStatusCompany(c.CompanyId, c.Outcome))]);
+        SignedDocuments.WriteRunStatus(runDir, status, material.Signer);
+    }
+
+    /// <summary>Slice 5: the system dump streamed into the encryptor (secret-store data excluded), with an encrypted, signed system manifest. The table of contents is checked by the recovery test.</summary>
+    private async Task<RunDump> BackupSystemEncryptedAsync(string runDir, string runId, BackupMaterial material, CancellationToken ct)
+    {
+        var start = clock.GetUtcNow(); var t = clock.GetTimestamp();
+        var dir = Path.Combine(runDir, BackupRunFiles.SystemFolder);
+        try
+        {
+            CompanyBackupService.CreatePrivateDirectory(dir, "run_exists", "run_not_private");
+            EncryptedFileEntry? entry = null;
+            var locale = await tool.DumpSystemToStreamAsync([.. SystemDumpExclusionsFor(encrypted: true).Select(e => SystemSchema.Resolve(e.LogicalTable))],
+                async (stdout, c) => entry = await EncryptedSets.EncryptToFileAsync(stdout, dir, EncryptedSets.DumpName, EncryptedSets.SystemDumpPurpose, material.Recovery, c), ct);
+            var level = await ReadSystemMigrationLevelAsync(ct);
+            var manifest = new ManifestV2(ManifestV2.CurrentVersion, EncryptedSets.SystemKind, runId, null, clock.GetUtcNow(), material.Recovery.KeyId, material.Signer.KeyId,
+                [entry ?? throw new BackupException("dump_failed")], System: new SystemDetails(locale, level, [.. SystemDumpExclusionsFor(encrypted: true).Select(e => e.Label)]));
+            await SignedDocuments.WriteManifestAsync(dir, manifest, material.Recovery, material.Signer, ct);
+            await EncryptedSets.VerifyStoredAsync(dir, manifest, ct);
+            return new RunDump("ok", null, start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, entry.Size);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new RunDump("failed", Code(ex), start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, 0);
+        }
+    }
+
     private async Task<RunDump> BackupSystemAsync(string runDir, CancellationToken ct)
     {
         var start = clock.GetUtcNow(); var t = clock.GetTimestamp();
@@ -278,10 +347,10 @@ public sealed class BackupRunService
         {
             CompanyBackupService.CreatePrivateDirectory(dir, "run_exists", "run_not_private");
             var dump = Path.Combine(dir, BackupSet.DatabaseFileName);
-            var locale = await tool.DumpSystemAsync(dump, [.. SystemDumpExclusions.Select(e => SystemSchema.Resolve(e.LogicalTable))], ct);
+            var locale = await tool.DumpSystemAsync(dump, [.. SystemDumpExclusionsFor(encrypted: false).Select(e => SystemSchema.Resolve(e.LogicalTable))], ct);
             await tool.VerifyArchiveAsync(dump, ct);
             var level = await ReadSystemMigrationLevelAsync(ct);
-            var manifest = SystemBackupSet.WriteManifest(dir, clock.GetUtcNow(), locale, level, [.. SystemDumpExclusions.Select(e => e.Label)]);
+            var manifest = SystemBackupSet.WriteManifest(dir, clock.GetUtcNow(), locale, level, [.. SystemDumpExclusionsFor(encrypted: false).Select(e => e.Label)]);
             if (!SystemBackupSet.Verify(dir)) throw new BackupException("system_set_not_clean");
             return new RunDump("ok", null, start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, manifest.Database.Size);
         }
@@ -291,13 +360,19 @@ public sealed class BackupRunService
         }
     }
 
-    private async Task<RunCompany> BackupCompanyAsync(Guid companyId, string destination, SortedSet<string> missing, CancellationToken ct)
+    private async Task<RunCompany> BackupCompanyAsync(Guid companyId, string destination, SortedSet<string> missing, BackupMaterial? material, string runId, CancellationToken ct)
     {
         var start = clock.GetUtcNow(); var t = clock.GetTimestamp();
         RunCompany Done(string outcome, string? code, long bytes = 0, int files = 0, int keys = 0) =>
             new(companyId, outcome, code, start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, bytes, files, keys);
         try
         {
+            if (material is not null)
+            {
+                var e = await companies.BackupCompanyEncryptedAsync(companyId, destination, material, runId, ct);
+                foreach (var k in e.MissingKeyIds) missing.Add(k);
+                return Done(e.MissingKeyIds.Count == 0 ? "ok" : "ok_missing_keys", null, e.Manifest.Files[0].Size, e.Manifest.Files.Count - 1, e.MissingKeyIds.Count);
+            }
             var r = await companies.BackupCompanyAsync(companyId, destination, ct);
             foreach (var k in r.MissingKeyIds) missing.Add(k);
             return Done(r.MissingKeyIds.Count == 0 ? "ok" : "ok_missing_keys", null, r.Manifest.Database.Size, r.Manifest.Attachments.Count, r.MissingKeyIds.Count);
@@ -325,7 +400,9 @@ public sealed class BackupRunService
 }
 
 /// <summary>One run folder as seen by status and retention: its id, its report (null when absent or unreadable), whether a report file exists, and the folder's last write time.</summary>
-public sealed record RunEntry(string RunId, BackupRunReport? Report, bool HasReportFile, DateTimeOffset LastWriteUtc)
+/// Slice 5: <see cref="RecoveryKeyId"/> is the recovery key of an encrypted run (from its verified signed status) and <see cref="RecoveryTested"/> is true when the run folder holds a valid recovery-test proof
+/// (<see cref="RecoveryTestProof.IsValidFor"/>).
+public sealed record RunEntry(string RunId, BackupRunReport? Report, bool HasReportFile, DateTimeOffset LastWriteUtc, string? RecoveryKeyId = null, bool RecoveryTested = false)
 {
     public bool IsComplete => Report is not null;
     public bool IsUnreadable => HasReportFile && Report is null;
@@ -341,18 +418,42 @@ public static class BackupRunStatus
     public static readonly TimeSpan IncompleteAge = TimeSpan.FromHours(24);
 
     /// <summary>The run folders of <paramref name="root"/> (names that are run ids; anything else is ignored), newest first. A missing root yields none.</summary>
-    public static IReadOnlyList<RunEntry> List(string root)
+    public static IReadOnlyList<RunEntry> List(string root, SigningTrust? trust = null)
     {
         if (!Directory.Exists(root)) return [];
         return [.. new DirectoryInfo(root).EnumerateDirectories()
             .Where(d => BackupRunFiles.IsRunId(d.Name) && d.LinkTarget is null)
-            .Select(d => new RunEntry(d.Name, BackupRunFiles.ReadReport(d.FullName), File.Exists(Path.Combine(d.FullName, BackupRunFiles.ReportFileName)), new DateTimeOffset(d.LastWriteTimeUtc, TimeSpan.Zero)))
+            .Select(d => Entry(d, trust))
             .OrderByDescending(e => e.RunId, StringComparer.Ordinal)];
+    }
+
+    private static RunEntry Entry(DirectoryInfo d, SigningTrust? trust)
+    {
+        var lastWrite = new DateTimeOffset(d.LastWriteTimeUtc, TimeSpan.Zero);
+        if (!File.Exists(Path.Combine(d.FullName, SignedDocuments.RunStatusFileName)))
+            return new RunEntry(d.Name, BackupRunFiles.ReadReport(d.FullName), File.Exists(Path.Combine(d.FullName, BackupRunFiles.ReportFileName)), lastWrite);
+        // an encrypted run: only its SIGNED status counts (review M1); an unsigned, invalid or unverifiable one counts as a FAILED run
+        var started = BackupRunFiles.StartOf(d.Name)!.Value;
+        try
+        {
+            if (trust is null) throw new BackupException("status_unsigned", "signing_trust_missing");
+            var s = SignedDocuments.ReadRunStatus(d.FullName, trust);
+            return new RunEntry(d.Name, new BackupRunReport(BackupRunFiles.ReportVersion, s.RunId, s.StartedUtc, s.FinishedUtc, s.DurationMs, new RunDump("ok", null, s.StartedUtc, s.StartedUtc, 0, 0),
+                [.. s.Companies.Select(c => new RunCompany(c.CompanyId, c.Outcome, null, s.StartedUtc, s.FinishedUtc, 0, 0, 0, 0))], s.Skipped, s.Verdict, [], s.Excluded, 0, true, s.Warnings), true, lastWrite,
+                s.RecoveryKeyId, RecoveryTestProof.IsValidFor(d.FullName, s));
+        }
+        catch (BackupException ex)
+        {
+            var code = BackupRunFiles.IsCode(ex.Code) ? ex.Code : "status_invalid";
+            return new RunEntry(d.Name, new BackupRunReport(BackupRunFiles.ReportVersion, d.Name, started, started, 0, new RunDump("failed", code, started, started, 0, 0), [], 0, "failed", [], [], 0, true, [code]), true, lastWrite);
+        }
     }
 
     /// <summary>
     /// Exit 1: no complete run (<c>backup_missing</c>), the newest complete run failed (<c>backup_failed</c>) or is older than <paramref name="maxAge"/> by its finish time (<c>backup_stale</c>). Exit 8: it is
-    /// partial (<c>backup_partial</c>), a company missed two or more consecutive runs (<c>company_missed_runs</c>) or a run's report is unreadable (<c>unreadable_reports</c>). Otherwise 0 (<c>ok</c>). Incomplete runs older than 24 hours are counted (information).
+    /// partial (<c>backup_partial</c>), a company missed two or more consecutive runs (<c>company_missed_runs</c>), the run is unencrypted (<c>unencrypted_dev_test</c>, D-095), a run's report is unreadable
+    /// (<c>unreadable_reports</c>) or no run of the newest run's recovery key has passed a recovery test (<c>recovery_untested</c>, D-085: the key is not production-ready). Otherwise 0 (<c>ok</c>). Incomplete
+    /// runs older than 24 hours are counted (information).
     /// </summary>
     public static BackupStatusResult Evaluate(IReadOnlyList<RunEntry> runs, DateTimeOffset now, TimeSpan maxAge)
     {
@@ -363,12 +464,17 @@ public static class BackupRunStatus
         var missed = MissedRuns(complete);
         if (complete.Count == 0) return new(1, "backup_missing", null, incomplete, unreadable, missed);
         var latest = complete[0];
-        if (latest.Verdict == "failed") return new(1, "backup_failed", latest, incomplete, unreadable, missed);
+        if (latest.Verdict == "failed") return new(1, latest.Warnings?.Contains("status_unsigned") == true ? "status_unsigned" : "backup_failed", latest, incomplete, unreadable, missed);
         if (now - latest.FinishedUtc > maxAge) return new(1, "backup_stale", latest, incomplete, unreadable, missed);
         if (latest.Verdict == "partial") return new(8, "backup_partial", latest, incomplete, unreadable, missed);
         if (missed.Count > 0) return new(8, "company_missed_runs", latest, incomplete, unreadable, missed);
+        // D-095: an unencrypted run is DEV/TEST only and never looks green
+        if (!latest.Encrypted) return new(8, "unencrypted_dev_test", latest, incomplete, unreadable, missed);
         // review L2 (lead decision under D-048): an unreadable report (possibly the newest run, damaged or altered) never lets the status pass silently: monitoring stays fail-closed
         if (unreadable > 0) return new(8, "unreadable_reports", latest, incomplete, unreadable, missed);
+        // D-085, D-117: a recovery key is production-ready only after a recorded, successful recovery test of a run encrypted to it
+        var latestKey = ordered.First(r => r.IsComplete).RecoveryKeyId;
+        if (!ordered.Any(r => r.IsComplete && r.RecoveryTested && r.RecoveryKeyId is not null && r.RecoveryKeyId == latestKey)) return new(8, "recovery_untested", latest, incomplete, unreadable, missed);
         return new(0, "ok", latest, incomplete, unreadable, missed);
     }
 
