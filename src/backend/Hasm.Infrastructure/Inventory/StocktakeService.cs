@@ -63,6 +63,7 @@ public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAu
             }, ct));
         }
         catch (Abort a) { return a.To<StocktakeView>(); }
+        catch (PostgresException ex) when (NumberingService.IsNumberCollision(ex)) { return ConfigResult<StocktakeView>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // the next number is already issued: nothing was written
     }
 
     // ================================================================================================================ reads

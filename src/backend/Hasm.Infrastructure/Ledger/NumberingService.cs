@@ -56,6 +56,12 @@ public static class LedgerAuditEvents
 /// </summary>
 public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
 {
+    /// <summary>
+    /// Whether a failure is the number-issue uniqueness guard refusing a number that is already issued (the counter and the issued numbers disagree, e.g. after a direct write). Callers map it to the stable,
+    /// retryable refusal <c>concurrent_change</c>: the whole transaction rolls back, so the counter does not move and no number is consumed. Narrowed to that one index so no other unique violation is masked.
+    /// </summary>
+    public static bool IsNumberCollision(PostgresException ex) => ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == NI.UniqueNumber;
+
     internal const int LockKey1 = 0x48434E52;   // "HCNR": advisory-lock namespace of numbering configuration
     internal const int LockKey2 = 1;
     internal static readonly Guid None = Guid.Empty;

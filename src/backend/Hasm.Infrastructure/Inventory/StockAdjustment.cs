@@ -227,6 +227,7 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
         }
         catch (Replay r) { return ConfigResult<StockAdjustmentView>.Ok(r.View); }
         catch (Exception e) when (e is StockDocumentService.Abort) { return Fail(e); }
+        catch (PostgresException ex) when (NumberingService.IsNumberCollision(ex)) { return ConfigResult<StockAdjustmentView>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // the next number is already issued: nothing was written
     }
 
     // ================================================================================================================ post

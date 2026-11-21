@@ -56,6 +56,7 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
             }, ct));
         }
         catch (Abort a) { return a.To<StockDocumentView>(); }
+        catch (PostgresException ex) when (NumberingService.IsNumberCollision(ex)) { return ConfigResult<StockDocumentView>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // the next number is already issued: nothing was written
     }
 
     // ================================================================================================================ reads

@@ -704,6 +704,7 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
         catch (Abort abort) { return abort.To<T>(); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName is { } c && c.Contains(JE.KUSource.AsSpan(2), StringComparison.Ordinal)) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "duplicate_source"); }
         catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, MapDatabaseRule(ex.MessageText)); }
+        catch (PostgresException ex) when (NumberingService.IsNumberCollision(ex)) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // the next number is already issued: nothing was written
     }
 
     /// <summary>Stable codes for the rules PostgreSQL enforces (the database message is never shown to clients).</summary>
