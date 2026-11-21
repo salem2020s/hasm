@@ -698,6 +698,12 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
   * The backup root is an argument of `backup-run`, not a setting, so `backup-keys` refuses a destination that is, or lies inside, a run folder or a folder that holds run folders (`destination_in_backup_root`), besides the planned overlap checks.
   * `backup-keys` also writes a READABLE copy of the trust list (`signing-trust.json`, public keys only) for the recovery kit.
   * The TOTP KEK-id check of the recovery test (M4) has nothing to check until Phase 4.1 creates `user_totp`; the attachment and audit key ids are checked.
+* **Review of #128 by Agent C (fixed):**
+  * **H1:** a version-1 (unencrypted, unsigned) company set planted in an encrypted run was restored by the recovery test. Now `CompanyBackupService.TrialRestoreAsync` itself refuses a version-1 set unless its caller passes `allowUnencrypted` from its own DEV/TEST acknowledgement, and always inside a run. The recovery test refuses every company set that is not encrypted (`unencrypted_set_refused`).
+  * **L1:** each company set must belong to the run (`run_mismatch`), and the company folders must match the signed status (`company_sets_mismatch`).
+  * **L2:** unit tests for an off-curve ephemeral point (`hbe_malformed`) and for a first chunk that fails authentication (nothing released).
+  * **L3:** refused trial restores and recovery tests are audited too (2010/2011 with `outcome=refused` and the code).
+  * **L4:** `backup-keys` parses every signing public key at write time (`key_file_invalid`).
 * **Not built here (later slices):** writing the key export back to disk (only verified: decrypt and compare the ids) belongs to the full-installation restore and the cutover (slice 7); retention and deletion (slice 6).
 * **Tests:** unit tests for every unit above (HBE1, keys, signatures and trust, signed documents and proof, guard and pin, encrypted sets, key export, status rules); a new PostgreSQL class `EncryptedBackupTests` (6 tests): an encrypted run with no plaintext at rest, trial restore with the private key equal to the source, forged/unsigned/swapped sets refused before `pg_restore`, `backup-keys` and `backup-signing-keygen` audited and recoverable, the recovery test end to end turning `backup-status` green, and encryption by default with the DEV/TEST path. The existing suites keep their counts and run with the DEV/TEST acknowledgement.
 

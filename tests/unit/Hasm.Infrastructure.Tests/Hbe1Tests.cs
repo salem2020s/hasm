@@ -143,6 +143,43 @@ public sealed class Hbe1Tests
     }
 
     [Fact]
+    public async Task An_off_curve_ephemeral_point_is_refused_as_malformed_even_under_a_matching_signed_digest()
+    {
+        // review L2 of #128: the platform import rejects a point that is not on P-256; the refusal is hbe_malformed, before any key agreement
+        var plain = RandomNumberGenerator.GetBytes(100);
+        var (file, _) = await Encrypt(plain);
+        var at = 4 + 1;
+        at += 1 + file[at];                                                                   // key id
+        at += 1 + file[at];                                                                   // purpose
+        at += 2 + ((file[at] << 8) | file[at + 1]);                                           // name
+        var spkiLength = (file[at] << 8) | file[at + 1];
+        at += 2;
+        Assert.Equal(91, spkiLength);                                                          // P-256 SubjectPublicKeyInfo with an uncompressed point
+        var forged = (byte[])file.Clone();
+        forged[at + spkiLength - 1] ^= 0x01;                                                   // the last byte of Y: the point leaves the curve
+        Assert.Equal("hbe_malformed", await Refused(forged, SelfDigest(forged, HeaderLength(forged, plain.Length))));
+    }
+
+    [Fact]
+    public async Task A_first_chunk_that_fails_authentication_releases_nothing()
+    {
+        // review L2 of #128: even under a digest that names the altered bytes (a compromised signer), the AEAD refuses the first chunk and the output stays EMPTY
+        var plain = RandomNumberGenerator.GetBytes(3 * Chunk + 5);
+        var (file, _) = await Encrypt(plain);
+        var header = HeaderLength(file, plain.Length);
+        var forged = (byte[])file.Clone();
+        forged[header + 10] ^= 0x01;
+        using var output = new MemoryStream();
+        var ex = await Assert.ThrowsAsync<BackupException>(() => Hbe1.DecryptAsync(new MemoryStream(forged), output, Priv, "company-dump", "database.dump", SelfDigest(forged, header)));
+        Assert.Equal("hbe_authentication_failed", ex.Code);
+        Assert.Equal(0, output.Length);
+        // and under the GENUINE digest the altered chunk is refused before decryption, also with nothing released
+        using var output2 = new MemoryStream();
+        Assert.Equal("hbe_not_authenticated", (await Assert.ThrowsAsync<BackupException>(() => Hbe1.DecryptAsync(new MemoryStream(forged), output2, Priv, "company-dump", "database.dump", SelfDigest(file, header)))).Code);
+        Assert.Equal(0, output2.Length);
+    }
+
+    [Fact]
     public async Task Reordered_removed_truncated_and_appended_chunks_are_refused()
     {
         var plain = RandomNumberGenerator.GetBytes(3 * Chunk);                                                         // exactly three full chunks

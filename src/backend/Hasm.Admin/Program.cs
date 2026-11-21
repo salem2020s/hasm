@@ -496,7 +496,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 else if (!BackupGuard.UnencryptedReadAllowed(backupOptions)) throw new BackupException("unencrypted_set_refused");
                 else Console.Error.WriteLine($"WARNING {BackupGuard.DegradedStatus}: restoring an UNENCRYPTED, unsigned set (DEV/TEST only).");
                 TrialRestoreResult r;
-                try { r = await service.TrialRestoreAsync(args[1], companyId, args[3], keep, keys); }
+                try { r = await service.TrialRestoreAsync(args[1], companyId, args[3], keep, keys, allowUnencrypted: keys is null && BackupGuard.UnencryptedReadAllowed(backupOptions)); }
                 finally { keys?.Recovery.Dispose(); }
                 Console.WriteLine($"Trial restore of company {companyId}: {r.Verdict switch { TrialRestoreVerdict.Ok => "OK", TrialRestoreVerdict.OkWithWarnings => "OK WITH WARNINGS", _ => "FAILED" }}.");
                 Console.WriteLine($"Attachment files restored: {r.AttachmentFiles} (without a row: {r.UnreferencedFiles}); company migration level {(r.MigrationVersion is { } v ? v.ToString("0000") : "unknown")}.");
@@ -509,7 +509,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 Console.WriteLine("This is a trial restore: the cutover and the audited restore acknowledgement are not available (BLOCKED).");
                 // D-118: a restore operation; the system-stream event names the operator, key ids, the company and a TAG of the trial database (never its name). Fail closed when it cannot be written.
                 if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.TrialRestore,
-                    $"trial restore operator={BackupAudit.Operator()} company={companyId:D} verdict={r.Verdict.ToString().ToLowerInvariant()} encrypted={(r.Encrypted ? "yes" : "no")} recovery={r.RecoveryKeyId ?? "none"} signing={r.SigningKeyId ?? "none"} db={r.DatabaseTag ?? "none"} kept={(r.KeptFile is null ? "no" : "yes")}",
+                    $"trial restore operator={BackupAudit.Operator()} company={companyId:D} outcome=completed verdict={r.Verdict.ToString().ToLowerInvariant()} encrypted={(r.Encrypted ? "yes" : "no")} recovery={r.RecoveryKeyId ?? "none"} signing={r.SigningKeyId ?? "none"} db={r.DatabaseTag ?? "none"} kept={(r.KeptFile is null ? "no" : "yes")}",
                     companyId)) return Failed;
                 return r.Verdict switch { TrialRestoreVerdict.Ok => Ok, TrialRestoreVerdict.OkWithWarnings => Warnings, _ => Failed };
             }
@@ -524,7 +524,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 foreach (var f in t.Failures) Console.WriteLine($"  [FAILURE] {f.Code} count={f.Count}");
                 foreach (var w in t.Warnings) Console.WriteLine($"  [WARNING] {w.Code} count={w.Count}");
                 if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RecoveryTest,
-                    $"recovery test operator={BackupAudit.Operator()} run={t.RunId} verdict={(t.Passed ? "passed" : "failed")} recovery={t.RecoveryKeyId} signing={t.SigningKeyId} key_export={(t.KeyExportChecked ? "yes" : "no")} db={string.Join(',', t.DatabaseTags)} companies={string.Join(',', t.Companies.Select(c => c.ToString("N")))}"))
+                    $"recovery test operator={BackupAudit.Operator()} run={t.RunId} outcome=completed verdict={(t.Passed ? "passed" : "failed")} recovery={t.RecoveryKeyId} signing={t.SigningKeyId} key_export={(t.KeyExportChecked ? "yes" : "no")} db={string.Join(',', t.DatabaseTags)} companies={string.Join(',', t.Companies.Select(c => c.ToString("N")))}"))
                     return Failed;
                 if (!t.Passed) return Failed;
                 RecoveryTestService.WriteProof(args[1], t, DateTimeOffset.UtcNow);
@@ -554,6 +554,13 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
     catch (BackupException ex)
     {
         Console.Error.WriteLine($"{command} stopped ({ex.Code}{(ex.Cause is null ? "" : $", cause {ex.Cause}")}).");
+        // review L3 of #128 (D-118): a REFUSED trial restore or recovery test is a restore attempt and is audited too (outcome refused, the code; never a name)
+        if (command is "trial-restore-company")
+            await TryAuditAsync(systemConnection, trail, BackupAuditEvents.TrialRestore,
+                $"trial restore operator={BackupAudit.Operator()} company={companyId:D} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}", companyId);
+        else if (command is "backup-recovery-test")
+            await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RecoveryTest,
+                $"recovery test operator={BackupAudit.Operator()} run={(BackupRunFiles.IsRunId(Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1]))) ? Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1])) : "unknown")} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}");
         return ex.Code switch
         {
             "attachment_storage_not_configured" or "database_not_configured" => BadConfig,

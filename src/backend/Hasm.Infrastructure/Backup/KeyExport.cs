@@ -149,6 +149,20 @@ public static class KeyExport
         if (d.HeaderSha256 != m.Archive.HeaderSha256 || !d.ChunkSha256.SequenceEqual(m.Archive.ChunkSha256)) throw new BackupException("backup_set_not_clean");
     }
 
+    /// <summary>Review L4 of #128: a signing public key file is parsed at WRITE time: exactly one PEM block labelled PUBLIC KEY, a P-256 key whose derived id is the file's id.</summary>
+    private static void RequireSigningPublicKey(string id, string pem)
+    {
+        try
+        {
+            var fields = System.Security.Cryptography.PemEncoding.Find(pem);
+            if (pem[fields.Label] is not "PUBLIC KEY" || pem[fields.Location.End..].Trim().Length != 0 || pem[..fields.Location.Start].Trim().Length != 0) throw new BackupException("key_file_invalid");
+            using var key = System.Security.Cryptography.ECDsa.Create();
+            key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(pem[fields.Base64Data]), out _);
+            if (key.KeySize != 256 || BackupSigningKeys.KeyIdOf(key.ExportSubjectPublicKeyInfo()) != id) throw new BackupException("key_file_invalid");
+        }
+        catch (Exception ex) when (ex is not BackupException) { throw new BackupException("key_file_invalid"); }
+    }
+
     private static List<string> Ids(IEnumerable<KeyArchiveFile> files, string ring) => [.. files.Where(f => f.Ring == ring).Select(f => f.KeyId).Order(StringComparer.Ordinal)];
 
     private static IEnumerable<KeyArchiveFile> ReadRing(string directory, string suffix, Func<string, bool> isKeyId, string ring)
@@ -162,7 +176,9 @@ public static class KeyExport
             if (!isKeyId(id)) continue;
             if (new FileInfo(path).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
             if (new FileInfo(path).Length > 64 * 1024) throw new BackupException("key_file_invalid");
-            result.Add(new KeyArchiveFile(ring, id, File.ReadAllText(path)));
+            var content = File.ReadAllText(path);
+            if (ring == SigningPublicRing) RequireSigningPublicKey(id, content);
+            result.Add(new KeyArchiveFile(ring, id, content));
         }
         return result;
     }

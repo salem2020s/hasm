@@ -331,7 +331,6 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     /// <summary>The backup code of a CREATE DATABASE failure that has a meaning for the caller (a lost creation race); null for every other SQLSTATE.</summary>
     internal static string? CreateFailureCode(string? sqlState) => sqlState == PostgresErrorCodes.DuplicateDatabase ? "target_exists" : null;
 
-    /// <summary>Runs a prepared tool to completion; only its exit code is reported (<c>dump_failed</c> / <c>restore_failed</c>, <c>tool_timeout</c>, <c>cancelled</c>, <c>tool_unavailable</c>).</summary>
     /// <summary>
     /// Runs a prepared tool while <paramref name="io"/> feeds its standard input or consumes its standard output (the other pipe and standard error go to a null stream). Within the same time limit; a
     /// failure of <paramref name="io"/> kills the tool and is rethrown; a non-zero exit is <c>dump_failed</c> / <c>restore_failed</c>.
@@ -373,6 +372,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         }
     }
 
+    /// <summary>Runs a prepared tool to completion; only its exit code is reported (<c>dump_failed</c> / <c>restore_failed</c>, <c>tool_timeout</c>, <c>cancelled</c>, <c>tool_unavailable</c>).</summary>
     internal async Task RunAsync(string tool, ProcessStartInfo psi, CancellationToken ct)
     {
         Process process;

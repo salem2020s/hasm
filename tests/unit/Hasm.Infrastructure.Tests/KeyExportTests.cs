@@ -111,6 +111,20 @@ public sealed class KeyExportTests : IDisposable
     }
 
     [Fact]
+    public async Task A_signing_public_key_file_is_parsed_at_write_time()
+    {
+        // review L4 of #128: every sk-*.pub.pem must be one P-256 PUBLIC KEY whose derived id is the file's id; anything else stops the export and writes nothing
+        var bogus = Path.Combine(sign, "sk-0123456789abcdef" + BackupSigningKeys.PublicSuffix);
+        File.WriteAllText(bogus, "not a key");
+        Assert.Equal("key_file_invalid", (await Assert.ThrowsAsync<BackupException>(() => KeyExport.WriteAsync(Path.Combine(root, "e1"), enc, audit, sign, Material(), DateTimeOffset.UtcNow))).Code);
+        File.WriteAllText(bogus, signingPem);                                                   // a real key under another key's id
+        Assert.Equal("key_file_invalid", (await Assert.ThrowsAsync<BackupException>(() => KeyExport.WriteAsync(Path.Combine(root, "e2"), enc, audit, sign, Material(), DateTimeOffset.UtcNow))).Code);
+        File.Delete(bogus);
+        Assert.False(Directory.Exists(Path.Combine(root, "e1")) || Directory.Exists(Path.Combine(root, "e2")));
+        await KeyExport.WriteAsync(Path.Combine(root, "e3"), enc, audit, sign, Material(), DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public void Backup_audit_details_name_the_operator_safely_and_tag_databases()
     {
         Assert.Matches("^os:[A-Za-z0-9._-]{1,64}$", BackupAudit.Operator());
