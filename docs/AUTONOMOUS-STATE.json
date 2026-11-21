@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "69c2916461fb9c1c174c8db1af91eb81b43fac55",
-    "note": "main = 69c2916 (merge of #168), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1255 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; no number allocated ahead."
+    "verifiedHead": "9a16fe06b9b655dc9542cf9d603ff23b68d9d62b",
+    "note": "LEAD MODEL SWITCH CHECKPOINT. main = 9a16fe0 (merge of #172), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (WIP, no PR)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -306,21 +306,38 @@
       "phase": "3.8D resume review of #48 (docs, inert analysis)",
       "mergeCommit": "785181b56b141c6caebc5b0dba7e19d09c40c5a7",
       "headMerged": "2b75e11d51aa247d3d6cf0fe80415de0d5e4301a"
+    },
+    {
+      "pr": 175,
+      "phase": "hardening follow-ups (#158 L1-L3, #163 L1-L2), registry unchanged",
+      "mergeCommit": "81f2f8ded87061d4b25cb9d6e1bcd8f198ed2030",
+      "headMerged": "55ba6c3acd5e169a15c20055e7ab609883e98238"
+    },
+    {
+      "pr": 172,
+      "phase": "4.1 S3b-1a MFA requirement model (D-164..D-166, no migration, registry 1262)",
+      "mergeCommit": "9a16fe06b9b655dc9542cf9d603ff23b68d9d62b",
+      "headMerged": "8523d06763f69be67fbfd5ef11554f97f4b09c78"
     }
   ],
   "active": {
-    "phase": "Release 1 sprint 3 (cloud team), end of sprint",
-    "state": "Open Draft PRs, the merge queue, the follow-ups and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
+    "phase": "LEAD MODEL SWITCH CHECKPOINT (2026-11-21)",
+    "state": "All agents stopped at safe checkpoints with no unpushed work (lead report); no agent job running. Open Draft PRs #174, #177, #178 approved and waiting for main merges; #176 request changes; #48 revision 3 awaiting G's review. Non-skipped check-runs of every open head were completed with success when read; exact-head verify-head NOT run by this refresh.",
     "knownIssues": [
-      "Decisions: next free ID D-164 (D-164..D-169 free; next after D-178 is D-179). D-160..D-163 and audit codes 1336/1337 are on main via #166; D-108..D-115 and D-122..D-129 allocated and not on main.",
-      "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2100-2199 Phase 3.14.",
-      "4.1 S3 is NOT complete: S3a (#166, merged) covers access and user administration only; company administration, approvals, backup/restore groups, the requirement model, company-selection step-up and the remaining UI go to S3b.",
-      "Release acceptance stays blocked per owner item 11 (D-088); #149's evidence is merged as evidence, not acceptance."
+      "Decisions: next free ID D-190. D-164..D-166 on main (#172); D-167..D-169 on the S3b-1b WIP branch; D-179..D-181 on B's WIP branch; D-182..D-189 on #176; D-108..D-115 and D-122..D-129 allocated, not on main.",
+      "Audit: 1336/1337 on main; 1338 allocated to S3b-1b; blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
+      "4.1 S3 is NOT complete: S3a (#166) and S3b-1a (#172) merged; S3b-1b WIP; S3b-2a UI is #178.",
+      "Release acceptance stays blocked per owner item 11 (D-088).",
+      "Flaky-test suspect: Hbe1Tests.Any_altered_byte_is_refused_by_the_signed_digest_and_also_by_the_format_itself failed once on #48's intermediate head 7203a0e; passed on retry and locally."
     ]
   },
   "next": [
-    "Next: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165).",
-    "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
+    "Resume merges in order #174, #177, #178 (merge main, registry, exact-head verify-head, CI, --match-head-commit).",
+    "#176 fixes (R's M1: D-186 exit order 1 > 8 > 0; L1-L6), then R's confirmation.",
+    "G's independent review of #48 design revision 3 (delta c9b2493..9f64f57); X1-A and X2-X8 stay owner decisions.",
+    "Open the S3b-1b PR (system 0034, D-167..D-169, audit 1338, registry +9) and finish B's import key coverage (D-179..D-181, +2).",
+    "The legacy PR audit is NOT started (owner instruction).",
+    "Follow-ups in docs/INTEGRATION-STATUS.md (flaky Hbe1Tests suspect, Lows of #155, #161, #172, #173, #174, #177, #178; load test stage 2)."
   ],
   "openDecisions": [
     "X1-X8",
@@ -358,7 +375,10 @@
     "OD-12",
     "T-2",
     "SESSION-EXPIRY-UNSAVED",
-    "APPROVAL-POLICY-DUPLICATES"
+    "APPROVAL-POLICY-DUPLICATES",
+    "3.8D-Q1..Q5",
+    "4.3-S8-MD-Q1..Q2",
+    "IMPORT-ORIGINALS-BACKUP-SCOPE"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -375,7 +395,32 @@
     "restartInstruction": "docs/RESUME-CODEX.md",
     "backgroundRestartConfigured": false
   },
-  "openPullRequests": [],
+  "openPullRequests": [
+    {
+      "pr": 174,
+      "branch": "test/constraint-matrix-followups",
+      "head": "43153c86c5a8ddcfd89fca7d235ec8932566472c",
+      "state": "C2 matrix follow-ups; R approve (L1-L3); next: merge main, registry +0, isolated EndpointConstraintMatrix*, CI, merge"
+    },
+    {
+      "pr": 177,
+      "branch": "fix/request-size-limits",
+      "head": "ca8cb610fb052ad93c34512976c5adec10c1955b",
+      "state": "A request-size limits; G approve (L1-L3); next: merge main (registry 1262), CI, merge"
+    },
+    {
+      "pr": 178,
+      "branch": "feat/security-settings-ui",
+      "head": "7e0ccd8e9faaefd41f06d0c250e48e248a3683bf",
+      "state": "E S3b-2a security settings UI; H approve (L1-L2); next: merge main, CI, merge"
+    },
+    {
+      "pr": 176,
+      "branch": "docs/phase-4-3-multi-destination-plan",
+      "head": "37662d9b3aae83df09b4664c8135d872a73a1e6e",
+      "state": "F2 4.3 slice 8 plan (docs); R request changes (M1, L1-L6); D-182..D-189, audit 2040-2049"
+    }
+  ],
   "inertPullRequests": [
     {
       "pr": 85,
@@ -400,10 +445,15 @@
     {
       "pr": 48,
       "branch": "feature/phase-3-8d-impact-preview",
-      "head": "1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb"
+      "head": "9f64f575cf0455096ac0381de2b6b65bedc4a0ef",
+      "state": "design revision 3; G review pending (c9b2493..9f64f57); never merged as is"
     }
   ],
-  "mergeSequence": [],
+  "mergeSequence": [
+    174,
+    177,
+    178
+  ],
   "agents": {
     "lead": "Claude Opus",
     "sonnet": [
@@ -419,5 +469,22 @@
       "G"
     ]
   },
-  "outsideQueue": []
+  "outsideQueue": [
+    176,
+    48
+  ],
+  "wipBranches": [
+    {
+      "branch": "feature/phase-4-1-s3b-1b",
+      "head": "71b15e2",
+      "owner": "D",
+      "state": "S3b-1b; system 0034, D-167..D-169, audit 1338, registry +9; no PR"
+    },
+    {
+      "branch": "feature/phase-4-3-import-key-coverage",
+      "head": "cd40c59",
+      "owner": "B",
+      "state": "import-file key coverage; D-179..D-181, registry +2; unfinished; no PR"
+    }
+  ]
 }
