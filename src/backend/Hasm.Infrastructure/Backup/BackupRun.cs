@@ -154,10 +154,17 @@ public sealed class BackupRunService
     internal const int RunLockNamespace = 0x48425255;
 
     /// <summary>
-    /// The secret-store tables whose DATA is excluded from the system dump, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; the Phase 4.1 TOTP
-    /// table is added to both in the slice that creates it.
+    /// Every secret-store table with its report label, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; which of them a dump excludes
+    /// follows the per-table rule (<see cref="SystemDumpExclusionsFor"/>, D-120). The Phase 4.1 TOTP table is added to both, as included only in encrypted runs, in the slice that creates it.
     /// </summary>
     public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table")];
+
+    /// <summary>
+    /// The secret-store tables whose DATA a system dump excludes (D-120, per-table rule of <see cref="SystemSchema.SecretStoreTables"/>): an unencrypted DEV/TEST run excludes every one; an encrypted run
+    /// excludes only the <see cref="SecretStoreBackupRule.AlwaysExcluded"/> ones.
+    /// </summary>
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusionsFor(bool encrypted) =>
+        [.. SystemDumpExclusions.Where(e => !encrypted || SystemSchema.SecretStoreTables[e.LogicalTable] == SecretStoreBackupRule.AlwaysExcluded)];
 
     private readonly HasmDatabaseOptions options;
     private readonly AttachmentOptions attachments;
@@ -226,7 +233,7 @@ public sealed class BackupRunService
         var runId = BackupRunFiles.NewRunId(started);
         var runDir = Path.Combine(root, runId);
         CompanyBackupService.CreatePrivateDirectory(runDir, "run_exists", "run_not_private");
-        var excluded = SystemDumpExclusions.Select(e => e.Label).ToList();
+        var excluded = SystemDumpExclusionsFor(material is not null).Select(e => e.Label).ToList();
 
         var system = material is null ? await BackupSystemAsync(runDir, ct) : await BackupSystemEncryptedAsync(runDir, runId, material, ct);
         var clientMajor = await tool.ClientMajorAsync("pg_dump", ct);
@@ -317,11 +324,11 @@ public sealed class BackupRunService
         {
             CompanyBackupService.CreatePrivateDirectory(dir, "run_exists", "run_not_private");
             EncryptedFileEntry? entry = null;
-            var locale = await tool.DumpSystemToStreamAsync([.. SystemDumpExclusions.Select(e => SystemSchema.Resolve(e.LogicalTable))],
+            var locale = await tool.DumpSystemToStreamAsync([.. SystemDumpExclusionsFor(encrypted: true).Select(e => SystemSchema.Resolve(e.LogicalTable))],
                 async (stdout, c) => entry = await EncryptedSets.EncryptToFileAsync(stdout, dir, EncryptedSets.DumpName, EncryptedSets.SystemDumpPurpose, material.Recovery, c), ct);
             var level = await ReadSystemMigrationLevelAsync(ct);
             var manifest = new ManifestV2(ManifestV2.CurrentVersion, EncryptedSets.SystemKind, runId, null, clock.GetUtcNow(), material.Recovery.KeyId, material.Signer.KeyId,
-                [entry ?? throw new BackupException("dump_failed")], System: new SystemDetails(locale, level, [.. SystemDumpExclusions.Select(e => e.Label)]));
+                [entry ?? throw new BackupException("dump_failed")], System: new SystemDetails(locale, level, [.. SystemDumpExclusionsFor(encrypted: true).Select(e => e.Label)]));
             await SignedDocuments.WriteManifestAsync(dir, manifest, material.Recovery, material.Signer, ct);
             await EncryptedSets.VerifyStoredAsync(dir, manifest, ct);
             return new RunDump("ok", null, start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, entry.Size);
@@ -340,10 +347,10 @@ public sealed class BackupRunService
         {
             CompanyBackupService.CreatePrivateDirectory(dir, "run_exists", "run_not_private");
             var dump = Path.Combine(dir, BackupSet.DatabaseFileName);
-            var locale = await tool.DumpSystemAsync(dump, [.. SystemDumpExclusions.Select(e => SystemSchema.Resolve(e.LogicalTable))], ct);
+            var locale = await tool.DumpSystemAsync(dump, [.. SystemDumpExclusionsFor(encrypted: false).Select(e => SystemSchema.Resolve(e.LogicalTable))], ct);
             await tool.VerifyArchiveAsync(dump, ct);
             var level = await ReadSystemMigrationLevelAsync(ct);
-            var manifest = SystemBackupSet.WriteManifest(dir, clock.GetUtcNow(), locale, level, [.. SystemDumpExclusions.Select(e => e.Label)]);
+            var manifest = SystemBackupSet.WriteManifest(dir, clock.GetUtcNow(), locale, level, [.. SystemDumpExclusionsFor(encrypted: false).Select(e => e.Label)]);
             if (!SystemBackupSet.Verify(dir)) throw new BackupException("system_set_not_clean");
             return new RunDump("ok", null, start, clock.GetUtcNow(), (long)clock.GetElapsedTime(t).TotalMilliseconds, manifest.Database.Size);
         }

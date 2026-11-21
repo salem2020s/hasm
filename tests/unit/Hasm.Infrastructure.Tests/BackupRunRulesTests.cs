@@ -251,13 +251,29 @@ public sealed class BackupRunRulesTests : IDisposable
     [Fact]
     public void The_system_dump_exclusions_equal_the_secret_store_flag_in_both_directions()
     {
-        var excluded = BackupRunService.SystemDumpExclusions.Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
-        Assert.True(excluded.SetEquals(SystemSchema.SecretStoreTables), "every secret-store table must be excluded from the system dump, and only those");
-        Assert.All(excluded, t => Assert.True(SystemSchema.Map.ContainsKey(t), t));
+        // D-070 and D-120 (replaces the set-equality pin of #104): every flagged table is labelled once, and only flagged tables are
+        var labelled = BackupRunService.SystemDumpExclusions.Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
+        Assert.True(labelled.SetEquals(SystemSchema.SecretStoreTables.Keys), "every secret-store table must carry a label and a rule, and only those");
+        Assert.All(labelled, t => Assert.True(SystemSchema.Map.ContainsKey(t), t));
         Assert.Equal(BackupRunService.SystemDumpExclusions.Count, BackupRunService.SystemDumpExclusions.Select(e => e.Label).Distinct().Count());
         Assert.All(BackupRunService.SystemDumpExclusions, e => Assert.Matches("^[a-z0-9_]{1,64}$", e.Label));
-        Assert.Contains("Session.Table", SystemSchema.SecretStoreTables);
-        Assert.Contains("LoginThrottle.Table", SystemSchema.SecretStoreTables);
+
+        // an UNENCRYPTED (DEV/TEST) dump excludes the data of every secret-store table
+        Assert.True(BackupRunService.SystemDumpExclusionsFor(encrypted: false).Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal).SetEquals(SystemSchema.SecretStoreTables.Keys));
+        // an ENCRYPTED dump excludes exactly the always-excluded ones and includes the encrypted-only ones under HBE1
+        var encryptedExcluded = BackupRunService.SystemDumpExclusionsFor(encrypted: true).Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
+        foreach (var (table, rule) in SystemSchema.SecretStoreTables)
+            Assert.Equal(rule == SecretStoreBackupRule.AlwaysExcluded, encryptedExcluded.Contains(table));
+
+        // pinned rules: sessions and login throttling are ephemeral and always excluded
+        Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["Session.Table"]);
+        Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["LoginThrottle.Table"]);
+        // D-120: a TOTP-secret table (Phase 4.1), once it exists in the dictionary, is a secret-store table included ONLY in encrypted runs
+        foreach (var totp in SystemSchema.Map.Keys.Where(k => k.Contains("Totp", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".Table", StringComparison.Ordinal)))
+        {
+            Assert.True(SystemSchema.SecretStoreTables.TryGetValue(totp, out var rule), totp + " must be flagged as a secret-store table");
+            Assert.Equal(SecretStoreBackupRule.IncludedOnlyInEncryptedRuns, rule);
+        }
     }
 
     // ---- path rules ------------------------------------------------------------------------------
