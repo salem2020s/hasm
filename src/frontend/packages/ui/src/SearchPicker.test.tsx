@@ -156,4 +156,30 @@ describe("SearchPicker", () => {
     expect(err).not.toHaveBeenCalled();
     err.mockRestore();
   });
+  it("passes id, invalid, describedBy and required to the list so a real label and an error text can be linked", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render(
+      <I18nProvider catalog={catalog}>
+        <label htmlFor="my-list">Item</label>
+        <SearchPicker id="my-list" label="Item" value="" onChange={() => undefined} load={() => Promise.resolve({ items: rows(1), total: 1 })} getId={(r: Row) => r.id} getLabel={(r: Row) => r.name}
+          invalid describedBy="my-error" required />
+        <p id="my-error">Bad value</p>
+      </I18nProvider>,
+    );
+    const box = await screen.findByRole("combobox", { name: "Item" });
+    expect(box).toHaveAttribute("id", "my-list");
+    expect(box).toHaveAttribute("aria-invalid", "true");
+    expect(box).toHaveAttribute("aria-required", "true");
+    expect(box).toHaveAccessibleDescription("Bad value");
+    expect(screen.getByRole("searchbox")).toHaveAttribute("aria-controls", "my-list");
+    expect(document.querySelector('label[for="my-list"]')).not.toBeNull();
+  });
+
+  it("sets none of those attributes when they are not given", async () => {
+    render(<Host load={() => Promise.resolve({ items: rows(1), total: 1 })} />);
+    const box = await screen.findByRole("combobox", { name: "Item" });
+    expect(box).not.toHaveAttribute("aria-invalid");
+    expect(box).not.toHaveAttribute("aria-required");
+    expect(box).not.toHaveAttribute("aria-describedby");
+  });
 });

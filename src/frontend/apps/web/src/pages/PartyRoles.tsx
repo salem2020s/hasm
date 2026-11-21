@@ -76,7 +76,7 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
   const { t, locale } = useI18n();
   const auth = useAuth();
   const id = kind === 1 ? "customer" : "supplier";
-  const runner = useRunner("pr.error.", reload);
+  const runner = useRunner("pr.error.", reload, "pr");
   const [editing, setEditing] = useState<PartyRole | null>(null);
   const [form, setForm] = useState(emptyForm);
   const configure = resp.can.configure;
@@ -161,7 +161,7 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
 function RepsTab({ resp, reload, onDirty }: { resp: SalesRepresentativesResponse; reload: () => Promise<void>; onDirty: (v: boolean) => void }) {
   const { t, locale } = useI18n();
   const auth = useAuth();
-  const runner = useRunner("pr.error.", reload);
+  const runner = useRunner("pr.error.", reload, "pr");
   const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", userId: "" });
   const configure = resp.can.configure;
   const isDirty = Object.values(form).some((v) => v !== "");

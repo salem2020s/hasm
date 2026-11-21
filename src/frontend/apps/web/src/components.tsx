@@ -112,11 +112,13 @@ export function errorText(t: (k: string) => string, e: unknown, keyPrefix = "err
   return t("error.network");
 }
 
-export function fieldErrors(t: (k: string) => string, e: unknown): Record<string, string> {
+/** Field refusals by server code. A screen may pass a `scope`: `field.<scope>.<code>` is tried first, then the shared `field.<code>`, so two screens can word the same code differently without colliding in the catalog. */
+export function fieldErrors(t: (k: string) => string, e: unknown, scope?: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (e instanceof ApiError) for (const f of e.details.fields ?? []) {
+    const scoped = scope ? `field.${scope}.${f.code}` : null;
     const key = `field.${f.code}`;
-    out[f.field] = t(key) === key ? t("field.invalid") : t(key);
+    out[f.field] = scoped && t(scoped) !== scoped ? t(scoped) : t(key) === key ? t("field.invalid") : t(key);
   }
   return out;
 }
