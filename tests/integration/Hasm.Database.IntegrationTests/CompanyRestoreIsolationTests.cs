@@ -22,7 +22,7 @@ namespace Hasm.Database.IntegrationTests;
 /// trial-restored. The proof is a before and after comparison of per-database CONTENT HASHES (every public table, exact row counts and row hashes) of the other company, the restored company's live
 /// database and the system database, plus a hash of every file of the live attachment storage: all must be byte-identical, the restored copy must equal its source and contain nothing of the other
 /// company, and an inconsistent set fails closed with the exact findings and changes nothing anywhere. Evidence only: it does not claim release acceptance of group G. Needs pg_dump and pg_restore of the
-/// server's major version on PATH. The sets are UNENCRYPTED v1 sets (DEV/TEST path, allowUnencrypted); an encrypted-set variant is not covered. The sets used are UNENCRYPTED v1 sets (DEV/TEST path, allowUnencrypted); an encrypted-set variant is not covered. Non-parallel collection, like <see cref="CompanyBackupServiceTests"/>, because a trial database must not exist while another test class starts.
+/// server's major version on PATH. The sets are UNENCRYPTED v1 sets (DEV/TEST path, allowUnencrypted); an encrypted-set variant is not covered. Non-parallel collection, like <see cref="CompanyBackupServiceTests"/>, because a trial database must not exist while another test class starts.
 /// </summary>
 [Collection(CompanyBackupSerialCollection.Name)]
 public class CompanyRestoreIsolationTests : PostgresTestBase
@@ -79,7 +79,7 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
 
     /// <summary>
     /// Every public table with its exact row count and a hash of its rows, every sequence with its last value, and a fingerprint of the schema objects (trigger, function and constraint definitions of
-    /// public): any change to data, counters or schema shows. <paramref name="constraintText"/> false compares constraint names and kinds only (needed against a pg_restore copy, which renders CHECK expressions differently).
+    /// public): any change to data, counters or schema shows. <paramref name="constraintText"/> false compares constraint names, kinds and structural attributes (columns, deferrability, referenced table, validity) but not the rendered text (needed against a pg_restore copy, which renders CHECK expressions differently).
     /// </summary>
     private static async Task<string> Digest(string connection, bool constraintText = true)
     {
@@ -97,7 +97,7 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         sb.Append("sequences=").Append(await Text(conn, "SELECT coalesce(string_agg(schemaname || '.' || sequencename || ':' || coalesce(last_value::text, 'null'), ',' ORDER BY schemaname, sequencename), '') FROM pg_sequences")).Append(';');
         sb.Append("triggers=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(pg_get_triggerdef(t.oid), E'\\n' ORDER BY c.relname, t.tgname), '')) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal")).Append(';');
         sb.Append("functions=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(pg_get_functiondef(p.oid), E'\\n' ORDER BY p.proname, p.oid::text), '')) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')")).Append(';');
-        sb.Append("constraints=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.contype::text || (CASE WHEN " + (constraintText ? "true" : "false") + " THEN pg_get_constraintdef(c.oid) ELSE '' END), E'\\n' ORDER BY c.conrelid::regclass::text, c.conname), '')) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public'")).Append(';');
+        sb.Append("constraints=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.contype::text || ':' || coalesce(c.conkey::text, '') || ':' || c.condeferrable::text || ':' || c.condeferred::text || ':' || coalesce(c.confrelid::regclass::text, '') || ':' || c.convalidated::text || (CASE WHEN " + (constraintText ? "true" : "false") + " THEN pg_get_constraintdef(c.oid) ELSE '' END), E'\\n' ORDER BY c.conrelid::regclass::text, c.conname), '')) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public'")).Append(';');
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
@@ -210,6 +210,13 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
 
         // the restored copy equals its source and holds nothing of the other company
         Assert.Equal(await Digest(Db(a.PhysicalDatabaseName), constraintText: false), await Digest(Db(kept.Database), constraintText: false));   // pg_restore re-renders CHECK expressions (same meaning, different text): constraint names and kinds are compared, not their text
+        // review F-L2 of #153 (control): the constraint comparison of the restored copy sees a structural change that keeps name and kind (a foreign key made deferrable), then sees it reverted
+        var keptDb = Db(kept.Database);
+        var fk = (await Scalar<string>(keptDb, "SELECT c.conrelid::regclass::text || '|' || c.conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public' AND c.contype = 'f' AND NOT c.condeferrable ORDER BY 1 LIMIT 1")).Split('|');
+        await Exec(keptDb, $"ALTER TABLE {fk[0]} ALTER CONSTRAINT \"{fk[1]}\" DEFERRABLE");
+        Assert.NotEqual(await Digest(Db(a.PhysicalDatabaseName), constraintText: false), await Digest(keptDb, constraintText: false));
+        await Exec(keptDb, $"ALTER TABLE {fk[0]} ALTER CONSTRAINT \"{fk[1]}\" NOT DEFERRABLE");
+        Assert.Equal(await Digest(Db(a.PhysicalDatabaseName), constraintText: false), await Digest(keptDb, constraintText: false));
         Assert.Equal(0L, await Scalar<long>(Db(kept.Database), $"SELECT count(*) FROM {LP.Table} WHERE {LP.Code} LIKE 'B-%'"));
         Assert.Equal(1L, await Scalar<long>(Db(kept.Database), $"SELECT count(*) FROM {LP.Table} WHERE {LP.Code} LIKE 'A-%'"));
         Assert.Equal(attachmentsOfA.Values.Order(StringComparer.Ordinal).ToArray(), Files(trialAtt).Values.Order(StringComparer.Ordinal).ToArray());      // the restored files are exactly A's bytes (plain and sensitive), nothing of B
@@ -238,6 +245,25 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         await Exec(bDb, $"SELECT setval('public.\"{seq}\"', {(last ?? 0) + 1000}, true)");
         Assert.NotEqual(before.B, await Digest(bDb));
         await Exec(bDb, last is null ? $"SELECT setval('public.\"{seq}\"', 1, false)" : $"SELECT setval('public.\"{seq}\"', {last}, true)");
+        Assert.Equal(before.B, await Digest(bDb));
+
+        // review F-L3 of #153: a changed trigger, function or constraint of a live database also changes its digest (each is reverted and the digest must return)
+        var trigger = (await Scalar<string>(bDb, "SELECT c.relname || '|' || t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal ORDER BY 1 LIMIT 1")).Split('|');
+        await Exec(bDb, $"ALTER TRIGGER \"{trigger[1]}\" ON \"{trigger[0]}\" RENAME TO zz_mutated_trigger");
+        Assert.NotEqual(before.B, await Digest(bDb));
+        await Exec(bDb, $"ALTER TRIGGER zz_mutated_trigger ON \"{trigger[0]}\" RENAME TO \"{trigger[1]}\"");
+        Assert.Equal(before.B, await Digest(bDb));
+
+        var function = await Scalar<string>(bDb, "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.proconfig IS NULL ORDER BY 1 LIMIT 1");
+        await Exec(bDb, $"ALTER FUNCTION {function} SET statement_timeout = '7s'");                                    // a function-level setting is part of pg_get_functiondef
+        Assert.NotEqual(before.B, await Digest(bDb));
+        await Exec(bDb, $"ALTER FUNCTION {function} RESET statement_timeout");
+        Assert.Equal(before.B, await Digest(bDb));
+
+        var constraint = (await Scalar<string>(bDb, "SELECT c.conrelid::regclass::text || '|' || c.conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public' AND c.contype = 'c' ORDER BY 1 LIMIT 1")).Split('|');
+        await Exec(bDb, $"ALTER TABLE {constraint[0]} RENAME CONSTRAINT \"{constraint[1]}\" TO zz_mutated_constraint");
+        Assert.NotEqual(before.B, await Digest(bDb));
+        await Exec(bDb, $"ALTER TABLE {constraint[0]} RENAME CONSTRAINT zz_mutated_constraint TO \"{constraint[1]}\"");
         Assert.Equal(before.B, await Digest(bDb));
 
         var liveFile = Directory.EnumerateFiles(Path.Combine(Storage, a.Id.ToString("N"))).First();                    // one byte of a live attachment
