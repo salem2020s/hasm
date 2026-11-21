@@ -94,7 +94,7 @@ Long-lived Draft pull requests that are never merged (details in the next sectio
 
 **Legacy pull-request audit (2026-11-21, after the lead-switch checkpoint; PRs #48-#85, read from `gh api repos/salem2020s/hasm/pulls/<n>`):** 33 of the 38 are merged; 5 are open Drafts. #48 is ACTIVE (3.8D design revision 3; see the checkpoint table and the 3.8D register row). #51, #55 and #85 are SUPERSEDED (#51/#55 by the merged #61 `215da56`, #85 by the merged #89). #62 is INERT (validation only, never merged). Closing these drafts is an owner action; no agent closes them.
 
-**Stale security documents corrected by the same audit:** `docs/SECURITY-PICOMATCH.md` (it still said "UNRESOLVED") and `docs/SECURITY-DEPENDENCY-STATE.json` (it still had `auditExceptionActive: true`) now carry a dated 2026-11-21 status: the exception is RETIRED (advisory withdrawn, D-047, #61 `215da56`), strict mode with zero exceptions. The 2026-11-17/18 investigation text and state are kept as history. No tool or workflow reads either file. Owner decisions S and C stay OPEN.
+**Stale security documents corrected by the same audit:** `docs/SECURITY-PICOMATCH.md` (it still said "UNRESOLVED") and `docs/SECURITY-DEPENDENCY-STATE.json` (it still had `auditExceptionActive: true`) now carry a dated 2026-11-21 status: the exception is RETIRED (advisory withdrawn, D-047, #61 `215da56`), strict mode with zero exceptions. The 2026-11-17/18 investigation text and state are kept as history. No tool takes policy or state from either file (`check-docs.js` reads the `.md` only for its generic link check). Owner decisions S and C stay OPEN.
 
 ## Owner-decision register (each recorded once; fail-closed while open)
 

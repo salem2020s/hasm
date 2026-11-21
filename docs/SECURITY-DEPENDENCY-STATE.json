@@ -4,6 +4,8 @@
   "advisory": "GHSA-fc5q-39xc-vjpf",
   "severity": "High",
   "auditExceptionActive": false,
+  "installedVersion": "picomatch 4.0.7 (src/frontend/package-lock.json on main 9ffaa6c; unchanged)",
+  "whyAuditPasses": "the advisory GHSA-fc5q-39xc-vjpf was withdrawn by GitHub on 2026-11-18; the dependency was NOT upgraded or replaced",
   "verifiedOnMain": "9ffaa6c7c265b3b2de2c8ddf398d2a6034ffa318",
   "retirement": {
     "decision": "D-047 (owner approval A, 2026-11-20; supersedes D-046)",

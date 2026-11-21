@@ -25,3 +25,6 @@
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** GitHub's advisory page itself (the withdrawal date is taken from D-047 and the merged review record, not fetched from github.com/advisories); the dependency-scan logs (only the job conclusion was read); hosted CI beyond the verification check-runs on the head.
 * **Verdict:** approve
+* **Resolutions (author, in the commit after `44b34cf`; for R's delta confirmation):**
+  * **L1 fixed:** `docs/INTEGRATION-STATUS.md` now says "No tool takes policy or state from either file (`check-docs.js` reads the `.md` only for its generic link check)".
+  * **L2 fixed:** the dated status line of `docs/SECURITY-PICOMATCH.md` and `docs/SECURITY-DEPENDENCY-STATE.json` (`installedVersion`, `whyAuditPasses`) state plainly that the installed picomatch is unchanged at 4.0.7 (verified in `src/frontend/package-lock.json` on `main`, `node_modules/picomatch`; the desktop lockfile has no picomatch) and that the strict audit passes because the advisory was withdrawn, not because the dependency was upgraded.

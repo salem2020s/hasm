@@ -1,6 +1,6 @@
 # Shared picomatch security blocker
 
-Status (2026-11-21, verified on `main` = `9ffaa6c`): **RETIRED, advisory withdrawn. Strict mode, zero exceptions.** GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The owner-approved retirement (approval A, D-047, superseding D-046) was applied by PR #61, merged as `215da56` on 2026-11-20. Evidence on `main`:
+Status (2026-11-21, verified on `main` = `9ffaa6c`): **RETIRED, advisory withdrawn. Strict mode, zero exceptions.** **The installed dependency is unchanged:** `src/frontend/package-lock.json` on `main` still resolves `node_modules/picomatch` to version 4.0.7. The strict audit passes because GitHub withdrew the advisory, NOT because picomatch was upgraded or replaced. GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The owner-approved retirement (approval A, D-047, superseding D-046) was applied by PR #61, merged as `215da56` on 2026-11-20. Evidence on `main`:
 * `tools/verify/picomatch-exception.json` has status `RETIRED-ADVISORY-WITHDRAWN`.
 * `tools/verify/dependency-audit-policy.cjs` binds that record to the owner-approved retirement hash and, in that state, authorizes ZERO exceptions; every High or Critical finding blocks.
 * The always-on `dependency-scan` job (`.github/workflows/verification.yml`, step "Full npm audit (strict; temporary exception retired)") passed on `9ffaa6c`.
