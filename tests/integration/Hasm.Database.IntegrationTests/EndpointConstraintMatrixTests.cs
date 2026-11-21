@@ -214,7 +214,8 @@ public class EndpointConstraintMatrixTests : JournalTestBase
             await Race("tax rate", ["400:rate_not_later"], HttpMethod.Post, $"/api/v1/company/taxes/{IdOf(tax)}/rates", new TaxRateInput(new DateOnly(2026, 1, 1), TaxTreatment.Standard, 15m));
         await Race("tax class", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Item, "CVTC", "فئة", "Class", true));
         await Race("exchange rate", ["412:revision_conflict"], HttpMethod.Post, "/api/v1/company/exchange-rates", new ExchangeRateInput("USD", 0.71m, new DateOnly(2026, 2, 1), null), "\"0\"");     // If-Match: the latest rate id of the series (none yet)
-        await Race("fiscal year", ["409:fiscal_year_overlap"], HttpMethod.Post, "/api/v1/company/fiscal-years", new FiscalYearInput("FY2027", new DateOnly(2027, 1, 1), "monthly"));
+        // a parallel duplicate of the same year meets the overlap or, equally legitimately, the name already taken (review follow-up of #155)
+        await Race("fiscal year", ["409:fiscal_year_overlap", "409:fiscal_year_name_taken"], HttpMethod.Post, "/api/v1/company/fiscal-years", new FiscalYearInput("FY2027", new DateOnly(2027, 1, 1), "monthly"));
 
         Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings));
     }
@@ -297,9 +298,11 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         // barcode activation carries no revision (no If-Match): the state must still change exactly once under concurrency (review L2 of #155): one winner and ONE business audit event
         foreach (var (what, action, refusal) in new[] { ("barcode deactivate", "deactivate", "409:barcode_already_inactive"), ("barcode activate", "activate", "409:barcode_already_active") })
         {
-            var events = await Sql<long>($"SELECT count(*) FROM {BA.Table}");
+            // counted for THIS barcode and event type only (review follow-up of #155), so an unrelated concurrent business event cannot mask a double application
+            var ofThisBarcode = $"SELECT count(*) FROM {BA.Table} WHERE {BA.SubjectId} = '{IdOf(barcode)}' AND {BA.EventType} = {InventoryAuditEvents.BarcodeActiveChanged}";
+            var events = await Sql<long>(ofThisBarcode);
             await Race(what, [refusal], HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item)}/barcodes/{IdOf(barcode)}/{action}", new { });
-            var written = await Sql<long>($"SELECT count(*) FROM {BA.Table}") - events;
+            var written = await Sql<long>(ofThisBarcode) - events;
             if (written != 1) findings.Add($"{what}: {written} business audit events for one state change");
         }
         Assert.NotNull(itemStep);
