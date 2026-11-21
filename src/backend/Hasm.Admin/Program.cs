@@ -19,6 +19,7 @@ using Npgsql;
 //   Hasm.Admin provision-company <company-id> (creates + migrates its separate database; safe to repeat/resume)
 //   Hasm.Admin migrate-companies [--company <id>]  (applies pending forward-only company migrations to Ready companies; per-company outcome; exit 8 on partial failure)
 //   Hasm.Admin grant-company-runtime <company-id> [--rotate-credential]  (creates/updates the company's own least-privilege runtime login role and credential file; idempotent)
+//   Hasm.Admin grant-system-runtime           (D-235: converges the API runtime account's privileges on the SYSTEM database to the reviewed catalog, least-privilege for the TOTP secret store; owner account; idempotent; never creates a role)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 //   Hasm.Admin grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id>  (offline delegation of the Import Approver role: approval of imports; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
@@ -62,7 +63,7 @@ var keepLast = 0;
 int? keepDays = null;
 var validUsage = command switch
 {
-    "init-system-db" or "register-company" => args.Length == 1,
+    "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "migrate-companies" => args.Length == 1
@@ -99,7 +100,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -397,6 +398,22 @@ try
             if (busy > 0) return InProgress;
             return onlyCompany is not null && skipped > 0 ? Failed : Ok;
         }
+        case "grant-system-runtime":
+        {
+            // Owner decision D-235. Codes and logical table names only; never a role name, a physical name or a secret.
+            SystemRuntimeGrantResult granted;
+            try { granted = await SystemRuntimeAdministration.GrantAsync(options); }
+            catch (SystemRuntimeGrantException ex) { Console.Error.WriteLine($"grant-system-runtime stopped ({ex.Code}): {ex.Message}"); return Failed; }
+            Console.WriteLine("The runtime account now holds exactly the system catalog. Re-run after every system migration and after restoring a system database.");
+            foreach (var note in granted.Findings.Notes) Console.WriteLine($"note: {note}");
+            foreach (var violation in granted.Findings.Violations) Console.Error.WriteLine($"violation: {violation}");
+            if (granted.Findings.Violations.Count > 0)
+            {
+                Console.Error.WriteLine("The TOTP secret store is still not least-privilege (another role holds access, or the runtime account has attributes this command does not change). The API refuses to start until this is corrected.");
+                return Failed;
+            }
+            return Ok;
+        }
         case "grant-company-runtime":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
@@ -456,7 +473,7 @@ catch (CompanyNotFoundException)
     Console.Error.WriteLine($"{command} stopped: the company is not registered; nothing was changed.");
     return Failed;
 }
-catch (PostgresException ex) when (command is "migrate-companies" or "grant-company-runtime")
+catch (PostgresException ex) when (command is "migrate-companies" or "grant-company-runtime" or "grant-system-runtime")
 {
     // PostgreSQL messages may quote object names; only the SQLSTATE is printed.
     Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");

@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
 using TO = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTotp;
@@ -24,8 +25,18 @@ public sealed record RestoreMfaResult(int UsersMarkedRecoveryRequired, int Enrol
 /// transaction: a mutation without its audit event does not happen. Secrets are encrypted by <see cref="TotpSecretProtector"/> before they reach the database. This layer holds NO policy (who may enrol or recover is
 /// slices S2 to S7); it guarantees the invariants of the tables: one Active and one Pending secret per user, a monotonic accepted step, an MFA state that follows <see cref="MfaStateGraph"/>.
 /// </summary>
-public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector) : IMfaSecretStore, IAsyncDisposable
+public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector, SystemRuntimeGate? gate = null) : IMfaSecretStore, IAsyncDisposable
 {
+    /// <summary>Every connection of the store passes the least-privilege gate when one is given (the API always gives one; owner decision D-235): a runtime account that is not least-privilege
+    /// for the secret store never reads or writes a secret. The administrative tool runs under the owner account and gives none.</summary>
+    private async Task<NpgsqlConnection> OpenAsync(CancellationToken ct)
+    {
+        var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        try { if (gate is not null) await gate.EnsureAsync(conn, ct); }
+        catch { await conn.DisposeAsync(); throw; }
+        return conn;
+    }
+
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
 
     public MfaStore(string connectionString, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector) : this(() => connectionString, clock, audit, protector) { }
@@ -42,7 +53,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
 
     public async Task<MfaState?> GetStateAsync(Guid userId, CancellationToken ct = default)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
         cmd.Parameters.AddWithValue("u", userId);
         return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : null;
@@ -55,7 +66,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     public async Task<bool> TryChangeStateAsync(Guid userId, MfaState from, MfaState to, MfaStateCause cause, Guid? actor, CancellationToken ct = default)
     {
         if (!MfaStateGraph.IsAllowed(from, to, cause)) return false;
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         if (!await SetStateAsync(conn, tx, userId, from, to, ct)) return false;
         var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StateChanged, actor, userId, $"mfa state {from} -> {to} ({cause})", ct);
@@ -80,7 +91,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     private async Task<MfaSecret?> FindSecretAsync(Guid userId, short state, CancellationToken ct)
     {
         ProtectedTotpSecret stored; Guid secretId; long? lastStep;
-        await using (var conn = await dataSource.Value.OpenConnectionAsync(ct))
+        await using (var conn = await OpenAsync(ct))
         await using (var cmd = new NpgsqlCommand($"SELECT {TO.SecretId}, {TO.Cipher}, {TO.Nonce}, {TO.Tag}, {TO.KekId}, {TO.LastStep} FROM {TO.Table} WHERE {TO.UserId} = @u AND {TO.State} = @st", conn))
         {
             cmd.Parameters.AddWithValue("u", userId);
@@ -98,7 +109,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
 
     public async Task<bool> TryAdvanceLastStepAsync(Guid secretId, long matchedStep, CancellationToken ct)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(                                                               // Active (a sign-in) or Pending (an enrolment being confirmed): both are replay-protected
             $"UPDATE {TO.Table} SET {TO.LastStep} = @s WHERE {TO.SecretId} = @id AND {TO.State} IN (0, 1) AND ({TO.LastStep} IS NULL OR {TO.LastStep} < @s)", conn);
         cmd.Parameters.AddWithValue("s", matchedStep);
@@ -113,7 +124,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         var secretId = Guid.NewGuid();
         var stored = protector.Protect(userId, secretId, secret);
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using (var lockRow = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.Id} = @u FOR UPDATE", conn, tx))     // serializes concurrent pending creations of one user (no unhandled unique violation)
         {
@@ -149,7 +160,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     /// </summary>
     public async Task<bool> ActivatePendingAsync(Guid userId, Guid secretId, long matchedStep, Guid? actor, CancellationToken ct = default, bool consumeEnrolmentCode = false, SessionIssue? reissue = null)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         MfaState current;
         await using (var lockRow = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u FOR UPDATE", conn, tx))
@@ -212,7 +223,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     public async Task<DateTimeOffset?> RecordStepUpAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
     {
         var now = clock.GetUtcNow();
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using (var cmd = new NpgsqlCommand(
             $"UPDATE {S.Table} SET {SM.VerifiedAtUtc} = @n, {SM.AuthMethods} = 3 WHERE {S.Id} = @s AND {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL AND ({SM.VerifiedAtUtc} IS NULL OR {SM.VerifiedAtUtc} < @n)", conn, tx))
@@ -230,7 +241,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     /// <summary>Audits a step-up refused for a wrong or replayed code (never the code). Called only for verifier-counted failures, so the shared MFA throttle bounds how many rows one session can append; throttled and unavailable answers are not audited.</summary>
     public async Task RecordStepUpFailureAsync(Guid sessionId, Guid userId, string cause, CancellationToken ct = default)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StepUpFailed, userId, userId, $"step-up refused ({cause}) session {sessionId:N}", ct);
         await audit.CommitAsync(tx, receipt, ct);
@@ -241,7 +252,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         if (validFor <= TimeSpan.Zero || validFor > TimeSpan.FromHours(24)) throw new ArgumentOutOfRangeException(nameof(validFor));
         var code = Totp.ToBase32(System.Security.Cryptography.RandomNumberGenerator.GetBytes(10));              // 16 characters
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using (var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = @h, {M.EnrolmentCodeExpiresAtUtc} = @e, {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {U.Id} = @u", conn, tx))
         {
@@ -259,7 +270,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     public async Task<bool> CheckEnrolmentCodeAsync(Guid userId, string? code, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(code) || code.Length > 64) return false;
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var cmd = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.Id} = @u AND {M.EnrolmentCodeHash} = @h AND {M.EnrolmentCodeConsumedAtUtc} IS NULL AND {M.EnrolmentCodeExpiresAtUtc} > @n", conn);
         cmd.Parameters.AddWithValue("u", userId);
         cmd.Parameters.AddWithValue("h", EnrolmentCodeHash(code));
@@ -270,7 +281,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     /// <summary>Revokes every Pending and Active secret of the user (recovery, DR reset). The user's state is NOT touched here: the caller moves it through <see cref="TryChangeStateAsync"/> in the same procedure. Returns the number revoked. Audited.</summary>
     public async Task<int> RevokeAllAsync(Guid userId, Guid? actor, string reason, CancellationToken ct = default)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         int count;
         await using (var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.State} = 2 WHERE {TO.UserId} = @u AND {TO.State} IN (0, 1)", conn, tx))
@@ -289,7 +300,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     public async Task<IReadOnlyDictionary<string, int>> ReferencedKeysAsync(CancellationToken ct = default)
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var cmd = new NpgsqlCommand($"SELECT {TO.KekId}, count(*) FROM {TO.Table} WHERE {TO.State} IN (0, 1) GROUP BY {TO.KekId}", conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) result[r.GetString(0)] = (int)r.GetInt64(1);
@@ -304,7 +315,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         if (!Security.KekRing.IsValidKeyId(targetKekId)) throw new ArgumentException("Invalid key id.", nameof(targetKekId));
         if (batchSize is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(batchSize));
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using (var flag = new NpgsqlCommand("SELECT set_config('hasm.totp_rewrap', 'on', true)", conn, tx)) await flag.ExecuteNonQueryAsync(ct);
         var rows = new List<(Guid SecretId, Guid UserId, ProtectedTotpSecret Stored)>();
@@ -351,7 +362,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     /// </summary>
     public async Task<RestoreMfaResult> ApplyRestoreAsync(bool differentInstallation, Guid? actor, CancellationToken ct = default)
     {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         int marked, codes;
         await using (var mark = new NpgsqlCommand(
