@@ -107,7 +107,7 @@ P("3.23","Operational reports","RR-3 to RR-7, RR-12, SRS 13.1, 13.2",["3.17","3.
  "Acceptance criteria 3 to 7 and 12 of docs/REPORTING-REQUIREMENTS.md.",
  "PostgreSQL correctness/authorization; export equals screen; both languages.","none","M","Uses the defaults of OD-3, OD-4 and OD-8."),
 P("3.24","Multi-company aggregation reports","SRS 3.7, 3.8",["3.18","3.23"],
- "Backend aggregation across authorized companies with currency conversion; formal consolidation only if the owner decides it is part of Release 1.",
+ "Backend aggregation across authorized companies with currency conversion; formal consolidation is deferred beyond Release 1 (OD-1, D-217) and aggregation is never presented as formal consolidated statements.",
  "No cross-database SQL; each company authorized separately.",
  "Integration tests across several company databases.","none","H","OD-1 is decided (D-217): simple aggregation only; formal consolidation is deferred beyond Release 1."),
 P("3.25","Visual report designer","SRS 13.3",["3.23"],
