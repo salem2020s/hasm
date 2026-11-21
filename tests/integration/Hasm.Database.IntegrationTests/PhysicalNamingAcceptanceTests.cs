@@ -408,7 +408,12 @@ public partial class PhysicalNamingAcceptanceTests : CompanyRuntimeTestBase
         {
             var original = await InCompany<string>(kept.Database, $"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = '{name}'");
             await InCompany(kept.Database, $"ALTER TABLE {table} DROP CONSTRAINT {name}; ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({changed})");
-            Assert.NotNull(await Record.ExceptionAsync(async () => AssertSameStructure(source.Structure, await Structure(restored), "mutated restored database", "its source")));
+            // the structure is read OUTSIDE the recorded call, so a failure of Structure itself can never pass as the control; only the comparison's own XunitException, naming the mutated constraint, does (review Low of #151)
+            var mutated = await Structure(restored);
+            var failure = Record.Exception(() => AssertSameStructure(source.Structure, mutated, "mutated restored database", "its source"));
+            var comparison = Assert.IsAssignableFrom<Xunit.Sdk.XunitException>(failure);
+            Assert.Contains("mutated restored database: catalog differs from its source", comparison.Message);
+            Assert.Contains(name, comparison.Message);
             await InCompany(kept.Database, $"ALTER TABLE {table} DROP CONSTRAINT {name}; ALTER TABLE {table} ADD CONSTRAINT {name} {original}");
         }
         AssertSameStructure(source.Structure, await Structure(restored), "restored company database after the controls", "its source after the dump's own parse round trip");
