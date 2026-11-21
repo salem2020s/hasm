@@ -3,6 +3,7 @@
 # HASM_REQUIRE_PG_TESTS=1 and HASM_REQUIRE_PG_ROLE_TESTS=1 (a closed gate fails instead of skipping), then requires 0 failed and 0 skipped/not executed from the TRX counters.
 # Usage: scripts/test-pg/run-pg-tests.sh [--build] [extra dotnet test arguments, e.g. --filter "FullyQualifiedName~PricingApiTests"]
 # Without --build the solution must already be built in Release (dotnet build src/backend/Hasm.slnx -c Release).
+# Any extra argument makes the run a SUBSET: it is reported as such (never as a verification of the suite) (run-oneshot.sh additionally exits 4 for a passing subset).
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 assert_safe_locations
 assert_cluster_present
@@ -20,12 +21,15 @@ n="$(foreign_sessions)"
 
 build=no
 if [[ "${1:-}" == "--build" ]]; then build=yes; shift; fi
+subset=no; [[ $# -eq 0 ]] || subset=yes
 cd "${REPO_ROOT}"
 [[ "${build}" == yes ]] && dotnet build src/backend/Hasm.slnx -c Release --nologo -v q 9>&-    # fd 9 (the lock) is not inherited by build servers
 
 # shellcheck disable=SC1090
 . "${ENV_FILE}"
 export HASM_REQUIRE_PG_TESTS=1 HASM_REQUIRE_PG_ROLE_TESTS=1
+# Inherited CI-runner variables would make PostgresClusterIdentity accept the CI ports as well; this local path is port 5433 only.
+unset GITHUB_ACTIONS GITHUB_RUN_ID RUNNER_ENVIRONMENT HASM_CI_PG_DIR
 trx_dir="${TEST_ROOT}/trx"
 rm -rf "${trx_dir}"; install -d -m 700 "${trx_dir}"
 start=$(date +%s)
@@ -46,4 +50,8 @@ echo "PostgreSQL integration tests: total=${total} executed=${executed} passed=$
 if [[ "${failed}" != "0" || "${executed}" != "${total}" || "${passed}" != "${total}" || "${code}" != "0" ]]; then
   die "Not clean: require 0 failed and 0 skipped/not executed with every test passed."
 fi
-echo "OK: ${passed}/${total} passed, 0 failed, 0 skipped."
+if [[ "${subset}" == yes ]]; then
+  echo "SUBSET PASSED: ${passed}/${total} passed, 0 failed, 0 skipped - extra dotnet test arguments were given, so this is NOT a verification of the full suite (no per-class registry check)."
+else
+  echo "OK: ${passed}/${total} passed, 0 failed, 0 skipped."
+fi
