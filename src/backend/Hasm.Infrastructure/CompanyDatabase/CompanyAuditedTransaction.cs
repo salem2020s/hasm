@@ -24,6 +24,10 @@ public sealed class CompanyAuditedWork
     public NpgsqlConnection Connection { get; }
     public NpgsqlTransaction Transaction { get; }
     internal IReadOnlyList<AuditReceipt> Receipts => receipts;
+    /// <summary>The number of audit receipts so far: a savepoint's mark, so that a rollback to it can forget exactly the receipts of the events it rolled back.</summary>
+    internal int ReceiptMark => receipts.Count;
+    /// <summary>Forgets the receipts added since <paramref name="mark"/>: used after a ROLLBACK TO SAVEPOINT, because the events they describe no longer exist and must not be committed or anchored.</summary>
+    internal void DiscardReceiptsSince(int mark) { if (receipts.Count > mark) receipts.RemoveRange(mark, receipts.Count - mark); }
 
     /// <summary>
     /// Appends one authenticated event to the company's business stream INSIDE the transaction. Take every business lock first: the

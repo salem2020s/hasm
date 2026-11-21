@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.CompanyConfiguration;
+using Hasm.Infrastructure.Costing;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Inventory;
 using OP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostOperation;
@@ -158,5 +159,49 @@ public class StockPostingInWorkTests : StockPostingTestBase
         // an amounts problem is a costing/validation refusal, also thrown, also leaving nothing
         await Assert.ThrowsAsync<StockDocumentService.Abort>(() => Tx.ExecuteAsync(Company.Id, work => Posting.PostInWorkAsync(work, Admin.Id, open.Id, open.Revision, new StockPostInput([new StockPostLineInput(1, -1m)]))));
         Assert.Equal((0L, 0L, 0L, 0L, 0L, 0L), await Everything());
+    }
+
+    [PostgresFact]
+    public async Task A_refusal_thrown_after_the_costing_writes_is_undone_by_the_savepoint_so_a_caller_that_catches_it_commits_no_partial_effect()
+    {
+        // the accounting configuration is missing: the priced issue is costed FIRST (writes) and only then refused with inventory_accounting_not_configured
+        await PreparePosting(configure: false);
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest("seed", D1, null, [new CostingReceiptLine(Fifo.Id, W1.Id, 10m, 80m)]));
+        var issue = await Approved(Issue(W1, "2026-03-12", L(Fifo, Pcs, 4)));
+        var seeded = await Everything();
+        Assert.Equal((1L, 1L), (seeded.Operations, seeded.Entries));                                              // only the seed receipt
+        var seededValue = await Sql<decimal>($"SELECT coalesce(sum({PO.Value}), 0) FROM {PO.Table}");
+        const short CallerEvent = 1999;                                                                           // the caller's own audit event: its work must still commit
+
+        await Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Posting.PostInWorkAsync(work, Admin.Id, issue.Id, issue.Revision, null));
+            Assert.Equal("inventory_accounting_not_configured", refusal.Message);
+            // INSIDE the caller's transaction, after the caller caught the refusal: nothing of the failed attempt remains
+            async Task<long> Inside(string sql) { await using var q = new Npgsql.NpgsqlCommand(sql, work.Connection, work.Transaction); return Convert.ToInt64(await q.ExecuteScalarAsync()); }
+            Assert.Equal(1L, await Inside($"SELECT count(*) FROM {OP.Table}"));                                   // the seed only: the issue's cost operation was undone
+            Assert.Equal(1L, await Inside($"SELECT count(*) FROM {EN.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {SP.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {CompanySchema.JournalEntry.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {CompanySchema.StockPostingEvent.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {StockPostingAuditEvents.Posted}"));
+            Assert.Equal(seededValue, Convert.ToDecimal(await Inside($"SELECT coalesce(sum({PO.Value}), 0) FROM {PO.Table}")));
+            // the transaction is usable and the caller carries on with its own work
+            await work.AppendAuditAsync(new Hasm.Infrastructure.Audit.AuditEventData(CallerEvent, ActorUserId: Admin.Id, Detail: "caller work after a caught refusal"));
+        });
+
+        // after the caller's commit: its own work is there, and nothing of the failed posting
+        Assert.Equal(seeded, await Everything());
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {CallerEvent}"));
+        Assert.Equal((10m, 80m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value));                         // the stock never moved
+        // the audit chain stayed sound (the rolled-back receipt was not committed or anchored)
+        Assert.Empty(await Cost.ReconcileAsync(Company.Id));
+        // nothing is half done: with the configuration in place the same document posts once
+        Ok(await Acc.SaveAsync(Admin.Id, Company.Id, 0, new InventoryAccountingInput(StockAcc.Id, GoodsAcc.Id, CogsAcc.Id, [], null)));
+        var posted = Ok(await Post(issue));
+        Assert.False(posted.Replayed);
+        Assert.Equal(32m, posted.TotalValue);
+        Assert.Equal((6m, 48m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value));
+        Assert.Equal(1L, (await Everything()).Postings);
     }
 }

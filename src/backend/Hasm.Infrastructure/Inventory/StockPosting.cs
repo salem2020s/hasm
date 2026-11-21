@@ -146,15 +146,43 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
     /// <summary>
     /// The posting INSIDE an ambient company transaction supplied by the caller (Phase 3.13 S3: an invoice approval executes its stock document in the SAME transaction as the approval), the same refactor
     /// pattern as <see cref="JournalService.CancelInWorkAsync"/> / <see cref="JournalService.ReverseInWorkAsync"/>: validation, locks, costing, journal creation and audit are exactly those of <see cref="PostAsync"/>
-    /// (this is the same code), only the transaction owner differs. The caller owns the commit: nothing is committed here, and an exception rolls the whole caller transaction back, so no stock movement, cost
-    /// operation, journal entry or audit event survives it. A repeated call for an already posted document returns the original posting (<c>Replayed</c> true) and writes nothing. Refusals are thrown as the
-    /// same exceptions <see cref="PostAsync"/> maps to a result (<see cref="StockDocumentService.Abort"/>, <see cref="CostingException"/>, <see cref="JournalService.Abort"/>, <see cref="InvalidOperationException"/>
-    /// for a missing accounting configuration): the caller maps them as it maps its own, or lets them abort its transaction. No authorization here: the caller authorizes.
+    /// (this is the same code), only the transaction owner differs. The caller owns the commit; nothing is committed here.
+    /// <para><b>Atomic on its own:</b> the posting runs under a SAVEPOINT. The posting writes in steps (costing first, then the accounting configuration and the journal) and some refusals are thrown AFTER writes
+    /// (for example <c>inventory_accounting_not_configured</c> after the issue was costed, <c>negative_exception_stale</c>, a later journal refusal). On ANY exception other than a replay the savepoint is rolled back
+    /// (undoing every write and the audit receipts of the failed attempt, and clearing an aborted-transaction state left by a PostgreSQL error) and the exception is rethrown, so a caller that catches a refusal
+    /// and carries on in its own transaction never commits a partial stock or cost effect. On success the savepoint is released.</para>
+    /// <para>Refusals are thrown as the same exceptions <see cref="PostAsync"/> maps to a result (<see cref="StockDocumentService.Abort"/>, <see cref="CostingException"/>, <see cref="JournalService.Abort"/>,
+    /// <see cref="InvalidOperationException"/> for a missing accounting configuration): the caller maps them as it maps its own, or lets them abort its transaction. No authorization here: the caller authorizes.</para>
+    /// <para><b>Replay:</b> a repeated call for an already posted document returns the EXISTING posting (<c>Replayed</c> true) whoever posted it and writes nothing; the caller must check that the stock document belongs
+    /// to its own business document (invoice) before relying on it.</para>
+    /// <para><b>Lock order (deadlock avoidance):</b> the posting first takes the company's branch-change advisory lock (<c>CompanyBranchService.LockKey1/LockKey2</c>, "HBRC"), then row locks on the document and the
+    /// stock positions, and the audit stream lock last. A caller that already holds row locks of its own must therefore call this EARLY (before taking them) or take that advisory lock FIRST; taking its row locks
+    /// first and the advisory lock afterwards inverts the order against a concurrent posting or branch change and can deadlock (PostgreSQL 40P01).</para>
     /// </summary>
     internal async Task<StockPostingView> PostInWorkAsync(CompanyAuditedWork work, Guid actor, Guid documentId, long expectedRevision, StockPostInput? input, CancellationToken ct = default)
     {
-        try { return await PostCoreAsync(work, actor, documentId, expectedRevision, input, ct); }
-        catch (Replay r) { return r.View; }              // nothing was written; the ambient transaction is left untouched
+        var savepoint = "hasm_post_inwork_" + Guid.NewGuid().ToString("N");            // unique, so nested or repeated calls in one transaction never clash
+        var mark = work.ReceiptMark;
+        await work.Transaction.SaveAsync(savepoint, ct);
+        try
+        {
+            var view = await PostCoreAsync(work, actor, documentId, expectedRevision, input, ct);
+            await work.Transaction.ReleaseAsync(savepoint, ct);
+            return view;
+        }
+        catch (Replay r)
+        {
+            // the replay check precedes every write: nothing was written and the ambient transaction is untouched
+            await work.Transaction.ReleaseAsync(savepoint, ct);
+            return r.View;
+        }
+        catch
+        {
+            // undo every write of the failed attempt (also clears an aborted state after a database error), forget its audit receipts, and let the exception reach the caller
+            try { await work.Transaction.RollbackAsync(savepoint, CancellationToken.None); work.DiscardReceiptsSince(mark); }
+            catch (Exception) { /* the connection is unusable: the original exception still propagates and the caller's transaction ends without a commit */ }
+            throw;
+        }
     }
 
     /// <summary>The body of the posting transaction (formerly the lambda of <see cref="PostAsync"/>, unchanged): throws <see cref="Replay"/> for an already posted document, so that the public entry ends its own transaction without a mutation.</summary>
