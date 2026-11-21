@@ -41,6 +41,9 @@ Recorded limitations against G (dated; each must be closed or explicitly accepte
 ## H. Security (SRS 17, 4)
 No open Critical or High finding; audit chain verifies after export; secrets never in repository, logs or support bundles; opaque physical names preserved by every migration; MFA and emergency account as specified.
 
+Recorded limitations against H (dated; each must be closed or explicitly accepted before release):
+* 2026-11-21 (Phase 4.1 S1, review M2 of PR #133, lead decision D-048): the system database runtime connection is not least-privilege for user_totp; the hasm.totp_rewrap flag is code discipline only, settable by any session. A system-database runtime-role grant model is an architecture change outside slice S1; it is a follow-up of the S4 authorization or the database-role work, is on the owner/DBA register, and is a blocker for production readiness until closed or explicitly accepted.
+
 ## I. Quality gates
 All mandatory tests pass on the final committed tree; all required GitHub Actions checks green on the exact release head; no weakened or disabled test, no reduced expected count; frontend typecheck, production build and Tauri build pass; manual visual review of Arabic RTL and English LTR on Web and Desktop recorded with owner sign-off.
 
