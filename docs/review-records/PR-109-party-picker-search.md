@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #109 (Party roles UI: party picker searches the server)
-* **Head SHA reviewed (full 40 characters):** f6917b28e43faba464384e05faec4257847ee793
+* **Head SHA reviewed (full 40 characters):** 634dba65c787a4758f8ffe47503c2358faffc71c (the delta review; C's full-diff review was at f6917b28e43faba464384e05faec4257847ee793)
 * **Reviewer context:** Agent C (independent QA/security, separate session); model family Claude Opus (claude-opus-5-5). Prompt: the lead's independent full-diff review of `origin/main...feature/party-picker-search` (truncation and bounded requests, permission/403 behaviour and server authorization, selection persistence and inactive/used filters, honesty of "N of M", accessibility and RTL/LTR parity on `SearchPicker`, no weakened tests).
 * **Scope read:** the full diff of the PR against `origin/main` (`PartyRoles.tsx` and `partyRoles.test.tsx`).
 * **Checks run (commands and results):** `npm ci`; typecheck; web vitest 498/498 (testTimeout 30 s); ui 37/37; production build; hosted CI on f6917b2 all green including desktop-build; mergeable with main.
@@ -14,5 +14,6 @@
 | L2 | Low | option labels | Party labels lacked Unicode isolates. | Fixed in e51c77a: code and name are wrapped in Unicode isolates; test added. |
 
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** browser RTL/LTR and keyboard behaviour; a local Tauri build (hosted `desktop-build` ran green on the reviewed head); the fix commit e51c77a is not part of the reviewed head and awaits the reviewer's delta review.
-* **Verdict:** request changes
+* **NOT VERIFIED:** browser RTL/LTR and keyboard behaviour; a local Tauri build (hosted `desktop-build` ran green on the reviewed head); the fix commit e51c77a: confirmed by the delta review at 634dba6.
+* **Round 2 (delta review):** Reviewer: independent reviewer subagent (independent, separate agent); model family Claude Opus; prompt: lead's independent delta review of PR #109 f6917b2..634dba6 with the full diff against origin/main for context (M1/L1/L2 fixes, SQL safety and role-table semantics against the 0023 unique index, RBAC/company scope and 401/403 tests, PostgreSQL first-page test and registry 1086 / PartyRoleApiTests 8, no weakened tests, record validation); Head SHA reviewed 634dba65c787a4758f8ffe47503c2358faffc71c; executed: git fetch, git diff f6917b2 634dba6, reads of PartyService.ListAsync, migration 0023 and the schema/enum, node check-review-record.js (main copy) on the record against f6917b28e43faba464384e05faec4257847ee793 (complete), npm ci, npm run typecheck (pass), web vitest 501/501, api-client 48/48, ui 37/37 (PostgreSQL not run; hosted CI on 634dba6 reported green by the lead); verdict approve; findings none (Critical/High/Medium/Low: 0; informational: a malformed filter answers 400 before the 401 check, consistent with the existing list endpoints).
+* **Verdict:** approve
