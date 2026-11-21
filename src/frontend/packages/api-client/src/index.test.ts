@@ -2,7 +2,7 @@
 // Storage/localStorage are not Node globals on Node 24 (CI), only on newer Node (local); jsdom provides
 // them so the "no browser persistence" assertions run identically everywhere.
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, createApiClient } from "./index";
+import { ApiError, createApiClient, createSessionGate, gateClient } from "./index";
 
 const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" }, ...init });
 const call = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => ({ url: fetchMock.mock.calls[n][0] as string, init: fetchMock.mock.calls[n][1] as RequestInit });
@@ -723,5 +723,58 @@ describe("api client: the second factor (Phase 4.1; one implementation for Web a
     expect(await client.confirmEnrolment({ code: "123456" })).toMatchObject({ user: { id: "u" } });                 // a voluntary enrolment also ends in a NEW session
     expect(await client.confirmEnrolment({ challenge: "c", code: "123456" })).toMatchObject({ user: { id: "u" } });
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/auth/mfa/enrol/confirm");
+  });
+});
+
+describe("session gate (D-236)", () => {
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  it("is created CLOSED and refuses every call locally: nothing is sent and the session-ended listener is not called", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ companies: [] }));
+    const ended = vi.fn();
+    const raw = createApiClient("https://x", fetchMock as unknown as typeof fetch, { onUnauthenticated: ended });
+    const gate = createSessionGate();
+    const gated = gateClient(raw, gate);
+    expect(gate.isOpen()).toBe(false);
+    await expect(gated.listCompanies()).rejects.toMatchObject({ status: 401, code: "session_locked" });
+    await expect(gated.putProfile({} as never, 3)).rejects.toMatchObject({ status: 401, code: "session_locked" });
+    await expect(gated.login("a", "b")).rejects.toMatchObject({ code: "session_locked" });     // a screen never signs in through the gated client
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ended).not.toHaveBeenCalled();
+  });
+
+  it("passes calls through unchanged while open, and refuses again as soon as it is closed", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => json({ companies: [{ id: "c1", nameAr: "a", nameEn: null }] }));
+    const raw = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const gate = createSessionGate();
+    const gated = gateClient(raw, gate);
+    gate.open();
+    await expect(gated.listCompanies()).resolves.toEqual({ companies: [{ id: "c1", nameAr: "a", nameEn: null }] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    gate.close();
+    await expect(gated.listCompanies()).rejects.toMatchObject({ code: "session_locked" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    gate.open();
+    await gated.listCompanies();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the ungated client untouched (the session provider signs in through it) and keeps method identities stable", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => json({ authenticated: false }));
+    const raw = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const gate = createSessionGate();
+    const gated = gateClient(raw, gate);
+    await expect(raw.status()).resolves.toEqual({ authenticated: false });      // the gate is closed, the raw client still works
+    expect(gated.listCompanies).toBe(gated.listCompanies);
+    expect(gated.listCompanies).not.toBe(raw.listCompanies);
+  });
+
+  it("a 401 answered by the server through an open gate still reports the session end exactly once", async () => {
+    const ended = vi.fn();
+    const raw = createApiClient("https://x", vi.fn().mockImplementation(async () => json({ error: "unauthenticated" }, 401)) as unknown as typeof fetch, { onUnauthenticated: ended });
+    const gate = createSessionGate();
+    gate.open();
+    await expect(gateClient(raw, gate).listCompanies()).rejects.toMatchObject({ status: 401, code: "unauthenticated" });
+    expect(ended).toHaveBeenCalledTimes(1);
   });
 });

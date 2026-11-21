@@ -135,12 +135,17 @@ describe("MFA step-up dialog", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("another 401 (the session itself ended) still ends the session and opens no dialog", async () => {
+  // Since D-236 a session that ends while the form holds unsaved input asks the user to sign in again (sessionLock.test.tsx); what this test guards is unchanged:
+  // a 401 that is NOT `mfa_step_up_required` is a session end, never a step-up.
+  it("another 401 (the session itself ended) still ends the session and opens no step-up dialog", async () => {
     const s = setup({ create: [() => json({ error: "unauthenticated" }, 401)], stepUp: [] });
     await openAndFill();
-    expect(await screen.findByTestId("notice-expired")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByTestId("reauth-dialog")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);                     // the sign-in-again dialog only
+    expect(screen.queryByText(A("mfa.step_up.title"))).toBeNull();
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("hidden");
     expect(s.stepUps()).toHaveLength(0);
+    expect(s.posts()).toHaveLength(1);                                         // not repeated
   });
 
   it("a 401 from the step-up call itself (the session is gone) ends the session and closes the dialog", async () => {
@@ -149,8 +154,10 @@ describe("MFA step-up dialog", () => {
     const d = await dialog();
     await userEvent.type(within(d).getByLabelText(new RegExp(A("mfa.code"))), "123456");
     await userEvent.click(within(d).getByRole("button", { name: A("mfa.verify") }));
-    expect(await screen.findByTestId("notice-expired")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByTestId("reauth-dialog")).toBeInTheDocument();    // D-236: unsaved input, so sign in again; the session did end
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);                     // the step-up dialog is closed
+    expect(screen.queryByText(A("mfa.step_up.title"))).toBeNull();
+    expect(document.querySelector('input[autocomplete="one-time-code"]')).toBeNull();           // and its code is gone
   });
 
   it("a server that still asks after a good step-up is not looped: one repeat only, and the screen says the action was not done", async () => {

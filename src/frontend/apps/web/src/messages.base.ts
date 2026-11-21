@@ -31,6 +31,8 @@ export const baseAr: Record<string, string> = {
   "login.submit": "دخول",
   "login.session_expired": "انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.",
   "login.logged_out": "تم تسجيل الخروج.",
+  "reauth.message": "انتهت الجلسة قبل حفظ ما أدخلته. سجّل الدخول مرة أخرى بالمستخدم نفسه لمتابعة العمل من حيث توقفت. إذا سجّل الدخول مستخدم آخر، أو اخترت التجاهل، فلن تُستعاد الإدخالات غير المحفوظة.",
+  "reauth.discard": "تجاهل الإدخالات غير المحفوظة وتسجيل الخروج",
 
   "companies.title": "اختيار الشركة",
   "companies.none": "لا توجد شركات متاحة لحسابك. اطلب من مسؤول الشركة إضافتك.",
@@ -654,6 +656,8 @@ export const baseEn: Record<string, string> = {
   "login.submit": "Sign in",
   "login.session_expired": "Your session has ended. Please sign in again.",
   "login.logged_out": "You have been signed out.",
+  "reauth.message": "Your session ended before your input was saved. Sign in again as the same user to continue where you left off. If another user signs in, or you choose to discard, the unsaved input is not restored.",
+  "reauth.discard": "Discard unsaved input and sign out",
 
   "companies.title": "Select a company",
   "companies.none": "No companies are available to your account. Ask a company administrator to add you.",

@@ -8,7 +8,7 @@ import { MfaStep } from "./MfaStep";
 export function LoginPage() {
   const { t } = useI18n();
   const auth = useAuth();
-  if (auth.phase === "mfa" && auth.mfa) return <MfaStep />;
+  if ((auth.phase === "mfa" || auth.locked) && auth.mfa) return <MfaStep />;   // locked (D-236): the phase stays "ready" so that the shell stays mounted; the step is read from `mfa`
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
