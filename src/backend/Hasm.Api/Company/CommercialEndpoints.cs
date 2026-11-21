@@ -70,15 +70,22 @@ public static class CommercialEndpoints
         return CompanyConfigurationEndpoints.Map(await call(actor!.UserId, actor.CompanyId, expected), body, revision);
     }
 
-    private static Task<IResult> List(HttpContext http, AccessService access, CommercialDocumentManagementService svc, int? status, string? docType, Guid? branchId, int? limit, int? offset) =>
-        Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0), http.RequestAborted),
-            v => new { documents = v.Select(Body) }, null);
+    /// <summary>The list. <c>partyId</c>, <c>currency</c> and <c>search</c> (a literal part of the official number) filter on the SERVER before paging, and the answer carries the exact <c>total</c>; an invalid value answers the standard 400 <c>invalid_request</c> naming the field.</summary>
+    private static Task<IResult> List(HttpContext http, AccessService access, CommercialDocumentManagementService svc, int? status, string? docType, Guid? branchId, int? limit, int? offset, string? partyId, string? currency, string? search)
+    {
+        Guid? party = null;
+        if (!string.IsNullOrWhiteSpace(partyId)) { if (!Guid.TryParse(partyId, out var g)) return Task.FromResult(ListParameters.Invalid("partyId")); party = g; }
+        string? ccy = null;
+        if (!string.IsNullOrWhiteSpace(currency)) { ccy = currency.Trim(); if (ccy.Length != 3 || !ccy.All(char.IsAsciiLetter)) return Task.FromResult(ListParameters.Invalid("currency")); ccy = ccy.ToUpperInvariant(); }
+        if (!ListPaging.TryCleanSearch(search, out var cleaned)) return Task.FromResult(ListParameters.Invalid("search"));
+        return Run(http, access, false, (u, c, _) => svc.ListPageAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0, party, ccy, cleaned), http.RequestAborted),
+            v => new { documents = v.Items.Select(Body), total = v.Total }, null);
+    }
     private static Task<IResult> Approvals(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.ApprovalProgressAsync(u, c, id, http.RequestAborted),
             v => new { plan = v.Plan.Select(p => new { stage = p.Stage, required = p.Required, approved = p.Approved, roleId = p.RoleId }), decisions = v.Decisions.Select(d => new { id = d.Id, revision = d.DocumentRevision, approver = d.Approver, stage = d.Stage, decidedAtUtc = d.DecidedAtUtc }) }, null);
-
     private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
-        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v }, null);
+        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }) }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.GetAsync(u, c, id, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Create(CommercialDocumentInput? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
