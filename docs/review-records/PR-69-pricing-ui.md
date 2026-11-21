@@ -1,6 +1,6 @@
 # Independent review - PR #69, Phase 3.11 slice 2c (pricing API and shared screens)
 
-* Reviewed: the full diff against `origin/main` at head `5da344c`. Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; it ran the pricing and message component tests and the typecheck, not the PostgreSQL suite). **No Critical, no High; four Medium, seven Low.**
+* Reviewed: the full diff against `origin/main` at head `5da344c`. Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context; it ran the pricing and message component tests and the typecheck, not the PostgreSQL suite). **No Critical, no High; four Medium, seven Low.**
 * Verified: every route behind `RequireAuthorization` plus the session company; view/configure/override permissions (an override object with all-null fields still needs the permission); version fence for the policy and revision fences elsewhere; immutable fields enforced server-side; no DELETE; explicit response shapes; shared `Tabs` with per-tab dirty marks, panels kept mounted; labels, `bdi`/ltr for numbers and codes; every `t()` key defined with ar/en parity; update payloads send stored values plus the revision read; customer groups stated as an unfinished Release 1 requirement in both docs; handoff matches GitHub.
 
 | # | Sev | Finding | Disposition |

@@ -1,6 +1,6 @@
 # Independent review - PR #66 (key retirement safety, decision K)
 
-* Reviewed: the full diff against `origin/main` at head `c42218d`. Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; it built the project, it did not run the PostgreSQL suite). **No Critical, no High; two Medium, several Low.** The change is conservative: it can only turn `oldKeysMayBeRetired` false, never true, relative to the previous behavior.
+* Reviewed: the full diff against `origin/main` at head `c42218d`. Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context; it built the project, it did not run the PostgreSQL suite). **No Critical, no High; two Medium, several Low.** The change is conservative: it can only turn `oldKeysMayBeRetired` false, never true, relative to the previous behavior.
 * Verified: the count query (sensitive, removed or otherwise not active, key null or not the active one) and both DB/envelope disagreement directions are safe; `RewrapAsync` is otherwise unchanged (existing equality assertions hold); verify's `keyIdsInUse` includes removed rows' keys; registry raised 1015 -> 1016 (AttachmentTests 9 -> 10); the new fields are aggregates behind the existing `company.attachmentssensitive.upload` gate.
 
 | # | Sev | Finding | Disposition |
