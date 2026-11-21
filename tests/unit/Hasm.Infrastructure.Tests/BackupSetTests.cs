@@ -314,6 +314,17 @@ public sealed class BackupSetTests : IDisposable
         Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(link2, "inside"), DateTimeOffset.UnixEpoch)).Code);
     }
 
+    [Fact]
+    public void A_cyclic_symbolic_link_is_a_backup_refusal_not_an_unhandled_io_error()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var s = Source();
+        var a = P("cycle-a"); var b = P("cycle-b");
+        Directory.CreateSymbolicLink(a, b);
+        Directory.CreateSymbolicLink(b, a);
+        Assert.Equal("path_unresolvable", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(a, "inside"), DateTimeOffset.UnixEpoch)).Code);
+    }
+
     private static string[] Snapshot(string dir) =>
         [.. Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).OrderBy(p => p, StringComparer.Ordinal)
             .Select(p => Path.GetRelativePath(dir, p) + ":" + Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(p))))];

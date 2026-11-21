@@ -7,9 +7,11 @@ using Hasm.Infrastructure.Security;
 namespace Hasm.Infrastructure.Backup;
 
 /// <summary>A refused backup-set operation. <see cref="Code"/> is a stable reason code; messages never carry paths, names or key material.</summary>
-public sealed class BackupException(string code) : Exception("The backup set operation was refused.")
+public sealed class BackupException(string code, string? cause = null) : Exception("The backup set operation was refused.")
 {
     public string Code { get; } = code;
+    /// <summary>A secondary reason code when the primary one hides an earlier failure (for example a failed cleanup after a failed restore); a code only, never tool output.</summary>
+    public string? Cause { get; } = cause;
 }
 
 /// <summary>One file of a backup set: a relative name, its size and the SHA-256 of the stored bytes (for an encrypted attachment: of the ciphertext).</summary>
@@ -283,7 +285,7 @@ public static class BackupSet
             FileSystemInfo info = Directory.Exists(cur) ? new DirectoryInfo(cur) : new FileInfo(cur);
             try
             {
-                if (info.Exists && info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
+                if (info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
                     cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
             }
             catch (IOException) { throw new BackupException("path_unresolvable"); }   // for example a cyclic symbolic link

@@ -107,7 +107,17 @@ public class BackupRestoreDrillTests : PostgresTestBase
         Assert.Equal(digestA, await Digest(a));                                                      // the dump left the source unchanged
         Assert.Equal(digestB, await Digest(b));                                                      // another company untouched (tables, row counts and row hashes)
         Assert.Equal(digestSystem, await DigestOf(SystemConnection()));                              // the system database untouched
+        Assert.Equal(await Settings(a), await Settings(restored));                                   // encoding and libc locale of the source are kept
         Assert.Equal(50L, await Count(restored));
+    }
+
+    private async Task<string> Settings(string name)
+    {
+        await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT pg_encoding_to_char(encoding) || '|' || datcollate || '|' || datctype FROM pg_database WHERE datname = @n", conn);
+        cmd.Parameters.AddWithValue("n", name);
+        return (string)(await cmd.ExecuteScalarAsync())!;
     }
 
     private async Task<long> Count(string name)

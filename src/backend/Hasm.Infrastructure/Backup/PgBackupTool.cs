@@ -15,7 +15,7 @@ namespace Hasm.Infrastructure.Backup;
 /// </summary>
 public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirectory = null, TimeSpan? timeout = null)
 {
-    private static readonly System.Text.RegularExpressions.Regex EncodingName = new("^[A-Za-z0-9_]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex Safe = new("^[A-Za-z0-9_.@-]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
     private readonly TimeSpan limit = timeout ?? TimeSpan.FromMinutes(30);
 
     /// <summary>Dumps <paramref name="sourceDatabase"/> (a company database) to <paramref name="dumpFile"/>, which must not exist. A partial file is removed on failure.</summary>
@@ -54,25 +54,33 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
                 if ((long)(await exists.ExecuteScalarAsync(ct))! != 0) throw new BackupException("target_exists");
             }
             // template0 (never the modifiable template1: nothing a local admin put there leaks in), with the encoding of the source database when it can be read
-            string? encoding = null;
-            await using (var enc = new NpgsqlCommand("SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = @n", conn))
+            string? encoding = null, collate = null, ctype = null;
+            await using (var enc = new NpgsqlCommand("SELECT pg_encoding_to_char(encoding), datcollate, datctype, datlocprovider::text FROM pg_database WHERE datname = @n", conn))
             {
                 enc.Parameters.AddWithValue("n", sourceDatabase);
-                encoding = await enc.ExecuteScalarAsync(ct) as string;
+                await using var r = await enc.ExecuteReaderAsync(ct);
+                if (await r.ReadAsync(ct))
+                {
+                    encoding = r.GetString(0);
+                    // libc locales only (an ICU/builtin provider keeps the template0 default); each value is validated before it is placed in the statement
+                    if (r.GetString(3) == "c") { collate = r.IsDBNull(1) ? null : r.GetString(1); ctype = r.IsDBNull(2) ? null : r.GetString(2); }
+                }
             }
-            var encodingClause = encoding is not null && EncodingName.IsMatch(encoding) ? $" ENCODING '{encoding}'" : "";
-            await using var create = new NpgsqlCommand($"CREATE DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(targetDatabase)} TEMPLATE template0{encodingClause}", conn);
+            var clause = "";
+            if (encoding is not null && Safe.IsMatch(encoding)) clause += $" ENCODING '{encoding}'";
+            if (collate is not null && ctype is not null && Safe.IsMatch(collate) && Safe.IsMatch(ctype)) clause += $" LC_COLLATE '{collate}' LC_CTYPE '{ctype}'";
+            await using var create = new NpgsqlCommand($"CREATE DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(targetDatabase)} TEMPLATE template0{clause}", conn);
             try { await create.ExecuteNonQueryAsync(ct); }
-            catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.DuplicateDatabase) { throw new BackupException("target_exists"); }   // lost a creation race
+            catch (PostgresException ex) when (CreateFailureCode(ex.SqlState) is not null) { throw new BackupException(CreateFailureCode(ex.SqlState)!); }   // lost a creation race
         }
         try
         {
             await RunAsync("pg_restore", ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);
         }
-        catch
+        catch (Exception ex)
         {
-            // the half-restored target must not stay behind; when it cannot be dropped that is reported distinctly (the caller must remove it)
-            if (!await TryDropAsync(targetDatabase)) throw new BackupException("restore_failed_cleanup_failed");
+            // the half-restored target must not stay behind; when it cannot be dropped that is reported distinctly (the caller must remove it) and the original cause is kept
+            if (!await TryDropAsync(targetDatabase)) throw new BackupException("restore_failed_cleanup_failed", ex is BackupException be ? be.Code : ex.GetType().Name);
             throw;
         }
     }
@@ -96,6 +104,27 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { return false; }
     }
 
+    /// <summary>
+    /// The ONLY environment the PostgreSQL tools get: <c>PATH</c> and <c>SystemRoot</c> (when present), the credential, the TLS settings and a connect timeout. With the environment cleared there is no HOME, so libpq cannot find
+    /// <c>~/.postgresql/root.crt</c>: in verify-ca/verify-full mode the configured certificate is passed, and without one the system trust store is named explicitly (<c>PGSSLROOTCERT=system</c>, libpq 16+, which the
+    /// major-version rule already requires). A server certificate that cannot be validated makes the tool fail (never a silent downgrade).
+    /// </summary>
+    internal static Dictionary<string, string> BuildEnvironment(HasmDatabaseOptions options, Func<string, string?> getVariable)
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var keep in new[] { "PATH", "SystemRoot" }) if (getVariable(keep) is { } value) env[keep] = value;
+        env["PGPASSWORD"] = options.AdminPassword ?? throw new BackupException("database_not_configured");
+        var mode = options.SslMode.ToString().ToLowerInvariant() switch { "verifyfull" => "verify-full", "verifyca" => "verify-ca", var m => m };
+        env["PGSSLMODE"] = mode;
+        if (options.SslRootCertificate is not null) env["PGSSLROOTCERT"] = options.SslRootCertificate;
+        else if (mode is "verify-full" or "verify-ca") env["PGSSLROOTCERT"] = "system";
+        env["PGCONNECT_TIMEOUT"] = "30";
+        return env;
+    }
+
+    /// <summary>The backup code of a CREATE DATABASE failure that has a meaning for the caller (a lost creation race); null for every other SQLSTATE.</summary>
+    internal static string? CreateFailureCode(string? sqlState) => sqlState == PostgresErrorCodes.DuplicateDatabase ? "target_exists" : null;
+
     private async Task RunAsync(string tool, string[] arguments, CancellationToken ct)
     {
         var exe = pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
@@ -106,10 +135,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         psi.ArgumentList.Add("--no-password");
         foreach (var a in arguments) psi.ArgumentList.Add(a);
         psi.Environment.Clear();                                   // nothing of the service environment (connection strings, secrets) reaches the tool
-        foreach (var keep in new[] { "PATH", "SystemRoot" }) if (Environment.GetEnvironmentVariable(keep) is { } value) psi.Environment[keep] = value;
-        psi.Environment["PGPASSWORD"] = options.AdminPassword ?? throw new BackupException("database_not_configured");
-        psi.Environment["PGSSLMODE"] = options.SslMode.ToString().ToLowerInvariant() switch { "verifyfull" => "verify-full", "verifyca" => "verify-ca", var m => m };
-        if (options.SslRootCertificate is not null) psi.Environment["PGSSLROOTCERT"] = options.SslRootCertificate;
+        foreach (var (key, value) in BuildEnvironment(options, Environment.GetEnvironmentVariable)) psi.Environment[key] = value;
 
         Process process;
         try { process = Process.Start(psi) ?? throw new BackupException("tool_unavailable"); }
