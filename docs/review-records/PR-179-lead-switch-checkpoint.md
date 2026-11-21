@@ -29,3 +29,9 @@
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** the owner's exact 3.8D wording (taken from the lead's prompt; no in-repo owner record exists to compare against, which is M1); D's 203/203 regression and the review approvals named for #174/#177/#178 beyond their pushed records; the Hbe1Tests flaky report; exact-head `verify-head.js` for any open PR.
 * **Verdict:** request changes
+* **Resolutions (author, in the commit after `ebb554a`; for R's delta confirmation):**
+  * **M1 fixed:** the 3.8D register row records the owner instruction as an attributed, dated entry ("Owner instruction, 2026-11-21 (lead-switch checkpoint message)", recorded as relayed by the lead) with its nine points, and Q3 is split: SCOPE answered by the owner (revaluation is in 3.8D), CONTRACT pending (counter accounts, write-down only or also write-up, approval, layer-preserving representation). `AUTONOMOUS-STATE.json` `openDecisions` reflects the split.
+  * **L1 fixed:** the long-lived drafts line names #48 at `9f64f57` (design revision 3).
+  * **L2 fixed:** the 4.1-S3 paragraph says the requirement model merged in #172 (S3b-1a); S3b-1b covers the company policy, company-selection step-up and the remaining UI.
+  * **L3 fixed:** the kept review worktrees line is marked TRANSIENT (as of the checkpoint; may already be removed).
+  * **L4 fixed:** D-179..D-181 read "allocated; decision rows pending (only code comments on `cd40c59`)", in the markdown and in the JSON.

@@ -324,7 +324,7 @@
     "phase": "LEAD MODEL SWITCH CHECKPOINT (2026-11-21)",
     "state": "All agents stopped at safe checkpoints with no unpushed work (lead report); no agent job running. Open Draft PRs #174, #177, #178 approved and waiting for main merges; #176 request changes; #48 revision 3 awaiting G's review. Non-skipped check-runs of every open head were completed with success when read; exact-head verify-head NOT run by this refresh.",
     "knownIssues": [
-      "Decisions: next free ID D-190. D-164..D-166 on main (#172); D-167..D-169 on the S3b-1b WIP branch; D-179..D-181 on B's WIP branch; D-182..D-189 on #176; D-108..D-115 and D-122..D-129 allocated, not on main.",
+      "Decisions: next free ID D-190. D-164..D-166 on main (#172); D-167..D-169 on the S3b-1b WIP branch; D-179..D-181 allocated to B (decision rows pending; code comments only on cd40c59); D-182..D-189 on #176; D-108..D-115 and D-122..D-129 allocated, not on main.",
       "Audit: 1336/1337 on main; 1338 allocated to S3b-1b; blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
       "4.1 S3 is NOT complete: S3a (#166) and S3b-1a (#172) merged; S3b-1b WIP; S3b-2a UI is #178.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
@@ -376,7 +376,7 @@
     "T-2",
     "SESSION-EXPIRY-UNSAVED",
     "APPROVAL-POLICY-DUPLICATES",
-    "3.8D-Q1..Q5",
+    "3.8D-Q1, Q2, Q3-contract, Q4, Q5 (Q3 scope answered by the owner 2026-11-21: revaluation is in 3.8D)",
     "4.3-S8-MD-Q1..Q2",
     "IMPORT-ORIGINALS-BACKUP-SCOPE"
   ],
