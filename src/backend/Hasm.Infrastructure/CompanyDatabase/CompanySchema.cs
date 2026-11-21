@@ -55,7 +55,7 @@ public static partial class CompanySchema
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 
     private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() =>
-        Phase1Map!.Concat(ConfigurationMap).Concat(BranchMap).Concat(WarehouseMap).Concat(FiscalMap).Concat(AccountMap).Concat(NumberingMap).Concat(RatesMap).Concat(CostCenterMap).Concat(ApprovalMap).Concat(JournalMap).Concat(PolicyMap).Concat(ImportMap).Concat(StatementMap).Concat(InventoryMap).Concat(StockDocumentMap).Concat(CostingMap).Concat(InventoryAccountingMap).Concat(StockPostingMap).Concat(StockReversalMap).Concat(StocktakeMap).Concat(StockAdjustmentMap).Concat(NegativeStockMap).Concat(PartyMap).Concat(TaxMap).Concat(PartyRoleMap).Concat(AttachmentMap).Concat(ImportTemplateMap).Concat(PricingMap).Concat(CustomerGroupMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+        Phase1Map!.Concat(ConfigurationMap).Concat(BranchMap).Concat(WarehouseMap).Concat(FiscalMap).Concat(AccountMap).Concat(NumberingMap).Concat(RatesMap).Concat(CostCenterMap).Concat(ApprovalMap).Concat(JournalMap).Concat(PolicyMap).Concat(ImportMap).Concat(StatementMap).Concat(InventoryMap).Concat(StockDocumentMap).Concat(CostingMap).Concat(InventoryAccountingMap).Concat(StockPostingMap).Concat(StockReversalMap).Concat(StocktakeMap).Concat(StockAdjustmentMap).Concat(NegativeStockMap).Concat(PartyMap).Concat(TaxMap).Concat(PartyRoleMap).Concat(AttachmentMap).Concat(ImportTemplateMap).Concat(PricingMap).Concat(CustomerGroupMap).Concat(CommercialMap).ToDictionary(kv => kv.Key, kv => kv.Value));
 
     private static IReadOnlyDictionary<string, string> Phase1Map { get; } = new Dictionary<string, string>
     {
