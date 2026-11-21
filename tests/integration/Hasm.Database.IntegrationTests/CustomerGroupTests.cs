@@ -62,6 +62,43 @@ public class CustomerGroupTests : InventoryTestBase
         new(code, "خصم", null, priority, Jan, null, null, percent, 0m, customer, null, null, group);
 
     [PostgresFact]
+    public async Task The_customer_group_active_filter_counts_exactly_the_filtered_rows_in_the_total_and_every_page()
+    {
+        await Prepare();
+        foreach (var code in new[] { "CG1", "CG2", "CG3", "CG4", "CG5" }) await NewGroup(code);
+        foreach (var code in new[] { "CG2", "CG4" })
+        {
+            var g = (await Pricing.ListCustomerGroupsAsync(Company.Id)).Single(x => x.Code == code);
+            Ok(await Pricing.UpdateCustomerGroupAsync(Admin.Id, Company.Id, g.Id, g.Revision, Grp(code, active: false)));
+        }
+        static string[] Codes(CustomerGroupPage p) => [.. p.Items.Select(g => g.Code)];
+        CustomerGroupPage Groups(string? q, bool? active, int? offset = null, int? limit = null) => Ok(PricingMgmt.SearchCustomerGroupsAsync(Admin.Id, Company.Id, q, offset, limit, active).Result);
+
+        Assert.Equal(["CG1", "CG3", "CG5"], Codes(Groups(null, true)));
+        Assert.Equal(3L, Groups(null, true).Total);
+        Assert.Equal(["CG2", "CG4"], Codes(Groups(null, false)));
+        Assert.Equal(2L, Groups(null, false).Total);
+        Assert.Equal(5L, Groups(null, null).Total);                                    // absent = both, as before
+        // paging works on the filtered set: the total is the filtered count, also past the end
+        Assert.Equal(["CG1", "CG3"], Codes(Groups(null, true, 0, 2)));
+        Assert.Equal(3L, Groups(null, true, 0, 2).Total);
+        Assert.Equal(["CG5"], Codes(Groups(null, true, 2, 2)));
+        Assert.Empty(Groups(null, true, 99, 5).Items);
+        Assert.Equal(3L, Groups(null, true, 99, 5).Total);                             // the past-the-end count carries the same filter
+        Assert.Equal(2L, Groups(null, false, 99, 5).Total);
+        // combined with the search
+        Assert.Equal(["CG2", "CG4"], Codes(Groups("cg", false)));
+        Assert.Empty(Groups("cg3", false).Items);
+        Assert.Equal(0L, Groups("cg3", false).Total);
+        Assert.Equal(["CG3"], Codes(Groups("cg3", true)));
+        // the permission is the unchanged pricing view
+        var outsider = await NewUser("activeoutsider");
+        Fails(await PricingMgmt.SearchCustomerGroupsAsync(outsider.Id, Company.Id, null, null, null, true), ConfigStatus.Forbidden, "forbidden");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PricingView], ScopeKind.Company, null);
+        Assert.Equal(3L, Ok(await PricingMgmt.SearchCustomerGroupsAsync(viewer.Id, Company.Id, null, null, null, true)).Total);
+    }
+
+    [PostgresFact]
     public async Task The_customer_group_search_pages_by_code_with_a_total_matches_literally_and_keeps_the_pricing_view_permission()
     {
         await Prepare();
