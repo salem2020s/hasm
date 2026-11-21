@@ -1,4 +1,7 @@
 using System.Net;
+using System.Net.Http.Headers;
+using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Commercial;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.Security;
@@ -13,13 +16,14 @@ using Hasm.Infrastructure.Taxes;
 using Br = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
 using Cc = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
 using LP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LocalParty;
+using Ni = Hasm.Infrastructure.CompanyDatabase.CompanySchema.NumberIssue;
 
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
 /// Constraint-violation matrix, part 2 (planning item 4): the mutating company routes part 1 (<c>EndpointConstraintMatrixTests</c>, #155) left pending. The rule and the engine are
 /// part 1's: the same request is sent <see cref="Parallel"/> times in parallel and once more, and every answer is either the probe's winner or its EXPECTED refusal, never a 5xx
-/// (the global handler maps an unhandled PostgreSQL error to 503). Probe modes: <see cref="Mode.One"/> (exactly one 2xx; a create, update or transition from one revision),
+/// (the global handler maps an unhandled PostgreSQL error to 503 <c>service_unavailable</c>; the only 5xx a probe may pin is a documented one, the attachment upload gate's 503 <c>upload_busy</c>). Probe modes: <see cref="Mode.One"/> (exactly one 2xx; a create, update or transition from one revision),
 /// <see cref="Mode.Same"/> (a read-only or idempotent operation: every answer has the same status and code), <see cref="Mode.Append"/> (an operation that appends a new
 /// version without a precondition: at least one 2xx, every refusal the expected version conflict). Every finding of a run is reported together.
 /// Disposable cluster only.
@@ -64,6 +68,34 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         ["PUT /api/v1/company/approval-policies/{id:guid}"] = "stale-revision race",
         ["POST /api/v1/company/approval-policies/{id:guid}/deactivate"] = "stale-revision race",
         ["POST /api/v1/company/approval-policies/{id:guid}/activate"] = "stale-revision race",
+        // batch 2: journal, fiscal calendar and closing, attachments and retention
+        ["POST /api/v1/company/journal/"] = "append (no uniqueness rule)",
+        ["PUT /api/v1/company/journal/{id:guid}"] = "stale-revision race",
+        ["POST /api/v1/company/journal/{id:guid}/decision"] = "decision race (409 entry_not_pending_approval)",
+        ["POST /api/v1/company/journal/{id:guid}/post"] = "idempotent retry (same answer, one number)",
+        ["POST /api/v1/company/journal/{id:guid}/reverse"] = "transition race (409 already_reversed)",
+        ["PUT /api/v1/company/fiscal-closing/settings"] = "stale-revision race",
+        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close"] = "transition race (409 closing_blocked)",
+        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward"] = "transition race (409 closing_blocked)",
+        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening"] = "transition race (409 already_reversed)",
+        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing"] = "transition race (409 already_reversed)",
+        ["POST /api/v1/company/fiscal-periods/{id:guid}/final-close"] = "stale-revision race",
+        ["POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
+        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve"] = "decision race (409 request_not_pending)",
+        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel"] = "decision race (409 request_not_pending)",
+        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny"] = "decision race (409 request_not_pending)",
+        ["POST /api/v1/company/fiscal-years/{id:guid}/close"] = "stale-revision race",
+        ["POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
+        ["POST /api/v1/company/attachments/"] = "append (503 upload_busy back-pressure pinned)",
+        ["POST /api/v1/company/attachments/{id:guid}/remove"] = "transition race (409 already_removed)",
+        ["POST /api/v1/company/attachments/maintenance/rewrap"] = "idempotent (same answer)",
+        ["POST /api/v1/company/attachments/maintenance/sweep"] = "idempotent (same answer)",
+        ["POST /api/v1/company/attachments/maintenance/verify"] = "read-only (same answer)",
+        ["POST /api/v1/company/attachment-retention/policies"] = "append (no uniqueness rule)",
+        ["POST /api/v1/company/attachment-retention/policies/{id:guid}/approve"] = "decision race (409 not_a_draft)",
+        ["POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke"] = "decision race (409 not_approved)",
+        ["POST /api/v1/company/attachment-retention/holds"] = "append (no uniqueness rule)",
+        ["POST /api/v1/company/attachment-retention/holds/{id:guid}/release"] = "decision race (409 already_released)",
     };
 
     /// <summary>The routes part 1 (<c>EndpointConstraintMatrixTests</c>, #155) probes; listed here so the completeness test is exact before the two classes are folded together.</summary>
@@ -134,18 +166,6 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     /// <summary>Mutating company routes not probed yet, listed EXPLICITLY by family: a new route must be classified here, in <see cref="Probed"/> or in part 1.</summary>
     public static readonly IReadOnlyList<string> Pending =
     [
-        // attachment-retention
-        "POST /api/v1/company/attachment-retention/holds",
-        "POST /api/v1/company/attachment-retention/holds/{id:guid}/release",
-        "POST /api/v1/company/attachment-retention/policies",
-        "POST /api/v1/company/attachment-retention/policies/{id:guid}/approve",
-        "POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke",
-        // attachments
-        "POST /api/v1/company/attachments/",
-        "POST /api/v1/company/attachments/maintenance/rewrap",
-        "POST /api/v1/company/attachments/maintenance/sweep",
-        "POST /api/v1/company/attachments/maintenance/verify",
-        "POST /api/v1/company/attachments/{id:guid}/remove",
         // commercial-documents
         "POST /api/v1/company/commercial-documents/",
         "POST /api/v1/company/commercial-documents/links",
@@ -155,22 +175,6 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         "POST /api/v1/company/commercial-documents/{id:guid}/submit",
         "POST /api/v1/company/commercial-documents/{id:guid}/withdraw",
         "PUT /api/v1/company/commercial-documents/{id:guid}",
-        // fiscal-closing
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening",
-        "PUT /api/v1/company/fiscal-closing/settings",
-        // fiscal-periods
-        "POST /api/v1/company/fiscal-periods/{id:guid}/final-close",
-        "POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests",
-        // fiscal-reopen-requests
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve",
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel",
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny",
-        // fiscal-years
-        "POST /api/v1/company/fiscal-years/{id:guid}/close",
-        "POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests",
         // imports
         "POST /api/v1/company/imports/",
         "POST /api/v1/company/imports/maintenance/rewrap",
@@ -190,12 +194,6 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         "POST /api/v1/company/imports/{id:guid}/withdraw",
         "PUT /api/v1/company/imports/settings",
         "PUT /api/v1/company/imports/{id:guid}/mapping",
-        // journal
-        "POST /api/v1/company/journal/",
-        "POST /api/v1/company/journal/{id:guid}/decision",
-        "POST /api/v1/company/journal/{id:guid}/post",
-        "POST /api/v1/company/journal/{id:guid}/reverse",
-        "PUT /api/v1/company/journal/{id:guid}",
         // stock-adjustments
         "POST /api/v1/company/stock-adjustments/{id:guid}/posting",
         "POST /api/v1/company/stock-adjustments/{id:guid}/reversal",
@@ -249,14 +247,19 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     /// Sends the same request <see cref="Parallel"/> times in parallel, then once more. <see cref="Mode.One"/>: exactly one 2xx, every other answer one of <paramref name="expected"/>.
     /// <see cref="Mode.Same"/>: every answer has the signature <paramref name="expected"/>[0] ("2xx" for an idempotent success). A 5xx is always a finding. Returns a winner or null.
     /// </summary>
-    private async Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One)
+    private Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One, string? caller = null) =>
+        RaceWith(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
+
+    /// <summary><see cref="Race(string, string[], HttpMethod, string, object?, string?, Mode, string?)"/> for any request (a multipart upload, another caller).</summary>
+    private async Task<ApiResponse?> RaceWith(string what, string[] expected, Func<Task<ApiResponse>> send, Mode mode = Mode.One)
     {
-        var raced = await Task.WhenAll(Enumerable.Range(0, Parallel).Select(_ => Task.Run(() => Call(method, path, body, ifMatch))));
-        var again = await Call(method, path, body, ifMatch);
+        var raced = await Task.WhenAll(Enumerable.Range(0, Parallel).Select(_ => Task.Run(send)));
+        var again = await send();
         var all = raced.Append(again).ToList();
         var winners = all.Where(r => Signature(r) == "2xx").ToList();
         diagnostics.Add($"{what} || {winners.Count} won || {string.Join(" ; ", all.Select(Signature).Distinct())} || {Short(all.FirstOrDefault(r => Signature(r) != "2xx")?.Body ?? all[0].Body)}");
-        foreach (var r in all.Where(r => (int)r.Status >= 500))
+        // a 5xx is a finding unless the probe pins it EXACTLY as a documented answer (the attachment upload gate's 503 upload_busy); the unhandled-error 503 never matches a pin
+        foreach (var r in all.Where(r => (int)r.Status >= 500 && !expected.Contains(Signature(r))))
             findings.Add($"{what}: {(int)r.Status} {Short(r.Body)}");
         if (mode == Mode.Same)
         {
@@ -278,16 +281,32 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         return r;
     }
 
+    /// <summary>A probe's winner the next step builds on; without one, every finding so far is reported (the probe recorded why nobody won).</summary>
+    private ApiResponse Won(ApiResponse? winner)
+    {
+        if (winner is null) AssertNoFindings();
+        Assert.NotNull(winner);
+        return winner!;
+    }
+
     private void AssertNoFindings()
     {
         Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings) + "\nobserved per probe (winners, signatures):\n" + string.Join("\n", diagnostics));
     }
 
     private Guid main;
+    private string? storage;
+
+    public override async Task DisposeAsync()
+    {
+        await base.DisposeAsync();
+        if (storage is not null && Directory.Exists(storage)) try { Directory.Delete(storage, true); } catch (IOException) { }
+    }
 
     private async Task Start()
     {
-        await StartApi(new WarehouseLimitPolicy(50, 50), b => b.ConfigureServices(s =>
+        storage = Path.Combine(Path.GetTempPath(), "hasm-cvm2-" + Guid.NewGuid().ToString("N"));
+        await StartApi(new WarehouseLimitPolicy(50, 50), b => b.UseSetting("Hasm:Attachments:StorageDirectory", storage).ConfigureServices(s =>
         {
             s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
             s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
@@ -300,6 +319,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             await Sql($"INSERT INTO {Cc.Table} ({Cc.Code}, {Cc.IsBase}, {Cc.Enabled}, {Cc.Revision}, {Cc.UpdatedAtUtc}) VALUES ('{code}', {(isBase ? "true" : "false")}, true, 1, now())");
         Year = Ok(await Cal.CreateYearAsync(Admin.Id, Company.Id, new FiscalYearInput("FY2026", new DateOnly(2026, 1, 1), "monthly")));
         main = await Sql<Guid>($"SELECT {Br.Id} FROM {Br.Table} WHERE {Br.IsMain}");
+        Main = main;
         cookie = await SignIn(Admin);
     }
 
@@ -318,7 +338,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((32, 60, 74), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal((59, 60, 47), (Probed.Count, CoveredByPart1.Count, Pending.Count));
         await Task.CompletedTask;
     }
 
@@ -418,6 +438,170 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             var off = await Race("approval policy deactivate", R, HttpMethod.Post, $"/api/v1/company/approval-policies/{IdOf(policy)}/deactivate", null, EtagOf(updated ?? policy));
             if (off is not null) await Race("approval policy activate", R, HttpMethod.Post, $"/api/v1/company/approval-policies/{IdOf(policy)}/activate", null, EtagOf(off));
         }
+
+        AssertNoFindings();
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------------------- batch 2
+
+    private static readonly byte[] Pdf = [0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A, 0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A];
+
+    /// <summary>A company member holding the preset approver role named by <paramref name="grant"/> (fiscal or retention), delegated the supported way (offline tool).</summary>
+    private async Task<UserRecord> PresetApprover(Func<string, Guid, Task<AccessService.FiscalApproverStatus>> grant)
+    {
+        var user = await NewUser($"cv2approver{Guid.NewGuid():N}"[..24]);
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, user.Login)).IsOk);
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await grant(user.Login, Company.Id));
+        return user;
+    }
+
+    /// <summary>Submits, approves with an independent approver and posts an entry generated by year-end processing (domain services: the probes are the HTTP calls).</summary>
+    private async Task PostGenerated(Guid entryId)
+    {
+        var v = await Reload(entryId);
+        var s = Ok(await Journal.SubmitAsync(Admin.Id, Company.Id, entryId, v.Header.Revision));
+        if (s.Header.Status == JournalStatus.PendingApproval) s = Ok(await Approve(s, Checker1));
+        Ok(await Journal.PostAsync(Checker3, Company.Id, entryId, s.Header.Revision, false));
+    }
+
+    [PostgresFact]
+    public async Task Journal_entries_from_creation_to_reversal_end_in_a_mapped_4xx_never_a_5xx()
+    {
+        await Start();
+        var R = new[] { "412:revision_conflict" };
+        Cash = await NewAccount("1101", "asset");
+        Sales = await NewAccount("4101", "revenue");
+        // one approval for every entry, decided by a separate approver; posting by a separate poster
+        Ok(await Policies.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(DocumentTypes.JournalEntry, "any", null, 0m, 1, "سياسة", "Policy")));
+        var approver = await SignIn(await PresetApprover((login, company) => Rbac.GrantJournalApproverOfflineAsync(login, company)));
+        var poster = await SignIn((await Member([PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalPost], ScopeKind.Company, null)).User);
+
+        // a create carries no precondition and no uniqueness rule: each parallel request appends one draft
+        var draft = await Race("journal create", [], HttpMethod.Post, "/api/v1/company/journal", Simple("2026-03-10", 10m), mode: Mode.Append);
+        Won(draft);
+        var id = draft!.Json.GetProperty("entry").GetProperty("id").GetGuid();
+        var updated = await Race("journal update", R, HttpMethod.Put, $"/api/v1/company/journal/{id}", Simple("2026-03-11", 20m), EtagOf(draft));
+        Won(updated);
+        var submitted = await Create($"/api/v1/company/journal/{id}/submit", null!, EtagOf(updated!));
+        var decided = await Race("journal decision", ["412:revision_conflict", "409:already_decided", "409:entry_not_pending_approval"], HttpMethod.Post, $"/api/v1/company/journal/{id}/decision",
+            new ApprovalDecisionInput(true, "ok"), EtagOf(submitted), caller: approver);
+        Won(decided);
+        // posting keeps the revision and a retry of a posted entry answers it unchanged (an idempotent retry): every answer is the posted entry, and it carries ONE number
+        var posted = await Race("journal post", ["2xx"], HttpMethod.Post, $"/api/v1/company/journal/{id}/post", null, EtagOf(decided!), Mode.Same, poster);
+        Won(posted);
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Ni.Table} WHERE {Ni.DocumentId} = '{id}'"));
+        await Race("journal reverse", ["412:revision_conflict", "409:entry_not_posted", "409:already_reversed"], HttpMethod.Post, $"/api/v1/company/journal/{id}/reverse",
+            new ReversalInput(new DateOnly(2026, 3, 20), "matrix"), EtagOf(posted!));
+
+        AssertNoFindings();
+    }
+
+    [PostgresFact]
+    public async Task The_fiscal_calendar_closing_and_reopening_requests_end_in_a_mapped_4xx_never_a_5xx()
+    {
+        await Start();
+        var R = new[] { "412:revision_conflict" };
+        var fiscalApprover = await SignIn(await PresetApprover((login, company) => Rbac.GrantFiscalApproverOfflineAsync(login, company)));
+        var p1 = Year.Periods[0];
+        var soft = Ok(await Cal.SoftCloseAsync(Admin.Id, Company.Id, p1.Id, p1.Revision));
+        var final = await Race("period final-close", R, HttpMethod.Post, $"/api/v1/company/fiscal-periods/{p1.Id}/final-close", null, $"\"{soft.Revision}\"");
+        Won(final);
+        var periodTag = EtagOf(final!);
+
+        // a reopening is a request: one open request per target; cancel, deny and approve each decide it once
+        var requestBody = new ReasonInput("Correction of a posting error found in audit");
+        string[] requestOpen = ["409:reopen_request_pending", "412:revision_conflict"];
+        string[] notPending = ["409:request_not_pending", "412:revision_conflict"];
+        var first = await Race("period reopen request", requestOpen, HttpMethod.Post, $"/api/v1/company/fiscal-periods/{p1.Id}/reopen-requests", requestBody, periodTag);
+        Won(first);
+        await Race("reopen request cancel", notPending, HttpMethod.Post, $"/api/v1/company/fiscal-reopen-requests/{IdOf(first!)}/cancel", null, EtagOf(first!));
+        var second = await Create($"/api/v1/company/fiscal-periods/{p1.Id}/reopen-requests", requestBody, periodTag);
+        await Race("reopen request deny", notPending, HttpMethod.Post, $"/api/v1/company/fiscal-reopen-requests/{IdOf(second)}/deny", new { note = "not needed" }, EtagOf(second), caller: fiscalApprover);
+        var third = await Create($"/api/v1/company/fiscal-periods/{p1.Id}/reopen-requests", requestBody, periodTag);
+        await Race("reopen request approve", notPending, HttpMethod.Post, $"/api/v1/company/fiscal-reopen-requests/{IdOf(third)}/approve", null, EtagOf(third), caller: fiscalApprover);
+
+        // the year closes once every period is final closed; its reopening is a request too
+        var year = (await Cal.GetAsync(Company.Id, Year.Id))!;
+        foreach (var p in year.Periods)
+        {
+            var current = p;
+            if (current.State == FiscalPeriodState.Open) current = Ok(await Cal.SoftCloseAsync(Admin.Id, Company.Id, current.Id, current.Revision));
+            if (current.State == FiscalPeriodState.SoftClosed) Ok(await Cal.FinalCloseAsync(Admin.Id, Company.Id, current.Id, current.Revision));
+        }
+        year = (await Cal.GetAsync(Company.Id, Year.Id))!;
+        var closed = await Race("fiscal year close", ["412:revision_conflict", "409:fiscal_year_already_closed"], HttpMethod.Post, $"/api/v1/company/fiscal-years/{Year.Id}/close", null, $"\"{year.Revision}\"");
+        Won(closed);
+        await Race("year reopen request", requestOpen, HttpMethod.Post, $"/api/v1/company/fiscal-years/{Year.Id}/reopen-requests", requestBody, EtagOf(closed!));
+
+        AssertNoFindings();
+    }
+
+    [PostgresFact]
+    public async Task Year_end_closing_and_carry_forward_end_in_a_mapped_4xx_never_a_5xx()
+    {
+        await Start();
+        Ok(await Cal.CreateYearAsync(Admin.Id, Company.Id, new FiscalYearInput("FY2027", new DateOnly(2027, 1, 1), "monthly")));
+        Cash = await NewAccount("1101", "asset");
+        Sales = await NewAccount("4101", "revenue");
+        var equity = await NewAccount("3101", "equity");
+        await Posted(Simple("2026-03-10", 100m));
+        const string Base = "/api/v1/company/fiscal-closing";
+        await Race("closing settings", ["412:revision_conflict"], HttpMethod.Put, $"{Base}/settings", new ClosingSettingsInput(equity.Id, true), "\"0\"");
+
+        // close, carry forward and the two reversals carry no precondition: one request wins, every other one meets the state it created
+        var closing = await Race("year-end close", ["409:closing_blocked"], HttpMethod.Post, $"{Base}/years/{Year.Id}/close", null);
+        Won(closing);
+        await PostGenerated(closing!.Json.GetProperty("closingEntryId").GetGuid());
+        var carry = await Race("carry forward", ["409:closing_blocked"], HttpMethod.Post, $"{Base}/years/{Year.Id}/carry-forward", null);
+        Won(carry);
+        await PostGenerated(carry!.Json.GetProperty("entryId").GetGuid());
+        var opening = await Race("reverse opening", ["409:already_reversed"], HttpMethod.Post, $"{Base}/years/{Year.Id}/reverse-opening", new YearEndReversalInput(new DateOnly(2027, 1, 1)));
+        Won(opening);
+        await PostGenerated(opening!.Json.GetProperty("entryId").GetGuid());
+        await Race("reverse closing", ["409:already_reversed"], HttpMethod.Post, $"{Base}/years/{Year.Id}/reverse-closing", new YearEndReversalInput(new DateOnly(2026, 12, 31)));
+
+        AssertNoFindings();
+    }
+
+    private async Task<ApiResponse> Upload(Guid subject)
+    {
+        using var form = new MultipartFormDataContent { { new StringContent("local_party"), "subjectKind" }, { new StringContent(subject.ToString()), "subjectId" }, { new StringContent("false"), "sensitive" } };
+        var file = new ByteArrayContent(Pdf); file.Headers.ContentType = new MediaTypeHeaderValue("application/pdf"); form.Add(file, "file", "doc.pdf");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/company/attachments") { Content = form };
+        request.Headers.Add("X-Hasm-Request", "1");
+        request.Headers.Add("Cookie", $"{CookieName}={cookie}");
+        using var response = await client.SendAsync(request);
+        return new ApiResponse(response.StatusCode, response.Headers, await response.Content.ReadAsStringAsync());
+    }
+
+    [PostgresFact]
+    public async Task Attachments_and_their_retention_end_in_a_mapped_4xx_never_a_5xx()
+    {
+        await Start();
+        var R = new[] { "412:revision_conflict" };
+        var party = Guid.NewGuid();
+        await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CV2P', 'p', true, 1, 1, '{Admin.Id}', now(), now())");
+
+        // uploads append one attachment each; the upload gate turns a parallel one away with its documented back-pressure answer (503 upload_busy, PHASE-3.12), pinned exactly
+        var uploaded = await RaceWith("attachment upload", ["503:upload_busy"], () => Upload(party), Mode.Append);
+        Won(uploaded);
+        await Race("attachment remove", ["412:revision_conflict", "409:already_removed"], HttpMethod.Post, $"/api/v1/company/attachments/{IdOf(uploaded!)}/remove", new { reason = "matrix" }, EtagOf(uploaded!));
+        foreach (var task in new[] { "rewrap", "sweep", "verify" })
+            await Race($"attachment {task}", ["2xx"], HttpMethod.Post, $"/api/v1/company/attachments/maintenance/{task}", null, mode: Mode.Same);
+
+        // retention: drafts and holds append; approval, revocation and release each decide one revision
+        const string Base = "/api/v1/company/attachment-retention";
+        var approver = await SignIn(await PresetApprover((login, company) => Rbac.GrantRetentionApproverOfflineAsync(login, company)));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var policy = await Race("retention draft", [], HttpMethod.Post, $"{Base}/policies",
+            new { effectiveFrom = today, note = "matrix", rules = new[] { new { subjectKind = "*", sensitivity = 0, months = (int?)60, indefinite = false } } }, mode: Mode.Append);
+        Won(policy);
+        var approved = await Race("retention approve", ["412:revision_conflict", "409:not_a_draft"], HttpMethod.Post, $"{Base}/policies/{IdOf(policy!)}/approve", new { }, EtagOf(policy!), caller: approver);
+        Won(approved);
+        await Race("retention revoke", ["412:revision_conflict", "409:not_approved"], HttpMethod.Post, $"{Base}/policies/{IdOf(policy!)}/revoke", new { reason = "matrix" }, EtagOf(approved!), caller: approver);
+        var hold = await Race("legal hold", [], HttpMethod.Post, $"{Base}/holds", new { scope = 1, reason = "audit", reference = "CASE-1" }, mode: Mode.Append);
+        Won(hold);
+        await Race("legal hold release", ["412:revision_conflict", "409:already_released"], HttpMethod.Post, $"{Base}/holds/{IdOf(hold!)}/release", new { reason = "closed" }, EtagOf(hold!), caller: approver);
 
         AssertNoFindings();
     }
