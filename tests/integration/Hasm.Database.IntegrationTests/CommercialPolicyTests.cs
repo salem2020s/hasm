@@ -100,7 +100,8 @@ public class CommercialPolicyTests : CommercialTestBase
         Assert.Equal((CommercialStatus.Approved, a2, "2026-000001"), (last.Status, last.ApprovedBy, last.OfficialNumber));
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {NI.Table}"));
         Assert.Equal(2L, await Sql<long>($"SELECT count(*) FROM {AD.Table} WHERE {AD.DocumentId} = '{doc.Id}'"));
-        Assert.Equal([1, 2], await Sql<long[]>($"SELECT array_agg({AG.DecisionStage} ORDER BY {AD.Id}) FROM {AD.Table} WHERE {AD.DocumentId} = '{doc.Id}'").ContinueWith(t => t.Result.Select(x => (int)x).ToArray()));
+        var decided = await Sql<short[]>($"SELECT array_agg({AG.DecisionStage} ORDER BY {AD.Id}) FROM {AD.Table} WHERE {AD.DocumentId} = '{doc.Id}'");
+        Assert.Equal(new short[] { 1, 2 }, decided);
         Assert.Equal(1L, await Events(CommercialAuditEvents.Approved));
         // an approved document takes no further decision
         Fails(await Docs.ApproveAsync(await NewApprover(), Company.Id, doc.Id, last.Revision), ConfigStatus.Conflict, "document_not_submitted");
