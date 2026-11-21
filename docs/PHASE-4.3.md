@@ -1036,7 +1036,11 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
   * its credential effects (D-106, D-107, D-119: logins blocked until post-backup revocations are re-applied, and an installation-id change makes users `RecoveryRequired`);
   * system-stream epochs.
 
-  A company cutover never touches the system database's data: users, credentials, memberships, roles, the registry row and the company's access stream (`company:<id>`, in the system database) stay live. So D-106 and D-107 are NOT triggered by this slice. This is stated, not assumed: a test pins that a cutover writes nothing to the user, session or credential tables.
+  A company cutover changes no user, credential, session, membership or role, and no EFFECTIVE permission. Its only writes to the system database are:
+  * its own records: the `restore_cutover` journal, the registry state, the retention pin and the system audit events;
+  * the soft revocation of scoped role assignments that are ALREADY INERT in live (D-152, step 3.5). This removes nothing anyone can use.
+
+  Users, credentials, memberships, roles, the registry row and the company's access stream (`company:<id>`) otherwise stay live. So D-106 and D-107 are NOT triggered by this slice. This is stated, not assumed: a test pins that a cutover writes nothing to the user, session or credential tables, and that its only role-assignment changes are the D-152 revocations (review M7 of #143).
 * Unencrypted (DEV/TEST) sets are never cut over, whatever the acknowledgement: `unencrypted_set_refused`.
 * No UI in this slice (administrative tool, like the other 4.3 commands). The API exposes nothing new.
 
@@ -1091,20 +1095,24 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
 
       If it cannot be taken, the cutover stops before anything is switched (owner question Q1 for a live database that is lost).
    5. **Company-scope revocations stay applied (D-152, review H1 of #143).**
-      * Branches, warehouses and cost centers carry an `ActivationEpoch` that advances on every deactivation and reactivation. The system-side scoped role assignments record the epoch they were made under, and an assignment is effective only while it equals the entity's current epoch.
-      * A restored copy carries the OLDER epochs, so a grant made inert by a deactivation after the backup point would come back to life.
-      * **Mechanism (review M5 of #143; lead decision under D-048: no new migration, no trigger bypass, since a bypass would weaken a database safeguard and is the owner's call).**
-        * The company triggers allow an epoch to change only by +1, together with a change of the active flag (branches, company migration 0004; warehouses, 0005). Cost-center epochs are maintained by the database and bumped on reactivation (0009).
-        * So, before the switch, for EVERY branch, warehouse and cost center, the engine reads the live and the restored epoch. It then runs ADMINISTRATIVE deactivate/reactivate cycles on the copy until the restored epoch is at least `max(live, restored) + 1`: a branch or warehouse cycle adds 2, a cost-center cycle adds 1.
-        * The original active state is restored EXACTLY. Two transaction rules follow from the company triggers (review M6 of #143):
-          * **The main branch:** the CHECK `NOT is_main OR is_active` (company migration 0004) is IMMEDIATE, so the main branch cannot simply be deactivated. Its cycle clears `is_main`, deactivates, reactivates and sets `is_main` again, all in ONE transaction, so the deferred "exactly one active main branch" check passes at commit.
-          * **Cost centers with active children:** the deferred cost-center tree trigger (0008) evaluates each row as it was at event time. So a subtree is deactivated BOTTOM-UP in one transaction and reactivated TOP-DOWN in a SECOND transaction, on the unregistered copy.
-          * Resume and verification restore the exact active states of every entity BEFORE the switch. A copy whose states cannot be restored exactly refuses the cutover (`epoch_advance_failed`).
-        * The cycles bump each entity's revision WITHOUT writing revision-history rows (they write no business-stream events). The system event 2029 is their provenance (review Low of #143).
-        * **These cycles write NO business-stream events.** The copy's business stream must keep its restored head seq_r, and a write before the epoch rotation would be refused (`audit_stream_truncated`) and would move the head.
-        * They are recorded in the SYSTEM stream as ONE event per cutover, **2029 `RestoreCompanyEpochsAdvanced`**, with the entity ids and their epochs before and after (ids and numbers only).
-        * **Any failure refuses the cutover** (`epoch_advance_failed`, audit 2027): a cycle that fails, a state that cannot be restored exactly, and **a live epoch that cannot be read** (`live_epoch_unreadable`). A live database that cannot be read never yields "no grants to protect".
-      * This fails closed: every scoped assignment recorded before the cutover becomes inert, and administrators re-grant explicitly.
+      * Branches, warehouses and cost centers carry an `ActivationEpoch`. The system-side scoped role assignments record the epoch they were made under. An assignment is effective only while its entity is active AND its epoch equals the recorded one.
+      * A restored copy carries the OLDER epochs and active states, so a grant made inert by a change after the backup point would come back to life.
+      * **Mechanism: system-side revocation of inert scoped assignments.** This is a lead decision under D-048 (review M7 of #143). It replaces the earlier in-copy deactivate/reactivate cycles, which collided with company safeguards: the immediate main-branch CHECK of 0004 (M6), the cost-center tree trigger of 0008 (M6) and the negative-obligation warehouse trigger of 0020 (M7). It is security-preserving: there is no company-database write, no trigger bypass and no new migration.
+        * **When:** after quiescing, under the company provisioning lock, after the step 6 checks have passed and immediately before the switch (step 7).
+        * **What:** the engine reads every branch, warehouse and cost center of the LIVE database: its epoch and its active flag. It then soft-revokes on the system side every not-yet-revoked branch-, warehouse- and cost-center-scoped assignment of the company that is NOT effective in live:
+          * its recorded epoch differs from the entity's live epoch; or
+          * the entity is inactive in live; or
+          * the entity is missing from live.
+        * **The inactive case is needed for cost centers.** A cost-center epoch is bumped only on REactivation (0009). So a cost center deactivated after the backup keeps its epoch: its grants are inert in live only because it is inactive, and they would revive in a copy where it is still active.
+        * **How:** the existing soft revocation (revoked at / revoked by; rows are never deleted), attributed to the executing named administrator (D-099).
+        * **Why this changes no effective permission:** every revoked assignment is already PERMANENTLY inert in live. A reactivation always bumps the epoch, so none of them could ever become effective again in live. The impact is that inert grants disappear permanently, which is already their effect.
+        * **What remains:** only assignments effective in live (recorded epoch = live epoch, entity active). After the cutover such an assignment stays effective only where the restored entity has the same epoch and is active; that entity has not changed state since the backup point. Where the restored epoch differs, the assignment becomes inert. This fails closed: administrators re-grant.
+        * **Cost-center coverage (self-review of the redesign).** A cost-center grant covers the cost center AND its descendants in the CURRENT tree, and cost centers can be moved (Phase 3.2C). So a restored tree can place under a granted cost center a descendant that live had moved out. **Default: REFUSED** when an assignment that stays effective would cover, in the copy, a cost center it does not cover in live (`cost_center_scope_widened`). A refusal changes no permission, and the alternative of revoking a grant that is effective in live is left to the owner (Q8).
+        * **Atomicity and journal:** the revocations, the journal step's `done` record and ONE system event per cutover, **2029 `RestoreInertScopedAssignmentsRevoked`**, are written in ONE system transaction. The event lists the assignment ids and, per entity, the entity id, the recorded epoch and the live epoch (ids and numbers only). On resume, a step without `done` was rolled back and is recomputed from the live state; a step with `done` is not repeated.
+        * **Reversal:** a later reversal of the cutover (step 9, resume BACK) does NOT un-revoke. The revoked rows were inert in live, the old database is live again, and they stay inert.
+        * **Assignment writes are blocked meanwhile:** the company is `Restoring` (the API resolves only `Ready` companies), and the implementation refuses any assignment write of a company in `Restoring` (tested). The step 9 post-check re-evaluates at switch time.
+        * **Any failure refuses the cutover** (`inert_assignment_revocation_failed`, audit 2027), and so does **a live epoch or active flag that cannot be read** (`live_epoch_unreadable`). A live database that cannot be read never yields "no grants to protect".
+        * **No company-database writes in this step:** the copy's business stream keeps its restored head seq_r, and its branch, warehouse and cost-center rows are unchanged. So a company with an open negative-stock obligation (company migration 0020) is cut over normally (M7).
       * This applies D-106's principle ("revocations after the backup point stay applied") at company scope. It is a security-preserving default, not new policy, and is listed as owner question Q8 with this default.
    6. **What the restore would lose (D-153, review H2 of #143 and the accounting review F1-F4 by Agent F; owner questions Q7 and Q9).** The copy rolls back everything the live company did after the restore point. That is accounting policy, so it is the owner's decision. Until the owner decides, the preserving defaults below REFUSE the cutover whenever the restore would lose accounting history.
       * **Quiesced comparison (F4).** The comparisons below run at request, and again at execution AFTER quiescing (registry `Restoring`, sessions terminated, `ALLOW_CONNECTIONS false`, under the company provisioning lock), and once more immediately before the switch. A number issued, or a period closed, between request and switch is caught.
@@ -1149,7 +1157,7 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
       * the business stream verified as a prefix of the previous epoch (D-147);
       * every attachment row checked against its file;
       * the migration level and checksums;
-      * **every branch, warehouse and cost-center epoch is above its live value** (D-152): no scoped assignment made before the cutover is effective;
+      * **no revival (D-152):** every scoped assignment of the company that is effective against the switched database was effective in live at cutover time: recorded epoch = live epoch and the entity active in live. No cost-center assignment covers a cost center it did not cover in live;
       * **no numbering series is behind the live maximum, no issued or voided number differs, and the fiscal state equals live** (D-153; F2, F3);
       * **warning check (review L6 of #143):** system-side scope assignments that point at a branch, warehouse or cost center missing from the restored copy are reported (`scope_target_missing`, count). They are inert anyway.
 
@@ -1166,7 +1174,7 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
    * `restore-cutover-rollback <cutover-id>` is a restore operation with its own `restore.execute` approval, and it runs the FULL procedure (review M3 of #143):
      * live verification;
      * a safety backup of the outgoing (restored) company with its non-expiring evidence pin;
-     * the company-scope epoch advance (D-152) and the D-153 checks (lost-tail accounting events, numbering including voided numbers, fiscal state), after quiescing (review R1 by Agent F);
+     * the revocation of inert scoped assignments (D-152, against the epochs and active flags of the outgoing live database) and the D-153 checks (lost-tail accounting events, numbering including voided numbers, fiscal state), after quiescing (review R1 by Agent F);
      * the journaled switch, KEEPING the outgoing database and folder as retained;
      * runtime grants and post-checks;
      * ANOTHER epoch whose parent is the epoch the retained database belongs to.
@@ -1220,9 +1228,9 @@ Today a restored company database rolls its business stream back while the exter
 | 2024 | `RestoreCutoverReversed` | cutover id, the failed step and code (automatic reversal before the epoch rotation) |
 | 2025 | `RestoreCutoverRolledBack` | cutover id, rollback approval id, new epoch |
 | 2026 | `AuditEpochStarted` | stream, epoch, parent epoch, restored head, parent verdict and failure codes (in the system stream AND as the first event of the new epoch in the business stream) |
-| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`, `restore_prefix_unprovable`, `numbers_issued_after_restore_point`, `accounting_events_after_restore_point`, `fiscal_state_differs`, `live_chain_not_verified`, `epoch_advance_failed`, `live_epoch_unreadable`) |
+| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`, `restore_prefix_unprovable`, `numbers_issued_after_restore_point`, `accounting_events_after_restore_point`, `fiscal_state_differs`, `live_chain_not_verified`, `inert_assignment_revocation_failed`, `live_epoch_unreadable`, `cost_center_scope_widened`) |
 | 2028 | `RestoreCutoverExpired` | request id (the prepared copy is dropped) |
-| 2029 | `RestoreCompanyEpochsAdvanced` | cutover id, and per branch, warehouse and cost center its id and epoch before and after the cycles (review M5 of #143; ids and numbers only) |
+| 2029 | `RestoreInertScopedAssignmentsRevoked` | cutover id, the revoked assignment ids, and per entity its id, the recorded epoch and the live epoch (review M7 of #143; ids and numbers only) |
 
 * Every step fails closed when its event cannot be written.
 * The detail carries database TAGS only.
@@ -1248,9 +1256,18 @@ Today a restored company database rolls its business stream back while the exter
   * a live stream that did not verify is recorded in the epoch and stays reported as Failed;
   * rollback through a second approval creates another epoch and restores the old data;
   * concurrent backup, retention, trial restore, migration and runtime grant are blocked while `Restoring`;
-  * nothing in the user, session or credential tables changes;
+  * nothing in the user, session or credential tables changes, and the only role-assignment changes are the D-152 revocations of assignments inert in live;
   * H1: grant a branch-scoped role, deactivate the branch, cut over to a pre-deactivation set; the grant stays ineffective (and a warehouse and cost-center variant);
-  * M5/M6: the deactivate/reactivate cycles reach at least max(live, restored)+1 for each entity, restore every active flag exactly, write no business-stream event (the copy's head stays seq_r) and one system event 2029; the MAIN branch is cycled in one transaction (main flag cleared and restored); a PARENT cost center with active children is deactivated bottom-up and reactivated top-down in two transactions; a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
+  * M7 (D-152 redesign):
+    * grant a branch-scoped role, deactivate and reactivate the branch (live epoch +2), cut over to a pre-deactivation set: the grant stays ineffective, the inert row is soft-revoked and listed in ONE system event 2029 with its recorded and live epochs; an assignment effective in live stays effective where the restored epoch is equal, and becomes inert where it differs;
+    * a warehouse with an open negative-stock obligation (company migration 0020): the cutover proceeds;
+    * the MAIN branch, and a PARENT cost center with active children: the cutover proceeds, and their inert grants are revoked;
+    * a cost center deactivated after the backup (same epoch, inactive in live): its grant is revoked;
+    * a cost center moved out from under a granted cost center after the backup: refused (`cost_center_scope_widened`);
+    * no company-database write: the copy's head stays seq_r and its branch, warehouse and cost-center rows are unchanged;
+    * a resume after a crash inside the step recomputes it; a reversal does not un-revoke;
+    * an assignment write for a company in `Restoring` is refused;
+    * a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
   * H2/F3: issue a document number after the backup, request a cutover; it is refused (`numbers_issued_after_restore_point`), and the post-check fails on a forced bypass through the seam. Likewise for a number VOIDED after the backup, and for a series key that exists only in live;
   * F1: post (stock posting of an already approved document) after the backup; the request is refused (`accounting_events_after_restore_point`) and shows the per-type inventory; an unknown business event type counts as accounting;
   * F2: soft-close a period after the backup; the request is refused (`fiscal_state_differs`);
@@ -1260,7 +1277,7 @@ Today a restored company database rolls its business stream back while the exter
   * L2: no session can connect to the live database between termination and rename; the retained database refuses the runtime role.
 
 ### Decisions (D-143..D-151; recorded in `docs/DECISIONS.md`, status planned)
-D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework); D-152 company-scope revocations stay applied (activation epochs advanced; Q8); D-153 what a restore may lose (lost-tail accounting events, numbering incl. issued and voided numbers, fiscal state; refuse by default after quiescing; Q7, Q9).
+D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework); D-152 company-scope revocations stay applied (inert scoped assignments revoked on the system side; Q8); D-153 what a restore may lose (lost-tail accounting events, numbering incl. issued and voided numbers, fiscal state; refuse by default after quiescing; Q7, Q9).
 
 ### Open questions for the owner (not decided here; the safe default applies until answered)
 * **Q1. The live database is lost or unreadable**, so no pre-cutover safety backup can be taken. **Default: the cutover is refused.** A disaster variant without the safety backup (with the gap recorded) would need the owner's decision. **Note (F5):** consequently a company whose live database is corrupt or unreadable cannot be cut over in slice 7 at all, because every what-would-be-lost check (Q4, Q7, Q9) needs a readable live database. That case needs the later full-installation path or an owner-approved procedure.
@@ -1274,7 +1291,10 @@ D-143 scope (single company; full-installation restore is a later slice bound by
   * The option for numbering: advance and void, ONLY under conditions 1-6 of step 3.6.
   * **Note for the owner:** while Q7 refuses, ANY company that has done accounting work (for example issued a document number) since its backup point cannot be cut over at all. Its lost work must be re-entered or recovered under a separate policy.
   * **Accounting configuration counts as accounting** (review Low of #143). The preserving default classifies configuration that drives accounting as an accounting event, so its loss refuses the cutover. This covers: chart and account settings, tax configuration, inventory-accounting versions, statement mappings, numbering rules, closing settings and approval policies. The owner may narrow this list.
-* **Q8. Company-scope revocations after the backup point** (review H1 of #143). **Default: every restored branch, warehouse and cost-center epoch is advanced above both the live and the restored value, so no scoped grant from before the cutover is effective** (D-106's principle at company scope). The option for the owner: a narrower re-validation that keeps grants still valid in live.
+* **Q8. Company-scope revocations after the backup point** (review H1 and M7 of #143).
+  * **Default: before the switch, every branch-, warehouse- and cost-center-scoped assignment that is already inert in live is soft-revoked on the system side.** Assignments effective in live stay; they become inert where the restored epoch differs, which fails closed (administrators re-grant). A cost-center grant whose coverage the restored tree would widen refuses the cutover.
+  * **This is security-preserving:** no permission is added, and none that live has is revived. Its only impact is that inert grants disappear permanently, which is already their effect, since a reactivation always bumps the epoch.
+  * **No alternative is needed for the owner.** The owner may still choose to revoke instead of refuse for a widened cost-center coverage.
 * **Q9. Fiscal state after the backup point** (accounting review F2). **PRESERVING DEFAULT: REFUSE the cutover when any fiscal period or year state, its revision, the year-close state or a pending reopen request differs between live and the copy.** The option for the owner: re-apply the live closures to the copy before the switch; never reopen anything.
 
 ### Owner decisions this slice relies on (not re-asked)
