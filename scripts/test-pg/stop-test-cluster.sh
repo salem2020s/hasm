@@ -3,6 +3,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 assert_safe_locations
 assert_cluster_present
+take_lock
 if ! cluster_running; then echo "Test cluster is not running."; exit 0; fi
 as_pg "${PG_BIN}/pg_ctl" -D "${DATA_DIR}" -m fast -w -t 60 stop >/dev/null
 cluster_running && die "Test cluster did not stop in time."

@@ -4,18 +4,25 @@
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 assert_safe_locations
 umask 077
+[[ -d "$(dirname "${TEST_ROOT}")" ]] || die "The parent directory of ${TEST_ROOT} does not exist."
+take_lock
 
+# The root must be ABSENT (this script creates it) or be a root this script created earlier (it carries the marker file): a pre-existing directory is never used and never chmod-ed.
 resume=no
-[[ -f "${SUPER_FILE}" && ! -f "${ENV_FILE}" ]] && resume=yes     # an interrupted earlier run that got as far as initdb
-[[ -d "${DATA_DIR}" && "${resume}" == no ]] && die "Data directory already exists: ${DATA_DIR} (refusing to touch it; run destroy-test-cluster.sh first)."
+if [[ -e "${TEST_ROOT}" ]]; then
+  [[ -d "${TEST_ROOT}" && ! -L "${TEST_ROOT}" ]] || die "${TEST_ROOT} exists and is not a plain directory; refusing."
+  [[ -f "${MARKER_FILE}" ]] || die "${TEST_ROOT} already exists and was not created by new-test-cluster.sh; refusing to use or modify it (choose another HASM_TEST_ROOT)."
+  [[ -O "${TEST_ROOT}" ]] || die "${TEST_ROOT} is not owned by the current user; refusing."
+  [[ -f "${SUPER_FILE}" && ! -f "${ENV_FILE}" ]] && resume=yes     # an interrupted earlier run that got as far as initdb
+  [[ -d "${DATA_DIR}" && "${resume}" == no ]] && die "Data directory already exists: ${DATA_DIR} (refusing to touch it; run destroy-test-cluster.sh first)."
+else
+  # mkdir (not install -d) fails if the directory appeared in the meantime. The root is traversable (711) so the server account can reach its own 700 data directory.
+  mkdir -m 711 "${TEST_ROOT}" || die "Cannot create ${TEST_ROOT}."
+  ( umask 077; : > "${MARKER_FILE}" )
+fi
 [[ "${resume}" == no ]] && port_listening && die "Something already listens on ${TEST_HOST}:${TEST_PORT}; refusing to create a cluster next to it."
-
-# The root is traversable (711) so the server account can reach its own 700 data directory; the secrets directory stays owner-only.
-if [[ -e "${TEST_ROOT}" && ! -O "${TEST_ROOT}" ]]; then die "${TEST_ROOT} exists and is not owned by the current user; refusing."; fi
-install -d -m 711 "${TEST_ROOT}"
 install -d -m 700 "${SECRETS_DIR}"
 make_pg_dir "${LOG_DIR}"
-touch "${MARKER_FILE}"; chmod 600 "${MARKER_FILE}"
 
 if [[ "${resume}" == yes ]]; then
   super_pw="$(cat "${SUPER_FILE}")"
@@ -24,14 +31,14 @@ else
   super_pw="$(new_secret)"
   pw_file="${LOG_DIR}/initdb.pw"
   # the password file is written by the server account (mode 600), used once, and removed
-  printf '%s' "${super_pw}" | as_pg sh -c "umask 077; cat > '${pw_file}'"
+  printf '%s' "${super_pw}" | as_pg sh -c 'umask 077; cat > "$1"' sh "${pw_file}"
   trap 'as_pg rm -f "${pw_file}" 2>/dev/null || true' EXIT
   as_pg "${PG_BIN}/initdb" -D "${DATA_DIR}" -U hasm_test_super --pwfile="${pw_file}" --auth=scram-sha-256 -E UTF8 --locale=C >/dev/null
   as_pg rm -f "${pw_file}"
   ( umask 077; printf '%s' "${super_pw}" > "${SUPER_FILE}" )
   chmod 600 "${SUPER_FILE}"
   conf="${DATA_DIR}/postgresql.conf"
-  as_pg sh -c "cat >> '${conf}'" <<CONF
+  as_pg sh -c 'cat >> "$1"' sh "${conf}" <<CONF
 
 # --- HASM disposable test cluster (never the development cluster) ---
 port = ${TEST_PORT}

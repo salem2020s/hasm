@@ -3,6 +3,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 assert_safe_locations
 assert_cluster_present
+take_lock
 if cluster_running; then echo "Test cluster already running."; exit 0; fi
 port_listening && die "Something already listens on ${TEST_HOST}:${TEST_PORT} and it is not this cluster; refusing."
 # The listen address and port are also forced on the command line, so an edited postgresql.conf cannot move the server.
