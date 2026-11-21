@@ -137,7 +137,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1105 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1115 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -223,12 +223,14 @@ jobs:
                 # Phase 3.11 customer groups (company migration 0027): group master, one-group-per-customer assignment, customer-or-group scope, regroup concurrency, server-derived quote group; HTTP API.
                 "CustomerGroupTests": 7, "CustomerGroupApiTests": 3,
                 # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
-                "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 1,
+                "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 2,
                 # Phase 3.13 S1b commercial approval, numbering and server-produced snapshots (company migration 0029, system migration 0029).
                 "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 4, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
+                # Release 1 acceptance, cross-module accounting scenarios: company isolation over HTTP across every read family, the fiscal life cycle to year end, inventory valuation = inventory ledger.
+                "CrossModuleIsolationScenarioTests": 1, "CrossModuleFiscalLifecycleScenarioTests": 1, "CrossModuleInventoryValuationScenarioTests": 1,
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
@@ -241,5 +243,7 @@ jobs:
                 "CompanyBackupServiceTests": 11,
                 # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
                 "BackupRunTests": 6,
+                # Release 1 acceptance C: parallel writers from one revision, exactly one wins (no migration).
+                "AccountLostUpdateTests": 1, "BranchLostUpdateTests": 1, "WarehouseLostUpdateTests": 1, "PartyLostUpdateTests": 1, "PriceListLostUpdateTests": 1, "TaxLostUpdateTests": 1,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
