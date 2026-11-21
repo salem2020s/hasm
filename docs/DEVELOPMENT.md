@@ -647,6 +647,8 @@ Branches: `main` (protected, owner-merged) and one `feature/<phase-name>` branch
 
 Several agents work in one environment at the same time, so temporary files must never collide and a pull-request description must never be overwritten with another task's text (owner instruction, 2026-11-21). Documentation only; this adds no protected policy.
 
+**Why (2026-11-21 incident):** a reviewer cleaning its files ran a glob (`*.md`) in the shared scratchpad and deleted 45 files of other agents. Nothing in git was lost, but unpushed drafts were. Hence: never glob-delete, and remove only your own `mktemp` directory by its exact path.
+
 1. **One own directory per task.** At the start of a task create it: `D=$(mktemp -d "${TMPDIR:-/tmp}/hasm-<agentLetter>-<task>-XXXXXX"); chmod 700 "$D"`. Every temporary file of that task (PR bodies, review text, test output, patches, TRX copies) goes inside it. Never use the shared scratchpad root or a fixed file name.
 2. **No fixed names.** Never reuse a name such as `pr-body.md`, `review.txt`, `out.log` or `pg.out` in a shared place; inside your own `$D` the names are yours alone.
 3. **Stay out of other agents' space.** Keep temporary output out of other agents' worktrees and directories. Never read, write or delete anything you did not create.
