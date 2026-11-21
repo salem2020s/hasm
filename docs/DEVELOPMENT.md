@@ -645,6 +645,29 @@ dotnet run --project src/backend/Hasm.Admin -- backup-recovery-test <run-dir> --
 * **DEV/TEST only: unencrypted sets.** `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production` (exactly) permits unencrypted sets; any other value is a configuration error, and it is refused while a recovery public key is configured. Every output then shows `DEGRADED: unencrypted backups (DEV/TEST only)`, sets and runs carry the file `UNENCRYPTED-DEV-TEST-ONLY`, and `backup-status` exits 8 (`unencrypted_dev_test`). Never set it in production (D-088).
 * **Interim mode (dated limitations in RELEASE1-ACCEPTANCE G).** Until Phase 4.1 delivers the administrative-tool login (D-099) and the approval framework, these commands run under operating-system access to the service account; the audit events record the operating-system account (`os:<account>`). Trial restore and the recovery test are restore operations that will then need independent approval (D-118).
 
+## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
+
+`tools/loadtest/` is tooling only: no migration, no change to the PostgreSQL registry. It talks to the REAL HTTP API as ordinary users, so every server rule (validation, RBAC, numbering, audit, period and approval rules, optimistic concurrency) applies. Stage 2 (the 60-minute, 50-session runner) is separate and later.
+
+**Safety.** It refuses to run unless `HASM_LOADTEST_DISPOSABLE=this-installation-is-disposable` is set (the operator's statement that the installation and its database are disposable), refuses a non-loopback API without `--environment <file>`, refuses port 5432 (`--database-port`, `PGPORT`), and refuses a company that holds any item or party that is not load-test data (codes `LT-...`). It cannot see the PostgreSQL cluster behind the API, so these are best-effort protections, not proof: point it only at an installation on the isolated runner's cluster (`scripts/test-pg/`) or the dedicated reference machine. Credentials come only from the environment (`HASM_LT_LOGIN`, `HASM_LT_PASSWORD`; `HASM_LT_APPROVER_LOGIN`, `HASM_LT_APPROVER_PASSWORD` for stock-document approval, which needs a second user). A development certificate is trusted through `NODE_EXTRA_CA_CERTS`; validation is never disabled.
+
+**Prerequisites in the target company** (the seeder checks and names what is missing): a fiscal year covering `--year`, the base currency selected, at least two active postable base-currency accounts, at least one active warehouse (stock documents). It creates its own unit and group (`LT-PCS`, `LT-G`).
+
+```
+node tools/loadtest/loadtest.js plan --items 20000 --parties 10000 --journals N --stock-docs N   # the plan digest, no API
+node tools/loadtest/loadtest.js seed --api http://127.0.0.1:PORT --company <id> --items 20000 --parties 10000 --journals N --stock-docs N --year 2026 --concurrency 4 > seed-manifest.json
+node tools/loadtest/loadtest.js run  --api ... --company <id> --items ... --parties ... --iterations 100 [--duration-seconds S] [--environment env.json] [--out results.json]
+node --test tools/loadtest/tests/smoke.test.js                                                     # no database, no real API
+```
+
+**Data.** Deterministic: record i of kind k depends only on (`--seed`, k, i) (default seed `hasm-loadtest-1`), so the same seed and counts give the same data and the same plan digest on any machine. Items and parties (Latin and Arabic names; about 60% of parties get a customer role) are idempotent by code. Journal entries (create, submit, post by the maker) and stock documents (create, submit, approve by a second user) are not: a re-run adds more, so use a fresh disposable company. Approving a stock document changes no stock figure by itself (posting is a later stage), and invoices are not seeded in stage 1: both are listed as missing in every results file, never omitted.
+
+**Scenarios.** Item search, party search, customer search (P95 target 1 s), ordinary screen-load calls (2 s), save and post a journal entry (3 s), trial balance and general ledger (5 s). Declared but not implemented: invoice save/post and the stock balance report; they appear with `implemented: false`.
+
+**Results and the verdict.** A results file records the tool, seed, data counts, load shape, the load generator's host facts and the operator-declared reference environment (`--environment`: `vcpu`, `ramGb`, `diskGb`, `ssd`, `backendAndPostgresTogether`, `companies`; the tool cannot verify it). Samples are measured, never estimated; a scenario without samples shows `null`. The verdict is **NOT VERIFIED** unless every reference condition (8 vCPU/32 GB/500 GB SSD declared, 5 companies, 20,000 items, 10,000 parties, 100,000 invoices, 500,000 entries and stock movements, 50 sessions, 3,600 s, every scenario implemented) is met; the file lists each unmet reason. Stage 1 cannot meet them, so its output is mechanics validation and never acceptance evidence. `loadtest-results/` is git-ignored.
+
+**Validation.** `tools/loadtest/tests/smoke.test.js` (Node, no database): determinism, the guard, the verdict rule, a contract check of every route and request field against the backend sources, and a seed plus short run against an in-process stub. It is not wired into CI (workflow files are protected). Beyond the smoke test, the harness was run once end to end against the real API in-process on the isolated runner (60 items, 30 parties, 15 journal entries posted, 10 stock documents approved by two users, 80 scenario iterations, 0 errors); those numbers are meaningless and not recorded.
+
 ## Checks
 ```
 dotnet test src/backend/Hasm.slnx
