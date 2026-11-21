@@ -61,7 +61,7 @@ Merged by the cloud team since the Opus resumption (each: independent full-diff 
 | #136 | `feature/phase-3-13-s5a` | `3bb88df` | A (Sonnet) | 3.13 S5a approval policies for commercial documents (company 0032, D-140/D-141); fourth |
 | #137 | `feature/phase-3-13-s5a-ui` | `218046d` | A (Sonnet) | S5a approval-progress panel; STACKED on #136, merges right after it |
 | #134 | `feature/phase-4-3-slice6-impl` | `016d0f8` | B (Opus) | 4.3 slice 6 retention of backup runs (system 0032); approved; red until system 0031 (#133) is on `main`; last in the queue |
-| #143 | `docs/phase-4-3-slice7-plan` | `c51f48a` (C confirmed up to `80a737b`; M5 in `26635c2` and F1-F5 in `c51f48a` under confirmation) | B (Opus) | 4.3 slice 7 plan, live company restore cutover (D-081; docs only, D-143..D-153, audit 2020-2029); under C's review; OUTSIDE the queue |
+| #143 | `docs/phase-4-3-slice7-plan` | `2b2ac29` (C and F confirmed up to `c4fc3a3`; M6, R1 and Lows in `2b2ac29` under C's confirmation) | B (Opus) | 4.3 slice 7 plan, live company restore cutover (D-081; docs only, D-143..D-153, audit 2020-2029); under C's review; OUTSIDE the queue |
 | #142 | `feat/numeric-input-digits` | `9736fa7` | E (Sonnet) | shared whole-number parsing for Arabic-Indic, Persian and mixed digits (frontend only, no registry change); approved, record pending; OUTSIDE the queue |
 
 WIP with no pull request yet: D's S2 (system 0033 at rebase, D-142). B's slice 7 plan is #143 (docs only, D-143..D-153, audit 2020-2029) and is outside the merge queue.
