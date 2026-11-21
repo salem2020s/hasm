@@ -1,0 +1,110 @@
+# Phase 3.14 - Cash and bank accounts, vouchers and transfers (PLAN, docs only)
+
+Status: **PLAN.** Nothing here is built. The lead confirmed (2026-11-21) that this phase is planned now and that its first slice does not depend on 3.13 S3, S4 or S5b. Every rule below is taken from the approved SRS (3 "a cashbox per branch", 4, 5, 7.1, 10, 11, 19, 21.6), `docs/REPORTING-REQUIREMENTS.md` (RR-4), `docs/ROADMAP.md` (3.14) and the existing decisions. **Where those sources are silent, the point is an owner question (section 7) with a fail-closed default; no accounting rule is invented.** Decision IDs D-154 to D-159 (lead allocation under D-048) are recorded in `docs/DECISIONS.md` as PLANNED.
+
+## 1. Sources and scope
+
+* **ROADMAP 3.14:** cashboxes and bank accounts per branch; receipt and payment vouchers (initially UNALLOCATED); transfers between cash and bank accounts; ledger integration; approval. Acceptance: a voucher posts once, balances reconcile to the ledger, branch authorization. Mandatory tests: PostgreSQL and web tests. Migrations: company and system. Risk: High.
+* **SRS:** 3 (each branch has its own cashboxes); 4 (RBAC by branch, approval policies by type, value and branch, separation of duties, posted documents are immutable); 5 (balanced atomic journals, fiscal periods); 7.1 (receipt and payment vouchers; numbering per company, branch, type and fiscal year, official number at approval, a cancelled number is never reused); 10 (cashboxes, banks, transfers and vouchers; allocation to invoices belongs to 3.17); 19.2 (one effect per business event), 19.3 (no change to a posted document), 19.5 (no posting into Final Closed periods); 21.6 (a voucher allocation, a bank match or a retry after a disconnection never creates a duplicate receipt or entry).
+* **RR-4 (cash account movement report):** opening, debit, credit, running and closing balance per cashbox or cash account; filters by account, branch, date and transaction type; each line navigates to its voucher or journal; the closing balance equals the ledger balance of the account.
+* **Out of scope here (other phases, with their roadmap numbers):** allocation of vouchers to invoices, advances and credit notes (3.17); foreign-exchange differences (3.18); cheques (3.19); bank statement import and reconciliation (3.20); inter-branch settlement accounting (3.22); opening balances (3.27); recurring vouchers (3.21); direct bank integration (not mandatory in R1, SRS 11).
+
+## 2. What already exists and is reused (verified in the repository on main)
+
+| Need | Existing mechanism | How 3.14 uses it |
+|---|---|---|
+| Ledger effect | `JournalService` automatic path: `CreateInWorkAsync` with `DocumentSource.Automatic` and a unique source key among non-cancelled entries; the approval gate is evaluated in SQL; `FiscalPeriodGate` share-locks the period; posting refuses Final Closed | A voucher or transfer creates exactly ONE journal entry through this path, in the SAME transaction as its own state change, with a deterministic source key. |
+| Accounts | `AccountView`: type, nature, `IsPostable` (active and not a group), `AccountCurrencyPolicy` (Base, Any, Specific) | A cash or bank account is bound to ONE postable asset account whose currency policy fits (Q2). |
+| Numbering | `NumberingService` with the `DocumentTypes` registry in code (journal, stock documents, stocktake, adjustment): row-locked counter allocated inside the transaction, append-only issue ledger, voided numbers never reused, per branch and per fiscal year options | New document types are added to the registry; the official number is allocated in the approval transaction (SRS 7.1). |
+| Approval | the ordered approval-policy engine is restricted to `journal_entry` by `DocumentTypes.UsesApprovalPolicies`; stock documents and commercial documents (S1b) use an independent-approver rule in their own service; 3.13 S5a (#136, in the merge queue) extends the engine to registered commercial types as a reviewed precedent (D-140, D-141) | Slice 1 uses the independent-approver rule (never the creator, last editor or submitter). Policy-engine coverage of vouchers needs an explicit extension of `UsesApprovalPolicies` and is an owner question (Q5). |
+| Pending accounting state | stock posting creates a DRAFT journal entry with an explicit accounting-pending state; the existing `PendingJournalPeriodCloseProbe` blocks period close while a Draft, Pending approval or Approved entry is dated inside the period (domain `pending_accounting_postings`) | Same pattern for vouchers by default (Q4): no new stored flag, no new close probe is needed. |
+| Idempotency | commercial documents (S1a): a client idempotency key per new draft, replay returns the original, a reused key for other content is refused | Vouchers and transfers use the same create-idempotency rule (SRS 21.6). |
+| Reversal | `JournalService.ReverseAsync` (reverse-by-new-entry with the reference chain) | A posted voucher is corrected by reversal; a voucher is never edited or deleted after posting (SRS 19.3). |
+| Permissions and audit | `PermissionCatalog` resources with scope Branch (journal, ledger reports), `CompanyAuditedTransactions`, per-module audit ranges | New permission families and an audit range (section 6). |
+| Reports and export | the ledger query engine of 3.3 and the shared export engine (RR-12) | The cash movement report (RR-4) reuses them. |
+
+## 3. Design principles (each proven by a test in section 8)
+
+1. **One effect per business event.** Key `cashvoucher:<voucher id>` (and `cashtransfer:<id>`) is the unique source key of the journal entry; a retry or a concurrent approval returns the original or refuses, never duplicates (SRS 19.2, 21.6).
+2. **Posted means immutable.** A voucher or transfer that has an accounting effect cannot be edited, cancelled or deleted; PostgreSQL refuses UPDATE of identity and DELETE or TRUNCATE; correction is a reversal linked to the original (SRS 19.3).
+3. **The ledger is the source of truth for balances.** A cash or bank account's balance is read from its GL account; nothing here stores a running balance (RR-4: closing balance equals the ledger balance).
+4. **Company-scoped, branch-authorized, RBAC-checked on the server.** Both clients use the same API; no frontend-only security; no cross-company visibility (SRS 19.4).
+5. **Fail closed.** A missing account, rule, open period, rate or configuration yields a refusal or an explicit pending state with a reason, never a guess.
+6. **Separation of duties is not configurable away.** The approver differs from the creator, last editor and submitter (SRS 4); the automatic path never bypasses approval.
+7. **Unallocated now, allocated later.** A voucher records WHO paid or was paid (an optional party reference) and a status "unallocated"; allocation to invoices (3.17) will add links without changing a posted voucher or its entry (SRS 10: linking never creates a duplicate receipt entry).
+
+## 4. Data model sketch (logical; opaque physical names are generated by `tools/schema/company-00NN-cash-bank.cjs` with a `--check` CI step, like earlier phases)
+
+* `CashAccount`: id, kind (cashbox or bank), code (unique per company, stable), names (Arabic or English), branch (required), the bound GL account (unique: one GL account serves one cash or bank account), currency, optional bank details (bank name, account number, branch name; sensitivity per Q10), active flag, revision, audit fields. Never deleted; deactivation only while no open (unposted) voucher exists.
+* `CashVoucher`: id, kind (receipt or payment), cash or bank account, branch (the account's), date, party reference (optional), reference text, note, status (draft, submitted, approved, rejected, cancelled), official number (at approval), idempotency key, creator, last editor, submitter, approver, revision, counter lines.
+* `CashVoucherLine`: voucher, line number, counter account (postable), amount in the voucher currency, description, optional cost center and branch distribution as the journal already supports (SRS 5).
+* `CashTransfer`: id, from account, to account, date, amount, reference, status as vouchers, official number at approval, idempotency key, actors, revision.
+* Append-only `CashEvent` rows (created, submitted, approved, rejected, cancelled, journal created, reversed) per document for the history tab.
+* Link rows to the produced journal entry (document id, entry id, source key). The accounting state is DERIVED from the journal entry (pending, posted, reversed), never stored.
+
+## 5. Slice decomposition (smallest verifiable first; each slice = implement, test, independent review, merge)
+
+| Slice | Content | Migrations | PostgreSQL tests (registry impact) |
+|---|---|---|---|
+| **S1** Cash and bank account master | `CashAccount` table, API, permissions, audit, constraints (unique GL binding, asset type, postable, branch required, currency rule per Q2), deactivation rules, list and edit screen on the shared frontend (Tabs standard if several groups, none if simple), ar/en | company and system (permission codes and role presets), numbers at merge | about +8 to +10 classes of tests; counts exact in the registry |
+| **S2** Vouchers backend | `CashVoucher` and lines, state machine, idempotent create, independent-approver approval, official number at approval, journal creation in the approval transaction with the source key, derived accounting state, reversal, events | company | about +10 to +12 |
+| **S3** Transfers backend | `CashTransfer`, same rules, two-sided entry, same-branch and same-currency checks (Q7) | company | about +6 |
+| **S4** Voucher and transfer screens | shared Web/Tauri editors and lists (Tabs standard: identity and Save or Cancel stay visible, no state reset on tab switch), approval actions mirrored but never relied on, ar/en, keyboard access | none | none (frontend tests only) |
+| **S5** Cash movement report (RR-4) and export | report over the ledger engine with voucher and journal navigation, branch scope, Excel and PDF through the shared export engine, reconciliation proof | none | about +4 |
+| **S6** Close and reconciliation hardening | proof that a pending voucher entry blocks period close, balances reconcile to the ledger under concurrency, branch and company isolation matrix, runtime-role privileges for the new tables (the completeness guard of #132 applies) | company only if a grant is missing | about +4 |
+
+Slices S1 to S3 are independent of 3.13 S3, S4 and S5b. S4 to S6 follow their backends. Migration numbers are taken from the next free numbers in MERGE ORDER at each merge (company and system), never reserved here.
+
+## 6. State machines, rules and permissions
+
+* **Voucher or transfer:** draft -> submitted -> approved; rejected returns to draft with a reason; cancel only before approval (a number is allocated at approval, so a cancelled draft never consumed one); after approval the document is immutable and its journal entry is pending or posted through the journal workflow (Q4).
+* **Approval rules:** an approver is never the creator, the last editor or the submitter; approval is bound to the exact revision (If-Match); a material edit of an approved-but-not-posted document returns it to approval (SRS 4, mirrored from S1b); the material fields are the account, counter lines, amounts, date, party reference and currency.
+* **Dates:** the voucher date must fall in an Open fiscal period (a Soft Closed period needs the existing soft-closed posting permission; Final Closed is refused), checked by `FiscalPeriodGate` at approval and again when the journal posts; the date of the operation and the approval date are both recorded (SRS 9 last bullet, by analogy).
+* **Branch authorization:** a voucher belongs to the branch of its cash or bank account; a user acts only on branches they hold; the transfer needs the permission for the branch of BOTH accounts.
+* **Permissions (proposal; the lead confirms the names):** `company.cashaccounts` (scope Branch: view, create, update, activate), `company.cashvouchers` (scope Branch: view, create, update, submit, approve, cancel, reverse), `company.cashtransfers` (scope Branch: the same actions), `company.cashreports` or reuse of `company.ledgerreports` for RR-4 (Q-free: reuse is the default). **Approve is NOT in the Company Administrator preset** (a Cash Approver preset and custom roles hold it, like the journal and commercial approval).
+* **Audit:** a NEW contiguous business-audit block is reserved at S1 (proposal 2100-2199; the lead confirms, because 2000-2029 are allocated to retention and backup). Events: account created or updated or deactivated; voucher created, submitted, approved, rejected, cancelled, journal created, reversed; transfer likewise.
+
+## 7. OPEN questions where the approved sources are silent (OWNER decision needed; fail-closed default stated; none is decided here)
+
+| # | Question | Why the sources do not answer | Fail-closed default until decided |
+|---|---|---|---|
+| Q1 | Is a cashbox or bank account its own master bound 1:1 to a GL asset account, or only a flag on the GL account? | SRS 3 and 10 name cashboxes and banks per branch but not the data model. | Its own master record, bound to ONE postable ACTIVE asset account (unique), with a required branch. |
+| Q2 | May a cash or bank account be in a foreign currency, and how are voucher amounts converted? | SRS 5 requires multi-currency with dated rates, but FX differences are 3.18 and not specified. | Base-currency accounts only; a foreign-currency account is refused until 3.18 is decided. |
+| Q3 | What is the counter side of an UNALLOCATED receipt or payment (the account credited by a receipt, debited by a payment) and is a party mandatory? | SRS 10 mentions advances and unallocated amounts without the ledger treatment. | The voucher names its counter account or accounts explicitly (postable, active); the party is an optional reference; NO automatic receivable, payable or advance rule and no use of a party's control account until the owner decides it. |
+| Q4 | Does approving a voucher post its journal entry in the same step, or create a pending draft entry that the journal workflow posts? | SRS 7.4 allows either (automatic posting or an explicit accounting-pending state); ARCHITECTURE keeps tracks separate. | Pending draft entry (as stock documents): explicit state with reason, blocks period close, posted through the journal workflow with its own approval. One-step posting is a later owner-approved change. |
+| Q5 | Do vouchers and transfers use the approval-policy engine (by amount, branch, risk, stages) or only the independent-approver rule? | SRS 4.3 requires policies by type, value and branch for documents generally; the engine is limited to journals (and S5a commercial types, in review). | Independent approver only; engine coverage is an explicit extension of `UsesApprovalPolicies`, decided by the owner. |
+| Q6 | Must a payment or transfer that would overdraw a cashbox or bank account be refused? | The SRS states no minimum balance. | No refusal (inventing a limit would be a business rule); the report shows negative balances; an owner-defined policy can add a check later. |
+| Q7 | May a transfer cross branches or currencies? | SRS 3 requires inter-branch settlements (3.22) and FX differences (3.18) but not their rules. | Same branch and same (base) currency only; anything else is refused until 3.22 and 3.18 define the entries. |
+| Q8 | Are bank account numbers sensitive (masked, separate permission, never in exports)? | SRS 17 requires protection of secrets and sensitive data but does not classify bank details. | Treated as sensitive: masked in lists and exports, shown in full only with the account view permission on that branch; never written to logs or the audit detail. |
+| Q9 | May a voucher be cancelled after approval but before its entry posts? | Not stated for vouchers; S1b allows cancel with a reason while no effect exists. | After approval the document is immutable; the only correction is to reverse the posted entry (or cancel the pending draft entry through the journal workflow); no cancel of an approved voucher. |
+| Q10 | Does the cash account need a physical cash count or closing procedure? | Not in the SRS for R1. | Not built. |
+
+**Needed BEFORE S1:** Q1, Q2. **Before S2:** Q3, Q4, Q5, Q9. **Before S3:** Q6, Q7. **Before S1 screens or exports:** Q8. Q10 is not scheduled. Each default is the preserving one; an answer that relaxes it is an owner decision recorded in the register of `docs/INTEGRATION-STATUS.md` and follows the PR rules.
+
+## 8. Mandatory tests per slice (exact names are proposals; every test is PostgreSQL unless marked)
+
+* **S1** `CashAccountTests` (create, unique GL binding, asset and postable and active checks, currency rule, branch required, deactivation refused while a draft voucher exists, revision conflicts, opaque physical names), `CashAccountAccessTests` (branch scope: a user of branch A cannot see or edit an account of branch B; company isolation), `CashAccountApiTests` (401, 403 for no permission and for read-only, translated refusals), runtime-role privileges, generator `--check`; frontend: list and edit screens in Arabic RTL and English LTR, forbidden state, conflict handling, keyboard.
+* **S2** `CashVoucherLifecycleTests` (state machine, idempotent create, independent approver, approval bound to the revision, number allocated at approval and never reused after cancel), `CashVoucherLedgerTests` (exactly one journal entry with the source key, balanced, the cash account's balance changes only when the entry posts, reversal links the chain, a failed journal creation rolls the approval back and consumes no number), `CashVoucherConcurrencyTests` (parallel approvals produce one effect; parallel creates with one key produce one voucher; retry after a simulated disconnection never duplicates, SRS 21.6), `CashVoucherPeriodTests` (soft closed refused without permission, final closed refused, a pending entry blocks close), `CashVoucherImmutabilityTests` (direct SQL cannot change or delete an approved voucher).
+* **S3** `CashTransferTests` (both sides in one entry, same branch and currency enforced, branch permission for both accounts, same invariants as vouchers).
+* **S4** component tests for the editors and lists (Tabs standard, state kept on tab switch, approval buttons mirror the server and the server still refuses, ar/en parity, no raw keys, the numeric and date inputs accept Arabic-Indic digits through the shared parser).
+* **S5** `CashMovementReportTests` (opening, debit, credit, running and closing balance equal the ledger balance, filters, navigation ids, branch scope, export content equals screen, export through the shared engine), web tests in both languages.
+* **S6** cross-module scenarios (voucher then period close then reversal), isolation matrix, permission matrix rows for every mutating route (the route-table completeness test of #119 requires a row), runtime-role completeness guard.
+* **Acceptance link:** SRS 21.6 (no duplicate receipt or entry on retry) and RELEASE1-ACCEPTANCE C (one effect per event, posted documents never changed) are proven by S2 and S6; B 21.6 also needs 3.17 and 3.20 for the allocation and bank-match halves.
+
+## 9. Risks and how the plan contains them
+
+| Risk | Containment |
+|---|---|
+| A duplicate receipt or entry on retry or concurrency | source key unique among non-cancelled entries, row-locked approval, create idempotency key, concurrency tests |
+| A voucher posted into a closed period | `FiscalPeriodGate` at approval and the journal's own database guard at posting; period tests |
+| Cash balance drifts from the ledger | no stored balance; the report reads the ledger; reconciliation test |
+| Unauthorized branch access | branch scope on every route, matrix rows, branch isolation tests |
+| A hidden accounting rule for unallocated money | Q3 default is explicit counter accounts only; nothing is inferred from a party |
+| Approval bypass by automation | the automatic path never skips the approval gate; SoD in service and database |
+
+## 10. What is explicitly NOT assumed
+
+* No default chart accounts, no seeded counter accounts and no automatic receivable, payable or advance posting.
+* No minimum balance, no cross-branch or cross-currency transfer, no FX difference, no cheque, no bank statement matching and no invoice allocation in this phase.
+* No new approval-policy semantics: S5a (#136) is a precedent, not a dependency; if the owner wants policy-engine coverage, that is a separate extension.
+* No change to journals, stock documents, commercial documents or any merged table.
