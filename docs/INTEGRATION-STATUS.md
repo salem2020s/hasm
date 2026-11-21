@@ -39,7 +39,7 @@ Migrations on `main`: see the cloud-team handoff section below (current values a
 | D-096..D-107 and D-120..D-129 | D | D-096..D-107 and D-120 on `main`; D-121..D-129 ALLOCATED, not yet on `main` |
 | D-108..D-115 | E and R | ALLOCATED, not yet on `main` (R's plan #114 is merged; its D-109/D-113 await the owner) |
 
-**Next free decision ID: D-130.** Audit-event blocks: **2000-2009** for R (attachment retention; the highest code in use on `main` is 1908); **2010-2019 requested for 4.3 slice 5, UNCONFIRMED** until the lead records the allocation. Migration allocation rule: system and company migrations are numbered in MERGE ORDER (the loader refuses gaps and generated names are never reused), allocated here and never reserved ahead in a PR; R1 (attachment retention) is expected to take **system 0030 and company 0031** (after #108's company 0030); 4.1 and 4.3 slice 5 take the next free number at merge.
+**Next free decision ID: D-142.** Audit-event blocks: **2000-2009** for R (attachment retention; the highest code in use on `main` is 1908); **2010-2013** for 4.3 slice 5 (#128), **2014-2019** for 4.3 slice 6, **2020-2029** for 4.3 slice 7 (lead allocation 2026-11-21). Decision IDs allocated and not yet on main: D-130..D-139 (B, 4.3 slice 6, #130), D-140..D-141 (A, 3.13 S5a). Migration allocation rule: system and company migrations are numbered in MERGE ORDER (the loader refuses gaps and generated names are never reused), allocated here and never reserved ahead in a PR; R1 (attachment retention) is expected to take **system 0030 and company 0031** (after #108's company 0030); 4.1 and 4.3 slice 5 take the next free number at merge.
 
 Cloud environment: .NET SDK 10 (installed in-session by the environment's own apt command); PostgreSQL 16 binaries; the Linux disposable-cluster harness (`scripts/test-pg/*.sh`, single holder lock, port 5433 only, destroy after use) is merged (#89). GraphQL is blocked: exact-head verification = the unmodified `main` copy of `tools/verify/verify-head.js` with `--input` from REST data; merges via REST with the head SHA pinned; for a final head that adds only a review record or a `main` merge, the code delta is proven identical to the reviewed head by `git patch-id`.
 
@@ -99,6 +99,7 @@ Inert pull requests (no action; details in the next section): #48 (`1e8f477`, BL
 | 3.13-Q4, Q5, Q6, Q12, Q16, Q17 | OPEN with the owner | S3 needs Q6, Q16, Q17 (and #107); S4 needs Q4, Q5, Q12; not started |
 | R-Q1..Q3 | OPEN with the owner: questions of the retention plan (`docs/PHASE-R-attachment-retention.md`); D-109 and D-113 are owner-pending | the plan (#114) is merged; retention policy and purge are not built; nothing deleted |
 | C | Production-readiness: mandatory Rust `cargo audit` job (M6) | no Rust audit exists (pre-existing gap); adding a mandatory job changes protected gates, so it needs the owner |
+| 4.3-ACT | Activation of automatic backup deletion (D-137, 4.3 slice 6): OPEN with the owner; activation PR is never self-merged and needs an explicit owner instruction plus recorded evidence | deletion INACTIVE (three layers); preview only |
 
 ## Medium follow-ups recorded in review records (no approval needed; schedule with the owning slice)
 
