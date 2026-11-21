@@ -143,6 +143,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.DiscountRule.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CustomerGroup.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CustomerGroupMember.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CommercialDocument.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CommercialDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),   // lines are replaceable ONLY while the document is a draft (PostgreSQL trigger); every replacement is audited
+        (CompanySchema.CommercialDocumentEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
