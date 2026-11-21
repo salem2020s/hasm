@@ -41,16 +41,19 @@ public sealed partial class PricingConfigService
     }
 
     /// <summary>
-    /// One page of customer groups for an optional search (code or either name, literal and case-insensitive through PostgreSQL's <c>upper()</c>), ordered by code, with the total from the same statement.
-    /// All values are parameters; the limit is clamped (default 50, at most 500).
+    /// One page of customer groups for an optional search (code or either name, literal and case-insensitive through PostgreSQL's <c>upper()</c>) and an optional active filter (true = only active groups,
+    /// false = only inactive, null = both), ordered by code, with the total from the same statement. The filter is part of the one WHERE shared by the page, the window total and the past-the-end count, so
+    /// <c>total</c> always counts exactly the filtered rows. All values are parameters; the limit is clamped (default 50, at most 500).
     /// </summary>
-    public async Task<CustomerGroupPage> SearchCustomerGroupsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    public async Task<CustomerGroupPage> SearchCustomerGroupsAsync(Guid companyId, string? search, int? offset, int? limit, bool? active = null, CancellationToken ct = default)
     {
         ListPaging.TryCleanSearch(search, out var cleaned);
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var q = new NpgsqlCommand { Connection = conn };
-        var w = "";
-        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", CG.Code, CG.NameAr, CG.NameEn); q.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var clauses = new List<string>();
+        if (cleaned is not null) { clauses.Add(ListPaging.LikeClause("like", CG.Code, CG.NameAr, CG.NameEn)); q.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        if (active is { } a) { clauses.Add($"{CG.IsActive} = @active"); q.Parameters.AddWithValue("active", a); }
+        var w = clauses.Count == 0 ? "" : " WHERE " + string.Join(" AND ", clauses);
         var off = ListPaging.ClampOffset(offset);
         q.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
         q.Parameters.AddWithValue("off", off);

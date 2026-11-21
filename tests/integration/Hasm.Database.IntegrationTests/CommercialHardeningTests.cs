@@ -57,8 +57,23 @@ public class CommercialHardeningTests : CommercialTestBase
         var (state, message) = await Run($"UPDATE {CD.Table} SET {CD.DocumentDate} = '2027-01-05', {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{a.Id}'");
         Assert.Equal("P0001", state);
         Assert.Contains("fiscal year of its number", message);
+        // the boundaries of the year 2026-01-01 .. 2026-12-31 (L5): start - 1 and end + 1 are refused, the start and the end themselves are inclusive, in PostgreSQL and in the service
+        string Set(string date) => $"UPDATE {CD.Table} SET {CD.DocumentDate} = '{date}', {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{a.Id}'";
+        Assert.Equal("P0001", (await Run(Set("2025-12-31"))).State);
+        Assert.Equal("P0001", (await Run(Set("2027-01-01"))).State);
+        var draft = (await Docs.GetAsync(Company.Id, a.Id))!;
+        Invalid(await Docs.UpdateAsync(Admin.Id, Company.Id, a.Id, draft.Revision, Doc(branch, party, item, unit, "ignored-key-xx") with { DocumentDate = new DateOnly(2025, 12, 31) }), "documentDate", "date_outside_number_year");
+        Invalid(await Docs.UpdateAsync(Admin.Id, Company.Id, a.Id, draft.Revision, Doc(branch, party, item, unit, "ignored-key-xx") with { DocumentDate = new DateOnly(2027, 1, 1) }), "documentDate", "date_outside_number_year");
+        Assert.Null((await Run(Set("2026-12-31"))).State);                                                                       // the end date itself (inclusive)
+        Assert.Null((await Run(Set("2026-01-01"))).State);                                                                       // the start date itself (inclusive)
+        draft = (await Docs.GetAsync(Company.Id, a.Id))!;
+        Assert.Equal(new DateOnly(2026, 1, 1), draft.DocumentDate);
+        var atEnd = Ok(await Docs.UpdateAsync(Admin.Id, Company.Id, a.Id, draft.Revision, Doc(branch, party, item, unit, "ignored-key-xx") with { DocumentDate = new DateOnly(2026, 12, 31) }));
+        Assert.Equal(new DateOnly(2026, 12, 31), atEnd.DocumentDate);
+        var atStart = Ok(await Docs.UpdateAsync(Admin.Id, Company.Id, a.Id, atEnd.Revision, Doc(branch, party, item, unit, "ignored-key-xx") with { DocumentDate = new DateOnly(2026, 1, 1) }));
+        Assert.Equal(new DateOnly(2026, 1, 1), atStart.DocumentDate);
         // a date inside the same year is allowed (the last statement: it commits)
-        Assert.Null((await Run($"UPDATE {CD.Table} SET {CD.DocumentDate} = '2026-09-01', {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{a.Id}'")).State);
+        Assert.Null((await Run(Set("2026-09-01"))).State);
     }
 
     [PostgresFact]
