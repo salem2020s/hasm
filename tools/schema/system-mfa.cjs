@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const MIGRATION_FILE = "0030_mfa_state_and_totp.sql";   // PROVISIONAL number: renamed at merge time (see above)
+const MIGRATION_FILE = "0031_mfa_state_and_totp.sql";   // assigned by the lead (0030 is R1, 0032 is #134, 0033 is the S2 login migration)
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
 const outSql = path.join(infra, "SystemDatabase", "Migrations", MIGRATION_FILE);

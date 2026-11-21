@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "045dd2a30c4e271edac14e12ae7bdaa38bb014d5",
-    "note": "main = 045dd2a (merge of #116), read from git and GitHub REST on 2026-11-21 (sprint 1 handoff refresh). PostgreSQL registry 1092 (.github/workflows/backend.yml). Migrations: company 0001-0029, system 0001-0029; company 0030 allocated to #108."
+    "verifiedHead": "0aeeab77b68f7151cdc7df059c1b6cacd85ef614",
+    "note": "main = 0aeeab7 (merge of #128), read from git and GitHub REST on 2026-11-21 (sprint 2 handoff refresh). PostgreSQL registry 1149 (.github/workflows/backend.yml). Migrations: company 0001-0031, system 0001-0030; allocation: system 0031 #133, 0032 #134, 0033 D's S2; company 0032 S5a (#136)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -14,101 +14,89 @@
   },
   "mergedRecently": [
     {
-      "pr": 110,
-      "phase": "owner decisions 1-11 (D-078..D-088)",
-      "mergeCommit": "e31c823090921c18dce032f7a24c3efea1113e7c",
-      "headMerged": "74298754023f595ec2407fcf4c5dcd10404a8788"
+      "pr": 126,
+      "phase": "S6 Links tab",
+      "mergeCommit": "631361afe18a6e9c43b498e72a15389dbc1c46f8",
+      "headMerged": "157ddea8a1c1539a2b9f20c9505d7fd87880461c"
     },
     {
-      "pr": 111,
-      "phase": "CI: PostgreSQL client/server major-version assertion (D-084)",
-      "mergeCommit": "3e5a3eba5fab2b1275e5ac036034cfd4f0507431",
-      "headMerged": "e10d37ded18c8939508be16ec14e7864b19c6608"
+      "pr": 107,
+      "phase": "PostInWorkAsync",
+      "mergeCommit": "9d542293a3240a89bec3c6bfc930e06b832b7c4d",
+      "headMerged": "d4b49d56405be0bb1eb4426b3a8e283241e57a3f"
     },
     {
-      "pr": 104,
-      "phase": "4.3 slice 4 backup run of the whole installation",
-      "mergeCommit": "db2a55ebe835dc3e987e22fa2dd7b86b51a31571",
-      "headMerged": "cdb35478e8f25d4da4e0b16b26810dcf3a82763a"
+      "pr": 131,
+      "phase": "Phase R slice R1",
+      "mergeCommit": "89f8ffe3f041305d45a51c103fe01a53b2e90045",
+      "headMerged": "9d6a6a28cc477fd10e1bc078621e761218a98a8d"
     },
     {
-      "pr": 114,
-      "phase": "plan for attachment retention, decision R (D-082)",
-      "mergeCommit": "b676f5ff025e4a800e2f85113215e1b523fb00fc",
-      "headMerged": "0c0c6b520731d1e98c3af9232cada86ff4a2c0f8"
+      "pr": 132,
+      "phase": "runtime-role access to the document-link table",
+      "mergeCommit": "b65b93b3e2446a3c5a0851cfbad6731ef6b2d2ba",
+      "headMerged": "7f9a7f31782faf2fbd76e26fe046dc132ba354d8"
     },
     {
-      "pr": 113,
-      "phase": "4.1 MFA and identity security plan (D-080)",
-      "mergeCommit": "002ffa3d65b7fc8feabc04be21f8f7566ada2d9e",
-      "headMerged": "f555856ca7e9f36ba2367df50e0ad2c1b6168cd4"
+      "pr": 119,
+      "phase": "endpoint permission matrix",
+      "mergeCommit": "364a5194c14769fdcacbe4a87d2e8634df823a20",
+      "headMerged": "b5618a5be9227e7461caa24f6aa3e26b74069394"
     },
     {
-      "pr": 120,
-      "phase": "D-120, user_totp always excluded from S1",
-      "mergeCommit": "039ad5841034b76b9b45aec0f8ba0a2655c8cc9f",
-      "headMerged": "c7da2bc2bbf5fa4fe84d30600490835c64a13412"
+      "pr": 138,
+      "phase": "model identifiers removed from docs",
+      "mergeCommit": "ae65f9ba6de4f13bc4f671491b9a94ca07427fd7",
+      "headMerged": "0f1c8183fc2ea93057822d4aa1636f63a54fa19d"
     },
     {
-      "pr": 112,
-      "phase": "AuditTrail first-touch state scoped to one PostgreSQL transaction",
-      "mergeCommit": "7f65b3222c54ffb17079db0b7f7fd03d5229b972",
-      "headMerged": "75983c448121ab2c6581831a006ba9be00e3fe8d"
+      "pr": 135,
+      "phase": "isolated parallel PostgreSQL workers",
+      "mergeCommit": "38096b57132562b861f2dc2c19d026e4b94b52bf",
+      "headMerged": "9639126f86a2824a8656b75b30498f7a353ee3d2"
     },
     {
-      "pr": 115,
-      "phase": "endpoint authorization inventory",
-      "mergeCommit": "bdb63f844fba56dfe7bbee4287afd6a56e2b5b71",
-      "headMerged": "6157778cac5a871b614a71ed1b903ef46d9196aa"
+      "pr": 140,
+      "phase": "migration CREATE TABLE scan hardening",
+      "mergeCommit": "649fbc90e1cfb524de86ce91333319c156345f54",
+      "headMerged": "e1f76c936624efd67e96ab240df4ee752796dc16"
     },
     {
-      "pr": 118,
-      "phase": "frontend i18n parity, permission/session states, Arabic-digit input",
-      "mergeCommit": "b8f551e46900b66f1143d720dd5e843a6b7966a0",
-      "headMerged": "0282f92fbc3845d3b5b672a010e758ceeecfd89b"
+      "pr": 129,
+      "phase": "number_already_issued refusal",
+      "mergeCommit": "2c860520b29293fe5b7acea305fba3a3e2abd4b7",
+      "headMerged": "8e08340a8256070f5ab3f853980a4fb5769a9743"
     },
     {
-      "pr": 116,
-      "phase": "4.3 slice 5 plan (encrypted and signed backup sets)",
-      "mergeCommit": "045dd2a30c4e271edac14e12ae7bdaa38bb014d5",
-      "headMerged": "6fd39d97e96f9e1baee5afd410b259356e463b68"
+      "pr": 139,
+      "phase": "Phase R slice R3 screen",
+      "mergeCommit": "67450de0ad07d6af67b1bb63e089223e02478f96",
+      "headMerged": "041a704d8288d7c2c202d4552196b72b42d740fb"
     },
     {
-      "pr": 105,
-      "phase": "handoff refresh",
-      "mergeCommit": "d3bee747a46242baa2a7231ee3970f68090330c4",
-      "headMerged": "e0e4250755a2c1e538e06fe03dad019da366584c"
+      "pr": 141,
+      "phase": "pricing UI test split",
+      "mergeCommit": "5b9fe04fdb54befb0033d9375c1ca04f857fca4f",
+      "headMerged": "bb8af29581ce25a38717ff6cf01e0a445448f5b8"
     },
     {
-      "pr": 99,
-      "phase": "3.13 S1b",
-      "mergeCommit": "98c3a0adc62659d8725a307d82fb8afb37ea61e5",
-      "headMerged": "3fc0d4f6fcf908bba8b66951a0328973767ee7d5"
-    },
-    {
-      "pr": 106,
-      "phase": "by-ids lookup of units and item groups",
-      "mergeCommit": "61ee7bed74cd550dc82084b95dd66fa13e4254c2",
-      "headMerged": "c9c157cff5a4f6aece2560ea3b0344386e3bbee3"
-    },
-    {
-      "pr": 82,
-      "phase": "CLAUDE.md standing authorization",
-      "mergeCommit": "0c4661dc04bcf7c8670ef705d95a2485f979958f",
-      "headMerged": "e9c5f688f59433f0366b551c47e4846c10ef1e82"
+      "pr": 128,
+      "phase": "4.3 slice 5 encrypted backup sets",
+      "mergeCommit": "0aeeab77b68f7151cdc7df059c1b6cacd85ef614",
+      "headMerged": "dfcceab6fa328a765c2c4b7862bdfb79ecf48c79"
     }
   ],
   "active": {
-    "phase": "Release 1 sprint 1 (cloud team)",
-    "state": "Open Draft PRs and the merge sequence are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
+    "phase": "Release 1 sprint 2 (cloud team)",
+    "state": "Open Draft PRs, the merge queue and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
     "knownIssues": [
-      "Decisions: D-130 is the next free ID; D-108..D-115 (E, R), D-121..D-129 (D) and D-074..D-077 (A) are allocated and not yet on main.",
-      "Audit-event blocks: 2000-2009 for R; 2010-2019 requested for 4.3 slice 5, unconfirmed.",
-      "Migration numbers follow merge order; R1 is expected to take system 0030 and company 0031 after #108's company 0030."
+      "Decisions: next free ID D-152; D-140..D-141 (A, #136), D-142 (D, S2 branch) and D-143..D-151 (B, #143) are not on main; D-108..D-115 and D-121..D-129 allocated and not on main.",
+      "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7.",
+      "Release acceptance stays blocked per owner item 11 (D-088) until encryption and authenticated manifests are tested."
     ]
   },
   "next": [
-    "Merge in the recorded sequence, re-reconciling the PostgreSQL registry, migration numbers, decision and audit ranges and the exact head at each step.",
+    "Merge in the recorded queue order, re-reconciling the registry, migration numbers, decision and audit ranges and the exact head at each step.",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
@@ -125,9 +113,19 @@
     "3.13-Q12",
     "3.13-Q16",
     "3.13-Q17",
+    "3.13-Q18",
     "R-Q1",
     "R-Q2",
-    "R-Q3 (D-109 and D-113 owner-pending)"
+    "R-Q3 (D-109 and D-113 owner-pending)",
+    "4.3-ACT",
+    "4.3-S6-Q1..Q7",
+    "4.3-S7-Q1..Q6",
+    "S5a-Reject",
+    "S5a-DIGIT",
+    "S5b",
+    "STOCK-PERIOD-DB (proposal recommends option b)",
+    "M2-TOTP (production-readiness blocker)",
+    "REL-ACC (release acceptance blocked, D-088)"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -146,60 +144,60 @@
   },
   "openPullRequests": [
     {
-      "pr": 109,
-      "branch": "feature/party-picker-search",
-      "head": "d6e9ff4676248227ab87182557d6ba849b30d2ab",
-      "owner": "E (Sonnet)",
-      "state": "party picker searches the server; first in the merge sequence"
-    },
-    {
-      "pr": 108,
-      "branch": "feature/phase-3-13-s2",
-      "head": "e0483b5fb574fcd3a3e4048ec921db19d8a92743",
-      "owner": "A (Sonnet)",
-      "state": "3.13 S2 document links, company 0030, D-074..D-077"
-    },
-    {
-      "pr": 107,
-      "branch": "feature/stock-posting-in-work",
-      "head": "a81d15c60aac4cdd3f026935cb808695291b699c",
-      "owner": "D (Sonnet)",
-      "state": "3.7B in-transaction PostInWorkAsync"
-    },
-    {
-      "pr": 117,
-      "branch": "test/cross-module-scenarios",
-      "head": "b85e77018732fd2fe66390028617bff30e68c7bc",
+      "pr": 125,
+      "branch": "test/journal-commercial-invariants",
+      "head": "2f9ee37c36f7b4002f8f08813960b9e013d79af1",
       "owner": "F (Opus)",
-      "state": "cross-module accounting scenarios"
+      "state": "journal and commercial invariants; queue 1"
     },
     {
-      "pr": 121,
-      "branch": "test/concurrency-invariants",
-      "head": "146a66e0fbce1da6c99909a235704deee95fb35c",
-      "owner": "H (Sonnet)",
-      "state": "concurrency invariants, registry +6; F reviewing"
+      "pr": 133,
+      "branch": "feature/phase-4-1-s0",
+      "head": "3a7a51760ccf1378e5b9bb648110bd171182cb6c",
+      "owner": "D (Sonnet)",
+      "state": "4.1 S1 MFA state and TOTP secret store (system 0031); approved; queue 2"
     },
     {
-      "pr": 123,
-      "branch": "feature/frontend-followups-118",
-      "head": "849e8422936c066a4043cdb39765ac4e5c3ca4c1",
-      "owner": "H (Sonnet)",
-      "state": "#118 follow-ups; approved, waiting for hosted CI; second in the sequence; no registry change"
+      "pr": 127,
+      "branch": "test/inventory-period-invariants",
+      "head": "113b285edf158833b5f3f6f751f0023d1571dc7a",
+      "owner": "F (Opus)",
+      "state": "inventory period invariants; queue 3"
     },
     {
-      "pr": 119,
-      "branch": "test/endpoint-permission-matrix",
-      "head": "9a014302d112ce9b49ca0597510271424d75d086",
-      "owner": "C (Opus)",
-      "state": "endpoint permission matrix; under construction"
-    },
-    {
-      "pr": 122,
-      "branch": "feature/phase-3-13-s6",
-      "head": "2d524f0d1d70a9f9ef2b8ab4339c0e7c5ea09133",
+      "pr": 136,
+      "branch": "feature/phase-3-13-s5a",
+      "head": "3bb88dfe85637615912252fe75f509fadae18ea1",
       "owner": "A (Sonnet)",
-      "state": "3.13 S6 screen, built from main (not stacked); Links tab after #108; 1 PostgreSQL test, registry reconciled at merge"
+      "state": "3.13 S5a approval policies (company 0032, D-140/D-141); queue 4"
+    },
+    {
+      "pr": 137,
+      "branch": "feature/phase-3-13-s5a-ui",
+      "head": "218046de81173882ec2a36b9d7d5fea4f45ae655",
+      "owner": "A (Sonnet)",
+      "state": "S5a approval-progress panel, stacked on #136; queue 5"
+    },
+    {
+      "pr": 134,
+      "branch": "feature/phase-4-3-slice6-impl",
+      "head": "016d0f81f12fc9f9927a0a0be84fc81524ae3832",
+      "owner": "B (Opus)",
+      "state": "4.3 slice 6 backup retention (system 0032); approved; red until #133 lands; queue 6"
+    },
+    {
+      "pr": 142,
+      "branch": "feat/numeric-input-digits",
+      "head": "9736fa7711da78bff9dedbe47b047773be7f8268",
+      "owner": "E (Sonnet)",
+      "state": "shared whole-number parsing for non-Latin digits; approved; outside the queue"
+    },
+    {
+      "pr": 143,
+      "branch": "docs/phase-4-3-slice7-plan",
+      "head": "63299f7b285a4a4ae09fe45e4999051b2e3163e9",
+      "owner": "B (Opus)",
+      "state": "4.3 slice 7 plan, live company restore cutover (docs only, D-143..D-151); under C's review; outside the queue"
     }
   ],
   "inertPullRequests": [
@@ -230,17 +228,15 @@
     }
   ],
   "mergeSequence": [
-    109,
-    123,
-    108,
-    107,
-    117,
-    121,
-    119,
-    122
+    125,
+    133,
+    127,
+    136,
+    137,
+    134
   ],
   "agents": {
-    "lead": "Claude Opus 5.5",
+    "lead": "Claude Opus",
     "sonnet": [
       "A",
       "D",
@@ -253,5 +249,9 @@
       "F",
       "G"
     ]
-  }
+  },
+  "outsideQueue": [
+    142,
+    143
+  ]
 }

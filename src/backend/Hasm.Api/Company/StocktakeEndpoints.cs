@@ -11,7 +11,7 @@ public static class StocktakeSetup
 {
     public static IServiceCollection AddHasmStocktakes(this IServiceCollection services)
     {
-        services.AddSingleton(sp => new StocktakeService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new StocktakeService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Hasm.Numbering")));
         services.AddSingleton(sp => new StocktakeManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<StockDocumentService>(), sp.GetRequiredService<StocktakeService>()));
         return services;
     }

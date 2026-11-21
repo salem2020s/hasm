@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LedgerHistory;
@@ -56,6 +57,29 @@ public static class LedgerAuditEvents
 /// </summary>
 public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
 {
+    /// <summary>
+    /// Whether a failure is the number-issue uniqueness guard refusing a number that is already issued (the counter and the issued numbers disagree, e.g. after a direct write). Callers map it to the stable,
+    /// retryable refusal <c>concurrent_change</c>: the whole transaction rolls back, so the counter does not move and no number is consumed. Narrowed to that one index so no other unique violation is masked.
+    /// </summary>
+    public static bool IsNumberCollision(PostgresException ex) => ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == NI.UniqueNumber;
+
+    /// <summary>
+    /// Runs an issue and turns a number collision into the caller's refusal (<c>number_already_issued</c>, not retryable: the counter and the issued numbers disagree until an administrator repairs them), logging a
+    /// warning that names only the document type. The caller's transaction still rolls back, so nothing is consumed.
+    /// </summary>
+    public static async Task<IssuedNumber> IssueOrRefuseAsync(Func<Task<IssuedNumber>> issue, string docType, ILogger? logger, Func<Exception> refusal)
+    {
+        try { return await issue(); }
+        catch (PostgresException ex) when (IsNumberCollision(ex))
+        {
+            logger?.LogWarning("numbering.number_already_issued docType={DocType}", docType);
+            throw refusal();
+        }
+    }
+
+    /// <summary>The stable refusal code of a number collision.</summary>
+    public const string NumberAlreadyIssued = "number_already_issued";
+
     internal const int LockKey1 = 0x48434E52;   // "HCNR": advisory-lock namespace of numbering configuration
     internal const int LockKey2 = 1;
     internal static readonly Guid None = Guid.Empty;

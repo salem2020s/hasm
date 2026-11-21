@@ -183,7 +183,9 @@ public class AttachmentTests : InventoryTestBase
 
         var b = Ok(await Up(name: "b.pdf"));
         Assert.Equal("P0001", await Fails($"DELETE FROM {AT.Table}"));
-        Assert.Equal("P0001", await Fails($"TRUNCATE {AT.Table}"));
+        // Since the retention tables (company 0031) reference the attachment, a plain TRUNCATE is refused earlier by PostgreSQL itself (0A000, referenced by a foreign key); CASCADE reaches the guard trigger.
+        Assert.Equal("0A000", await Fails($"TRUNCATE {AT.Table}"));
+        Assert.Equal("P0001", await Fails($"TRUNCATE {AT.Table} CASCADE"));
         Assert.Equal("P0001", await Fails($"UPDATE {AT.Table} SET {AT.FileName} = 'x', {AT.Revision} = {AT.Revision} + 1 WHERE {AT.Id} = '{b.Id}'"));          // identity data is immutable
         Assert.Equal("P0001", await Fails($"UPDATE {AT.Table} SET {AT.Sha256} = '{new string('a', 64)}', {AT.Revision} = {AT.Revision} + 1 WHERE {AT.Id} = '{b.Id}'"));
         Assert.Equal("P0001", await Fails($"UPDATE {AT.Table} SET {AT.UpdatedAtUtc} = now() WHERE {AT.Id} = '{b.Id}'"));                                          // revision must advance

@@ -16,7 +16,7 @@ public sealed record RewrapResult(int Rewrapped, int Remaining);
 public sealed record RestoreMfaResult(int UsersMarkedRecoveryRequired, int EnrolmentCodesInvalidated);
 
 /// <summary>
-/// Storage of the MFA state (user row, backed up) and of the TOTP secrets (<c>user_totp</c>, a secret store excluded from the system dump, D-120). Every mutation commits with its system-stream audit event in ONE
+/// Storage of the MFA state (user row, backed up) and of the TOTP secrets (<c>user_totp</c>, a secret store: excluded from unencrypted runs and included as ring ciphertext in encrypted runs, D-120). Every mutation commits with its system-stream audit event in ONE
 /// transaction: a mutation without its audit event does not happen. Secrets are encrypted by <see cref="TotpSecretProtector"/> before they reach the database. This layer holds NO policy (who may enrol or recover is
 /// slices S2 to S7); it guarantees the invariants of the tables: one Active and one Pending secret per user, a monotonic accepted step, an MFA state that follows <see cref="MfaStateGraph"/>.
 /// </summary>

@@ -26,9 +26,14 @@ using Npgsql;
 //   Hasm.Admin audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>]   (READ-ONLY integrity verification; exit 0 verified, 6 failed, 7 incomplete)
 //   Hasm.Admin audit-anchor <system|company-id> [--establish-baseline]  (records the head of a sound stream in the checkpoint store; never changes the database)
 //   Hasm.Admin backup-company <company-id> <destination-dir>  (Phase 4.3: database + attachment folder of ONE Ready company into a verified set; exit 8 when key ids are missing)
-//   Hasm.Admin trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]  (restores into a NEW unregistered database, runs the pre-cutover checks, drops it unless --keep; exit 0 ok, 8 warnings, 1 failed)
+//   Hasm.Admin trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]]
+//              (restores into a NEW unregistered database, runs the pre-cutover checks, drops it unless --keep; an encrypted set needs the recovery key; audited 2010; exit 0 ok, 8 warnings, 1 failed)
+//   Hasm.Admin backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin]
+//              (Phase 4.3 slice 5: verifies, decrypts and restores a whole encrypted run into disposable databases; writes recovery-test.json when passed; audited 2011; exit 0 passed, 8 passed with warnings, 1 failed)
 //   Hasm.Admin drop-trial-restore <kept-file>  (drops ONLY the trial database a --keep run recorded in that owner-only file)
 //   Hasm.Admin backup-run <root>  (Phase 4.3 slice 4: system database + every Ready company into <root>/<run id>/, run.json last; exit 0 ok, 8 partial, 1 failed, 4 another run in progress)
+//   Hasm.Admin backup-signing-keygen  (Phase 4.3 slice 5: a new ECDSA P-256 backup signing key in Hasm__Backup__SigningKeyDirectory, owner-only, never overwrites; audited 2013)
+//   Hasm.Admin backup-keys <destination-dir>  (Phase 4.3 slice 5: every key directory as ONE encrypted, signed export; signing PUBLIC keys only; audited 2012)
 //   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
@@ -44,6 +49,8 @@ Guid? onlyCompany = null;
 var rotateCredential = false;
 var keepTrial = false;
 var maxAgeHours = 26;
+string? recoveryKeyFile = null, signingTrustFile = null, signingPublicKeyFile = null, keysExportDir = null;
+var passphraseStdin = false;
 var keepLast = 0;
 int? keepDays = null;
 var validUsage = command switch
@@ -63,10 +70,14 @@ var validUsage = command switch
         && (args.Length == 2 || (args.Length == 4 && args[2] == "--checkpoint-dir" && !string.IsNullOrWhiteSpace(checkpointDirOverride = args[3]))),
     "audit-anchor" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream) && (args.Length == 2 || (args.Length == 3 && args[2] == "--establish-baseline")),
     "backup-company" => args.Length == 3 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[2]),
-    "trial-restore-company" => (args.Length == 4 || (args.Length == 5 && (keepTrial = args[4] == "--keep")))
-        && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[1]) && Path.IsPathFullyQualified(args[3]),
+    "trial-restore-company" => args.Length >= 4 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[1]) && Path.IsPathFullyQualified(args[3])
+        && ParseRestoreFlags(4, allowKeep: true, allowKeysExport: false),
+    "backup-recovery-test" => args.Length >= 2 && Path.IsPathFullyQualified(args[1]) && ParseRestoreFlags(2, allowKeep: false, allowKeysExport: true) && recoveryKeyFile is not null,
     "drop-trial-restore" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-recovery-keygen" => args.Length >= 2 && args.Length <= 4 && Path.IsPathFullyQualified(args[1]) && args.Skip(2).All(a => a is "--separate-passphrases" or "--passphrase-stdin") && args.Skip(2).Distinct().Count() == args.Length - 2,
     "backup-run" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-signing-keygen" => args.Length == 1,
+    "backup-keys" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-status" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length == 2
         || (args.Length == 4 && args[2] == "--max-age-hours" && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out maxAgeHours) && maxAgeHours is >= 1 and <= 8760)),
     "backup-retention-preview" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length is 4 or 6) && args[2] == "--keep-last"
@@ -76,7 +87,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file> | backup-run <root> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -100,7 +111,10 @@ if (command == "audit-keygen")
 if (command is "backup-status" or "backup-retention-preview")
 {
     // Read-only and without any database: usable by an operating-system monitor with no credentials at all (D-071). Nothing is written or deleted.
-    var runs = BackupRunStatus.List(args[1]);
+    // the server's own signing PUBLIC keys are the trust anchor for monitoring (an attacker controlling the server could forge a status anyway); restores use the operator's recovery-kit trust list
+    var statusOptions = BackupOptions.FromConfiguration(configuration);
+    var runs = BackupRunStatus.List(args[1], BackupMaterialLoader.ServerTrust(statusOptions));
+    if (statusOptions.UnencryptedDevTestOnly is not null) Console.WriteLine(BackupGuard.DegradedStatus);
     var now = DateTimeOffset.UtcNow;
     if (command == "backup-retention-preview")
     {
@@ -121,6 +135,44 @@ if (command is "backup-status" or "backup-retention-preview")
     if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
     if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns} (a damaged or altered run.json; investigate before relying on the newest run)");
     return status.ExitCode;
+}
+
+if (command == "backup-recovery-keygen")
+{
+    // Phase 4.3 slice 5 (D-085, D-089): run on an OFFLINE workstation. Refused where database settings exist, so it is not run on a configured server by accident; the private key is written only
+    // passphrase-encrypted, in two copies. Passphrases come from a prompt (twice) or, for scripted use, from standard input (--passphrase-stdin); never from an argument or a variable.
+    if (Environment.GetEnvironmentVariables().Keys.Cast<string>().Any(k => k.StartsWith("Hasm__Database__", StringComparison.OrdinalIgnoreCase)))
+    {
+        Console.Error.WriteLine("backup-recovery-keygen refused (recovery_keygen_on_server): Hasm__Database__* settings are present. Generate the recovery key pair on an offline workstation; only the PUBLIC key goes to the server.");
+        return BadConfig;
+    }
+    var separate = args.Contains("--separate-passphrases");
+    var fromStdin = args.Contains("--passphrase-stdin");
+    if (!fromStdin && Console.IsInputRedirected) { Console.Error.WriteLine("Run interactively to be prompted, or pass --passphrase-stdin."); return Usage; }
+    string? Ask(string label)
+    {
+        var first = fromStdin ? Console.In.ReadLine() : ReadHidden($"{label}: ");
+        var again = fromStdin ? Console.In.ReadLine() : ReadHidden($"{label} (again): ");
+        if (first is null || first != again) { Console.Error.WriteLine("The passphrases did not match; nothing was written."); return null; }
+        if (first.Length < RecoveryKeys.MinimumPassphraseLength) { Console.Error.WriteLine($"A recovery passphrase needs at least {RecoveryKeys.MinimumPassphraseLength} characters (or six diceware words); nothing was written."); return null; }
+        return first;
+    }
+    var p1 = Ask(separate ? "Passphrase for copy 1" : "Recovery key passphrase");
+    if (p1 is null) return Failed;
+    var p2 = separate ? Ask("Passphrase for copy 2 (a different custodian)") : p1;
+    if (p2 is null) return Failed;
+    if (separate && p1 == p2) { Console.Error.WriteLine("Separate passphrases must differ; nothing was written."); return Failed; }
+    try
+    {
+        var pair = RecoveryKeys.Generate(separate ? [p1, p2] : [p1]);
+        var files = RecoveryKit.Write(args[1], pair);
+        Console.WriteLine($"Recovery key pair {pair.KeyId} written to {args[1]}:");
+        foreach (var f in files) Console.WriteLine($"  {f}");
+        Console.WriteLine($"Put ONLY {pair.KeyId}.pub.pem on the server (Hasm__Backup__RecoveryPublicKeyFile). Move copy-1 and copy-2 to two separate offline media held apart (separate custodians when the passphrases differ),");
+        Console.WriteLine($"keep {pair.KeyId}.sha256 with each copy, then delete the private-key files from this workstation. Run backup-recovery-test before relying on the key (D-085).");
+        return Ok;
+    }
+    catch (BackupException ex) { Console.Error.WriteLine($"backup-recovery-keygen stopped ({ex.Code}); nothing usable was written."); return Failed; }
 }
 
 if (command == "encryption-keygen")
@@ -299,7 +351,11 @@ try
         case "trial-restore-company":
         case "drop-trial-restore":
         case "backup-run":
-            return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration);
+        case "backup-recovery-test":
+            return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration, new RestoreArgs(recoveryKeyFile, signingTrustFile, signingPublicKeyFile, keysExportDir, passphraseStdin));
+        case "backup-signing-keygen":
+        case "backup-keys":
+            return await BackupKeyCommandAsync(command!, args, options, configuration, auditOptions);
         case "migrate-companies":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
@@ -391,27 +447,57 @@ catch (Exception ex)
 }
 
 // Phase 4.3 backup commands (D-058): stable codes, counts, the company id and operator file paths only; never a physical database name, a password or tool output.
-static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration)
+static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration, RestoreArgs restore)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4, Warnings = 8;
-    var service = new CompanyBackupService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration));
+    var backupOptions = BackupOptions.FromConfiguration(configuration);
+    var trail = AuditTrail.FromOptions(AuditOptions.FromConfiguration(configuration), TimeProvider.System);
+    var systemConnection = options.BuildSystemConnectionString(admin: true);
+    // review M4 of #116: the audit and backup signing key directories are protected like the attachment and encryption ones
+    IReadOnlyList<string?> protectedDirs = [AuditOptions.FromConfiguration(configuration).KeyDirectory, backupOptions.SigningKeyDirectory];
+    var service = new CompanyBackupService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration), protectedDirectories: protectedDirs);
+    BackupMaterial? material = null;
     try
     {
+        if (command is "backup-company" or "backup-run")
+        {
+            // slice 5 (D-095): encrypted and signed by default; an unencrypted set only with the exact DEV/TEST acknowledgement, never silently
+            if (BackupGuard.Resolve(backupOptions) == BackupProtection.Encrypted) material = BackupMaterialLoader.Load(backupOptions);
+            else Console.Error.WriteLine($"WARNING {BackupGuard.DegradedStatus}: the set is NOT encrypted or signed (Hasm__Backup__UnencryptedDevTestOnly); never use this in production (D-088).");
+        }
         switch (command)
         {
             case "backup-company":
             {
-                var r = await service.BackupCompanyAsync(companyId, args[2]);
-                Console.WriteLine($"Backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
-                if (r.StagingFoldersSwept > 0) Console.WriteLine($"Stale staging folder(s) of earlier runs removed: {r.StagingFoldersSwept}.");
-                Console.WriteLine("Back up the key directory SEPARATELY (decision K); the set is not encrypted or signed yet.");
-                if (r.MissingKeyIds.Count == 0) return Ok;
-                Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {r.MissingKeyIds.Count} key id(s) the set needs: {string.Join(", ", r.MissingKeyIds)}.");
+                IReadOnlyList<string> missingKeys;
+                if (material is not null)
+                {
+                    var e = await service.BackupCompanyEncryptedAsync(companyId, args[2], material);
+                    Console.WriteLine($"Encrypted, signed backup of company {companyId} written and verified: {e.Manifest.Files.Count - 1} attachment file(s), {e.Manifest.Company!.KeyIdsRequired.Count} key id(s) needed, company migration level {e.Manifest.Company.CompanyMigrationVersion:0000}; recovery key {e.Manifest.RecoveryKeyId}, signing key {e.Manifest.SigningKeyId}.");
+                    missingKeys = e.MissingKeyIds;
+                }
+                else
+                {
+                    var r = await service.BackupCompanyAsync(companyId, args[2]);
+                    Console.WriteLine($"UNENCRYPTED (DEV/TEST only) backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
+                    if (r.StagingFoldersSwept > 0) Console.WriteLine($"Stale staging folder(s) of earlier runs removed: {r.StagingFoldersSwept}.");
+                    missingKeys = r.MissingKeyIds;
+                }
+                Console.WriteLine("Back up the key directories with backup-keys (D-087); never alongside the sets.");
+                if (missingKeys.Count == 0) return Ok;
+                Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {missingKeys.Count} key id(s) the set needs: {string.Join(", ", missingKeys)}.");
                 return Warnings;
             }
             case "trial-restore-company":
             {
-                var r = await service.TrialRestoreAsync(args[1], companyId, args[3], keep);
+                // slice 5: an encrypted set needs the operator's recovery key and trust list; an unencrypted set is accepted only under THIS reader's DEV/TEST acknowledgement (D-095, review M1)
+                RestoreKeys? keys = null;
+                if (CompanyBackupService.IsEncryptedSet(args[1])) keys = restore.RecoveryKeyFile is null ? throw new BackupException("recovery_key_required") : LoadRestoreKeys(restore);
+                else if (!BackupGuard.UnencryptedReadAllowed(backupOptions)) throw new BackupException("unencrypted_set_refused");
+                else Console.Error.WriteLine($"WARNING {BackupGuard.DegradedStatus}: restoring an UNENCRYPTED, unsigned set (DEV/TEST only).");
+                TrialRestoreResult r;
+                try { r = await service.TrialRestoreAsync(args[1], companyId, args[3], keep, keys, allowUnencrypted: keys is null && BackupGuard.UnencryptedReadAllowed(backupOptions)); }
+                finally { keys?.Recovery.Dispose(); }
                 Console.WriteLine($"Trial restore of company {companyId}: {r.Verdict switch { TrialRestoreVerdict.Ok => "OK", TrialRestoreVerdict.OkWithWarnings => "OK WITH WARNINGS", _ => "FAILED" }}.");
                 Console.WriteLine($"Attachment files restored: {r.AttachmentFiles} (without a row: {r.UnreferencedFiles}); company migration level {(r.MigrationVersion is { } v ? v.ToString("0000") : "unknown")}.");
                 foreach (var f in r.Failures) Console.WriteLine($"  [FAILURE] {f.Code} count={f.Count}");
@@ -421,18 +507,42 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                     : "The trial database was dropped. Nothing was registered and no live database or folder was touched.");
                 Console.WriteLine($"Measured trial restore time: {r.Elapsed.TotalSeconds:0.0} s (record it in the drill log; see docs/DEVELOPMENT.md).");
                 Console.WriteLine("This is a trial restore: the cutover and the audited restore acknowledgement are not available (BLOCKED).");
+                // D-118: a restore operation; the system-stream event names the operator, key ids, the company and a TAG of the trial database (never its name). Fail closed when it cannot be written.
+                if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.TrialRestore,
+                    $"trial restore operator={BackupAudit.Operator()} company={companyId:D} outcome=completed verdict={r.Verdict.ToString().ToLowerInvariant()} encrypted={(r.Encrypted ? "yes" : "no")} recovery={r.RecoveryKeyId ?? "none"} signing={r.SigningKeyId ?? "none"} db={r.DatabaseTag ?? "none"} kept={(r.KeptFile is null ? "no" : "yes")}",
+                    companyId)) return Failed;
                 return r.Verdict switch { TrialRestoreVerdict.Ok => Ok, TrialRestoreVerdict.OkWithWarnings => Warnings, _ => Failed };
+            }
+            case "backup-recovery-test":
+            {
+                var keys = LoadRestoreKeys(restore);
+                var work = Path.Combine(Path.GetTempPath(), "hasm-recovery-test-" + Guid.NewGuid().ToString("N"));
+                RecoveryTestResult t;
+                try { t = await new RecoveryTestService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration)).RunAsync(args[1], keys, restore.KeysExport, work); }
+                finally { keys.Recovery.Dispose(); }
+                Console.WriteLine($"Recovery test of run {t.RunId}: {(t.Passed ? "PASSED" : "FAILED")} in {t.Elapsed.TotalSeconds:0.0} s; recovery key {t.RecoveryKeyId}, signing key {t.SigningKeyId}; {t.Companies.Count} company set(s) restored into disposable databases (dropped); key export {(t.KeyExportChecked ? "checked" : "NOT checked")}.");
+                foreach (var f in t.Failures) Console.WriteLine($"  [FAILURE] {f.Code} count={f.Count}");
+                foreach (var w in t.Warnings) Console.WriteLine($"  [WARNING] {w.Code} count={w.Count}");
+                if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RecoveryTest,
+                    $"recovery test operator={BackupAudit.Operator()} run={t.RunId} outcome=completed verdict={(t.Passed ? "passed" : "failed")} recovery={t.RecoveryKeyId} signing={t.SigningKeyId} key_export={(t.KeyExportChecked ? "yes" : "no")} db={string.Join(',', t.DatabaseTags)} companies={string.Join(',', t.Companies.Select(c => c.ToString("N")))}"))
+                    return Failed;
+                if (!t.Passed) return Failed;
+                RecoveryTestService.WriteProof(args[1], t, DateTimeOffset.UtcNow);
+                Console.WriteLine($"recovery-test.json written to the run folder: backup-status now counts recovery key {t.RecoveryKeyId} as tested (D-085). Remove the private-key file from this machine now (runbook).");
+                return t.Warnings.Count == 0 ? Ok : Warnings;
             }
             case "backup-run":
             {
-                var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration)).RunAsync(args[1]);
+                var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration), protectedDirectories: protectedDirs).RunAsync(args[1], material);
                 Console.WriteLine($"Backup run {report.RunId}: {report.Verdict.ToUpperInvariant()} in {report.DurationMs / 1000.0:0.0} s; written to {runDir} (run.json written last).");
                 Console.WriteLine($"System database: {report.System.Outcome}{(report.System.Code is { } sc ? $" ({sc})" : "")}, {report.System.DurationMs / 1000.0:0.0} s; data excluded: {string.Join(", ", report.Excluded)}.");
                 foreach (var c in report.Companies) Console.WriteLine($"  Company {c.CompanyId}: {c.Outcome}{(c.Code is { } cc ? $" ({cc})" : "")}, {c.DurationMs / 1000.0:0.0} s, {c.AttachmentFiles} attachment file(s)");
                 if (report.Skipped > 0) Console.WriteLine($"  Not Ready (skipped): {report.Skipped}");
                 foreach (var w in report.Warnings ?? []) Console.Error.WriteLine($"WARNING {w}: the run lock connection was lost during the run (check idle_session_timeout of the admin role and the network); the sets were written and verified.");
                 if (report.MissingKeyIds.Count > 0) Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {report.MissingKeyIds.Count} key id(s) the sets need: {string.Join(", ", report.MissingKeyIds)}.");
-                Console.WriteLine("The run is NOT encrypted (owner package 4.3-2): keep the backup root on an encrypted volume; back up the key directory separately. The run is not one point in time across databases.");
+                Console.WriteLine(material is not null
+                    ? "The run is encrypted to the offline recovery key and signed (run.status.json is the only readable file). Back up the key directories with backup-keys. The run is not one point in time across databases."
+                    : $"{BackupGuard.DegradedStatus}: the run is NOT encrypted; DEV/TEST only. The run is not one point in time across databases.");
                 return report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
             }
             default: // drop-trial-restore
@@ -444,12 +554,130 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
     catch (BackupException ex)
     {
         Console.Error.WriteLine($"{command} stopped ({ex.Code}{(ex.Cause is null ? "" : $", cause {ex.Cause}")}).");
-        return ex.Code switch { "attachment_storage_not_configured" or "database_not_configured" => BadConfig, "company_busy" or "run_in_progress" => InProgress, _ => Failed };
+        // review L3 of #128 (D-118): a REFUSED trial restore or recovery test is a restore attempt and is audited too (outcome refused, the code; never a name)
+        if (command is "trial-restore-company")
+            await TryAuditAsync(systemConnection, trail, BackupAuditEvents.TrialRestore,
+                $"trial restore operator={BackupAudit.Operator()} company={companyId:D} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}", companyId);
+        else if (command is "backup-recovery-test")
+            await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RecoveryTest,
+                $"recovery test operator={BackupAudit.Operator()} run={(BackupRunFiles.IsRunId(Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1]))) ? Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1])) : "unknown")} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}");
+        return ex.Code switch
+        {
+            "attachment_storage_not_configured" or "database_not_configured" => BadConfig,
+            // slice 5 (D-095): encryption is the default; a missing or contradictory configuration is a configuration error, never a silent fallback
+            "backup_encryption_not_configured" or "unencrypted_ack_invalid" or "unencrypted_ack_with_recovery_key" or "recovery_key_invalid" or "signing_key_unavailable" => BadConfig,
+            "company_busy" or "run_in_progress" => InProgress,
+            _ => Failed,
+        };
     }
     catch (PostgresException ex)
     {
         Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");
         return Failed;
+    }
+}
+
+// Phase 4.3 slice 5 key commands (D-087, D-092, D-094, D-118). Interim mode: operating-system access, no named administrator with MFA until Phase 4.1 (D-099; a dated limitation). Both write a
+// system-stream audit event; when it cannot be written the command fails closed and removes what it created.
+static async Task<int> BackupKeyCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions)
+{
+    const int Ok = 0, Failed = 1, BadConfig = 3;
+    var backupOptions = BackupOptions.FromConfiguration(configuration);
+    var encryption = EncryptionOptions.FromConfiguration(configuration);
+    var attachments = AttachmentOptions.FromConfiguration(configuration);
+    var trail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
+    var system = options.BuildSystemConnectionString(admin: true);
+    try
+    {
+        if (command == "backup-signing-keygen")
+        {
+            if (backupOptions.SigningKeyDirectory is not { } dir || !Path.IsPathFullyQualified(dir)) { Console.Error.WriteLine("Hasm__Backup__SigningKeyDirectory (absolute) is required."); return BadConfig; }
+            KeyExport.CheckDestination(dir, [attachments.StorageDirectory, encryption.KeyDirectory, auditOptions.KeyDirectory]);
+            var (keyId, publicPem) = BackupSigningKeys.Generate(dir);
+            try { await BackupAudit.WriteAsync(system, trail, BackupAuditEvents.SigningKeyGenerated, $"backup signing key generated operator={BackupAudit.Operator()} signing={keyId}"); }
+            catch
+            {
+                foreach (var f in new[] { keyId + BackupSigningKeys.PrivateSuffix, keyId + BackupSigningKeys.PublicSuffix }) try { File.Delete(Path.Combine(dir, f)); } catch (IOException) { }
+                throw;
+            }
+            Console.WriteLine($"Backup signing key {keyId} created (owner-only; the private key never leaves this directory and is never exported).");
+            Console.WriteLine($"Public key SHA-256: {Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(publicPem)))}. Record it in the recovery kit.");
+            Console.WriteLine($"Set Hasm__Backup__SigningKeyId={keyId} to use it, then run backup-keys so the recovery kit holds the new public key (D-093).");
+            return Ok;
+        }
+        // backup-keys: always needs the recovery key and the signing key, even when the DEV/TEST acknowledgement is set (D-095)
+        if (BackupGuard.Resolve(backupOptions) != BackupProtection.Encrypted) throw new BackupException("backup_encryption_not_configured");
+        if (encryption.KeyDirectory is null) { Console.Error.WriteLine("Hasm__Encryption__KeyDirectory is required."); return BadConfig; }
+        var destination = KeyExport.CheckDestination(args[1], [attachments.StorageDirectory, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory]);
+        var material = BackupMaterialLoader.Load(backupOptions);
+        KeyExportManifest m;
+        try { m = await KeyExport.WriteAsync(destination, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory!, material, DateTimeOffset.UtcNow); }
+        finally { material.Recovery.Dispose(); material.Signer.Dispose(); }
+        try
+        {
+            await BackupAudit.WriteAsync(system, trail, BackupAuditEvents.KeysExported, $"backup keys exported operator={BackupAudit.Operator()} recovery={m.RecoveryKeyId} signing={m.SigningKeyId} "
+                + $"encryption={string.Join(',', m.EncryptionKeyIds)} audit={string.Join(',', m.AuditKeyIds)} signing_public={string.Join(',', m.SigningPublicKeyIds)}");
+        }
+        catch { try { Directory.Delete(destination, true); } catch (IOException) { } throw; }
+        Console.WriteLine($"Key export written and verified to {args[1]}: {m.EncryptionKeyIds.Count} encryption key(s), {m.AuditKeyIds.Count} audit key(s), {m.SigningPublicKeyIds.Count} signing PUBLIC key(s); encrypted to recovery key {m.RecoveryKeyId}, signed by {m.SigningKeyId}.");
+        Console.WriteLine($"Move it to the recovery kit, away from the backup sets; keep {KeyExport.TrustListName} with every kit copy and mark retired or compromised signing keys there (D-093). Signing private keys are never exported.");
+        return Ok;
+    }
+    catch (BackupException ex)
+    {
+        Console.Error.WriteLine($"{command} stopped ({ex.Code}); nothing usable was written.");
+        return ex.Code is "backup_encryption_not_configured" or "recovery_key_invalid" or "signing_key_unavailable" ? BadConfig : Failed;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"{command} stopped: the key files could not be written (existing keys are never overwritten); nothing usable was written.");
+        return Failed;
+    }
+}
+
+// The restore options of trial-restore-company and backup-recovery-test (slice 5).
+bool ParseRestoreFlags(int from, bool allowKeep, bool allowKeysExport)
+{
+    for (var i = from; i < args.Length; i++)
+    {
+        var hasValue = i + 1 < args.Length && Path.IsPathFullyQualified(args[i + 1]);
+        switch (args[i])
+        {
+            case "--keep" when allowKeep && !keepTrial: keepTrial = true; break;
+            case "--passphrase-stdin" when !passphraseStdin: passphraseStdin = true; break;
+            case "--recovery-key" when recoveryKeyFile is null && hasValue: recoveryKeyFile = args[++i]; break;
+            case "--signing-trust" when signingTrustFile is null && signingPublicKeyFile is null && hasValue: signingTrustFile = args[++i]; break;
+            case "--signing-public-key" when signingTrustFile is null && signingPublicKeyFile is null && hasValue: signingPublicKeyFile = args[++i]; break;
+            case "--keys-export" when allowKeysExport && keysExportDir is null && hasValue: keysExportDir = args[++i]; break;
+            default: return false;
+        }
+    }
+    // the key options come together: a recovery key without a trust anchor (or the reverse) is a usage error
+    return (recoveryKeyFile is null) == (signingTrustFile is null && signingPublicKeyFile is null) && (!passphraseStdin || recoveryKeyFile is not null);
+}
+
+// The recovery PRIVATE key is read from the operator's file and decrypted with a passphrase from a prompt or standard input (review M3 of #116: never an argument or an environment variable); it lives in
+// memory only and is disposed by the caller.
+static RestoreKeys LoadRestoreKeys(RestoreArgs a)
+{
+    var trust = a.TrustFile is not null ? BackupMaterialLoader.LoadTrustList(a.TrustFile) : BackupMaterialLoader.TrustFromPublicKey(a.PublicKeyFile!);
+    if (!a.PassphraseStdin && Console.IsInputRedirected) throw new BackupException("passphrase_missing");
+    var passphrase = a.PassphraseStdin ? Console.In.ReadLine() : ReadHidden("Recovery key passphrase: ");
+    if (string.IsNullOrEmpty(passphrase)) throw new BackupException("passphrase_missing");
+    string pem;
+    try { pem = File.ReadAllText(a.RecoveryKeyFile!); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BackupException("recovery_key_unreadable"); }
+    return new RestoreKeys(RecoveryPrivateKey.FromEncryptedPem(pem, passphrase), trust);
+}
+
+// Writes one backup audit event; false (with a message) when it cannot be written: the command then fails closed (D-118).
+static async Task<bool> TryAuditAsync(string systemConnection, AuditTrail trail, short eventType, string detail, Guid? subject = null)
+{
+    try { await BackupAudit.WriteAsync(systemConnection, trail, eventType, detail, subject); return true; }
+    catch (Exception ex) when (ex is AuditConfigurationException or AuditUnavailableException or NpgsqlException or InvalidOperationException)
+    {
+        Console.Error.WriteLine($"The system audit event {eventType} could not be written ({(ex is AuditUnavailableException a ? a.Code : ex is AuditConfigurationException ? "audit_not_configured" : "audit_write_failed")}); the operation is reported as FAILED (D-118).");
+        return false;
     }
 }
 
@@ -498,3 +726,6 @@ static void PrintReport(AuditVerificationReport r)
         Console.WriteLine($"  [{finding.Severity.ToString().ToUpperInvariant()}] {finding.Code}{(finding.Seq is { } q ? $" seq={q}" : "")}: {finding.Message}");
     if (r.FindingsOmitted > 0) Console.WriteLine($"  ... {r.FindingsOmitted} further finding(s) omitted.");
 }
+
+/// <summary>The restore options parsed from the command line (slice 5).</summary>
+sealed record RestoreArgs(string? RecoveryKeyFile, string? TrustFile, string? PublicKeyFile, string? KeysExport, bool PassphraseStdin);

@@ -45,6 +45,8 @@ public class PrivilegedAccessTests
     [InlineData("company.attachmentssensitive.upload")]            // authorizes the encryption-key rewrap of attachments (review M3 of PR #133)
     [InlineData("company.journalsoftclosed.post")]                  // override-like: posting into a soft-closed period
     [InlineData("company.imports.configure")]                       // import maintenance, including the key rewrap of imported files
+    [InlineData("company.attachmentretention.hold")]               // Phase R R1: retention policy, legal holds and attachment deletion
+    [InlineData("company.attachmentretention.execute")]
     public void Permissions_that_authorize_key_rewrap_or_override_a_control_are_privileged(string code) => Assert.True(PrivilegedAccess.IsPrivilegedPermission(code), code);
 
     [Theory]

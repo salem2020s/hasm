@@ -2,7 +2,7 @@
 
 * **Pull request:** #74
 * **Head SHA reviewed (full 40 characters):** 85feef1caabc81d9c37975c01ddd7ca4f33b2109
-* **Reviewer context:** Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors, fresh context, read-only). Prompt: "independent FULL-diff adversarial review, read-only" of the complete diff against `origin/main`. Independence is limited to a separate context; the model family is the same as the authors'.
+* **Reviewer context:** Agent C, a separate session (the same model family as the authors, fresh context, read-only). Prompt: "independent FULL-diff adversarial review, read-only" of the complete diff against `origin/main`. Independence is limited to a separate context; the model family is the same as the authors'.
 * **Review history:** first review of head `a3a231eb499b7e2324f67b1a19e94597f0612f26` (findings below); re-review of head `85feef1caabc81d9c37975c01ddd7ca4f33b2109` after the fixes (section "Re-review" below). The 40-character SHA above is the re-reviewed head.
 * **Scope read:** the full diff against `origin/main` at the reviewed head (upload endpoint, attachment service/options/sweep, party-role management, tests, `backend.yml` registry).
 * **Checks run (commands and results):** code reading only by the reviewer. The author ran nothing locally (no dotnet in the sandbox); hosted CI on the reviewed head: backend-build-test success, ci-guard, docs-traceability, secret-scan, guard-selftest, dependency-scan success; postgres-integration was still running when the review was written.
@@ -23,7 +23,7 @@
 
 ## Re-review (head 85feef1caabc81d9c37975c01ddd7ca4f33b2109)
 
-Reviewer: Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors), full diff against `origin/main`, code reading. It verified that M1, M2, M3 and L1-L7 above are fixed as recorded (per-user gate, deadline and minimum data rate, the three HTTP tests, the preallocated bounded read and the stated memory worst case, field cap, filename handling, clamps, 400 for malformed multipart, messages, docs) and that the compile fix (qualified Kestrel feature type) is the only change since the previous head. **No Critical, High or Medium finding is open.** Three new Low findings:
+Reviewer: Agent C, a separate session (the same model family as the authors), full diff against `origin/main`, code reading. It verified that M1, M2, M3 and L1-L7 above are fixed as recorded (per-user gate, deadline and minimum data rate, the three HTTP tests, the preallocated bounded read and the stated memory worst case, field cap, filename handling, clamps, 400 for malformed multipart, messages, docs) and that the compile fix (qualified Kestrel feature type) is the only change since the previous head. **No Critical, High or Medium finding is open.** Three new Low findings:
 
 | # | Sev | Finding | Disposition |
 |---|-----|---------|-------------|

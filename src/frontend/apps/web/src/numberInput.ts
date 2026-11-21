@@ -23,6 +23,14 @@ export function parsePositiveDecimal(s: string, places = 10): number {
   return Number.isFinite(n) && n > 0 && Number(n.toFixed(places)) === n ? n : Number.NaN;
 }
 
+/** A whole number within [min, max] with ANY number of digits (Latin, Arabic-Indic or Persian, also mixed), for fields without a fixed width (for example months or counts); NaN when blank, fractional or out of range. */
+export function parseIntegerInRange(s: string, min: number, max: number): number {
+  const digits = s.trim().replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+  if (!/^\d+$/.test(digits)) return Number.NaN;   // pure digits only: "60.0", "6,0" and "\u0666\u066b\u0660" are refused, not rounded
+  const n = Number(digits);
+  return Number.isSafeInteger(n) && n >= min && n <= max ? n : Number.NaN;
+}
+
 /** A whole number written with exactly `digits` digits (for example a four-digit year), within [min, max]; NaN otherwise. Leading zeros beyond the width are refused. */
 export function parseWholeNumber(s: string, digits: number, min: number, max: number): number {
   const n = parseDecimalInput(s);
