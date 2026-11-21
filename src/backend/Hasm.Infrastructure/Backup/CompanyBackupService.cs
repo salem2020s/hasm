@@ -313,6 +313,8 @@ public sealed class CompanyBackupService
     {
         // D-073: the measured restore time of this set (verification and drop included) is part of the result
         var started = clock.GetTimestamp();
+        // slice 6 (D-135): a restore holds the shared restore lock, so retention never deletes a run while it is being read
+        await using var restoreLock = await RetentionService.AcquireRestoreLockAsync(options, ct);
         var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, keys, ct);
         return result with { Elapsed = clock.GetElapsedTime(started) };
     }

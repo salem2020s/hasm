@@ -87,6 +87,8 @@ public sealed class RecoveryTestService
         var started = clock.GetTimestamp();
         if (!Path.IsPathFullyQualified(runDirectory) || !Path.IsPathFullyQualified(workDirectory) || (keysExport is not null && !Path.IsPathFullyQualified(keysExport))) throw new BackupException("path_not_absolute");
         var run = BackupSet.RealPath(runDirectory);
+        // slice 6 (D-135): the run is in an active recovery chain while it is tested; retention cannot delete it meanwhile
+        await using var restoreLock = await RetentionService.AcquireRestoreLockAsync(options, ct);
         if (!File.Exists(Path.Combine(run, SignedDocuments.RunStatusFileName))) throw new BackupException(File.Exists(Path.Combine(run, BackupRunFiles.ReportFileName)) ? "unencrypted_run" : "run_incomplete");
         var status = SignedDocuments.ReadRunStatus(run, keys.Trust);
         if (status.RecoveryKeyId != keys.Recovery.KeyId) throw new BackupException("recovery_key_mismatch");
