@@ -68,6 +68,7 @@ app.UseHttpsRedirection();
 app.UseCors();
 app.UseHasmResponseHardening();
 app.UseHasmCsrfProtection();
+app.UseHasmNulCharacterGuard();
 app.UseAuthentication();
 app.UseAuthorization();
 
