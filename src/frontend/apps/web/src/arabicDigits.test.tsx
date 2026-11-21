@@ -10,7 +10,8 @@ import { renderApp, signedIn } from "./test-utils";
  * Release 1 regression (Arabic/English parity of input): a user typing Arabic-Indic digits (and the Arabic decimal separator) into a
  * quantity, money, rate or year field must have them converted before validation and before anything reaches the server, exactly
  * as for Latin digits. Money and rates are covered where they live (ledger.test, taxes.test, accounts.test); this file covers the
- * numeric fields that had no Arabic-digit test: stock quantity, fiscal year, and the shared parsers.
+ * numeric fields that had no Arabic-digit test: stock quantity, fiscal year, and the shared parsers (item factor, unit decimals
+ * and stocktake counts are in inventory.test.tsx and stocktakes.test.tsx).
  */
 const PERMS = allPermissions(readRoutes());
 const go = async (hash: string) => {
@@ -49,9 +50,7 @@ describe("fiscal year: Arabic-Indic start year", () => {
     await waitFor(() => expect(c).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2027-01-01" })));
   });
 
-  // KNOWN PRODUCT GAP (reported, not weakened): FiscalYears.tsx tests the year with /^\d{4}$/ and Number(), which refuse Arabic-Indic digits.
-  // `it.fails` keeps CI green and turns red when fixed; then this must become a normal `it`.
-  it.fails("Arabic-Indic digits are accepted and sent as Latin digits (٢٠٢٧ -> 2027-01-01)", async () => {
+  it("Arabic-Indic digits are accepted and sent as Latin digits (٢٠٢٧ -> 2027-01-01)", async () => {
     const c = await create("٢٠٢٧");
     await waitFor(() => expect(c).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2027-01-01" })));
   });
@@ -91,10 +90,7 @@ describe("stock document: Arabic-Indic quantity", () => {
     expect(create.mock.calls[0]![0].lines[0].quantity).toBe(2.5);
   });
 
-  // KNOWN PRODUCT GAP (reported to the lead, not weakened): StockDocuments.tsx validates and sends Number(l.quantity) with a Latin-only
-  // pattern, so Arabic-Indic digits are refused client-side while the money, rate and tax fields accept them. `it.fails` keeps CI green
-  // and turns red as soon as the screen is fixed, at which point this must become a normal `it`.
-  it.fails("Arabic-Indic digits and decimal separator are converted like Latin digits (٢٫٥ -> 2.5)", async () => {
+  it("Arabic-Indic digits and decimal separator are converted like Latin digits (٢٫٥ -> 2.5)", async () => {
     const create = await type("٢٫٥");
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]![0].lines[0].quantity).toBe(2.5);

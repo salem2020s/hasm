@@ -9,6 +9,8 @@ import { catalog } from "./messages";
  * Release 1 regression (Arabic/English parity of server refusals): every error code literal the API layer can return either has a
  * translation (any `...error.<code>` or `...field.<code>` key, in both languages) or is explicitly accepted below as falling back to
  * the generic, status-based message. The accepted list is closed: a new untranslated code fails this test.
+ * LIMITATION: codes passed dynamically (e.g. Error(409, r.Code)) are not visible to this static scan; their translation is tested
+ * by the screen that owns them.
  */
 const apiDir = join(__dirname, "../../../../backend/Hasm.Api");
 const sources = (d: string): string[] => readdirSync(d).flatMap((f) => {
@@ -29,19 +31,8 @@ const serverCodes = (): string[] => {
 
 /** Accepted generic fallbacks, with the reason. Nothing here is hidden: each is reported in the PR description. */
 const GENERIC_FALLBACK: Record<string, string> = {
-  cannot_change_own_state: "identity administration API (auth/admin/users); no screen in Release 1 yet (4.1)",
-  invalid_current_password: "change-password API; no screen yet (4.1)",
-  invalid_display_name: "identity administration API; no screen yet (4.1)",
-  invalid_login: "identity administration API; no screen yet (4.1)",
-  last_company_administrator: "access administration API; no screen yet",
-  last_identity_administrator: "identity administration API; no screen yet (4.1)",
-  login_taken: "identity administration API; no screen yet (4.1)",
-  weak_password: "identity administration / change-password API; no screen yet (4.1)",
-  unauthenticated: "401 is mapped to error.session_expired by status",
+  unauthenticated: "401 is mapped to error.session_expired by status (a specific text would hide the sign-in prompt)",
   missing_request_header: "CSRF header is always sent by the shared api-client; not user-reachable",
-  company_not_selected: "409 before a company is chosen; the shell forces company selection (generic message by status)",
-  invalid_period_end: "negative-stock date input is a date picker; generic message by status",
-  not_posted: "404 on a stock-posting lookup for a document not yet posted; the screen shows an empty state, not a message",
 };
 
 const translated = (code: string, lang: "ar" | "en") =>

@@ -1,4 +1,5 @@
 import { ApiError, type StockItemRef, type StockWarehouseRef, type Stocktake, type StocktakeCapabilities, type StocktakeInput, type StocktakeStatus, type StocktakeSummary } from "@hasm/api-client";
+import { toLatinDigits } from "../ledgerCommon";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -291,7 +292,7 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
                       </td>
                       <td>
                         <Field id={`stk-qty-${i}`} label={t("stk.counted")} error={errors[`lines[${i}].countedQuantity`] ?? errors[`lines[${i}].itemId`]}>
-                          {(aria) => <input {...aria} value={l.counted} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setLine(l.key, { counted: e.target.value })} />}
+                          {(aria) => <input {...aria} value={l.counted} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setLine(l.key, { counted: toLatinDigits(e.target.value) })} />}
                         </Field>
                       </td>
                       <td><bdi dir="ltr" data-testid={`stk-base-${i}`}>{countedBase === null || countedBase === undefined ? "—" : `${qty(countedBase)} ${baseCode}`}</bdi></td>

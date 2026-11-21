@@ -428,3 +428,32 @@ describe("tax class tab of the item editor", () => {
     expect(within(screen.getByTestId("tax-class-picker")).queryByRole("button", { name: "حفظ" })).not.toBeInTheDocument();
   });
 });
+
+describe("Arabic-Indic digits in numeric fields", () => {
+  it("converts an alternate-unit factor typed as ١٢٫٥ to 12.5", async () => {
+    const client = setup({ createInventoryItem: vi.fn().mockResolvedValue(item({ id: "i-2" })) });
+    await openNew();
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Pear");
+    await userEvent.selectOptions(screen.getByLabelText(/^المجموعة/), "g-fruit");
+    await userEvent.click(tab("الوحدات والتحويلات"));
+    await userEvent.selectOptions(screen.getByLabelText(/^الوحدة الأساسية/), "u-pcs");
+    await userEvent.click(screen.getByRole("button", { name: "إضافة وحدة بديلة" }));
+    await userEvent.selectOptions(within(screen.getByTestId("alt-0")).getByLabelText("الوحدة"), "u-box");
+    await userEvent.type(within(screen.getByTestId("alt-0")).getByLabelText("معامل التحويل"), "١٢٫٥");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryItem).toHaveBeenCalledTimes(1));
+    expect(client.createInventoryItem).toHaveBeenCalledWith(expect.objectContaining({ alternateUnits: [{ unitId: "u-box", factor: 12.5 }] }));
+  });
+
+  it("converts unit decimals typed as ٣ to 3", async () => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), "٣");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
+  });
+});
