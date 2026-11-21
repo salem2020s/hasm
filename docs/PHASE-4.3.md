@@ -673,6 +673,16 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
 * **D-119, credential revocations after a system restore (M6, round 2 L-c).** A reference to the canonical D-106 and D-107; it binds the Phase 4.3 full-installation restore and slice 7.
 * The other review items amend D-089 (passphrases, M3/L4), D-090 (L1), D-092 (coverage, refusals and key status, M1/M5), D-094 (every key directory, overlap checks, TOTP KEK and audit key checks, M4) and D-095 (L2).
 
+### Recorded as built (implementation of slice 5)
+* **System-stream audit event codes, block 2010-2019** (lead allocation). Before use the registry was checked: retention (R, E) holds 2000-2009 and commercial documents 1900-1999, and nothing used 2010-2019 on main or on any open branch.
+  * 2010: trial restore.
+  * 2011: recovery test.
+  * 2012: key export.
+  * 2013: signing key generated.
+  * 2014-2019: reserved for slices 6 and 7.
+  * Persisted codes; never renumbered.
+* **Interim mode (G round 1, L5).** Until the Phase 4.1 administrative-tool login (D-099) exists, `backup-recovery-keygen`, `backup-signing-keygen` and `backup-keys` run under operating-system access without a named administrator with MFA. This is the second dated limitation in RELEASE1-ACCEPTANCE G (through the roadmap generator).
+
 ### Owner decisions this slice relies on (not re-asked)
 D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
 
