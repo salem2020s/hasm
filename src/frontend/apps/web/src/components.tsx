@@ -110,6 +110,8 @@ export function errorText(t: (k: string) => string, e: unknown, keyPrefix = "err
       const rules = e.code === "weak_password" ? (e.details.problems ?? []).map((p) => t(`error.password.${p}`).replace(/^error\.password\..*$/, "")).filter(Boolean) : [];
       return rules.length > 0 ? `${translated} (${rules.join(t("list.separator"))})` : translated;
     }
+    if (e.code === "mfa_step_up_cancelled") return t("mfa.step_up.cancelled");                // the action was NOT done: the verification was cancelled or failed
+    if (e.code === "mfa_step_up_required") return t("mfa.step_up.required");
     if (e.status === 403) return t("error.forbidden");
     if (e.status === 401) return t("error.session_expired");
     if (e.status === 503) return t("error.company_unavailable");

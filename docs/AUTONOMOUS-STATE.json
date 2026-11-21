@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "4c44ad384bb16ef5210c2eb24861b448a2e130e3",
-    "note": "main = 4c44ad3 (merge of #158), read from git and GitHub REST on 2026-11-21 (end-of-sprint-3 handoff refresh). PostgreSQL registry 1232 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033 (0033 from #157, 4.1 S2), counted in the migration folders of origin/main; no number allocated ahead."
+    "verifiedHead": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
+    "note": "main = afbf5f3 (merge of #166), read from git and GitHub REST on 2026-11-21 (end-of-sprint-3 handoff refresh). PostgreSQL registry 1255 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033, counted in the migration folders of origin/main; no number allocated ahead."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -246,21 +246,45 @@
       "phase": "hostile-input sweep (NUL, 22021 to 400)",
       "mergeCommit": "4c44ad384bb16ef5210c2eb24861b448a2e130e3",
       "headMerged": "02e2d2e4fa9bad4584dba6d1c2bbf6a5bb8e9c22"
+    },
+    {
+      "pr": 156,
+      "phase": "retention activation prerequisites L1, L2, L6 (deletion inactive)",
+      "mergeCommit": "b84f75a6fa34e9cbb6c83f638627a0bd48dae11c",
+      "headMerged": "1959c54b831205815a4641ea365619ca65ee4511"
+    },
+    {
+      "pr": 159,
+      "phase": "approval-policy threshold rounding-mode pin (registry +2)",
+      "mergeCommit": "903742a8486db9a481439c5b1ae76660ff345749",
+      "headMerged": "d8aa671214a10ef3a23a7049b313a0e247c118ce"
+    },
+    {
+      "pr": 161,
+      "phase": "constraint-violation matrix part 2 (103 probed, 3 pending)",
+      "mergeCommit": "394148ad7d93119d9d549162f6a87dc11573fc0e",
+      "headMerged": "96de98c4a095a3a41b1285ff1ccb8eeb564a6179"
+    },
+    {
+      "pr": 166,
+      "phase": "4.1 S3a MFA freshness policies and step-up (D-160..D-163, audit 1336/1337; S3 not complete)",
+      "mergeCommit": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
+      "headMerged": "2b00bcf99d7d2f5e2b2f66b93a63628f83d13fbc"
     }
   ],
   "active": {
     "phase": "Release 1 sprint 3 (cloud team), end of sprint",
     "state": "Open Draft PRs, the merge queue, the follow-ups and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
     "knownIssues": [
-      "Decisions: next free ID D-164 (D-164..D-169 free; next after D-178 is D-179). D-160..D-163 are on #166 (not merged); D-108..D-115 and D-122..D-129 allocated and not on main. Audit codes 1336/1337 allocated to #166.",
+      "Decisions: next free ID D-164 (D-164..D-169 free; next after D-178 is D-179). D-160..D-163 and audit codes 1336/1337 are on main via #166; D-108..D-115 and D-122..D-129 allocated and not on main.",
       "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2100-2199 Phase 3.14.",
-      "4.1 S3 is NOT complete: S3a (#166) covers access and user administration only; company administration, approvals, backup/restore groups, the requirement model, company-selection step-up and the remaining UI go to S3b.",
+      "4.1 S3 is NOT complete: S3a (#166, merged) covers access and user administration only; company administration, approvals, backup/restore groups, the requirement model, company-selection step-up and the remaining UI go to S3b.",
       "Release acceptance stays blocked per owner item 11 (D-088); #149's evidence is merged as evidence, not acceptance."
     ]
   },
   "next": [
-    "Merge in the recorded queue order (#156 after its CI, #159, #161, #166), re-reconciling the registry, migration numbers, decision and audit ranges and the exact head at each step.",
-    "Follow-ups: load test stage 2; pending-3 constraint matrix (C2 local branch test/constraint-matrix-pending-3); 4.1 S3b; the Lows of #158, #161, #163, #164 and #165 recorded in docs/INTEGRATION-STATUS.md.",
+    "Next session: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #158, #161, #163, #164 and #165).",
+    "#168 (pending-3 constraint matrix, Draft awaiting review) takes the next registry turn unless merged earlier; re-reconcile the registry, migration numbers, decision and audit ranges and the exact head at merge.",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
@@ -318,28 +342,10 @@
   },
   "openPullRequests": [
     {
-      "pr": 156,
-      "branch": "fix/phase-4-3-retention-activation-prereqs",
-      "head": "1959c54b831205815a4641ea365619ca65ee4511",
-      "state": "clears retention activation prerequisites L1, L2, L6 of #134 (deletion inactive); review approve; waiting on CI; registry +1; queue 1"
-    },
-    {
-      "pr": 159,
-      "branch": "fix/s5a-rounding-pin",
-      "head": "eee1fce0201f15d224453d7179bf28e27873d7be",
-      "state": "S5a threshold rounding-mode pin (F Low of #136); registry +1; queue 2"
-    },
-    {
-      "pr": 161,
-      "branch": "test/constraint-violation-matrix-part2",
-      "head": "addd8cae03bdcbeb7b9a246281f5b9ef97a3f814",
-      "state": "constraint-violation matrix part 2, batch 1; registry +10; queue 3"
-    },
-    {
-      "pr": 166,
-      "branch": "feature/phase-4-1-s3a",
-      "head": "488b82e06426a28f79fcd0a21b44581bd9c453ed",
-      "state": "4.1 S3a MFA policies and step-up (D-160..D-163, audit 1336/1337, no migration); S3 not complete; registry +10; queue 4"
+      "pr": 168,
+      "branch": "test/constraint-matrix-pending-3",
+      "head": "3c6fde47fc070c13e8c9b7a89a0a4b5114f829ce",
+      "state": "constraint matrix part 2: 3 pending routes moved to probed (tests only); Draft awaiting independent review; registry +0 on its base"
     }
   ],
   "inertPullRequests": [
@@ -370,10 +376,7 @@
     }
   ],
   "mergeSequence": [
-    156,
-    159,
-    161,
-    166
+    168
   ],
   "agents": {
     "lead": "Claude Opus",
