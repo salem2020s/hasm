@@ -6,7 +6,7 @@ Sources:
 * **ARCHITECTURE 12:** manual update through signed packages, a preflight of the migrations and the system state, then a health check after the upgrade.
 * **ROADMAP 4.4:** signed packages, compatibility and migration preflight, the backup requirement, safe rollback and client compatibility. Acceptance: a tampered package is refused, and a failed upgrade rolls back. Mandatory tests: upgrade tests across versions. **Database migration implications: none.**
 
-Decision ids **D-170..D-178** (lead allocation; technical defaults under D-048, chosen fail-closed). Owner questions **4.4-Q1..Q4** are separate and listed at the end; they are not decided here.
+Decision ids **D-170..D-178** (lead allocation, confirmed; audit block 2030-2039; technical defaults under D-048, chosen fail-closed). Owner questions **4.4-Q1..Q4** are separate and listed at the end; they are not decided here.
 
 Dependencies:
 * **Phase 4.3:** encrypted, signed backup runs (slice 5), the trial-restore path (slice 3) and the rename switch with its journal (slice 7, D-145).
@@ -204,7 +204,7 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
   * `update-apply`, `update-commit`, `update-rollback` and `update-release`: a named administrator with MFA (D-099).
   * Until the D-099 login exists, these commands run under the administrative tool's interim operating-system mode, recorded as a dated limitation in RELEASE1-ACCEPTANCE, as for slice 5.
 * **Independent approval:** owner question **Q2**.
-* **System-stream audit events** (a 10-code block allocated by the lead; proposed 2030-2039, after the slice 7 block). Each carries ids, versions, key ids, run ids and database TAGS only, and every step fails closed when its event cannot be written. The events: `UpdateVerified` (verified or refused, with the code), `UpdatePreflight`, `UpdateStarted`, `UpdateApplied`, `UpdateRolledBack`, `UpdateCommitted`, `UpdateReleased` and `UpdateRefused`.
+* **System-stream audit events** (block **2030-2039**, allocated by the lead to Phase 4.4). Each carries ids, versions, key ids, run ids and database TAGS only, and every step fails closed when its event cannot be written. The events: `UpdateVerified` (verified or refused, with the code), `UpdatePreflight`, `UpdateStarted`, `UpdateApplied`, `UpdateRolledBack`, `UpdateCommitted`, `UpdateReleased` and `UpdateRefused`.
 
 ## Exact tests (implementation PR)
 * **Unit tests:**
