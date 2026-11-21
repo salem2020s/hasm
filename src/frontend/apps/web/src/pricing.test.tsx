@@ -58,7 +58,14 @@ function render(over: Record<string, unknown> = {}, can = true) {
   return client;
 }
 const tab = (n: string) => screen.getByRole("tab", { name: new RegExp(`^${n}`) });
+const baseCurrencyOf = (code: string | null) => ({ currencies: [], baseCurrency: code, baseCurrencySelected: code !== null, baseCurrencyLock: { locked: false, checksImplemented: false, unimplementedDomains: [] } });
 const label = (k: string) => new RegExp(`^${A(k)}`);
+/** The item picker is a server search: its list (a combobox) fills asynchronously after the first load. */
+const pickItem = async (scope: ReturnType<typeof within>, k: string) => {
+  const box = await scope.findByRole("combobox", { name: label(k) });
+  await waitFor(() => expect(within(box).getByRole("option", { name: /APPLE/ })).toBeInTheDocument());
+  return box;
+};
 
 describe("pricing administration screen", () => {
   it("is organised in five tabs by business meaning and shows the saved policy with its configurable precedence", async () => {
@@ -88,7 +95,7 @@ describe("pricing administration screen", () => {
   });
 
   it("creates a price list for a customer, adds an item entry with a tier, reprices with the revision it read and never offers a delete", async () => {
-    const client = render();
+    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
     await go("#/company/pricing");
     await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
     expect(await screen.findByTestId("pricing-list-RETAIL")).toBeInTheDocument();
@@ -104,7 +111,7 @@ describe("pricing administration screen", () => {
     expect(client.listPriceEntries).toHaveBeenCalledWith("l1");
     const add = within(screen.getByTestId("pricing-entry-create"));
     expect(add.getByRole("button", { name: A("pricing.add_entry") })).toBeDisabled();                             // target, unit and price are required
-    await userEvent.selectOptions(add.getByLabelText(label("pricing.target")), "i1");
+    await userEvent.selectOptions(await pickItem(add, "pricing.target"), "i1");
     await userEvent.selectOptions(add.getByLabelText(label("pricing.unit")), "u1");
     await userEvent.clear(add.getByLabelText(label("pricing.min_quantity")));
     await userEvent.type(add.getByLabelText(label("pricing.min_quantity")), "10");
@@ -148,12 +155,12 @@ describe("pricing administration screen", () => {
 
   it("previews a quote with its rule, snapshot and trace, translates a refusal and requires a reason for an override", async () => {
     const quotePrice = vi.fn().mockRejectedValueOnce(apiError(400, "validation_failed", { fields: [{ field: "pricing", code: "no_price" }] })).mockResolvedValue(quote);
-    render({ quotePrice });
+    render({ quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
     await go("#/company/pricing");
     await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
     const form = within(await screen.findByTestId("pricing-quote-form"));
     expect(form.getByRole("button", { name: A("pricing.quote.run") })).toBeDisabled();                               // item and unit are required
-    await userEvent.selectOptions(form.getByLabelText(label("pricing.kind_item")), "i1");
+    await userEvent.selectOptions(await pickItem(form, "pricing.kind_item"), "i1");
     await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
     await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
     expect(await screen.findByTestId("pricing-quote-error")).toHaveTextContent(A("pricing.quote_error.no_price"));
@@ -214,7 +221,7 @@ describe("pricing administration screen", () => {
   });
 
   it("scopes a price list and a discount to a customer OR a group: choosing one disables the other and the group is sent", async () => {
-    const client = render();
+    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
     await go("#/company/pricing");
     await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
     const panel = within(await screen.findByTestId("pricing-list-create"));
@@ -256,5 +263,105 @@ describe("pricing administration screen", () => {
     expect(await screen.findByTestId("pricing-groups-table")).toBeInTheDocument();
     expect(screen.queryByTestId("pricing-group-create")).not.toBeInTheDocument();
     expect(within(screen.getByTestId("pricing-assignment-CUST1")).queryByRole("combobox")).not.toBeInTheDocument();
+  });
+  describe("follow-ups of the PR-69 review", () => {
+    it("searches items on the server (bounded, with the search text), says when more match, and sends the group of an item that is not in the preloaded page", async () => {
+      const far = { ...apple, id: "i9", code: "ZZZ-FAR", nameAr: "بعيد", nameEn: "Far", groupId: "g1" };
+      const list = vi.fn().mockImplementation((q: { search?: string } = {}) => Promise.resolve(q.search ? { items: [far], total: 1 } : { items: [apple], total: 900 }));
+      const quotePrice = vi.fn().mockResolvedValue(quote);
+      render({ listInventoryItems: list, quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      await pickItem(form, "pricing.kind_item");
+      expect(await form.findByText(/900/)).toBeInTheDocument();                                           // "showing 1 of 900 ... refine"
+      expect(list).toHaveBeenCalledWith({ limit: 500 });
+      await userEvent.type(form.getByRole("searchbox", { name: label("pricing.kind_item") }), "far");
+      await waitFor(() => expect(list).toHaveBeenLastCalledWith({ search: "far", limit: 500 }));
+      const box = form.getByRole("combobox", { name: label("pricing.kind_item") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /ZZZ-FAR/ })).toBeInTheDocument());
+      await userEvent.selectOptions(box, "i9");
+      await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
+      await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
+      await waitFor(() => expect(quotePrice).toHaveBeenCalledWith(expect.objectContaining({ itemId: "i9", itemGroupId: "g1", currency: "JOD" })));
+    });
+
+    it("the item picker is keyboard operable and a failing item search shows a retryable error", async () => {
+      const list = vi.fn().mockResolvedValueOnce({ items: [apple], total: 1 }).mockRejectedValueOnce(apiError(500, "internal")).mockResolvedValue({ items: [apple], total: 1 });
+      render({ listInventoryItems: list });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      const search = await form.findByRole("searchbox", { name: label("pricing.kind_item") });
+      search.focus();
+      await userEvent.keyboard("a");
+      expect(await form.findByRole("alert")).toHaveTextContent(A("picker.error"));
+      await userEvent.click(form.getByRole("button", { name: A("picker.retry") }));
+      await waitFor(() => expect(form.queryByRole("alert")).not.toBeInTheDocument());
+    });
+
+    it("takes the default currency from the company base currency, never guesses one without it, and keeps creation disabled until a code is typed", async () => {
+      render();                                                                                        // no base currency selected
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      expect(panel.getByLabelText(label("pricing.currency"))).toHaveValue("");
+      await userEvent.type(panel.getByLabelText(label("pricing.code")), "x");
+      await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "ق");
+      expect(panel.getByRole("button", { name: A("pricing.create_list") })).toBeDisabled();
+      await userEvent.type(panel.getByLabelText(label("pricing.currency")), "sar");
+      expect(panel.getByLabelText(label("pricing.currency"))).toHaveValue("SAR");
+      expect(panel.getByRole("button", { name: A("pricing.create_list") })).toBeEnabled();
+    });
+
+    it("pre-fills the currency of a new list and a quote with the base currency", async () => {
+      render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("SAR")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      expect(within(await screen.findByTestId("pricing-list-create")).getByLabelText(label("pricing.currency"))).toHaveValue("SAR");
+      await userEvent.click(screen.getByRole("tab", { name: label("pricing.tab.quote") }));
+      expect(within(await screen.findByTestId("pricing-quote-form")).getByLabelText(label("pricing.currency"))).toHaveValue("SAR");
+    });
+
+    it("lists customer assignments sorted by code with the name from the party-role list, and a short id when the names are unavailable", async () => {
+      const mk = (id: string, code: string, name: string) => ({ ...customer, id: `r-${id}`, partyId: id, partyCode: code, partyName: name });
+      render({
+        listPartyRoles: vi.fn().mockResolvedValue({ items: [mk("p2", "C10", "عشرة"), mk("p1", "C2", "اثنان")], can: { configure: true } }),
+        listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, partyId: "p2" }, { ...assignment, partyId: "unknown-id-zzzz" }, { ...assignment, partyId: "p1" }], can: { configure: true } }),
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
+      const rows = within(await screen.findByTestId("pricing-assignments-table")).getAllByRole("row").slice(1);
+      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["C2 — اثنان", "C10 — عشرة", "unknown-"]);   // numeric-aware code order; ids last by their short form
+    });
+
+    it("accepts a negative minimum margin and explains the range and meaning (ar and en)", async () => {
+      const save = vi.fn().mockResolvedValue({ ...policy, version: 3 });
+      render({ savePricingPolicy: save });
+      await go("#/company/pricing");
+      const form = within(await screen.findByTestId("pricing-policy-form"));
+      const margin = form.getByLabelText(label("pricing.policy.min_margin"));
+      await userEvent.clear(margin);
+      await userEvent.type(margin, "-5");
+      await userEvent.click(form.getByRole("button", { name: A("pricing.policy.save") }));
+      await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ minMarginPercent: -5 }), 2));
+      for (const l of ["ar", "en"] as const) expect(catalog[l]["pricing.policy.min_margin_hint"]).toMatch(/-1000/);
+      expect(form.getByText(A("pricing.policy.min_margin_hint"))).toBeInTheDocument();
+    });
+
+    it("tells the user that customer (or group) and item scopes combine on a discount", async () => {
+      render();
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.discounts") }));
+      expect(await screen.findByText(A("pricing.scope_combine_hint"))).toBeInTheDocument();
+    });
+
+    it("has a single source for field.ambiguous_rule (the customer-group wording wins)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync(`${process.cwd()}/src/messages.pricing.ts`, "utf-8");
+      expect(src).not.toContain("field.ambiguous_rule");
+      expect(catalog.en["field.ambiguous_rule"]).toMatch(/group rules/);
+      expect(catalog.ar["field.ambiguous_rule"]).toBeTruthy();
+    });
   });
 });

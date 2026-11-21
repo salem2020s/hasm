@@ -265,3 +265,4 @@ button.link:hover:not(:disabled) { background: none; }
 /* Shared SearchPicker (packages/ui): search box above the list, logical properties only (RTL/LTR) */
 .search-picker { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .search-picker input, .search-picker select { min-width: 0; max-width: 100%; }
+.field .field-label { font-weight: var(--weight-medium); font-size: var(--text-ui); color: var(--color-text); }
