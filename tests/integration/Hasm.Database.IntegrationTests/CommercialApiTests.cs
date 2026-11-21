@@ -132,9 +132,13 @@ public class CommercialApiTests : CommercialTestBase
         var a = await NewBranchId("BA"); var b2 = await NewBranchId("BB"); var p1 = await NewCustomerId("C1"); var p2 = await NewCustomerId("C2"); var (item, unit) = await NewItemAndUnit("LF1");
         var approver = await NewApprover();
         var n1 = await NewApproved(a, p1, "lf-doc-000001", approver, "commercial_test", (item, unit, 1m));          // 2026-000001, oldest
+        Clock.Advance(TimeSpan.FromMinutes(1));   // the list is newest first: distinct creation times make that order (and the paging below) explicit; equal times are ordered by id, which is deterministic but not chronological
         var n2 = await NewApproved(a, p2, "lf-doc-000002", approver, "commercial_test", (item, unit, 1m));          // 2026-000002
+        Clock.Advance(TimeSpan.FromMinutes(1));   // the list is newest first: distinct creation times make that order (and the paging below) explicit; equal times are ordered by id, which is deterministic but not chronological
         var n3 = await NewApproved(a, p1, "lf-doc-000003", approver, "commercial_test", (item, unit, 1m));          // 2026-000003
+        Clock.Advance(TimeSpan.FromMinutes(1));   // the list is newest first: distinct creation times make that order (and the paging below) explicit; equal times are ordered by id, which is deterministic but not chronological
         var usd = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(a, p1, item, unit, "lf-usd-000001") with { Currency = "USD" }));   // a USD draft
+        Clock.Advance(TimeSpan.FromMinutes(1));   // the list is newest first: distinct creation times make that order (and the paging below) explicit; equal times are ordered by id, which is deterministic but not chronological
         var other = await NewApproved(b2, p1, "lf-doc-000004", approver, "commercial_test", (item, unit, 1m));       // another branch
         var cookie = await SignIn(Admin);
         async Task<(HttpStatusCode Status, Guid[] Ids, long Total)> Get(string query)
