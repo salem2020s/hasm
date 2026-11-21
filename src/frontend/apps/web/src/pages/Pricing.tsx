@@ -105,7 +105,6 @@ function Notices({ runner, id }: { runner: ReturnType<typeof useRunner>; id: str
 const customerName = (p: Pickers, id: string | null, none: string) => (id ? p.customers.find((c) => c.partyId === id)?.partyCode ?? id : none);
 
 const PAGE_LIMIT = 50;
-const isActiveRow = (g: { isActive: boolean }) => g.isActive;
 
 /** Names of the customers a table mentions, by ONE ids lookup per 100 (`listPartyRoles(1, { ids })`). NEVER called with an empty id list: over HTTP an empty `ids` means "everything", so with nothing to look up no request is made. A customer that is not returned (no customer role) or whose lookup failed stays a short id. */
 function useCustomerDirectory(ids: string[]) {
@@ -136,22 +135,22 @@ interface LookupPickerProps<T> {
   /** One bounded page (the paged list API of the master data). */
   fetchPage: (q: { search?: string; limit: number }) => Promise<{ items: T[]; total?: number }>;
   getId: (item: T) => string; getLabel: (item: T) => string;
-  noneLabel: string; selectedLabel?: string; filter?: (item: T) => boolean;
+  noneLabel: string; selectedLabel?: string;
   /** The user's own list was already refused with 403: search is disabled and nothing is requested. */
   forbidden?: boolean; onForbidden?: () => void;
 }
 
 /** Shared server-search picker for the pricing forms (units, item groups, customer groups, customers): bounded page, "N of M" notice, selection kept, code-first labels, retry on error. Only a real 403 disables search (the list then offers just the empty choice); any other failure keeps search enabled and shows the picker's own error and retry. */
-function LookupPicker<T>({ id, label, hint, required, error, disabled, value, onChange, fetchPage, getId, getLabel, noneLabel, selectedLabel, filter, forbidden: forbiddenProp, onForbidden }: LookupPickerProps<T>) {
+function LookupPicker<T>({ id, label, hint, required, error, disabled, value, onChange, fetchPage, getId, getLabel, noneLabel, selectedLabel, forbidden: forbiddenProp, onForbidden }: LookupPickerProps<T>) {
   const auth = useAuth();
   const [forbiddenLocal, setForbiddenLocal] = useState(false);
   const forbidden = !!forbiddenProp || forbiddenLocal;
   const fetchRef = useRef(fetchPage);
   fetchRef.current = fetchPage;
   const load = useCallback((search: string) => forbidden ? Promise.resolve({ items: [] as T[], total: 0 })
-    : fetchRef.current({ search: search === "" ? undefined : search, limit: PAGE_LIMIT }).then((r) => ({ items: filter ? r.items.filter(filter) : r.items, total: r.total ?? r.items.length }))
+    : fetchRef.current({ search: search === "" ? undefined : search, limit: PAGE_LIMIT }).then((r) => ({ items: r.items, total: r.total ?? r.items.length }))
       .catch((e) => { if (is403(e)) { setForbiddenLocal(true); onForbidden?.(); } else auth.handleError(e); throw e; }),
-  [forbidden, filter, auth.handleError, onForbidden]); // eslint-disable-line react-hooks/exhaustive-deps
+  [forbidden, auth.handleError, onForbidden]); // eslint-disable-line react-hooks/exhaustive-deps
   const hintId = hint ? `${id}-hint` : undefined;
   return (
     <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
@@ -311,7 +310,7 @@ function CustomerGroupSelect({ id, value, onChange, pickers, error, disabled }: 
   const known = pickers.customerGroups.find((g) => g.id === value);
   return (
     <LookupPicker<CustomerGroup> id={id} label={t("pricing.customer_group")} hint={t("pricing.customer_group_hint")} error={error} disabled={disabled} value={value}
-      onChange={(v) => onChange(v)} fetchPage={(q) => auth.api.listCustomerGroups(q).then((r) => ({ items: r.customerGroups, total: r.total }))} getId={(g) => g.id} getLabel={(g) => codeName(g.code, localName(g, locale))} filter={isActiveRow}
+      onChange={(v) => onChange(v)} fetchPage={(q) => auth.api.listCustomerGroups({ ...q, active: true }).then((r) => ({ items: r.customerGroups, total: r.total }))} getId={(g) => g.id} getLabel={(g) => codeName(g.code, localName(g, locale))}
       noneLabel={t("pricing.all_groups")} selectedLabel={known ? codeName(known.code, localName(known, locale)) : undefined} forbidden={pickers.customerGroupsForbidden} />
   );
 }

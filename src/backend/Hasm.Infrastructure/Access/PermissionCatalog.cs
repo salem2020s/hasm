@@ -154,8 +154,8 @@ public sealed partial class PermissionCatalog
         new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
-        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve and reject arrive with S1b and, like the journal approver, will be outside the Company Administrator preset.
-        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Cancel]),
+        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to the Commercial Approver preset role (system migration 0029), which is granted offline (AccessService.GrantCommercialApproverOfflineAsync) or copied into custom roles.
+        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
     ]);
@@ -283,6 +283,7 @@ public sealed partial class PermissionCatalog
         public const string CommercialUpdate = "company.commercialdocs.update";
         public const string CommercialSubmit = "company.commercialdocs.submit";
         public const string CommercialCancel = "company.commercialdocs.cancel";
+        public const string CommercialApprove = "company.commercialdocs.approve";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
         public const string PartyRolesView = "company.partyroles.view";
@@ -322,6 +323,7 @@ public static class PresetRoles
     public static readonly Guid FiscalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000004");
     public static readonly Guid JournalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000005");
     public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
+    public static readonly Guid CommercialApproverId = new("5c1b0f6e-0000-4a00-8000-000000000007");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -329,7 +331,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -342,6 +344,7 @@ public static class PresetRoles
             }),
             [JournalApproverId] = ("journal-approver", new HashSet<string> { PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove }),
             [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
+            [CommercialApproverId] = ("commercial-approver", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialApprove }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,
