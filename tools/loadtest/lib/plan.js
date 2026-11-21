@@ -35,14 +35,22 @@ function journal(seed, i, accountIds, year) {
   const month = r.int(1, 12), day = r.int(1, 28);
   return { entryDate: `${year}-${pad(month, 2)}-${pad(day, 2)}`, description: `LT entry ${pad(i)}`, lines };
 }
-/** docType 1 receipt, 2 issue, 3 transfer; items are INDEXES into the seeded item space (the seeder maps them to ids). */
-function stockDoc(seed, i, { items, warehouses, year }) {
-  const r = rng(seed, "stockdoc", i); const roll = r.next();
-  const docType = roll < 0.6 || warehouses < 2 && roll >= 0.85 ? 1 : roll < 0.85 ? 2 : 3;
-  const w1 = r.int(0, warehouses - 1); let w2 = r.int(0, warehouses - 1); if (w2 === w1) w2 = (w1 + 1) % warehouses;
-  const lines = Array.from({ length: r.int(1, 5) }, () => ({ itemIndex: r.int(1, items), quantity: r.int(1, 50) }));
-  const seen = new Set(); const unique = lines.filter((l) => !seen.has(l.itemIndex) && seen.add(l.itemIndex));
-  return { docType, sourceWarehouse: docType === 1 ? null : w1, targetWarehouse: docType === 2 ? null : docType === 1 ? w1 : w2, documentDate: `${year}-${pad(r.int(1, 12), 2)}-${pad(r.int(1, 28), 2)}`, reference: `LT-S-${pad(i)}`, lines: unique };
+/** Number of receipts: the first documents (indices 1..receiptCount) are receipts, one cycle of warehouses at least, so issues and transfers always come after receipts. */
+function stockReceiptCount(total, warehouses) { return Math.min(total, Math.max(Math.ceil(total * 0.6), warehouses)); }
+/**
+ * docType 1 receipt, 2 issue, 3 transfer; items are INDEXES into the seeded item space. Receipts come first (indices <= stockReceiptCount) and
+ * cycle through the warehouses; item k is only ever stocked in warehouse (k-1) % W, so an issue or transfer draws only items that receipts of
+ * that warehouse can have brought in. Quantities are not tracked (approving a stock document changes no stock figure).
+ */
+function stockDoc(seed, i, { items, warehouses, year, total }) {
+  const r = rng(seed, "stockdoc", i); const W = Math.max(1, Math.min(warehouses, items));
+  const receipts = stockReceiptCount(total ?? i, W);
+  const docType = i <= receipts ? 1 : W < 2 ? 2 : r.next() < 0.6 ? 2 : 3;
+  const w1 = docType === 1 ? (i - 1) % W : r.int(0, W - 1); const w2 = docType === 3 ? (w1 + 1 + r.int(0, W - 2)) % W : null;
+  const pickItem = () => 1 + w1 + W * r.int(0, Math.floor((items - 1 - w1) / W));
+  const seen = new Set(); const lines = [];
+  for (let n = r.int(1, 5); n > 0; n--) { const k = pickItem(); if (!seen.has(k)) { seen.add(k); lines.push({ itemIndex: k, quantity: r.int(1, 50) }); } }
+  return { docType, sourceWarehouse: docType === 1 ? null : w1, targetWarehouse: docType === 1 ? w1 : docType === 3 ? w2 : null, documentDate: `${year}-${pad(r.int(1, 12), 2)}-${pad(r.int(1, 28), 2)}`, reference: `LT-S-${pad(i)}`, lines };
 }
 
 /** A digest over the whole plan: two machines with the same seed and counts get the same value, so "same data" is checkable. */
@@ -53,7 +61,7 @@ function planDigest({ seed, items, parties, journals, stockDocs, warehouses = 2,
   for (let i = 1; i <= parties; i++) add(party(seed, i));
   const ids = Array.from({ length: accounts }, (_, k) => `acc-${k}`);
   for (let i = 1; i <= journals; i++) add(journal(seed, i, ids, year));
-  for (let i = 1; i <= stockDocs; i++) add(stockDoc(seed, i, { items, warehouses, year }));
+  for (let i = 1; i <= stockDocs; i++) add(stockDoc(seed, i, { items, warehouses, year, total: stockDocs }));
   return h.digest("hex");
 }
-module.exports = { item, party, journal, stockDoc, planDigest, itemCode, partyCode, EN_NOUN, EN_ADJ, AR_NOUN, FIRST, FAMILY, AR_FIRST };
+module.exports = { stockReceiptCount, item, party, journal, stockDoc, planDigest, itemCode, partyCode, EN_NOUN, EN_ADJ, AR_NOUN, FIRST, FAMILY, AR_FIRST };

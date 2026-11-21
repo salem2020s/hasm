@@ -12,6 +12,7 @@ const { Client } = require("./lib/client");
 const { assertDisposableTarget } = require("./lib/guard");
 const planLib = require("./lib/plan");
 const { seed } = require("./lib/seed");
+const { assertLoadTestOnly } = require("./lib/company");
 const { defineScenarios, runLoad } = require("./lib/scenarios");
 const { buildResults } = require("./lib/results");
 
@@ -53,7 +54,8 @@ async function main() {
     process.stdout.write(JSON.stringify(manifest, null, 2) + "\n"); return;
   }
 
-  // run
+  // run: the same company check as seed, BEFORE any write; the measured counts are what the verdict uses
+  const measured = await assertLoadTestOnly(maker);
   const branches = (await maker.call("branches")).json.branches;
   const accounts = (await maker.call("accounts")).json.accounts.filter((x) => x.postable && x.isActive && ["base", "any"].includes(x.currencyPolicy));
   const ctx = { client: maker, seed: seedValue, counts: n, year, accountIds: accounts.map((x) => x.id), branchId: (branches.find((b) => b.isMain) || branches[0]).id };
@@ -63,7 +65,7 @@ async function main() {
   let commit = "unknown"; try { commit = cp.execFileSync("git", ["rev-parse", "HEAD"], { cwd: __dirname, encoding: "utf8" }).trim(); } catch { /* not a git checkout */ }
   const results = buildResults({
     tool: { name: "hasm-loadtest", stage: 1, commit }, seed: seedValue, startedAtUtc, finishedAtUtc: new Date().toISOString(), scenarios, samples, declaredEnvironment: envFile,
-    data: { ...n, invoices: 0, entriesAndStockMovements: n.journals + n.stockDocs }, load: { sessions: 1, concurrency: num(a.concurrency, 4), durationSeconds: Math.round(elapsedSeconds), mode: a["duration-seconds"] ? "duration" : "iterations" },
+    data: { declared: n, measured: { items: measured.items, parties: measured.parties, invoices: 0, entriesAndStockMovements: measured.journals + measured.stockDocs, journals: measured.journals, stockDocs: measured.stockDocs } }, load: { sessions: 1, concurrency: num(a.concurrency, 4), durationSeconds: Math.round(elapsedSeconds), mode: a["duration-seconds"] ? "duration" : "iterations" },
   });
   const out = a.out || path.join("loadtest-results", `run-${startedAtUtc.replace(/[:.]/g, "-")}.json`);
   fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(results, null, 2) + "\n");

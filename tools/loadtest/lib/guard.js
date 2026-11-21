@@ -11,6 +11,7 @@ function assertDisposableTarget({ apiUrl, env = process.env, databasePort, envir
   try { url = new URL(apiUrl); } catch { problems.push("the API address is not a valid URL"); }
   if (url && !["http:", "https:"].includes(url.protocol)) problems.push("the API address must be http or https");
   if (env.HASM_LOADTEST_DISPOSABLE !== ACK_VALUE) problems.push(`set HASM_LOADTEST_DISPOSABLE=${ACK_VALUE} to state that the target installation and its database are disposable`);
+  if (url && !LOOPBACK.has(url.hostname) && url.protocol !== "https:") problems.push("a non-loopback API must be https (credentials and tokens would travel in clear text)");
   if (url && !LOOPBACK.has(url.hostname) && !environmentFile) problems.push("a non-loopback API needs --environment <file> describing the (disposable, dedicated) reference environment");
   const ports = [databasePort, env.PGPORT, env.HASM_LOADTEST_DB_PORT].filter((p) => p !== undefined && p !== "");
   if (ports.some((p) => String(p) === "5432")) problems.push("port 5432 is the development cluster and is never a load-test target");

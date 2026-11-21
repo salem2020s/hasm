@@ -35,6 +35,14 @@ function evaluateReference({ declared, data, load }) {
   return reasons;
 }
 
+const ENV_KEYS = { vcpu: "number", ramGb: "number", diskGb: "number", ssd: "boolean", backendAndPostgresTogether: "boolean", companies: "number" };
+/** Copies ONLY the six documented keys (with the right type) from the operator's environment file: nothing else is carried into a results file. */
+function sanitizeEnvironment(file) {
+  if (file === null || file === undefined) return null;
+  const out = {}; for (const [k, t] of Object.entries(ENV_KEYS)) if (typeof file[k] === t) out[k] = file[k];
+  return out;
+}
+
 function buildResults({ tool, seed, data, load, samples, declaredEnvironment, startedAtUtc, finishedAtUtc, scenarios }) {
   const byScenario = scenarios.map((s) => {
     const ok = samples.filter((x) => x.scenario === s.id && x.ok).map((x) => x.ms);
@@ -42,11 +50,12 @@ function buildResults({ tool, seed, data, load, samples, declaredEnvironment, st
     const sum = summarize(ok);
     return { id: s.id, title: s.title, group: s.group, targetP95Ms: s.targetP95Ms ?? null, ...sum, errors: failed, implemented: s.implemented !== false };
   });
-  const reasons = evaluateReference({ declared: declaredEnvironment, data, load: { ...load, notImplemented: scenarios.filter((s) => s.implemented === false).map((s) => s.id) } });
+  const measured = data.measured; const declaredEnv = sanitizeEnvironment(declaredEnvironment);
+  const reasons = evaluateReference({ declared: declaredEnv, data: measured, load: { ...load, notImplemented: scenarios.filter((s) => s.implemented === false).map((s) => s.id) } });
   let verdict = "NOT VERIFIED";
   const perScenario = {};
   if (reasons.length === 0) {
-    for (const s of byScenario) perScenario[s.id] = s.errors === 0 && s.p95 !== null && s.targetP95Ms !== null && s.p95 < s.targetP95Ms ? "within target" : "NOT within target";
+    for (const s of byScenario) perScenario[s.id] = s.errors === 0 && s.p95 !== null && s.targetP95Ms !== null && s.p95 <= s.targetP95Ms ? "within target" : "NOT within target";
     verdict = Object.values(perScenario).every((v) => v === "within target") ? "MEASURED WITHIN TARGETS" : "MEASURED, TARGETS NOT MET";
   }
   return {
@@ -58,12 +67,12 @@ function buildResults({ tool, seed, data, load, samples, declaredEnvironment, st
     startedAtUtc, finishedAtUtc,
     tool,
     environment: {
-      declaredReferenceEnvironment: declaredEnvironment || null,
+      declaredReferenceEnvironment: declaredEnv,
       declaredIsNotVerifiedByTheTool: true,
       loadGenerator: { platform: os.platform(), release: os.release(), arch: os.arch(), cpus: os.cpus().length, memTotalGb: Math.round(os.totalmem() / 2 ** 30), node: process.version },
     },
-    data, load, referenceRequirements: REFERENCE,
+    data: { declared: data.declared, measured, note: "the verdict uses the MEASURED counts (read from the API at run start); the target is met at p95 <= target" }, load, referenceRequirements: REFERENCE,
     scenarios: byScenario,
   };
 }
-module.exports = { REFERENCE, evaluateReference, buildResults };
+module.exports = { REFERENCE, evaluateReference, buildResults, sanitizeEnvironment };
