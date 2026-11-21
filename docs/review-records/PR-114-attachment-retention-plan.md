@@ -7,7 +7,7 @@
   * **Round 2:** Reviewer: independent reviewer subagent (independent, separate agent); model family Claude Opus; prompt: lead's independent delta confirmation of PR #114 (plan R, D-082) 5c1e47c..be4d255 against Agent G's findings H1, H2, M1-M4, L1-L4, and consistency with D-082, D-080 and D-085..D-088; Head SHA reviewed be4d2559e1376a169d5054f6f14af3e7a145ea49; executed: git fetch, git log and git diff 5c1e47c..468d858..be4d255, git diff --stat origin/main...origin/docs/attachment-retention-plan, full read of docs/PHASE-R-attachment-retention.md at the head; verdict request changes; findings M1 (section 14 R2 "key report extension (a) live rows only" contradicts the H2 fix), L1 (section 15 Q1 and the Allocations line still call the removal date the default), L2 (wording of file-missing-before-purge versus a resumed pending item), L3 (meaning of "potentially affected" before R4); all of G's H1, H2, M1-M4 and L1-L4 fixed in the normative sections; no Critical or High.
 * **Scope read:** docs-only; the single file `docs/PHASE-R-attachment-retention.md` (the diff against `origin/main` is that one file).
 * **Checks run (commands and results):** none beyond reading (docs-only: no build or tests); hosted always-on verification jobs green on the pushed heads.
-* **Findings:**
+* **Findings:** round 1: 2 High, 4 Medium, 4 Low (request changes); round 2: 1 Medium, 3 Low and no Critical or High (request changes); every one is recorded below with its fixing commit.
 
 | Round | ID | Severity | Finding | Resolution |
 |-------|----|----------|---------|------------|
