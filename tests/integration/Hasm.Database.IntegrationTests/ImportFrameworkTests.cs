@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.Backup;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Imports;
@@ -466,6 +467,56 @@ public class ImportServiceTests : ImportTestBase
     }
 
     [PostgresFact]
+    public async Task A_rewrap_that_cannot_move_every_original_reports_failures_and_that_the_old_keys_must_be_kept()
+    {
+        // D-180 (register item K follow-up): failures are counted, never skipped silently, and the outcome says whether the old keys may be retired
+        await PrepareImports();
+        var moved = await Upload(); var lost = await Upload("x,y\n1,2\n", "lost.csv");
+        Ring.Add("k2", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k2");
+        var stranded = await Upload("p,q\n3,4\n", "stranded.csv");                                                         // under k2
+        Ring.Add("k3", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k3");
+        File.Delete(Path.Combine(CompanyDir, lost.Id.ToString("N") + ".enc"));                                              // the original is missing
+        Ring.Remove("k2");                                                                                                    // the stranded original's key is unavailable
+        var r = await Imports.RewrapAsync(Admin.Id, Company.Id);
+        Assert.Equal((1, 2), (r.Rewrapped, r.Failed));
+        Assert.False(r.OldKeysMayBeRetired);
+        Assert.Equal(2, r.Usage.UnderOtherKeys);                                                                              // the lost row still names k1, the stranded file is under k2
+        Assert.Equal(["k1", "k2", "k3"], r.Usage.KeyIdsInUse);
+        Assert.Equal("k3", (await Reload(moved.Id)).KeyId);
+        Assert.Equal("k2", (await Reload(stranded.Id)).KeyId);                                                                // untouched
+        await AssertAuditIntact();
+    }
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_keeps_every_key_a_live_import_original_needs_and_is_incomplete_without_a_backup_root()
+    {
+        // D-181: a key that only an import original still needs is NOT retirable; after a complete rewrap it is (backups do not contain import originals, D-179)
+        await PrepareImports();
+        var a = await Upload();
+        Ring.Add("k2", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k2");
+        var backups = Path.Combine(StorageDir, "..", "hasm-keyreport-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(backups);
+        try
+        {
+            var service = new EncryptionKeyRetirementService(Options, new RetentionOptions { InstallationTimeZone = "UTC" },
+                new Hasm.Infrastructure.Attachments.AttachmentOptions { StorageDirectory = Path.Combine(StorageDir, "attachments") }, ImportOpts, TestEncryption);
+            var before = await service.ReportAsync(["k1", "k2"], "k2", [backups], null);
+            Assert.True(before.Complete, string.Join("; ", before.Blockers));
+            Assert.Equal((false, "needed_by_import_originals"), (before.Keys.Single(k => k.KeyId == "k1").Retirable, before.Keys.Single(k => k.KeyId == "k1").Reasons.Single()));
+            Assert.Equal(["active_key"], before.Keys.Single(k => k.KeyId == "k2").Reasons);
+            Assert.True((await Imports.RewrapAsync(Admin.Id, Company.Id)).OldKeysMayBeRetired);
+            var after = await service.ReportAsync(["k1", "k2"], "k2", [backups], null);
+            Assert.True(after.Complete, string.Join("; ", after.Blockers));
+            Assert.True(after.Keys.Single(k => k.KeyId == "k1").Retirable);
+            // without a backup root nothing is known about the retained runs: incomplete, nothing retirable
+            var noRoot = await service.ReportAsync(["k1", "k2"], "k2", [], null);
+            Assert.False(noRoot.Complete);
+            Assert.All(noRoot.Keys, k => Assert.False(k.Retirable));
+        }
+        finally { Directory.Delete(backups, true); }
+    }
+
+    [PostgresFact]
     public async Task Key_rotation_rewraps_every_stored_original_under_the_active_key_atomically_audited_and_repeatably()
     {
         await PrepareImports();
@@ -474,6 +525,9 @@ public class ImportServiceTests : ImportTestBase
         Assert.True((await Imports.StageAsync(Admin.Id, Company.Id, a.Id, a.Revision, new StageInput(0, 1, null, null))).IsOk);       // old files stay readable during rotation
         var result = await Imports.RewrapAsync(Admin.Id, Company.Id);
         Assert.Equal(2, result.Rewrapped);
+        Assert.Equal((0, 0, 0), (result.Failed, result.Usage.UnderOtherKeys, result.Usage.Unknown));                          // D-180: the retirability signal
+        Assert.True(result.OldKeysMayBeRetired);
+        Assert.Equal(["k2"], result.Usage.KeyIdsInUse);
         foreach (var id in new[] { a.Id, b.Id })
         {
             Assert.Equal("k2", (await Reload(id)).KeyId);

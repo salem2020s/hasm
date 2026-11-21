@@ -462,6 +462,27 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     /// Verifies EVERY attachment row (active and removed: removed bytes are retained) against the stored bytes: existence, decryption with an available key, plaintext hash. One file is held in memory at a time.
     /// Orphan files (named by no row) are counted, never touched. Read-only apart from one audit event with the counts.
     /// </summary>
+    /// <summary>
+    /// The encryption keys the sensitive attachments of one company need (D-180, for the key-retirement report D-181): every sensitive row, active, removed (bytes retained) or purged (the row's key
+    /// still counts, D-114), by the key id of the row AND of its envelope header on disk. Read-only; decrypts nothing.
+    /// </summary>
+    public static async Task<EncryptionKeyUsage> KeyUsageAsync(NpgsqlConnection conn, AttachmentFileStore store, Guid companyId, string? activeKeyId, CancellationToken ct)
+    {
+        var rows = new List<(string Storage, string? KeyId)>();
+        await using (var q = new NpgsqlCommand($"SELECT {AT.StorageName}, {AT.KeyId} FROM {AT.Table} WHERE {AT.Sensitivity} = 2 ORDER BY {AT.Id}", conn))
+        {
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) rows.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1)));
+        }
+        var usage = new EncryptionKeyUsageBuilder(activeKeyId);
+        foreach (var (storage, keyId) in rows)
+        {
+            ct.ThrowIfCancellationRequested();
+            usage.Add(keyId, () => store.Read(companyId, storage));
+        }
+        return usage.Build();
+    }
+
     public async Task<AttachmentVerification> VerifyAsync(Guid actor, Guid companyId, CancellationToken ct = default)
     {
         List<(AttachmentView View, string StorageName, string? KeyId)> rows;

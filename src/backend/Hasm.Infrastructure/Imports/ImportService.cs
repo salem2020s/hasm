@@ -509,7 +509,7 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
     /// Re-wraps the per-file data keys of every stored original under the CURRENT active master key (key rotation). Only the wrapped data key changes (the ciphertext is untouched), the old key must still be
     /// available, each file is replaced atomically and each step is audited. Safe to repeat: files already under the active key are skipped.
     /// </summary>
-    public async Task<ImportMaintenanceResult> RewrapAsync(Guid actor, Guid companyId, CancellationToken ct = default)
+    public async Task<ImportRewrapOutcome> RewrapAsync(Guid actor, Guid companyId, CancellationToken ct = default)
     {
         var active = encryptor.ActiveKeyId;
         List<(Guid Id, string Storage)> todo;
@@ -519,26 +519,57 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
             q.Parameters.AddWithValue("k", active);
             todo = []; await using var r = await q.ExecuteReaderAsync(ct); while (await r.ReadAsync(ct)) todo.Add((r.GetGuid(0), r.GetString(1)));
         }
-        var done = 0;
+        int done = 0, skipped = 0, failed = 0;
         foreach (var (id, storage) in todo)
         {
-            var res = await MutateAsync(companyId, async work =>
+            ConfigResult<int> res;
+            try
             {
-                var cur = await LoadAsync(work.Connection, work.Transaction, id, true, ct);
-                if (cur is null || !cur.OriginalAvailable || cur.KeyId == active) return false;
-                var envelope = store.Read(companyId, storage);
-                if (envelope is null) return false;
-                var oldKey = EnvelopeEncryptor.KeyIdOf(envelope);
-                var rewrapped = oldKey == active ? envelope : encryptor.Rewrap(envelope, Context(companyId, id));
-                if (!ReferenceEquals(rewrapped, envelope)) store.Replace(companyId, storage, rewrapped);
-                await using (var up = new NpgsqlCommand($"UPDATE {IB.Table} SET {IB.KeyId} = @k, {IB.Revision} = {IB.Revision} + 1, {IB.UpdatedAtUtc} = @t WHERE {IB.Id} = @id", work.Connection, work.Transaction))
-                { up.Parameters.AddWithValue("id", id); up.Parameters.AddWithValue("k", active); up.Parameters.AddWithValue("t", clock.GetUtcNow().UtcDateTime); await up.ExecuteNonQueryAsync(ct); }
-                var view = (await LoadAsync(work.Connection, work.Transaction, id, false, ct))!;
-                await EventAsync(work, id, ImportEventKind.Rewrapped, view.Revision, actor, new JsonObject { ["fromKey"] = oldKey, ["toKey"] = active }, ct);
-                return true;
-            }, ct);
-            if (res is { IsOk: true, Value: true }) done++;
+                res = await MutateAsync(companyId, async work =>
+                {
+                    var cur = await LoadAsync(work.Connection, work.Transaction, id, true, ct);
+                    // a transaction that changes nothing must not commit (every company mutation appends its audit event), so the no-op cases abort it with a code
+                    if (cur is null || !cur.OriginalAvailable || cur.KeyId == active) throw new Abort(ConfigStatus.Conflict, "rewrap_not_needed");   // purged or rewrapped meanwhile
+                    var envelope = store.Read(companyId, storage)
+                        ?? throw new Abort(ConfigStatus.Conflict, "original_missing");                // its key cannot be moved (D-180: counted as a failure, never silent)
+                    var oldKey = EnvelopeEncryptor.KeyIdOf(envelope);
+                    var rewrapped = oldKey == active ? envelope : encryptor.Rewrap(envelope, Context(companyId, id));
+                    if (!ReferenceEquals(rewrapped, envelope)) store.Replace(companyId, storage, rewrapped);
+                    await using (var up = new NpgsqlCommand($"UPDATE {IB.Table} SET {IB.KeyId} = @k, {IB.Revision} = {IB.Revision} + 1, {IB.UpdatedAtUtc} = @t WHERE {IB.Id} = @id", work.Connection, work.Transaction))
+                    { up.Parameters.AddWithValue("id", id); up.Parameters.AddWithValue("k", active); up.Parameters.AddWithValue("t", clock.GetUtcNow().UtcDateTime); await up.ExecuteNonQueryAsync(ct); }
+                    var view = (await LoadAsync(work.Connection, work.Transaction, id, false, ct))!;
+                    await EventAsync(work, id, ImportEventKind.Rewrapped, view.Revision, actor, new JsonObject { ["fromKey"] = oldKey, ["toKey"] = active }, ct);
+                    return 1;
+                }, ct);
+            }
+            catch (Exception ex) when (ex is EncryptionUnavailableException or CryptographicException or FormatException or IOException or UnauthorizedAccessException)
+            { failed++; continue; }                                                                          // e.g. the old key is unavailable: counted, the other files go on
+            if (res.IsOk) done++;
+            else if (res.Code == "rewrap_not_needed") skipped++;
+            else failed++;
         }
-        return new ImportMaintenanceResult(0, 0, done);
+        await using var after = await resolver.OpenAsync(companyId, ct);
+        return new ImportRewrapOutcome(done, skipped, failed, await KeyUsageAsync(after, store, companyId, active, ct));
+    }
+
+    /// <summary>
+    /// The encryption keys the not-yet-purged import originals of one company need (D-180): the key id of each row AND of its envelope header on disk. Read-only (the store may create the empty,
+    /// owner-only company folder). A purged original needs no key: its file is gone and import originals are not part of backup sets (D-179).
+    /// </summary>
+    public static async Task<EncryptionKeyUsage> KeyUsageAsync(NpgsqlConnection conn, EncryptedFileStore store, Guid companyId, string? activeKeyId, CancellationToken ct)
+    {
+        var rows = new List<(string Storage, string? KeyId)>();
+        await using (var q = new NpgsqlCommand($"SELECT {IB.StorageName}, {IB.KeyId} FROM {IB.Table} WHERE {IB.OriginalPurgedAtUtc} IS NULL ORDER BY {IB.Id}", conn))
+        {
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) rows.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1)));
+        }
+        var usage = new EncryptionKeyUsageBuilder(activeKeyId);
+        foreach (var (storage, keyId) in rows)
+        {
+            ct.ThrowIfCancellationRequested();
+            usage.Add(keyId?.Trim(), () => store.Read(companyId, storage));
+        }
+        return usage.Build();
     }
 }

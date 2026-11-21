@@ -152,6 +152,12 @@ public sealed class FileKekRing(EncryptionOptions options) : KekRing
         }
     }
 
+    /// <summary>The ids of the key files in <paramref name="directory"/> (valid ids only; nothing is read or decoded). An absent directory has none.</summary>
+    public static IReadOnlyList<string> ListKeyIds(string directory) =>
+        Directory.Exists(directory)
+            ? [.. Directory.EnumerateFiles(directory, "*" + Extension).Select(f => Path.GetFileNameWithoutExtension(f)!).Where(IsValidKeyId).Order(StringComparer.Ordinal)]
+            : [];
+
     /// <summary>Creates a new random 256-bit key file with owner-only permissions. Refuses to overwrite an existing key. Returns nothing but succeeds or throws.</summary>
     public static void Generate(string directory, string keyId)
     {
