@@ -27,8 +27,10 @@ public sealed class BackupRunRulesTests : IDisposable
     private static RunCompany C(Guid id, string outcome) => new(id, outcome, outcome is "busy" ? "company_busy" : outcome is "failed" ? "company_database_missing" : null, T0, T0, 1, 10, 0, 0);
 
     private static string Id(DateTimeOffset t) => BackupRunFiles.NewRunId(t);
-    // status and retention rules are exercised on ENCRYPTED runs (slice 5); an unencrypted run always gives unencrypted_dev_test (D-095), asserted separately
-    private static RunEntry Entry(BackupRunReport r) => new(r.RunId, r with { Encrypted = true }, true, r.FinishedUtc);
+    // status and retention rules are exercised on ENCRYPTED runs of a recovery-tested key (slice 5); an unencrypted run always gives unencrypted_dev_test (D-095) and an untested key recovery_untested
+    // (D-085), asserted separately
+    private const string Rk = "rk-0123456789abcdef";
+    private static RunEntry Entry(BackupRunReport r, string recoveryKey = Rk, bool tested = true) => new(r.RunId, r with { Encrypted = true }, true, r.FinishedUtc, recoveryKey, tested);
 
     // ---- run id ----------------------------------------------------------------------------------
 
@@ -180,6 +182,13 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal((1, "status_unsigned"), Code(BackupRunStatus.Evaluate([new RunEntry(ok.RunId, ok with { Verdict = "failed", Encrypted = true, Warnings = ["status_unsigned"] }, true, ok.FinishedUtc)], now, max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], T0.AddHours(27), max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], now, TimeSpan.FromHours(1))));
+
+        // D-085, D-117: the newest run's recovery key must have passed a recovery test on SOME run encrypted to it; a tested OTHER key does not count
+        var older = Report(Id(T0.AddHours(-5)));
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false)], now, max)));
+        Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false), Entry(older)], now, max)));
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, "rk-fedcba9876543210", tested: false), Entry(older)], now, max)));   // a rotated key is not production-ready yet
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false), new RunEntry(older.RunId, null, false, T0, Rk, true)], now, max)));   // only complete runs count
 
         // an incomplete newer folder (no run.json) is skipped; reported once older than 24 hours; an unreadable report is counted, never used
         var incomplete = new RunEntry(Id(T0.AddHours(1)), null, false, T0.AddHours(1));

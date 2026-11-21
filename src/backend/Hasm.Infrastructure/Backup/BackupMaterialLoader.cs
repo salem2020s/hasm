@@ -38,6 +38,18 @@ public static class BackupMaterialLoader
 
     public static byte[] SerializeTrustList(IReadOnlyList<TrustedSigningKey> keys) => JsonSerializer.SerializeToUtf8Bytes(new TrustListFile(1, keys), Json);
 
+    /// <summary>A trust list of ONE signing public key (<c>--signing-public-key</c>), as active; its id is derived from the key itself. Prefer the kit's status list (<see cref="LoadTrustList"/>).</summary>
+    public static SigningTrust TrustFromPublicKey(string pemPath)
+    {
+        string pem;
+        try { pem = File.ReadAllText(pemPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BackupException("signing_trust_invalid"); }
+        using var key = System.Security.Cryptography.ECDsa.Create();
+        try { key.ImportFromPem(pem); }
+        catch (Exception ex) when (ex is ArgumentException or System.Security.Cryptography.CryptographicException) { throw new BackupException("signing_trust_invalid"); }
+        return new SigningTrust([new TrustedSigningKey(BackupSigningKeys.KeyIdOf(key.ExportSubjectPublicKeyInfo()), pem, SigningKeyStatus.Active)]);
+    }
+
     public static SigningTrust LoadTrustList(string path)
     {
         if (!File.Exists(path) || new FileInfo(path).Length > 1024 * 1024) throw new BackupException("signing_trust_invalid");

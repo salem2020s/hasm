@@ -393,7 +393,9 @@ public sealed class BackupRunService
 }
 
 /// <summary>One run folder as seen by status and retention: its id, its report (null when absent or unreadable), whether a report file exists, and the folder's last write time.</summary>
-public sealed record RunEntry(string RunId, BackupRunReport? Report, bool HasReportFile, DateTimeOffset LastWriteUtc)
+/// Slice 5: <see cref="RecoveryKeyId"/> is the recovery key of an encrypted run (from its verified signed status) and <see cref="RecoveryTested"/> is true when the run folder holds a valid recovery-test proof
+/// (<see cref="RecoveryTestProof.IsValidFor"/>).
+public sealed record RunEntry(string RunId, BackupRunReport? Report, bool HasReportFile, DateTimeOffset LastWriteUtc, string? RecoveryKeyId = null, bool RecoveryTested = false)
 {
     public bool IsComplete => Report is not null;
     public bool IsUnreadable => HasReportFile && Report is null;
@@ -430,7 +432,8 @@ public static class BackupRunStatus
             if (trust is null) throw new BackupException("status_unsigned", "signing_trust_missing");
             var s = SignedDocuments.ReadRunStatus(d.FullName, trust);
             return new RunEntry(d.Name, new BackupRunReport(BackupRunFiles.ReportVersion, s.RunId, s.StartedUtc, s.FinishedUtc, s.DurationMs, new RunDump("ok", null, s.StartedUtc, s.StartedUtc, 0, 0),
-                [.. s.Companies.Select(c => new RunCompany(c.CompanyId, c.Outcome, null, s.StartedUtc, s.FinishedUtc, 0, 0, 0, 0))], s.Skipped, s.Verdict, [], s.Excluded, 0, true, s.Warnings), true, lastWrite);
+                [.. s.Companies.Select(c => new RunCompany(c.CompanyId, c.Outcome, null, s.StartedUtc, s.FinishedUtc, 0, 0, 0, 0))], s.Skipped, s.Verdict, [], s.Excluded, 0, true, s.Warnings), true, lastWrite,
+                s.RecoveryKeyId, RecoveryTestProof.IsValidFor(d.FullName, s));
         }
         catch (BackupException ex)
         {
@@ -441,7 +444,9 @@ public static class BackupRunStatus
 
     /// <summary>
     /// Exit 1: no complete run (<c>backup_missing</c>), the newest complete run failed (<c>backup_failed</c>) or is older than <paramref name="maxAge"/> by its finish time (<c>backup_stale</c>). Exit 8: it is
-    /// partial (<c>backup_partial</c>), a company missed two or more consecutive runs (<c>company_missed_runs</c>) or a run's report is unreadable (<c>unreadable_reports</c>). Otherwise 0 (<c>ok</c>). Incomplete runs older than 24 hours are counted (information).
+    /// partial (<c>backup_partial</c>), a company missed two or more consecutive runs (<c>company_missed_runs</c>), the run is unencrypted (<c>unencrypted_dev_test</c>, D-095), a run's report is unreadable
+    /// (<c>unreadable_reports</c>) or no run of the newest run's recovery key has passed a recovery test (<c>recovery_untested</c>, D-085: the key is not production-ready). Otherwise 0 (<c>ok</c>). Incomplete
+    /// runs older than 24 hours are counted (information).
     /// </summary>
     public static BackupStatusResult Evaluate(IReadOnlyList<RunEntry> runs, DateTimeOffset now, TimeSpan maxAge)
     {
@@ -460,6 +465,9 @@ public static class BackupRunStatus
         if (!latest.Encrypted) return new(8, "unencrypted_dev_test", latest, incomplete, unreadable, missed);
         // review L2 (lead decision under D-048): an unreadable report (possibly the newest run, damaged or altered) never lets the status pass silently: monitoring stays fail-closed
         if (unreadable > 0) return new(8, "unreadable_reports", latest, incomplete, unreadable, missed);
+        // D-085, D-117: a recovery key is production-ready only after a recorded, successful recovery test of a run encrypted to it
+        var latestKey = ordered.First(r => r.IsComplete).RecoveryKeyId;
+        if (!ordered.Any(r => r.IsComplete && r.RecoveryTested && r.RecoveryKeyId is not null && r.RecoveryKeyId == latestKey)) return new(8, "recovery_untested", latest, incomplete, unreadable, missed);
         return new(0, "ok", latest, incomplete, unreadable, missed);
     }
 

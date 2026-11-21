@@ -59,6 +59,12 @@ public static class BackupGuard
         return BackupProtection.Encrypted;
     }
 
+    /// <summary>
+    /// Whether a READER (trial restore) may accept a version-1, unencrypted set: only under the reader's own exact acknowledgement (review M1 of #116: never because of a field inside the set). An invalid
+    /// acknowledgement, or one together with a recovery key, is a configuration error as for <see cref="Resolve"/>.
+    /// </summary>
+    public static bool UnencryptedReadAllowed(BackupOptions options) => options.UnencryptedDevTestOnly is not null && Resolve(options) == BackupProtection.UnencryptedDevTestOnly;
+
     /// <summary>The status line every readiness or health output shows while unencrypted sets are permitted (review L2 of #116).</summary>
     public const string DegradedStatus = "DEGRADED: unencrypted backups (DEV/TEST only)";
 }

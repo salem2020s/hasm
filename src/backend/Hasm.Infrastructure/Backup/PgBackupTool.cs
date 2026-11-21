@@ -135,10 +135,19 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     public Task RestoreIntoNewDatabaseFromStreamAsync(Func<Stream, CancellationToken, Task> produce, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale, CancellationToken ct = default) =>
         RestoreCoreAsync(null, produce, targetDatabase, sourceDatabase, sourceLocale, ct);
 
-    private async Task RestoreCoreAsync(string? dumpFile, Func<Stream, CancellationToken, Task>? produce, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale, CancellationToken ct)
+    /// <summary>
+    /// The recovery test (slice 5, D-085): a SYSTEM dump streamed into a NEW disposable database <paramref name="targetDatabase"/> (never the system, maintenance or a built-in database) with the locale
+    /// captured at dump time. The live system database is never touched.
+    /// </summary>
+    public Task RestoreSystemCopyFromStreamAsync(Func<Stream, CancellationToken, Task> produce, string targetDatabase, DatabaseLocale capturedLocale, CancellationToken ct = default) =>
+        RestoreCoreAsync(null, produce, targetDatabase, options.SystemDatabaseName ?? throw new BackupException("database_not_configured"), capturedLocale, ct, systemSource: true);
+
+    private async Task RestoreCoreAsync(string? dumpFile, Func<Stream, CancellationToken, Task>? produce, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale, CancellationToken ct,
+        bool systemSource = false)
     {
         RequireCompanyDatabase(targetDatabase);
-        RequireCompanyDatabase(sourceDatabase);
+        if (!systemSource) RequireCompanyDatabase(sourceDatabase);
+        else if (sourceLocale is null) throw new BackupException("source_locale_unknown");
         if (string.Equals(targetDatabase, sourceDatabase, StringComparison.Ordinal)) throw new BackupException("target_is_source");
         // the client version probe and the environment (ssl_root_certificate_required) come BEFORE CREATE DATABASE, so a refusal never costs a create/drop round trip
         var psi = await PrepareAsync("pg_restore", dumpFile is null ? ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase] : ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);

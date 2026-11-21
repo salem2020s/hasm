@@ -90,6 +90,64 @@ public sealed class SignedDocumentsTests : IDisposable
     }
 
     [Fact]
+    public void A_recovery_test_proof_counts_only_with_the_preimage_of_the_signed_canary_hash()
+    {
+        // review M2 and round 2 N1 of #116 (D-117): backup-status accepts a proof only when SHA-256(preimage) equals the hash in the run's SIGNED status
+        var runId = "20261121T020000Z-0011aabb";
+        var root2 = Path.Combine(root, "backups");
+        var dir = Path.Combine(root2, runId); Directory.CreateDirectory(dir);
+        var canary = RandomNumberGenerator.GetBytes(32);
+        var status = new RunStatus(1, RunStatus.KindValue, runId, T0, T0.AddMinutes(3), 180000, "ok", 1, 0, 0, 0, 0, pub.KeyId, signer.KeyId,
+            Convert.ToHexStringLower(SHA256.HashData(canary)), ["session", "login_throttle"], [], true, [new RunStatusCompany(Guid.NewGuid(), "ok")]);
+        SignedDocuments.WriteRunStatus(dir, status, signer);
+        var path = Path.Combine(dir, RecoveryTestProof.FileName);
+        void Write(RecoveryTestProof p) { if (File.Exists(path)) File.Delete(path); File.WriteAllBytes(path, p.ToBytes()); }
+        var good = new RecoveryTestProof(1, RecoveryTestProof.KindValue, runId, pub.KeyId, T0.AddHours(1), RecoveryTestProof.Passed, Convert.ToBase64String(canary), [], true);
+
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));                                                          // no proof yet
+        var listed = Assert.Single(BackupRunStatus.List(root2, trust));
+        Assert.False(listed.RecoveryTested);
+        Assert.Equal(pub.KeyId, listed.RecoveryKeyId);
+        Assert.Equal((8, "recovery_untested"), (BackupRunStatus.Evaluate([listed], T0.AddHours(2), BackupRunStatus.DefaultMaxAge) is var e ? (e.ExitCode, e.Code) : default));
+
+        Write(good);
+        Assert.True(RecoveryTestProof.IsValidFor(dir, status));
+        listed = Assert.Single(BackupRunStatus.List(root2, trust));
+        Assert.True(listed.RecoveryTested);
+        Assert.Equal((0, "ok"), (BackupRunStatus.Evaluate([listed], T0.AddHours(2), BackupRunStatus.DefaultMaxAge) is var g ? (g.ExitCode, g.Code) : default));
+
+        Write(good with { CanaryPreimage = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) });               // a wrong preimage
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+        Write(good with { CanaryPreimage = status.CanarySha256 });                                                       // the (public) hash instead of the preimage
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+        Write(good with { Verdict = "failed" });
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+        Write(good with { RecoveryKeyId = "rk-0000000000000000" });
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+        Write(good with { RunId = "20261121T030000Z-0011aabb" });
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+        File.Delete(path); File.WriteAllText(path, "{ not json");
+        Assert.False(RecoveryTestProof.IsValidFor(dir, status));
+    }
+
+    [Fact]
+    public void A_single_signing_public_key_and_the_reader_acknowledgement_are_checked()
+    {
+        var pem = Path.Combine(root, "sign", signer.KeyId + BackupSigningKeys.PublicSuffix);
+        var t = BackupMaterialLoader.TrustFromPublicKey(pem);
+        Assert.Equal(signer.KeyId, t.Verify("x"u8, signer.Sign("x"u8)).KeyId);
+        var bad = Path.Combine(root, "bad.pem"); File.WriteAllText(bad, "not a key");
+        Assert.Equal("signing_trust_invalid", Assert.Throws<BackupException>(() => BackupMaterialLoader.TrustFromPublicKey(bad)).Code);
+
+        // D-095, review M1: a reader accepts an unencrypted set only under its own exact acknowledgement
+        Assert.False(BackupGuard.UnencryptedReadAllowed(new BackupOptions()));
+        Assert.True(BackupGuard.UnencryptedReadAllowed(new BackupOptions { UnencryptedDevTestOnly = BackupOptions.UnencryptedAcknowledgement }));
+        Assert.Equal("unencrypted_ack_invalid", Assert.Throws<BackupException>(() => BackupGuard.UnencryptedReadAllowed(new BackupOptions { UnencryptedDevTestOnly = "yes" })).Code);
+        Assert.Equal("unencrypted_ack_with_recovery_key", Assert.Throws<BackupException>(() => BackupGuard.UnencryptedReadAllowed(
+            new BackupOptions { UnencryptedDevTestOnly = BackupOptions.UnencryptedAcknowledgement, RecoveryPublicKeyFile = "/k.pem" })).Code);
+    }
+
+    [Fact]
     public async Task The_keyless_digest_of_a_stored_file_equals_the_digest_produced_while_encrypting()
     {
         foreach (var size in new[] { 0, 1, Hbe1.DefaultChunkSize, Hbe1.DefaultChunkSize + 1 })

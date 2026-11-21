@@ -392,7 +392,10 @@ public class CompanyBackupServiceTests : PostgresTestBase
         {
             ["Hasm__Attachments__StorageDirectory"] = Storage, ["Hasm__Encryption__KeyDirectory"] = Keys, ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
             ["Hasm__Backup__UnencryptedDevTestOnly"] = BackupOptions.UnencryptedAcknowledgement,   // slice 5, D-095: these suites run unencrypted DEV/TEST sets
+            // slice 5, D-118: a trial restore writes a system-stream audit event
+            ["Hasm__Audit__KeyDirectory"] = Path.Combine(work, "audit-keys"), ["Hasm__Audit__ActiveKeyId"] = "a1", ["Hasm__Audit__CheckpointDirectory"] = Path.Combine(work, "checkpoints"),
         };
+        Hasm.Infrastructure.Audit.FileAuditKeyRing.Generate(Path.Combine(work, "audit-keys"), "a1");
         var set = Path.Combine(work, "set");
         var outputs = new List<string>();
         string? keptDatabase = null;
@@ -411,6 +414,9 @@ public class CompanyBackupServiceTests : PostgresTestBase
             var drop = await AdminTool.RunWith(Options, env, "drop-trial-restore", keptFile); outputs.Add(drop.All);
             Assert.True(drop.Exit == 0, drop.All);
             Assert.False(await Exists(keptDatabase));
+            // D-118: one system-stream event per trial restore, with a database TAG, never the name
+            Assert.Equal(2L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {SystemSchema.AuditEvent.Table} WHERE {SystemSchema.AuditEvent.EventType} = {BackupAuditEvents.TrialRestore}"));
+            Assert.Equal(0L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {SystemSchema.AuditEvent.Table} WHERE {SystemSchema.AuditEvent.Detail} LIKE '%{keptDatabase}%'"));
 
             Assert.Equal(2, (await AdminTool.RunWith(Options, env, "backup-company", "not-a-guid", set)).Exit);
             Assert.Equal(2, (await AdminTool.RunWith(Options, env, "trial-restore-company", "relative", c.Id.ToString(), Path.Combine(work, "t3"))).Exit);

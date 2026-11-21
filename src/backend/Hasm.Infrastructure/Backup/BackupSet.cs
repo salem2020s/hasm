@@ -166,7 +166,7 @@ public static class BackupSet
         foreach (var p in Directory.EnumerateFileSystemEntries(setDirectory))
         {
             var n = Path.GetFileName(p);
-            if (n != DatabaseFileName && n != ManifestFileName && n != AttachmentFolderName) unexpected.Add("set/unlisted");
+            if (n != DatabaseFileName && n != ManifestFileName && n != AttachmentFolderName && n != BackupRunFiles.UnencryptedMarker) unexpected.Add("set/unlisted");   // slice 5: the DEV/TEST marker (D-095)
         }
         return new BackupVerification(true, databaseOk, missing, mismatch, unexpected, manifest);
     }

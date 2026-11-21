@@ -89,9 +89,20 @@ public static class EncryptedSets
     public static async Task VerifyStoredAsync(string setDirectory, ManifestV2 manifest, CancellationToken ct = default)
     {
         var expected = new HashSet<string>(StringComparer.Ordinal) { SignedDocuments.ManifestFileName, SignedDocuments.ManifestFileName + SignedDocuments.SignatureSuffix };
-        foreach (var f in manifest.Files)
+        foreach (var f in manifest.Files) expected.Add(f.Name);
+        await VerifyEntriesAsync(setDirectory, manifest.Files, ct);
+        foreach (var e in Directory.EnumerateFileSystemEntries(setDirectory, "*", SearchOption.AllDirectories))
         {
-            expected.Add(f.Name);
+            if (Directory.Exists(e)) continue;
+            if (!expected.Contains(Path.GetRelativePath(setDirectory, e).Replace(Path.DirectorySeparatorChar, '/'))) throw new BackupException("backup_set_not_clean");
+        }
+    }
+
+    /// <summary>Keyless check of the listed files only (each exists, is no link, and has its size and digest); <c>backup_set_not_clean</c> otherwise.</summary>
+    public static async Task VerifyEntriesAsync(string setDirectory, IEnumerable<EncryptedFileEntry> entries, CancellationToken ct = default)
+    {
+        foreach (var f in entries)
+        {
             var path = Path.Combine(setDirectory, f.Name.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(path) || new FileInfo(path).LinkTarget is not null || new FileInfo(path).Length != f.Size) throw new BackupException("backup_set_not_clean");
             await using var s = File.OpenRead(path);
@@ -100,10 +111,54 @@ public static class EncryptedSets
             catch (BackupException) { throw new BackupException("backup_set_not_clean"); }
             if (d.HeaderSha256 != f.HeaderSha256 || !d.ChunkSha256.SequenceEqual(f.ChunkSha256)) throw new BackupException("backup_set_not_clean");
         }
-        foreach (var e in Directory.EnumerateFileSystemEntries(setDirectory, "*", SearchOption.AllDirectories))
+    }
+
+    /// <summary>
+    /// Reads an encrypted COMPANY set for a restore: the signed manifest (verified against the operator's trust list, then decrypted), its kind, company and structure (the dump first, then only
+    /// <c>attachments/&lt;storage name&gt;.hbe</c>), and every stored file against its signed digest, before anything is decrypted (H1).
+    /// </summary>
+    public static async Task<ManifestV2> ReadCompanySetAsync(string setDirectory, Guid expectedCompanyId, SigningTrust trust, RecoveryPrivateKey recovery, CancellationToken ct = default)
+    {
+        var m = await SignedDocuments.ReadManifestAsync(setDirectory, trust, recovery, CompanyKind, ct);
+        if (m.Company is null || m.CompanyId is null || m.Files.Count == 0 || m.Files[0] is not { Name: DumpName, Purpose: CompanyDumpPurpose }
+            || m.Files.Skip(1).Any(f => f.Purpose != AttachmentPurpose || !f.Name.StartsWith(AttachmentsFolder + "/", StringComparison.Ordinal) || !f.Name.EndsWith(".hbe", StringComparison.Ordinal)
+                || !BackupSet.IsStorageName(f.Name[(AttachmentsFolder.Length + 1)..^4])))
+            throw new BackupException("manifest_invalid");
+        if (m.CompanyId != expectedCompanyId) throw new BackupException("company_mismatch");
+        await VerifyStoredAsync(setDirectory, m, ct);
+        return m;
+    }
+
+    /// <summary>
+    /// Decrypts the attachments of a verified encrypted company set into <paramref name="target"/> (absent or empty) through a private (0700) staging folder, releasing only authenticated chunks
+    /// (D-116); a failure removes the staging folder and leaves the target untouched. Returns the number of files.
+    /// </summary>
+    public static async Task<int> RestoreAttachmentsAsync(string setDirectory, ManifestV2 manifest, string target, RecoveryPrivateKey recovery, CancellationToken ct = default)
+    {
+        if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()) throw new BackupException("target_not_empty");
+        if (Path.GetDirectoryName(target) is not { Length: > 0 } parent) throw new BackupException("target_invalid");
+        AuditFilePermissions.CreateOwnerOnlyDirectory(parent);
+        var staging = target + ".restoring-" + Guid.NewGuid().ToString("N");
+        CompanyBackupService.CreatePrivateDirectory(staging, "staging_exists", "staging_not_private");
+        try
         {
-            if (Directory.Exists(e)) continue;
-            if (!expected.Contains(Path.GetRelativePath(setDirectory, e).Replace(Path.DirectorySeparatorChar, '/'))) throw new BackupException("backup_set_not_clean");
+            var n = 0;
+            foreach (var entry in manifest.Files.Where(f => f.Purpose == AttachmentPurpose))
+            {
+                var o = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+                if (!OperatingSystem.IsWindows()) o.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                await using (var output = new FileStream(Path.Combine(staging, entry.Name[(AttachmentsFolder.Length + 1)..^4]), o))
+                    await DecryptAsync(setDirectory, entry, recovery, output, ct);
+                n++;
+            }
+            if (Directory.Exists(target)) Directory.Delete(target);   // empty by the check above
+            Directory.Move(staging, target);
+            return n;
+        }
+        catch
+        {
+            try { Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort; the target was never touched */ }
+            throw;
         }
     }
 

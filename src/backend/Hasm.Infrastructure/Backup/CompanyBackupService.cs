@@ -30,7 +30,13 @@ public sealed record EncryptedCompanyBackupResult(ManifestV2 Manifest, IReadOnly
 public enum TrialRestoreVerdict { Ok, OkWithWarnings, Failed }
 
 /// <summary>The outcome of a trial restore. <see cref="KeptFile"/> is the owner-only file that names a kept trial database (with <c>keep</c> only); the database name itself is never returned.</summary>
-public sealed record TrialRestoreResult(TrialRestoreVerdict Verdict, IReadOnlyList<BackupFinding> Failures, IReadOnlyList<BackupFinding> Warnings, int AttachmentFiles, int UnreferencedFiles, int? MigrationVersion, string? KeptFile, TimeSpan Elapsed = default);
+/// Slice 5: <see cref="Encrypted"/> for an encrypted set; <see cref="DatabaseTag"/> tags the trial database for the audit event (D-118; never its name); <see cref="AuditKeyIds"/> are the audit key ids the restored
+/// business stream uses and <see cref="KeyIdsRequired"/> the attachment key ids the set needs (for the recovery test's key-export check, review M4).
+public sealed record TrialRestoreResult(TrialRestoreVerdict Verdict, IReadOnlyList<BackupFinding> Failures, IReadOnlyList<BackupFinding> Warnings, int AttachmentFiles, int UnreferencedFiles, int? MigrationVersion, string? KeptFile, TimeSpan Elapsed = default,
+    bool Encrypted = false, string? DatabaseTag = null, IReadOnlyList<string>? AuditKeyIds = null, IReadOnlyList<string>? KeyIdsRequired = null, string? RecoveryKeyId = null, string? SigningKeyId = null);
+
+/// <summary>What a restore of an ENCRYPTED set needs (slice 5): the offline recovery PRIVATE key, brought in by the operator, and the operator's recovery-kit trust list of signing public keys.</summary>
+public sealed record RestoreKeys(RecoveryPrivateKey Recovery, SigningTrust Trust);
 
 /// <summary>
 /// Phase 4.3 slice 3 (decisions D-058..D-062): backup of ONE registered company (its database from the registry, its attachment folder, its locale and migration level) into a verified set, and a TRIAL restore of
@@ -156,6 +162,8 @@ public sealed class CompanyBackupService
             // R2-L2 belt and braces: the level is re-read after the dump; a change (impossible while the lock is held) refuses the set
             if (await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) != level) throw new BackupException("migration_level_changed");
             var manifest = BackupSet.Create(companyId, staging, Path.Combine(root, companyId.ToString("N")), dest, clock.GetUtcNow(), locale, level);
+            // slice 5 (D-095): an unencrypted set is DEV/TEST only and marked as such
+            BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(dest, BackupRunFiles.UnencryptedMarker), "This set is NOT encrypted: DEV/TEST only (D-088, D-095).\n"u8.ToArray());
             if (!BackupSet.Verify(dest).IsClean)
             {
                 try { Directory.Delete(dest, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
@@ -296,15 +304,23 @@ public sealed class CompanyBackupService
     /// Restores the set into a NEW generated database and <paramref name="attachmentTarget"/> (absent or empty, outside the live attachment root), runs the read-only checks and drops the database again, unless
     /// <paramref name="keep"/>: then an owner-only file next to the set records it (<see cref="DropTrialRestoreAsync"/> removes it later). Refusals before anything is created throw <see cref="BackupException"/>.
     /// </summary>
-    public async Task<TrialRestoreResult> TrialRestoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, CancellationToken ct = default)
+    /// <remarks>
+    /// Slice 5: an ENCRYPTED set (<c>manifest.json.hbe</c>) needs <paramref name="keys"/> (<c>recovery_key_required</c>): its signed manifest and every stored file are verified first, then the dump is decrypted
+    /// STREAMING into <c>pg_restore</c> and the attachments into a private staging folder, releasing only authenticated chunks (D-116). A version-1 (unencrypted) set is DEV/TEST only: whether it is accepted
+    /// is decided by the CALLER from its own acknowledgement (D-095), never by a field inside the set.
+    /// </remarks>
+    public async Task<TrialRestoreResult> TrialRestoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys = null, CancellationToken ct = default)
     {
         // D-073: the measured restore time of this set (verification and drop included) is part of the result
         var started = clock.GetTimestamp();
-        var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, ct);
+        var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, keys, ct);
         return result with { Elapsed = clock.GetElapsedTime(started) };
     }
 
-    private async Task<TrialRestoreResult> TrialRestoreCoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, CancellationToken ct)
+    /// <summary>True when <paramref name="setDirectory"/> holds an encrypted (version 2) set.</summary>
+    public static bool IsEncryptedSet(string setDirectory) => File.Exists(Path.Combine(setDirectory, SignedDocuments.ManifestFileName));
+
+    private async Task<TrialRestoreResult> TrialRestoreCoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys, CancellationToken ct)
     {
         if (!Path.IsPathFullyQualified(setDirectory) || !Path.IsPathFullyQualified(attachmentTarget)) throw new BackupException("path_not_absolute");
         if (expectedCompanyId == Guid.Empty) throw new BackupException("invalid_company");
@@ -314,33 +330,51 @@ public sealed class CompanyBackupService
         if (encryption.KeyDirectory is { } keyDir && (BackupSet.IsInside(target, BackupSet.RealPath(keyDir)) || BackupSet.IsInside(BackupSet.RealPath(keyDir), target))) throw new BackupException("target_overlaps_keys");   // review L1
         if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()) throw new BackupException("target_not_empty");
         var set = BackupSet.RealPath(setDirectory);
-        var verification = BackupSet.Verify(set);
-        if (!verification.IsClean || verification.Manifest is not { } manifest) throw new BackupException("backup_set_not_clean");
-        if (manifest.CompanyId != expectedCompanyId) throw new BackupException("company_mismatch");
+        if (BackupSet.IsInside(target, set) || BackupSet.IsInside(set, target)) throw new BackupException("target_overlaps_set");
+        var encrypted = IsEncryptedSet(set);
+        BackupManifest? manifest = null;
+        ManifestV2? v2 = null;
+        if (encrypted)
+        {
+            if (keys is null) throw new BackupException("recovery_key_required");
+            v2 = await EncryptedSets.ReadCompanySetAsync(set, expectedCompanyId, keys.Trust, keys.Recovery, ct);   // signature, structure and stored digests BEFORE anything is decrypted (H1)
+        }
+        else
+        {
+            var verification = BackupSet.Verify(set);
+            if (!verification.IsClean || verification.Manifest is null) throw new BackupException("backup_set_not_clean");
+            manifest = verification.Manifest;
+            if (manifest.CompanyId != expectedCompanyId) throw new BackupException("company_mismatch");
+        }
+        var manifestLevel = encrypted ? v2!.Company!.CompanyMigrationVersion : manifest!.CompanyMigrationVersion;
+        var manifestLocale = encrypted ? v2!.Company!.DatabaseLocale : manifest!.DatabaseLocale;
+        IReadOnlyList<string> keyIdsRequired = encrypted ? v2!.Company!.KeyIdsRequired : manifest!.KeyIdsRequired;
         var company = await registry.GetAsync(expectedCompanyId, ct) ?? throw new BackupException("company_not_found");
 
         var embedded = scripts.ToDictionary(s => s.Version, s => s.Checksum);
-        ClassifyMigrations(manifest.CompanyMigrationVersion, null, embedded, beforeRestore: true);
+        ClassifyMigrations(manifestLevel, null, embedded, beforeRestore: true);
 
         DatabaseLocale locale;
         await using (var maint = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
         {
             await maint.OpenAsync(ct);
-            locale = ChooseRestoreLocale(manifest.DatabaseLocale, await PgBackupTool.ReadLocaleAsync(maint, company.PhysicalDatabaseName, ct));
+            locale = ChooseRestoreLocale(manifestLocale, await PgBackupTool.ReadLocaleAsync(maint, company.PhysicalDatabaseName, ct));
         }
 
         var trial = nameGenerator();
         PhysicalIdentifier.Validate(trial, nameof(trial));
-        await tool.RestoreIntoNewDatabaseAsync(Path.Combine(set, BackupSet.DatabaseFileName), trial, company.PhysicalDatabaseName, locale, ct);
+        if (encrypted)
+            await tool.RestoreIntoNewDatabaseFromStreamAsync((stdin, c) => EncryptedSets.DecryptAsync(set, v2!.Files[0], keys!.Recovery, stdin, c), trial, company.PhysicalDatabaseName, locale, ct);
+        else await tool.RestoreIntoNewDatabaseAsync(Path.Combine(set, BackupSet.DatabaseFileName), trial, company.PhysicalDatabaseName, locale, ct);
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         TrialRestoreResult result;
         try
         {
             await MaintenanceAsync($"COMMENT ON DATABASE {Quote(trial)} IS '{CommentPrefix}{token}'", ct);
-            var files = BackupSet.RestoreAttachments(set, target, expectedCompanyId);
+            var attachmentFiles = encrypted ? await EncryptedSets.RestoreAttachmentsAsync(set, v2!, target, keys!.Recovery, ct) : BackupSet.RestoreAttachments(set, target, expectedCompanyId).Files;
 
             var failures = new List<BackupFinding>(); var warnings = new List<BackupFinding>();
-            if (manifest.CompanyMigrationVersion is { } lv && lv < SupportedMigrationVersion) warnings.Add(new("migration_level_older", 1));
+            if (manifestLevel is { } lv && lv < SupportedMigrationVersion) warnings.Add(new("migration_level_older", 1));
 
             // the restored database itself: locale and migrations (check c)
             await using (var maint = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
@@ -351,7 +385,7 @@ public sealed class CompanyBackupService
             await using var db = new NpgsqlConnection(options.BuildCompanyAdminConnectionString(trial));
             await db.OpenAsync(ct);
             var journal = await ReadJournalAsync(db, ct);
-            var (mf, mw) = ClassifyMigrations(manifest.CompanyMigrationVersion, journal, embedded, beforeRestore: false);
+            var (mf, mw) = ClassifyMigrations(manifestLevel, journal, embedded, beforeRestore: false);
             failures.AddRange(mf);
             foreach (var w in mw) if (!warnings.Any(x => x.Code == w.Code)) warnings.Add(w);
 
@@ -375,11 +409,16 @@ public sealed class CompanyBackupService
             var referenced = rows.Select(r => r.StorageName).ToHashSet(StringComparer.Ordinal);
             var unreferenced = Directory.Exists(target) ? Directory.EnumerateFiles(target).Count(f => !referenced.Contains(Path.GetFileName(f))) : 0;
 
-            var keyCoverage = BackupSet.CheckKeys(manifest, encryption.KeyDirectory is null ? [] : BackupSet.ListKeyIds(encryption.KeyDirectory));
-            if (!keyCoverage.IsComplete) warnings.Add(new("key_ids_missing", keyCoverage.Missing.Count));
+            var available = (encryption.KeyDirectory is null ? [] : BackupSet.ListKeyIds(encryption.KeyDirectory)).ToHashSet(StringComparer.Ordinal);
+            var missingKeys = keyIdsRequired.Count(k => !available.Contains(k));
+            if (missingKeys > 0) warnings.Add(new("key_ids_missing", missingKeys));
+
+            // review M4 of #116: the audit key ids the restored business stream needs (for the recovery test's key-export check); key ids only, no event is read
+            var auditKeyIds = await ReadAuditKeyIdsAsync(db, ct);
 
             var verdict = failures.Count > 0 ? TrialRestoreVerdict.Failed : warnings.Count > 0 ? TrialRestoreVerdict.OkWithWarnings : TrialRestoreVerdict.Ok;
-            result = new TrialRestoreResult(verdict, failures, warnings, files.Files, unreferenced, journal is { Count: > 0 } ? journal.Keys.Max() : null, null);
+            result = new TrialRestoreResult(verdict, failures, warnings, attachmentFiles, unreferenced, journal is { Count: > 0 } ? journal.Keys.Max() : null, null,
+                Encrypted: encrypted, DatabaseTag: BackupAudit.DatabaseTag(trial), AuditKeyIds: auditKeyIds, KeyIdsRequired: keyIdsRequired, RecoveryKeyId: v2?.RecoveryKeyId, SigningKeyId: v2?.SigningKeyId);
         }
         catch (Exception ex)
         {
@@ -395,6 +434,19 @@ public sealed class CompanyBackupService
         if (await DropAsync(trial)) return result;
         // the database could not be dropped: it is recorded for drop-trial-restore instead of being left unnamed
         return result with { Verdict = TrialRestoreVerdict.Failed, Failures = [.. result.Failures, new BackupFinding("trial_drop_failed", 1)], KeptFile = WriteKeptFile(set, new KeptTrial(1, expectedCompanyId, trial, token)) };
+    }
+
+    /// <summary>The distinct audit key ids of the audit table <paramref name="table"/> (absent table: none). Key ids only; no event content is read.</summary>
+    internal static async Task<IReadOnlyList<string>> ReadAuditKeyIdsAsync(NpgsqlConnection db, CancellationToken ct, string? table = null, string? keyColumn = null)
+    {
+        table ??= Hasm.Infrastructure.Audit.AuditTableMap.Business.Table;
+        keyColumn ??= Hasm.Infrastructure.Audit.AuditTableMap.Business.KeyId;
+        if (!await TableExistsAsync(db, table, ct)) return [];
+        var ids = new List<string>();
+        await using var cmd = new NpgsqlCommand($"SELECT DISTINCT {keyColumn} FROM {table} WHERE {keyColumn} IS NOT NULL ORDER BY 1", db);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) ids.Add(r.GetString(0));
+        return ids;
     }
 
     private static async Task<IReadOnlyDictionary<int, string>?> ReadJournalAsync(NpgsqlConnection db, CancellationToken ct)
