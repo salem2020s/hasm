@@ -1,5 +1,7 @@
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Attachments;
 using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.Backup;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
@@ -23,6 +25,9 @@ using Npgsql;
 //   Hasm.Admin encryption-keygen <key-id>     (creates a new random master key file for the import/attachment file encryption with owner-only permissions; never overwrites; back it up SEPARATELY from the data)
 //   Hasm.Admin audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>]   (READ-ONLY integrity verification; exit 0 verified, 6 failed, 7 incomplete)
 //   Hasm.Admin audit-anchor <system|company-id> [--establish-baseline]  (records the head of a sound stream in the checkpoint store; never changes the database)
+//   Hasm.Admin backup-company <company-id> <destination-dir>  (Phase 4.3: database + attachment folder of ONE Ready company into a verified set; exit 8 when key ids are missing)
+//   Hasm.Admin trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]  (restores into a NEW unregistered database, runs the pre-cutover checks, drops it unless --keep; exit 0 ok, 8 warnings, 1 failed)
+//   Hasm.Admin drop-trial-restore <kept-file>  (drops ONLY the trial database a --keep run recorded in that owner-only file)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
 
@@ -34,6 +39,7 @@ AuditStream auditStream = default;
 string? checkpointDirOverride = null;
 Guid? onlyCompany = null;
 var rotateCredential = false;
+var keepTrial = false;
 var validUsage = command switch
 {
     "init-system-db" or "register-company" => args.Length == 1,
@@ -50,11 +56,15 @@ var validUsage = command switch
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
         && (args.Length == 2 || (args.Length == 4 && args[2] == "--checkpoint-dir" && !string.IsNullOrWhiteSpace(checkpointDirOverride = args[3]))),
     "audit-anchor" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream) && (args.Length == 2 || (args.Length == 3 && args[2] == "--establish-baseline")),
+    "backup-company" => args.Length == 3 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[2]),
+    "trial-restore-company" => (args.Length == 4 || (args.Length == 5 && (keepTrial = args[4] == "--keep")))
+        && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[1]) && Path.IsPathFullyQualified(args[3]),
+    "drop-trial-restore" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     _ => false,
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline]");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file>  (all paths absolute)");
     return Usage;
 }
 
@@ -247,6 +257,10 @@ try
             Console.WriteLine(anchored is { } seq ? $"Stream head anchored at sequence {seq}." : "The stream is empty; nothing to anchor.");
             return Ok;
         }
+        case "backup-company":
+        case "trial-restore-company":
+        case "drop-trial-restore":
+            return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration);
         case "migrate-companies":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
@@ -335,6 +349,56 @@ catch (Exception ex)
     // For provisioning failures the company is marked Failed centrally; its database is never dropped.
     Console.Error.WriteLine($"{command} failed: {ex.GetType().Name}: {options.Scrub(ex.Message)}");
     return Failed;
+}
+
+// Phase 4.3 backup commands (D-058): stable codes, counts, the company id and operator file paths only; never a physical database name, a password or tool output.
+static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration)
+{
+    const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4, Warnings = 8;
+    var service = new CompanyBackupService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration));
+    try
+    {
+        switch (command)
+        {
+            case "backup-company":
+            {
+                var r = await service.BackupCompanyAsync(companyId, args[2]);
+                Console.WriteLine($"Backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
+                if (r.StagingFilesSwept > 0) Console.WriteLine($"Stale staging file(s) of earlier runs removed: {r.StagingFilesSwept}.");
+                Console.WriteLine("Back up the key directory SEPARATELY (decision K); the set is not encrypted or signed yet.");
+                if (r.MissingKeyIds.Count == 0) return Ok;
+                Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {r.MissingKeyIds.Count} key id(s) the set needs: {string.Join(", ", r.MissingKeyIds)}.");
+                return Warnings;
+            }
+            case "trial-restore-company":
+            {
+                var r = await service.TrialRestoreAsync(args[1], companyId, args[3], keep);
+                Console.WriteLine($"Trial restore of company {companyId}: {r.Verdict switch { TrialRestoreVerdict.Ok => "OK", TrialRestoreVerdict.OkWithWarnings => "OK WITH WARNINGS", _ => "FAILED" }}.");
+                Console.WriteLine($"Attachment files restored: {r.AttachmentFiles} (without a row: {r.UnreferencedFiles}); company migration level {(r.MigrationVersion is { } v ? v.ToString("0000") : "unknown")}.");
+                foreach (var f in r.Failures) Console.WriteLine($"  [FAILURE] {f.Code} count={f.Count}");
+                foreach (var w in r.Warnings) Console.WriteLine($"  [WARNING] {w.Code} count={w.Count}");
+                Console.WriteLine(r.KeptFile is { } kept
+                    ? $"The trial database was KEPT; it is recorded in {kept} (owner-only). Remove it with: drop-trial-restore {kept}"
+                    : "The trial database was dropped. Nothing was registered and no live database or folder was touched.");
+                Console.WriteLine("This is a trial restore: the cutover and the audited restore acknowledgement are not available (BLOCKED).");
+                return r.Verdict switch { TrialRestoreVerdict.Ok => Ok, TrialRestoreVerdict.OkWithWarnings => Warnings, _ => Failed };
+            }
+            default: // drop-trial-restore
+                await service.DropTrialRestoreAsync(args[1]);
+                Console.WriteLine("The kept trial database was dropped and its file removed.");
+                return Ok;
+        }
+    }
+    catch (BackupException ex)
+    {
+        Console.Error.WriteLine($"{command} stopped ({ex.Code}{(ex.Cause is null ? "" : $", cause {ex.Cause}")}).");
+        return ex.Code switch { "attachment_storage_not_configured" or "database_not_configured" => BadConfig, "company_busy" => InProgress, _ => Failed };
+    }
+    catch (PostgresException ex)
+    {
+        Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");
+        return Failed;
+    }
 }
 
 // Business streams live in the company database and are read with that company runtime role (least privilege).
