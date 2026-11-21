@@ -2,7 +2,7 @@
 
 * **Pull request:** #109 (Party roles UI: party picker searches the server)
 * **Head SHA reviewed (full 40 characters):** 634dba65c787a4758f8ffe47503c2358faffc71c (the delta review; C's full-diff review was at f6917b28e43faba464384e05faec4257847ee793)
-* **Reviewer context:** Agent C (independent QA/security, separate session); model family Claude Opus (claude-opus-5-5). Prompt: the lead's independent full-diff review of `origin/main...feature/party-picker-search` (truncation and bounded requests, permission/403 behaviour and server authorization, selection persistence and inactive/used filters, honesty of "N of M", accessibility and RTL/LTR parity on `SearchPicker`, no weakened tests).
+* **Reviewer context:** Agent C (independent QA/security, separate session); model family Claude Opus. Prompt: the lead's independent full-diff review of `origin/main...feature/party-picker-search` (truncation and bounded requests, permission/403 behaviour and server authorization, selection persistence and inactive/used filters, honesty of "N of M", accessibility and RTL/LTR parity on `SearchPicker`, no weakened tests).
 * **Scope read:** the full diff of the PR against `origin/main` (`PartyRoles.tsx` and `partyRoles.test.tsx`).
 * **Checks run (commands and results):** `npm ci`; typecheck; web vitest 498/498 (testTimeout 30 s); ui 37/37; production build; hosted CI on f6917b2 all green including desktop-build; mergeable with main.
 * **Findings:** verdict request changes at the reviewed head: one Medium and two Low.
