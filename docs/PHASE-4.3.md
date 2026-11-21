@@ -1347,6 +1347,151 @@ D-143 scope (single company; full-installation restore is a later slice bound by
 ### Owner decisions this slice relies on (not re-asked)
 D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system restore here), D-085..D-088.
 
+## Slice 8: multiple backup destinations (local and network copies, SRS 16) - PLAN (docs only)
+
+Sources: SRS 16 bullet 1 (retention and multiple local or network destinations, encryption, alerting and monitoring of the backup result); ROADMAP 4.3 deliverables ("destinations"); owner decisions D-085 (encryption and signed manifests) and D-086 (retention minimums and safeguards); slices 4, 5 and 6 of this document. Risk: Critical (ROADMAP 4.3). Decisions D-182..D-189 (status planned, `docs/DECISIONS.md`); audit codes 2040-2049 (system stream; lead allocation, recorded in `docs/INTEGRATION-STATUS.md`).
+
+### Scope
+* **In scope:**
+  * replicate each complete, encrypted and signed run of the primary root to N configured destinations (local folders and network shares mounted or addressed by the operating system);
+  * verify every copy at its destination by signature and stored digests before it is reported as a good copy;
+  * per-destination status in `backup-status`, with stale, failed or corrupt copies raising the alert exit codes;
+  * slice 6 retention evaluated and applied per destination, with the same D-086 minimums and the same INACTIVE deletion gate (D-137);
+  * refusal of overlapping or unsafe destinations, reusing and extending the slice 3/5 overlap checks.
+* **Not in scope:**
+  * object storage or cloud APIs, and any network protocol implemented by HASM: a network destination is a path the operating system already reaches (a mounted share on Linux, a UNC path or mapped share on Windows);
+  * network credentials: HASM stores none. Access is the service account's own operating-system identity (privilege separation, as for scheduling in slice 4);
+  * incremental or differential copies: every copy is a full run, as every run is (D-135);
+  * a backup screen in the shared frontend (the later monitoring UI slice).
+* **Migrations: none.** Replication state lives in the destination folders and in the system audit stream. The legal-hold and pin tables of slice 6 are keyed by run id and apply to every destination unchanged. If implementation shows a migration is needed, work stops and the lead allocates the number.
+* **What it does not meet by itself:** RELEASE1-ACCEPTANCE G stays blocked per D-088 (REL-ACC). Automatic deletion stays INACTIVE on every destination (D-137). Full-installation restore and the cutover (slice 7) are unaffected.
+
+### D-182, the model: a primary root and replicas of complete runs
+* `backup-run <root>` keeps writing the run to the primary root exactly as today. A destination receives a byte-for-byte COPY of a complete run folder; it is never a second dump. So every copy carries the same run id, the same signed `run.status.json`, the same signed manifests and the same ciphertext, and a copy verifies with the same trust list (slice 5) as the original.
+* **What is replicated:** every complete run whose `run.status.json` verifies and whose verdict is `ok` or `partial`. A `partial` run still holds good company sets.
+* **What is never replicated:**
+  * a run with verdict `failed`, an incomplete run (no valid status), and a run whose status does not verify;
+  * an unencrypted DEV/TEST run (D-088, D-095), whatever acknowledgement the reader holds: a copy would multiply plaintext, and DEV/TEST sets never need off-machine copies (`replica_unencrypted_refused`);
+  * standalone `backup-company` sets, key exports (`backup-keys`) and kit material. The key export has its own separate destination by D-087.
+* **When it runs:**
+  * at the end of `backup-run`, after `run.status.json` is signed, for every configured destination;
+  * by `backup-replicate <root> [--run <id>] [--destination <id>]`, which catches up runs that a destination missed (for example while a share was offline). Without `--run` it copies, oldest first, every replicable run of the primary that is missing or unverified at the destination, newest first if `--newest-first` is given.
+* **Alternative rejected:** dumping once per destination. It costs N database snapshots per run, gives copies with different contents and run ids, and breaks "one run, one signed unit" (D-130).
+
+### D-183, configuration format
+* Destinations are settings of the administrative tool (not of the API), in `appsettings` or environment variables:
+
+  ```json
+  "Hasm": { "Backup": { "Destinations": [
+    { "Id": "nas-1",   "Path": "/mnt/hasm-nas/backups", "Kind": "network" },
+    { "Id": "usb-a",   "Path": "/srv/hasm-usb/backups", "Kind": "local", "DailyKeep": 14 }
+  ] } }
+  ```
+
+  or `Hasm__Backup__Destinations__0__Id=nas-1`, `Hasm__Backup__Destinations__0__Path=...`, `Hasm__Backup__Destinations__0__Kind=network`.
+* Fields:
+  * `Id`: required, `[a-z0-9-]{1,32}`, unique; it names the destination in reports and audit events (never the path);
+  * `Path`: required, absolute (a UNC path is absolute on Windows);
+  * `Kind`: `local` or `network`, required; it is descriptive (reports, the volume check below) and changes no copy rule;
+  * optional `DailyKeep` and `WeeklyKeep`: retention for that destination; they may RAISE the D-132 values, never lower them (below 7 or 4 is `retention_below_minimum`, exit 3; never clamped);
+  * optional `MaxAgeHours`: the freshness limit of copies at that destination for `backup-status` (default: the `--max-age-hours` of the call, 26 hours).
+* At most 8 destinations. No destination configured means today's behaviour (a single root), and `backup-status` reports `replicas: none` without changing its exit code until owner question MD-Q1 is answered otherwise.
+* Any invalid entry makes every command that reads the configuration exit 3 (`destination_config_invalid`) before anything is written. A configuration error is never skipped silently, and no destination is dropped silently.
+
+### D-184, unsafe and overlapping destinations (reusing slices 3 and 5)
+* Checked by every command before anything is copied or deleted, on resolved paths (symbolic links refused, as in slice 3):
+  * the destination exists or its parent exists; it is created owner-only (0700, verified on Linux) when absent;
+  * a destination that is itself a symbolic link, or contains one on its resolved path, is refused (`symbolic_link_refused`);
+  * no overlap, in either direction, with: the primary root, any other destination, the attachment root, the encryption, audit and signing key directories (the slice 5 set, `destination_overlaps_source`), and the trial-restore staging folders;
+  * a destination equal to the primary root, or two destinations resolving to the same folder, is refused (`destination_duplicate`).
+* `backup-keys` (slice 5) additionally refuses a key-export destination inside any configured backup destination (`destination_in_backup_root`), so the recovery material never travels with the data copies (D-087).
+* **Same volume.** A destination on the same volume as the primary root (same device id on Linux, same volume serial on Windows) protects against neither disk failure nor loss of the machine. It is reported as a warning (`destination_same_volume`) in `backup-status` and on each copy; whether it must be refused is owner question MD-Q2.
+
+### D-185, atomic copy and verification at the destination
+For each run R and destination D (in `backup-run` and `backup-replicate`):
+1. **Locks.** The restore lock of slice 6 is taken SHARED for R's duration, so a retention deletion at the primary cannot remove R while it is being copied. A per-destination advisory lock (run-lock namespace of slice 4, object derived from the destination id) is taken exclusively, so two replicators never write the same destination and retention at D never runs during a copy (`destination_busy`, exit 4, bounded wait).
+2. **Already there.** If `<D>/<R>/` exists and its `run.status.json` hash equals the primary's, the copy is re-verified (step 4) instead of copied again. A folder with that run id and a DIFFERENT status hash is never overwritten: it is reported (`replica_conflict`, audit 2041) and kept as evidence.
+3. **Copy into staging.** Files are streamed into `<D>/<R>.incoming-<16 hex>/` (owner-only), each file written to its final name inside the staging folder, flushed to disk (`fsync` of every file and of the staging folder on Linux, `FlushFileBuffers` on Windows). The copy reads the primary's files only; it never decrypts anything and never needs the recovery private key.
+4. **Verify the COPY, read back from D** (never from the bytes just written in memory):
+   * `run.status.json` and every manifest verify against the server's signing trust list (slice 5; a retired key only for sets signed before its retirement, a compromised key never);
+   * the status hash equals the primary's;
+   * every file listed in the signed manifests exists with the signed size, header hash and chunk-hash list (H1), recomputed over the file at D;
+   * the folder holds no file outside the slice 5 set plus `recovery-test.json` (the slice 6 `run_not_clean` rule).
+5. **Publish.** Only after step 4 passes, the staging folder is renamed to `<D>/<R>/` (atomic within one file system) and the parent folder is flushed. A run folder at a destination therefore always holds a verified copy; there is no partial run under a run id.
+6. **Failure.** Any error in steps 3-5 removes the staging folder (best effort), records the destination's outcome `failed` with its code (`destination_unreachable`, `destination_full`, `replica_verification_failed`, `replica_conflict`) and writes audit 2041. One destination's failure never stops the others, and never changes the primary run.
+7. **Crash.** A leftover `<R>.incoming-*` folder is never a run. The next copy to D removes staging folders older than 24 hours (the slice 3 sweep rule) and copies again; `backup-status` reports them (`replica_incoming_stale`, exit 8).
+* **The copy's `recovery-test.json`.** A recovery test is written to the primary run after the run. `backup-replicate` copies a later `recovery-test.json` into an existing verified copy through the same staging rule (copy, verify the preimage against the signed hash, rename into place); it never changes any signed file.
+* **Re-verification of old copies.** `backup-replica-verify [--destination <id>] [--all]` re-runs step 4 over the copies at a destination (by default the newest copy per company and the copies the retention hard keeps protect). A copy that no longer verifies (bit rot, tampering) is reported `replica_corrupt` (audit 2042) and is NEVER repaired in place: the next `backup-replicate` writes a fresh copy beside it only after the operator has moved the corrupt folder away (it stays evidence). Scheduled by the operating system like `backup-run`.
+
+### D-186, success semantics and per-destination status
+* **The primary run's verdict does not change.** `run.status.json` is signed before replication and is never rewritten, so a run's signed verdict (`ok`, `partial`, `failed`) describes the backup itself. Replication outcomes are separate.
+* **`backup-run` result and exit code:**
+  * the replication outcome per destination is printed and written to audit (2040 or 2041);
+  * the exit code is the worse of the run's own code and the replication code: every configured destination verified gives 0 (when the run is `ok`); one or more destinations failed gives 8 (`replication_incomplete`); no destination verified while at least one is configured gives 1 (`replication_failed`);
+  * this is the preserving reading of SRS 16 ("multiple destinations"): a run is fully successful only when EVERY configured destination holds a verified copy. Whether fewer copies may count as success is owner question MD-Q1.
+* **`backup-status <root>` adds, for each configured destination:** its id and kind; the newest verified copy (run id and age); whether the primary's newest replicable run is present there; staging leftovers; the same-volume warning; and the exit contributions:
+  * the destination's newest verified copy is older than its `MaxAgeHours`, or it holds no verified copy: exit 1 (`replica_stale`, `replica_missing`);
+  * the primary's newest replicable run is not yet at the destination while an older copy is still within its age: exit 8 (`replica_lagging`);
+  * a copy reported corrupt by the last re-verification, or a `replica_conflict`: exit 1 (`replica_corrupt`, `replica_conflict`);
+  * `replica_incoming_stale` and `destination_same_volume`: exit 8.
+  * The overall exit code is the worst of the primary's code (slice 4/5 rules, unchanged) and every destination's code, so a stale or failed copy always alerts through the operating-system monitor (SRS 16, D-071).
+* **`backup-status <destination path>`** on a destination folder works as on a primary root (the same signed-status rules), so a monitor on another machine can check a share directly.
+
+### D-187, retention per destination (slice 6 unchanged, applied at every destination)
+* Each destination is a root of its own for slice 6: `backup-retention-plan` and `backup-retention-apply` take `--destination <id>` (or a root path) and classify the runs PRESENT there, with D-131 classification, D-132 minimums (the destination's own `DailyKeep`/`WeeklyKeep`, never below 7 and 4), D-133 recoverability, D-134 holds and D-135 pins.
+* **Global facts used at every destination:** legal holds and retention pins (system tables keyed by run id), and the recovery-test proof of a recovery key id (a passed test on any copy of any run counts for that key id, because the copies are byte-identical and signed).
+* **New keep reason at the primary, `replication_pending`:** the primary never deletes a run that some configured destination's policy would keep but that is not yet verified there. A share that is offline therefore never causes the only copy to be lost.
+* **Deletion at a destination** requires, besides every slice 6 step: the destination's own status ok (no stale, missing, corrupt or conflicting copy) AND the primary's status ok (`backups_not_current`). The per-destination lock of D-185 is held exclusively. Audit 2015/2016/2017 carry the destination id; tombstones are written under `<D>/.retention/tombstones/`.
+* **D-137 applies to every destination with no separate switch:** the same three layers keep deletion INACTIVE everywhere, and the activation PR (4.3-ACT) activates it for all roots together. Nothing in this slice activates deletion.
+
+### D-188, audit events (system stream, block 2040-2049, lead allocation)
+
+| Code | Event | Payload (never a path, a name or file contents) |
+|------|-------|--------------------------------------------------|
+| 2040 | `BackupReplicaVerified` | run id, status hash, destination id and kind, files, bytes, duration, `reverified` flag |
+| 2041 | `BackupReplicaFailed` | run id, destination id, reason code (`destination_unreachable`, `destination_full`, `replica_verification_failed`, `replica_conflict`, `replica_unencrypted_refused`) |
+| 2042 | `BackupReplicaCorrupt` | run id, destination id, the failing check (signature, size, header hash, chunk hash, unexpected file) |
+| 2043 | `BackupDestinationRefused` | destination id, reason (`destination_overlaps_source`, `destination_duplicate`, `symbolic_link_refused`, `destination_config_invalid`) |
+| 2044-2049 | reserved for this slice's follow-ups | - |
+
+* Every command fails closed when its event cannot be written: a copy is not reported as verified without 2040, and nothing is renamed into place before the event of its verification is committed.
+* The 2014-2017 retention events gain a `destination` field (`primary` or the destination id); their codes do not change.
+
+### D-189, restore from a copy
+* `trial-restore-company` and `backup-recovery-test` accept a run folder at any destination: they verify signatures and digests first (slice 5), exactly as at the primary. A copy is therefore usable for every restore path without the primary.
+* The slice 7 cutover (when built) takes its source set from any verified copy under the same rules; this slice changes nothing there.
+
+### Exact tests (implementation PR)
+* **Unit:**
+  * configuration parser: valid arrays and environment variables, duplicate ids, invalid ids, relative paths, more than 8 destinations, `DailyKeep`/`WeeklyKeep` below the minimums (exit 3, never clamped);
+  * overlap matrix: each destination against the primary root, other destinations, the attachment root and every key directory, in both directions, through a symbolic link, with a trailing separator and with case differences on Windows;
+  * status rules: every combination of primary verdict and destination outcome gives the exit code of D-186 (`replica_stale`, `replica_missing`, `replica_lagging`, `replica_corrupt`, `replica_conflict`, `replica_incoming_stale`, `destination_same_volume`);
+  * the `replication_pending` keep reason, and that destination retention uses the destination's own minimums and the global holds, pins and recovery-test facts.
+* **PostgreSQL class `BackupReplicationTests`** (disposable cluster on 5433; the isolated runner):
+  * a real encrypted run replicated to two destinations: both copies verify, are byte-identical to the primary, carry the same status hash, and audit 2040 is written twice; `backup-status` exits 0;
+  * one destination unreachable (a removed folder): the other is verified, 2041 is written, `backup-run` exits 8, `backup-status` reports `replica_missing` (exit 1);
+  * a flipped byte injected at the destination between copy and verification (test seam): verification fails, nothing is renamed into place, no run folder appears under the run id;
+  * a crash between copy and rename (test seam): the `.incoming-*` folder is never a run, `backup-status` reports it, and the next `backup-replicate` produces a verified copy;
+  * catch-up: a destination offline for two runs receives both through `backup-replicate`, oldest first;
+  * an existing copy with a different status hash is never overwritten (`replica_conflict`);
+  * an unencrypted DEV/TEST run is never replicated;
+  * `backup-replica-verify` detects a corrupted copy (2042) and leaves it in place;
+  * a trial restore from a destination copy gives the same catalog-and-content digest as one from the primary;
+  * retention plan at a destination honours a legal hold placed on the run id and the destination's raised `DailyKeep`; the primary keeps a run with `replication_pending`; `backup-retention-apply --destination` stays INACTIVE (2017, nothing deleted);
+  * an overlapping destination is refused before anything is written (2043).
+* **Drill log:** the drill of `docs/qa/DRILL-BACKUP-ENCRYPTION-ACCEPTANCE.md` is extended with a network destination (an operating-system mounted share) and a restore from that copy; recorded as a manual drill where CI cannot mount a share.
+* The PostgreSQL registry in `.github/workflows/backend.yml` is raised by the new tests at the merge turn.
+
+### Decisions (D-182..D-189, recorded in `docs/DECISIONS.md`, status planned)
+D-182 the model (primary root, byte-identical copies of complete signed encrypted runs; failed, unsigned and unencrypted runs never replicated); D-183 the configuration format; D-184 unsafe and overlapping destinations; D-185 atomic copy and verification at the destination; D-186 success semantics and per-destination status (all configured destinations required by default, MD-Q1); D-187 retention per destination (slice 6 at every destination, `replication_pending`, D-137 everywhere); D-188 audit events 2040-2043, 2044-2049 reserved; D-189 restore from a copy.
+
+### Owner questions (policy not covered by D-085, D-086 or SRS 16; the preserving default applies until answered)
+* **MD-Q1. How many verified copies make a run successful?** SRS 16 requires multiple destinations but no count. **Default: EVERY configured destination must hold a verified copy**; fewer gives exit 8 (`replication_incomplete`) and no copy at all gives exit 1. Options: a configured minimum number of copies (for example 1 of 2); or a set of required destinations with the others best-effort. Also: whether an installation with NO destination configured must alert (default: no change, `replicas: none` is reported but does not alert, as today).
+* **MD-Q2. Must a destination be on a different volume, machine or site?** **Default: not refused; a destination on the same volume as the primary is reported (`destination_same_volume`, exit 8) on every status check.** Options: refuse same-volume destinations; require at least one destination of kind `network`; require an off-site copy.
+
+### Owner decisions this slice relies on (not re-asked)
+D-085 (encryption with an offline recovery key, signed manifests; copies are of encrypted signed runs only), D-086 (retention minimums at least 7 daily and 4 weekly, configurable upward only; never delete the last recoverable, held or chain-needed backup; deletion inactive until the safeguards are tested), D-087 (the key export goes to a separate destination), D-088 (unencrypted sets are DEV/TEST only), D-137 (deletion inactive until an owner-instructed activation PR).
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
@@ -1355,4 +1500,4 @@ D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system 
 ## BLOCKED / owner decisions
 * Audited restore acknowledgement and a new checkpoint epoch after a company restore: decided (D-081); planned in slice 7 (D-143..D-151). Cutovers stay unavailable (`RestoreSafeguards.CutoverAvailable = false`) until the engine, the Phase 4.1 approval framework (S4/S8) and an owner-instructed activation are in place; owner questions Q1-Q6 of slice 7.
 * Retention/purge of removed attachments (decision R).
-* Set encryption and authentication and the key-directory export: decided (D-085, D-087, D-088), slice 5. Retention and deletion of backups: decided (D-086), planned in slice 6; automatic deletion stays INACTIVE until its activation PR (D-137), and the month-end/year-end legal policy waits for owner questions Q1-Q3 of slice 6. Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
+* Set encryption and authentication and the key-directory export: decided (D-085, D-087, D-088), slice 5. Retention and deletion of backups: decided (D-086), planned in slice 6; automatic deletion stays INACTIVE until its activation PR (D-137), and the month-end/year-end legal policy waits for owner questions Q1-Q3 of slice 6. Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Multiple destinations (local and network copies, SRS 16): planned in slice 8 (D-182..D-189; owner questions MD-Q1 and MD-Q2), not built. Full-installation restore: not started.
