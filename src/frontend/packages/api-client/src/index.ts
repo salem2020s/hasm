@@ -801,7 +801,6 @@ export interface ApiClientOptions {
   onUnauthenticated?: () => void;
 }
 
-/** Typed HTTP client for the HASM Backend API. It never talks to the database. */
 /** Distinct ids in batches of {@link MAX_LOOKUP_IDS}; nothing to ask means NO request (never an empty `ids`). Results are concatenated in batch order. */
 async function lookupByIds<T>(ids: readonly string[], fetchBatch: (batch: string[]) => Promise<T[]>): Promise<T[]> {
   const distinct = [...new Set(ids)];
@@ -811,6 +810,7 @@ async function lookupByIds<T>(ids: readonly string[], fetchBatch: (batch: string
   return (await Promise.all(batches.map(fetchBatch))).flat();
 }
 
+/** Typed HTTP client for the HASM Backend API. It never talks to the database. */
 export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...args) => fetch(...args), options: ApiClientOptions = {}) {
   const root = baseUrl.replace(/\/+$/, "");
   const kind: ClientKind = options.client ?? "web";
@@ -936,7 +936,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getInventorySettings: () => get<InventorySettings>("/api/v1/company/inventory/settings"),
     putInventorySettings: (defaultValuation: ValuationMethodCode | null, revision: number) => request<InventorySettings>("PUT", "/api/v1/company/inventory/settings", { body: { defaultValuation }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all units, no `total`); with `search` (code or name), `limit` (default 50, at most 500) or `offset` the server answers one page ordered by code and adds `total`. */
-    listInventoryUnits: (q?: IdsQuery) => get<{ units: InventoryUnit[]; total?: number }>(`/api/v1/company/inventory/units${listQueryString(q)}`),
+    /** An explicit EMPTY `ids` array is answered locally with an empty page and NO request: sent to the server it would read as "no filter" and return every unit. */
+    listInventoryUnits: (q?: IdsQuery) => q?.ids?.length === 0 ? Promise.resolve({ units: [] as InventoryUnit[], total: 0 }) : get<{ units: InventoryUnit[]; total?: number }>(`/api/v1/company/inventory/units${listQueryString(q)}`),
     /** The units with these ids (company-scoped, same permission as the list): duplicates removed, batches of at most 100, NO request at all for an empty list (an empty `ids` would mean "everything" over HTTP). Unknown ids are simply absent. */
     lookupInventoryUnits: (ids: readonly string[]) => lookupByIds(ids, (batch) => get<{ units: InventoryUnit[] }>(`/api/v1/company/inventory/units${listQueryString({ ids: batch })}`).then((r) => r.units)),
     createInventoryUnit: (unit: InventoryUnitInput) => request<InventoryUnit>("POST", "/api/v1/company/inventory/units", { body: unit }),
@@ -944,7 +945,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     deactivateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/deactivate`, { ifMatch: revision }),
     activateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/activate`, { ifMatch: revision }),
     /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
-    listInventoryGroups: (q?: IdsQuery) => get<{ groups: InventoryGroup[]; total?: number }>(`/api/v1/company/inventory/groups${listQueryString(q)}`),
+    /** Same guard as `listInventoryUnits`: an explicit empty `ids` never becomes an unfiltered request. */
+    listInventoryGroups: (q?: IdsQuery) => q?.ids?.length === 0 ? Promise.resolve({ groups: [] as InventoryGroup[], total: 0 }) : get<{ groups: InventoryGroup[]; total?: number }>(`/api/v1/company/inventory/groups${listQueryString(q)}`),
     /** The item groups with these ids (see `lookupInventoryUnits`); the effective valuation still resolves through ancestors. */
     lookupInventoryGroups: (ids: readonly string[]) => lookupByIds(ids, (batch) => get<{ groups: InventoryGroup[] }>(`/api/v1/company/inventory/groups${listQueryString({ ids: batch })}`).then((r) => r.groups)),
     createInventoryGroup: (group: InventoryGroupInput) => request<InventoryGroup>("POST", "/api/v1/company/inventory/groups", { body: group }),

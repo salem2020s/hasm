@@ -546,6 +546,21 @@ describe("api client: by-ids lookup of units and item groups", () => {
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/inventory/units");
   });
 
+  it("answers an explicit empty ids array locally with an empty page and sends NO request, for units and for groups (it must never become the unfiltered list)", async () => {
+    const fetchMock = vi.fn();
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listInventoryUnits({ ids: [] })).toEqual({ units: [], total: 0 });
+    expect(await client.listInventoryUnits({ ids: [], search: "a", limit: 5 })).toEqual({ units: [], total: 0 });
+    expect(await client.listInventoryGroups({ ids: [] })).toEqual({ groups: [], total: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    // an ABSENT ids is still the ordinary list
+    const ok = vi.fn().mockImplementation(() => Promise.resolve(json({ units: [], groups: [] })));
+    const live = createApiClient("https://x", ok as unknown as typeof fetch);
+    await live.listInventoryUnits({});
+    await live.listInventoryGroups();
+    expect(ok).toHaveBeenCalledTimes(2);
+  });
+
   it("never sends a request for an empty id list (an empty ids would mean everything over HTTP)", async () => {
     const fetchMock = vi.fn();
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
