@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #142 (feat(ui): shared whole-number parsing with Arabic-Indic/Persian/mixed digits; retention months field and digit tests; frontend only)
-* **Head SHA reviewed (full 40 characters):** 0900517d58f899e306ad984202bfa470e789697f
+* **Head SHA reviewed (full 40 characters):** 916db7b1aec51cdd5beda5b1adc5a2f74aea0e8f (the full review was at 0900517d58f899e306ad984202bfa470e789697f; the delta 0900517..916db7b was confirmed at 916db7b)
 * **Reviewer context:** Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's independent full-diff review of draft PR #142 (frontend only: `parseIntegerInRange`, retention months field as a text input with numeric input mode parsed to 1..1200, tests for fiscal year, units and retention with Arabic-Indic, Persian and mixed digits): parser correctness for every digit set and the separators, refusing a blank matching the server, dir=ltr and RTL layout, ar/en messages, nothing weakened; Head SHA reviewed 0900517d58f899e306ad984202bfa470e789697f; executed: git diff origin/main...head (6 files, +95/-4), reads of `parseDecimalInput`, `parseWholeNumber`, `parseIntegerInRange` and the retention screen, export of the head with `npm ci`, typecheck, and the retention, numberInput, arabicDigits and inventory tests; Tauri compile and hosted CI not verified; verdict approve; findings 0 Critical/High, 1 Medium, 3 Low.
 * **Scope read:** the 6 changed files of the PR (`numberInput.ts`, the retention page, and the numberInput, arabicDigits, inventory and retention tests).
 * **Checks run (commands and results):** by the reviewer: as listed above. By the author after the fixes: `npm run typecheck` clean; web suite 45 files, 938 tests passed; `npm run build` OK.
@@ -14,6 +14,8 @@
 | L2 | Low | `parseIntegerInRange` accepted "60.0", "6,0" and "٦٫٠" through the decimal parser | Fixed in a2b189b: it accepts pure digits only (Latin, Arabic-Indic, Persian, mixed); the decimal parser stays for the fields that intentionally use it (fiscal year and units use `parseWholeNumber`, unchanged). Tests in `numberInput.test.ts` and in the retention screen. |
 | L3 | Low | convoluted `.replace` in the mixed-digits parser test | Fixed in a2b189b: a plain literal. While doing so the literal was found to be mis-written (it produced five characters and the case still passed through another branch); the corrected literal is `"٢0٢۷"` and the assertion now really covers the mixed form. |
 
-* **Blocker or High findings open:** none; the Medium and the Lows are fixed in a2b189b, pending H's confirmation.
+* **Blocker or High findings open:** none (the Medium and the Lows are fixed in a2b189b, confirmed by H at 916db7b).
 * **NOT VERIFIED:** the Tauri compile (the shell loads the same built frontend; hosted `desktop-build` is the arbiter) and hosted CI on the new head.
 * **Verdict:** approve
+
+Confirmation: Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's confirmation of the #142 delta 0900517d58f899e306ad984202bfa470e789697f..916db7b1aec51cdd5beda5b1adc5a2f74aea0e8f (a2b189b the fixes for the Medium and L1 to L3, 916db7b the record): the stable-key change leaves unsaved-change detection and the save payload intact (the key is never sent), the tests pin the fixes, nothing is weakened; Head SHA reviewed 916db7b1aec51cdd5beda5b1adc5a2f74aea0e8f; executed: read-only git diff of 0900517..a2b189b and 0900517..916db7b, export of the head with `npm ci`, typecheck (0 errors) and the retention, numberInput, arabicDigits, inventory and message-catalog tests (117 pass); Tauri compile and hosted CI on the new head not verified; verdict approve; no open findings.
