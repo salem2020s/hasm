@@ -32,6 +32,178 @@ Sources: SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10; PHASE-3.12 (backup c
 * `PgBackupTool` validates NAMES only. The orchestrating slice must tie `sourceDatabase` to a real database of the company registry and the dump to the manifest's company before calling it.
 * A blocked drop of a failed restore target (the `restore_failed_cleanup_failed` path) is not exercised by a test (no robust way to block a drop on the shared disposable server).
 
+## Slice 3: orchestration - PLAN (revised after review round 1; not implemented; awaits confirmation before any code)
+Goal: one company is backed up and trial-restored END TO END from the company registry, through administrative commands, using the slice 1 set and the slice 2 tool. The trial restore includes the read-only checks SRS 16.2 / Scenario 21.8 require: shared party links, attachment rows against files, and migration compatibility. Risk: Critical (ROADMAP 4.3).
+* **Migrations: none.** The registry and `Hasm_System` are only read, and nothing is added to any schema. If implementation shows a migration is needed, work stops and the lead allocates it.
+* **No API endpoint and no UI in this slice.** The shared Web/Tauri frontend is unaffected; a backup screen belongs to the monitoring/scheduling slice.
+* **Scenario 21.8 is NOT fully met by this slice.** It still lacks the cutover (replacing the live company database and attachment folder, re-applying the runtime grants, bringing registry and company to consistent points) and the audited restore acknowledgement with a new checkpoint epoch. Both are BLOCKED on an owner decision (see below). Slice 3 must never be cited as meeting 21.8; it delivers the backup, the trial restore and the pre-cutover checks only.
+
+### Design
+1. **`CompanyBackupService`** (`Hasm.Infrastructure.Backup`). Options: `HasmDatabaseOptions`, `AttachmentOptions`, `EncryptionOptions`, a clock. It wraps `PgBackupTool`, `BackupSet`, `CompanyRegistry`, `PartyRegistryStore` (read-only) and the embedded company migrations.
+   * **`BackupCompanyAsync(companyId, destination)`:**
+     1. The company is read from the registry (`CompanyRegistry.GetAsync`). An unknown company is `company_not_found`; any state other than `Ready` is `company_not_ready`. The source database is ALWAYS the registry's `PhysicalDatabaseName`; no caller ever names a database.
+     2. `Hasm:Attachments:StorageDirectory` must be configured, otherwise `attachment_storage_not_configured`. This fails closed and has no override: a backup run with a missing setting must never silently produce a set without the attachments (documented for operators, see "Operator documentation"). The company folder is `<root>/<company id N>`, exactly as `AttachmentFileStore` builds it; a missing folder means no attachments yet.
+     3. The destination is checked before anything runs: absolute, empty or absent, and outside the attachment root and the key directory (`destination_not_empty`, `destination_overlaps_source`).
+     4. **Stale staging files are swept first.** The pattern is exactly `<destination leaf>.dump-<32 lowercase hex>` in the destination's parent directory, last written more than 24 hours ago (well above the 30-minute tool timeout). Nothing else is ever deleted, and the count is reported.
+     5. **Migration level.** The company migration level (highest version in the source's migration journal) is read with the admin account and stored in the manifest as the optional `companyMigrationVersion`. Older manifests still read: the field is null.
+     6. **Dump.** `PgBackupTool.DumpAsync` writes the dump to a private staging file `<destination>.dump-<random>` (owner-only, removed on success and on failure) and captures the locale.
+     7. **Restorability at backup time.** The captured locale must pass the restore rules (`PgBackupTool.EnsureRestorable`: libc provider and the character rule). Otherwise the result is `locale_unsupported` and NO set is written: an ICU/builtin company is refused up front instead of producing a set that can never be restored.
+     8. **Create and verify the set.** `BackupSet.Create(companyId, staging dump, company folder, destination, now, locale, migration level)`, then `BackupSet.Verify(destination).IsClean` as a post-condition; if it fails, the result is `backup_set_not_clean` and the set is removed.
+     9. **Key coverage.** `BackupSet.CheckKeys(manifest, ListKeyIds(Encryption:KeyDirectory))`. Missing key ids are REPORTED (result and exit code 8), not a refusal.
+   * **Why taking the dump before copying the attachment folder is safe:**
+     * Attachment files are written BEFORE their row commits (`AttachmentService`), and removed attachments keep their bytes, so every file referenced by a row in the dump is present when the folder is copied.
+     * This argument depends on decision R staying open (no purge of removed bytes). A future purge must coordinate with a running backup, for example by excluding or waiting for backups in progress; this is recorded for decision R.
+     * A file uploaded after the dump is an unreferenced extra in the set. It is reported by the trial restore and is harmless; the orphan sweep removes it after a restore.
+     * After a rewrap, the row's stored key id can be STALE: the dump may hold the old key id while the copied envelope names the new key. Decryption always uses the key id in the envelope, and the manifest takes its key ids from the envelopes. The trial restore reports row/envelope key-id differences as warnings.
+   * **`TrialRestoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep)`:**
+     1. **Set and company.** The set is verified (`backup_set_not_clean`). Its company must equal `expectedCompanyId` (`company_mismatch`) and must exist in the registry (`company_not_found`).
+     2. **Compatibility before anything is created (check c).** A manifest `companyMigrationVersion` newer than the highest embedded company migration of this installation is refused with `set_newer_than_installation`; an older one is reported as a warning (`migration_level_older`: a cutover would first need `migrate-companies`). An older set without the field is checked after the restore instead.
+     3. **Locale.**
+        * The manifest locale is ALWAYS validated by the restore rules.
+        * When the registry's database still exists, the manifest locale must equal the live one, otherwise `locale_mismatch`. A database's locale cannot change after creation, so a difference means a tampered or foreign set.
+        * In that comparison a provider of null (PostgreSQL 14, which has no provider column) and `c` are the SAME libc provider, so an upgrade from 14 to 15+ never raises a false `locale_mismatch`. Encoding, collation and ctype must match exactly.
+        * When the database is gone, the manifest locale is used alone. An older set without it falls back to the live database, and with neither the restore is refused (`source_locale_unknown`, slice 2).
+     4. **Target database.** A NEW generated physical name (`PhysicalIdentifier.GenerateDatabaseName`), never registered and never the registry's name. `PgBackupTool.RestoreIntoNewDatabaseAsync(set dump, target, registry name, manifest locale)` restores into it, after which the database is tagged with `COMMENT ON DATABASE <target> IS 'hasm-trial-restore:<random 32 hex token>'`.
+     5. **Attachments.** `BackupSet.RestoreAttachments(set, attachmentTarget, companyId)`. The target must be absolute, empty or absent, and OUTSIDE the live attachment root (`target_in_live_storage`): a trial restore never writes into live storage.
+     6. **Read-only checks of the restored copy** (they write nothing anywhere except the trial database's comment):
+        * **Locale and migrations (check c, continued).** The database opens with the admin account, and its encoding, collation, ctype and provider equal the manifest (null = `c`).
+          * Its migration journal must be readable.
+          * Its highest version must equal the manifest's `companyMigrationVersion` when present, otherwise `migration_level_mismatch`.
+          * For an older set without the field, a level newer than this installation is `set_newer_than_installation`.
+          * Each journal row's checksum must equal the checksum of the embedded script with that version, otherwise `migration_checksum_mismatch` (a set from a diverged build).
+        * **Shared party links (check a).** Every restored local party with a `GlobalPartyId` must resolve in `Hasm_System`, read only: `PartyRegistryStore.GetLinkedIdentitiesAsync` must return a link for (company, local party) to the SAME global party. Unresolved or different links are a failure, `shared_links_unresolved`, with the count only (never party data).
+        * **Attachment rows against files (check b).** Every attachment row, active AND removed, is checked:
+          * its file must exist in the restored folder (`attachment_file_missing`);
+          * a non-sensitive file's SHA-256 must equal the row's hash (`attachment_hash_mismatch`);
+          * a sensitive envelope is decrypted with the configured key ring and the row's context, and the plaintext's SHA-256 must equal the row's hash; a decryption failure with an available key is `attachment_undecryptable`;
+          * an envelope whose key is missing from the key directory is reported as missing key coverage (warning, exit code 8; consistent with D-061);
+          * a row key id that differs from the envelope's key id is reported as a warning (`attachment_key_id_stale`);
+          * files without a row are counted (information).
+          * Counts and generated storage names only; never file names or content.
+        * Key coverage of the restored set against the key directory is reported.
+     7. **Verdict.** `ok`, `ok_with_warnings` (exit 8) or `failed` (exit 1, codes and counts listed). The restored database is DROPPED after the checks by default: only the database this run generated, whatever the verdict.
+     8. **`--keep`.**
+        * The database is kept, and its physical name is NEVER printed (the `Hasm.Admin` convention).
+        * The name, the token and the company id are written to an owner-only file next to the set, `<set dir>.trial-<random>.json`. It cannot go inside the set: that would make the set unclean. Only that file's path is printed.
+        * No registry change, no runtime grant, no cutover.
+   * **`DropTrialRestoreAsync(keptFile)`** removes a kept trial database later. It reads the owner-only file and refuses (`not_a_trial_restore`) unless all of these hold:
+     * the recorded name is a valid physical identifier;
+     * it is not any registered company's database and not the system, maintenance or built-in databases;
+     * the database's comment equals `hasm-trial-restore:<token from the file>`.
+     Only then does it run `DROP DATABASE ... WITH (FORCE)` and delete the file. This is a documented procedure, not a manual DBA step.
+2. **`Hasm.Admin` commands:**
+   * `backup-company <company-id> <destination-dir>`
+   * `trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]`
+   * `drop-trial-restore <kept-file>`
+   Configuration comes from the environment, as for every other command: the admin database account is required, plus `Hasm__Attachments__StorageDirectory` and `Hasm__Encryption__KeyDirectory`. The PostgreSQL client tools come from `PATH` (no new configuration option). Output is stable codes, counts, the company id and file paths given by or created for the operator; never a physical database name, a password, tool output, party data or attachment file names. Exit codes:
+   * 0: ok
+   * 1: refused or failed (code printed)
+   * 2: usage
+   * 3: configuration
+   * 8: completed with warnings (missing key ids, older migration level, stale key ids)
+3. **Test infrastructure:** `PosixFactAttribute` (unit tests) sets `Skip` on Windows, so the fake-tool tests are REPORTED as skipped instead of passing by an early return. All fake tools of a test class are written in the class constructor, before any process of that class starts, under the test output directory (exec-capable, unlike a possibly `noexec` temp folder). A helper retries the first `--version` run ONLY when the launch fails with `ETXTBSY` (errno 26, the race with a concurrent fork in another test); every other launch error fails at once. The `PgBackupToolProcessTests` move to it.
+4. **Operator documentation** (`docs/DEVELOPMENT.md`, new "Company backup and trial restore" section):
+   * the three commands and their exit codes;
+   * no backup is possible without `Hasm__Attachments__StorageDirectory` (no override);
+   * the staging-file pattern and its 24-hour sweep;
+   * the owner-only kept-trial file and `drop-trial-restore`;
+   * the key directory is backed up separately (decision K);
+   * the cutover is not available (BLOCKED) and the manifest is not authenticated.
+
+### Exact tests
+* **Unit (`Hasm.Infrastructure.Tests`):**
+  * `PosixFactAttribute` sets `Skip` exactly on Windows. The four existing `PgBackupToolProcessTests` use it, write their tools in the constructor, and retry only on `ETXTBSY` (a non-`ETXTBSY` launch error is not retried: tested with a non-executable file).
+  * `PgBackupTool.EnsureRestorable`: libc and PostgreSQL 14 (no provider) are accepted; ICU, builtin and unsafe names are refused with `locale_unsupported`.
+  * Restore-locale choice (pure function):
+    * manifest = live -> manifest;
+    * manifest differs from live only by provider null vs `c` -> manifest (no mismatch);
+    * a real difference -> `locale_mismatch`;
+    * manifest only -> manifest; live only -> live; neither -> `source_locale_unknown`;
+    * an invalid manifest locale is refused even when it equals the live one.
+  * Compatibility classification (pure function):
+    * newer than the installation -> refused;
+    * older -> warning;
+    * equal -> ok;
+    * restored level different from the manifest -> `migration_level_mismatch`;
+    * a checksum that differs from the embedded script -> `migration_checksum_mismatch`.
+  * Attachment check classification (pure function, from facts about a row and its file): missing, hash mismatch, undecryptable, key missing (warning), stale row key id (warning), extra file (information).
+  * Manifest: `companyMigrationVersion` round trip; a manifest without it still reads.
+  * Path rules: a destination inside the attachment root or the key directory is refused; a trial attachment target inside the live attachment root is refused, including through a symbolic link (POSIX).
+  * Staging sweep: only exact `<leaf>.dump-<32 hex>` names older than 24 hours are removed. A younger file, another leaf, an uppercase or shorter suffix, and a directory are all kept.
+  * Kept-trial file: owner-only permissions (POSIX); malformed content is refused.
+* **PostgreSQL (`Hasm.Database.IntegrationTests`, new class `CompanyBackupServiceTests`, 11 tests).** The test registry in `.github/workflows/backend.yml` is RAISED by 11 at push time, counted from whatever main is then.
+  1. A registered Ready company is backed up into a clean set bound to its id, with the captured locale and migration level. The source, another company database and the system database are unchanged (catalog-and-content digests, as in the slice 2 drill).
+  2. Refusals before any dump: unknown company, a Pending company, unconfigured attachment storage, a non-empty destination, a destination inside the attachment root. No staging file and no set remain. A stale staging file older than 24 hours is swept and a young one is kept.
+  3. An ICU company database (created `LOCALE_PROVIDER icu` on the PostgreSQL 16 CI server, whose image has ICU, and registered as Ready) is refused with `locale_unsupported` up front; no set and no staging file remain.
+  4. A trial restore into a new unregistered database passes every check:
+     * locale equal;
+     * migration level and checksums equal;
+     * a linked local party resolves in `Hasm_System`;
+     * one plain and one sensitive attachment verified, including decryption;
+     * key coverage complete.
+     The database is dropped afterwards, and the registry and the `Hasm_System` digest are unchanged.
+  5. Trial restore refusals, with nothing created in any case:
+     * a set of another company (`company_mismatch`);
+     * a set of an unknown company;
+     * a manifest whose locale was edited to a different valid libc locale while the source exists (`locale_mismatch`);
+     * an attachment target inside live storage (`target_in_live_storage`).
+  6. Disaster recovery: the company's database is dropped after the backup (the registry row is kept). The trial restore succeeds from the manifest locale, and the restored digest equals the pre-backup digest.
+  7. Check (a): after the backup, the company's link for a local party is changed in `Hasm_System` to another global party, and the link of a second party is removed (test setup on the disposable server). The trial restore reports `failed` with `shared_links_unresolved` = 2, and the `Hasm_System` digest is unchanged by the restore.
+  8. Check (b):
+     * failures: a set whose dump references an attachment file that is missing from the set, and one whose file content differs from the row hash (the manifest is regenerated so the SET is clean, simulating an inconsistent backup), give `attachment_file_missing` and `attachment_hash_mismatch`;
+     * warnings: a sensitive file whose key is absent from the key directory, and a rewrapped envelope with a stale row key id, give warnings only (exit 8 path).
+  9. Check (c): a manifest whose `companyMigrationVersion` exceeds the embedded maximum is refused with `set_newer_than_installation` before any database is created. A source whose journal checksum for one version was altered before the backup (disposable database) gives `migration_checksum_mismatch`.
+  10. `--keep` and `drop-trial-restore`:
+      * the kept file is owner-only and holds the name; the output does not contain the physical name;
+      * `drop-trial-restore` refuses a kept file naming a registered company database, and one whose token does not match the database comment (`not_a_trial_restore`), dropping nothing;
+      * with the right file it drops exactly the trial database and deletes the file.
+  11. The real `Hasm.Admin` binary:
+      * `backup-company`, then `trial-restore-company` (exit 0), then `--keep` + `drop-trial-restore`;
+      * usage errors exit 2; a missing storage setting exits 3;
+      * stdout and stderr contain neither the admin password, any physical database name nor any tool output.
+* **Not tested (recorded):** real-tool TLS (the disposable server has no TLS); PostgreSQL 14/15 servers (CI runs 16); the blocked-drop path; the Windows process tests (reported as skipped).
+* **Commands before every push:**
+  * `dotnet build src/backend/Hasm.slnx -c Release`;
+  * `dotnet test tests/unit/Hasm.Infrastructure.Tests -c Release --no-build`;
+  * the API tests;
+  * the PostgreSQL suite in CI (postgres-integration is authoritative), or locally only through the single-holder lock of the Linux test harness (PR #89), once merged and only when free; never port 5432.
+
+### Stays BLOCKED or out of this slice
+* **BLOCKED (owner decision):**
+  * the audited restore acknowledgement and the new checkpoint epoch, and therefore the cutover that replaces a live company database or touches its checkpoints (the part of 21.8 this slice does not meet);
+  * retention/purge of removed attachments (decision R). The backup ordering argument above relies on R staying open.
+  Nothing in this slice decides either. No audit event is added: an audited backup/restore record belongs with the acknowledgement and the monitoring slice.
+* **Not in this slice:** scheduling, retention of sets, destinations, set encryption and signing (until then the manifest, including its locale and migration level, is NOT authenticated: see D-059), monitoring/alerts, RPO/RTO measurement, full-installation restore, key backup (kept separately by the operator), and encrypted import-file originals (decision K follow-up).
+
+### Decisions under D-048 (recorded in docs/DECISIONS.md)
+* **D-058: entry points and binding.**
+  * Decision: three `Hasm.Admin` commands over one infrastructure service. The company and its database come only from the registry, and only in state Ready. Attachment storage must be configured (no override). Client tools come from `PATH`. A physical database name is never printed.
+  * Alternatives rejected:
+    * an API endpoint now (needs the RBAC, licensing and UI decisions of the monitoring slice);
+    * accepting a database name;
+    * treating missing storage configuration as "no attachments";
+    * printing the kept trial database name.
+* **D-059: restorability and manifest trust.**
+  * Decision: a set is written only if its captured locale passes the restore rules. The unsigned manifest locale is always validated, cross-checked against the live database when it exists (null and `c` being the same libc provider; `locale_mismatch` otherwise), and trusted alone only when the database is gone, until set signing exists.
+  * Alternatives rejected:
+    * checking only at restore time;
+    * ignoring the live database;
+    * refusing whenever the database is gone (defeats D-053).
+* **D-060: trial restore and its pre-cutover checks.**
+  * Decision: a new generated, unregistered, token-tagged database plus an attachment folder outside live storage. It runs the read-only 21.8 checks: shared party links resolve in `Hasm_System`; attachment rows match their files, hashes and keys; migration compatibility. It is then dropped by default. `--keep` writes an owner-only file next to the set, and `drop-trial-restore` later drops only a database whose comment carries that file's token. No registry, grant or checkpoint change; the cutover stays BLOCKED.
+  * Alternatives rejected:
+    * deferring the 21.8 checks to the cutover;
+    * restoring under the registered name or into live storage (that is a cutover);
+    * keeping every trial database;
+    * a manual DBA drop.
+* **D-061: key coverage is reported, not refused,** at backup and at trial restore (exit code 8 and the missing key ids). A row's stale key id is a warning, because decryption uses the envelope. Alternative rejected: refusing the backup (the gap already exists in the live system; refusing would leave the company with no backup at all).
+* **D-062: migration compatibility of a backup set.**
+  * Decision: the company migration level is captured at backup time in the manifest (optional; older sets are checked after the restore). A level newer than this installation is refused before anything is created; an older level is a warning (a cutover would need `migrate-companies` first). The restored journal must equal the manifest level and match the embedded script checksums.
+  * Alternatives rejected:
+    * checking only after a restore (creates a database for a set that can never be used);
+    * migrating the trial copy automatically (a write the trial restore must not make);
+    * ignoring checksums (a set from a diverged build would pass).
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
