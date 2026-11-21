@@ -17,20 +17,13 @@ public sealed partial record MigrationScript(int Version, string Name, string Sq
     [GeneratedRegex(@"^(\d{4})_([a-z0-9_]+)\.sql$")]
     private static partial Regex FileName();
 
-    [GeneratedRegex(@"--[^\n]*")]
-    private static partial Regex LineComment();
-
-    // "BEFORE TRUNCATE" is the append-only guard trigger (protective); every other TRUNCATE statement stays forbidden.
-    [GeneratedRegex(@"\bDROP\b|(?<!\bBEFORE\s+)\bTRUNCATE\b|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase)]
-    private static partial Regex Destructive();
-
     public static MigrationScript Parse(string fileName, string sql)
     {
         var m = FileName().Match(fileName);
         if (!m.Success) throw new MigrationException($"Invalid migration file name '{fileName}' (expected NNNN_name.sql).");
         var script = new MigrationScript(int.Parse(m.Groups[1].Value), fileName, sql);
-        if (Destructive().IsMatch(LineComment().Replace(sql, "")))
-            throw new MigrationException($"Migration {fileName} contains a destructive statement (DROP/TRUNCATE/DELETE); not allowed.");
+        // Destructive statements, unsafe trigger switching and the other guard-neutralizing forms (MigrationGuard) are refused before anything runs.
+        MigrationGuard.EnsureAcceptable(fileName, sql);
         return script;
     }
 
@@ -66,6 +59,8 @@ public sealed partial record MigrationScript(int Version, string Name, string Sq
             if (ordered[i].Version != i + 1)
                 throw new MigrationException("Migration versions must be unique and contiguous starting at 0001.");
         }
+        // Set-level rule: a function of an earlier migration is replaced only through the owner-approved allowlist.
+        MigrationGuard.EnsureAcceptableSet(ordered);
         return ordered;
     }
 }
