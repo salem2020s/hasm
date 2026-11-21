@@ -92,7 +92,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   }, []);
 
   const handleError = useCallback((error: unknown) => {
-    if (error instanceof ApiError && error.status === 401) {
+    if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
       endSession("session_expired");
       return true;
     }

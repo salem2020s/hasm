@@ -869,8 +869,14 @@ export interface ApiClientOptions {
    * localStorage/sessionStorage); a restart of the desktop app asks for the password again.
    */
   client?: ClientKind;
-  /** Called when an authenticated call is answered 401 (the session ended or expired). */
+  /** Called when an authenticated call is answered 401 (the session ended or expired). A 401 `mfa_step_up_required` is NOT a session end and never calls it. */
   onUnauthenticated?: () => void;
+  /**
+   * Phase 4.1 step-up: called when the server refuses an AUTHENTICATED call only because the second-factor proof is not fresh (401 `mfa_step_up_required`). It asks the user for a fresh code (the UI) and resolves
+   * true when the step-up succeeded: the original request is then repeated ONCE, unchanged. False (cancelled, failed) leaves the request undone: the caller gets an ApiError `mfa_step_up_cancelled`. Without a handler the
+   * caller gets the ApiError `mfa_step_up_required` itself.
+   */
+  stepUp?: () => Promise<boolean>;
 }
 
 /** Distinct ids in batches of {@link MAX_LOOKUP_IDS}; nothing to ask means NO request (never an empty `ids`). Results are concatenated in batch order. */
@@ -888,7 +894,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   const kind: ClientKind = options.client ?? "web";
   let bearer: string | null = null;
 
-  async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean } = {}): Promise<T> {
+  async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean; keepSessionOn?: readonly string[]; stepUpDone?: boolean } = {}): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (method !== "GET") headers["X-Hasm-Request"] = "1"; // anti-CSRF header required by the API on every state-changing call
     if (opts.body !== undefined) headers["Content-Type"] = "application/json";
@@ -909,7 +915,13 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
         /* non-JSON error body */
       }
       const retry = Number(response.headers?.get?.("Retry-After"));
-      if (response.status === 401 && !opts.anonymous) options.onUnauthenticated?.();
+      if (response.status === 401 && payload.error === "mfa_step_up_required") {
+        // the session is fine; only the second-factor proof is stale. Ask once, repeat the identical request once. Never ends the session.
+        if (options.stepUp && !opts.stepUpDone) {
+          if (await options.stepUp()) return request<T>(method, path, { ...opts, stepUpDone: true });
+          throw new ApiError(401, "mfa_step_up_cancelled");
+        }
+      } else if (response.status === 401 && !opts.anonymous && !opts.keepSessionOn?.includes(payload.error ?? "")) options.onUnauthenticated?.();
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
@@ -973,6 +985,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     async confirmEnrolment(input: { challenge: string; code: string } | { code: string }): Promise<LoginResult> {
       return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/enrol/confirm", { body: { ...input, client: kind }, anonymous: true }));
     },
+    /** A fresh second-factor proof for the privileged operations. A wrong or replayed code is 401 `invalid_code` and does NOT end the session; 429 `too_many_attempts` is the shared throttle. The code is never stored. */
+    mfaStepUp: (code: string) => request<{ verifiedAtUtc: string }>("POST", "/api/v1/auth/mfa/step-up", { body: { code }, keepSessionOn: ["invalid_code"] }),
     async logout(): Promise<void> {
       try {
         await request<void>("POST", "/api/v1/auth/logout", { anonymous: true });

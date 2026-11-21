@@ -19,6 +19,14 @@ export const mfaAr: Record<string, string> = {
   "mfa.recovery.title": "الحساب بحاجة إلى استرداد",
   "mfa.recovery.body": "لا يتوفر لهذا الحساب تطبيق مصادقة صالح. لا يمكن الدخول إلا بعد إجراء استرداد يوافق عليه مسؤول آخر. تواصل مع مسؤول النظام.",
   "mfa.throttled": "محاولات كثيرة. انتظر قليلًا ثم أعد المحاولة.",
+  "mfa.step_up.title": "تأكيد الهوية",
+  "mfa.step_up.message": "هذا الإجراء يتطلب تحققاً حديثاً بخطوتين. أدخل الرمز المكوّن من 6 أرقام من تطبيق المصادقة.",
+  "mfa.step_up.format": "أدخل رمزاً من 6 أرقام.",
+  "mfa.step_up.wrong": "الرمز غير صحيح أو سبق استخدامه. أدخل الرمز الحالي من التطبيق.",
+  "mfa.step_up.cancelled": "لم يُنفَّذ الإجراء: أُلغي التحقق. بياناتك ما زالت في الشاشة.",
+  "mfa.step_up.required": "هذا الإجراء يتطلب تحققاً حديثاً بخطوتين ولم يُنفَّذ.",
+  "error.mfa_step_up_required": "هذا الإجراء يتطلب تحققاً حديثاً بخطوتين ولم يُنفَّذ.",
+  "error.mfa_not_enrolled": "لا يوجد تطبيق مصادقة مفعّل لحسابك، فلا يمكن إجراء التحقق الحديث.",
 };
 
 export const mfaEn: Record<string, string> = {
@@ -41,4 +49,12 @@ export const mfaEn: Record<string, string> = {
   "mfa.recovery.title": "This account needs recovery",
   "mfa.recovery.body": "This account has no valid authenticator. It can only sign in after a recovery that another administrator approves. Contact your system administrator.",
   "mfa.throttled": "Too many attempts. Wait a moment and try again.",
+  "mfa.step_up.title": "Confirm your identity",
+  "mfa.step_up.message": "This action needs a fresh two-step verification. Enter the 6-digit code from your authenticator app.",
+  "mfa.step_up.format": "Enter a 6-digit code.",
+  "mfa.step_up.wrong": "The code is wrong or was already used. Enter the current code from the app.",
+  "mfa.step_up.cancelled": "The action was not done: verification was cancelled. Your input is still on the screen.",
+  "mfa.step_up.required": "This action needs a fresh two-step verification and was not done.",
+  "error.mfa_step_up_required": "This action needs a fresh two-step verification and was not done.",
+  "error.mfa_not_enrolled": "Your account has no active authenticator, so a fresh verification cannot be done.",
 };

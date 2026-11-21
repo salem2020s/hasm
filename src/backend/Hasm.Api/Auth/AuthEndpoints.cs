@@ -7,6 +7,7 @@ namespace Hasm.Api.Auth;
 public sealed record LoginRequest(string? Login, string? Password, string? Client);
 public sealed record MfaVerifyRequest(string? Challenge, string? Code, string? Client);
 public sealed record MfaEnrolBeginRequest(string? Challenge, string? EnrolmentCode, string? Password, string? Client);
+public sealed record MfaStepUpRequest(string? Code);
 public sealed record MfaEnrolConfirmRequest(string? Challenge, string? Code, string? Client);
 public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
 public sealed record CreateUserRequest(string? Login, string? DisplayName, string? Password, bool IsIdentityAdministrator);
@@ -24,13 +25,14 @@ public static class AuthEndpoints
         auth.MapPost("/mfa/verify", MfaVerify).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/enrol/begin", MfaEnrolBegin).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/enrol/confirm", MfaEnrolConfirm).WithMetadata(new BodyLimit());
+        auth.MapPost("/mfa/step-up", MfaStepUp).RequireAuthorization().WithMetadata(new BodyLimit());
         auth.MapPost("/logout", Logout);
         auth.MapGet("/status", Status);
         auth.MapPost("/change-password", ChangePassword).RequireAuthorization().WithMetadata(new BodyLimit());
 
-        var admin = app.MapGroup("/api/v1/admin/users").RequireAuthorization(AuthDefaults.AdministratorPolicy);
+        var admin = app.MapGroup("/api/v1/admin/users").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.MfaVerifiedPolicy);
         admin.MapPost("", CreateUser).WithMetadata(new BodyLimit());
-        admin.MapPost("/{id:guid}/state", SetState).WithMetadata(new BodyLimit());
+        admin.MapPost("/{id:guid}/state", SetState).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
     }
 
     private static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);
@@ -121,7 +123,27 @@ public static class AuthEndpoints
         if (!string.IsNullOrEmpty(body.Challenge))
             return EnrolResult(await auth.BeginEnrolmentWithChallengeAsync(body.Challenge, body.EnrolmentCode, client, http.ClientSource(), http.RequestAborted), client, http);
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return Error(401, "invalid_credentials");
+        if (client != session.Client) return Error(400, "invalid_request");                                    // S2 review L1: the transport of the answer is the session's own client
         return EnrolResult(await auth.BeginEnrolmentWithSessionAsync(session, body.Password, http.ClientSource(), http.RequestAborted), client, http);
+    }
+
+    /// <summary>
+    /// Re-proves the second factor on the caller's live session (Phase 4.1 S3a, D-160). The code goes through the same verifier, replay protection and throttling as login.
+    /// A user without MFA gets 409 <c>mfa_not_enrolled</c> (nothing to prove; the operations that need freshness pass for them, D-161).
+    /// </summary>
+    private static async Task<IResult> MfaStepUp(MfaStepUpRequest? body, HttpContext http, AuthService auth)
+    {
+        if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return Error(401, "unauthenticated");
+        if (body is null || string.IsNullOrEmpty(body.Code)) return Error(400, "invalid_request");
+        switch (await auth.StepUpAsync(session, body.Code, http.ClientSource(), http.RequestAborted))
+        {
+            case StepUpOutcome.Verified v: return Results.Json(new { verifiedAtUtc = v.VerifiedAtUtc });
+            case StepUpOutcome.Throttled t:
+                http.Response.Headers.RetryAfter = ((int)Math.Ceiling(t.RetryAfter.TotalSeconds)).ToString();
+                return Error(429, "too_many_attempts");
+            case StepUpOutcome.NotApplicable: return Error(409, "mfa_not_enrolled");
+            default: return Error(401, "invalid_code");
+        }
     }
 
     private static async Task<IResult> MfaEnrolConfirm(MfaEnrolConfirmRequest? body, HttpContext http, AuthService auth)
@@ -130,6 +152,7 @@ public static class AuthEndpoints
         if (!string.IsNullOrEmpty(body.Challenge))
             return EnrolResult(await auth.ConfirmEnrolmentWithChallengeAsync(body.Challenge, body.Code, client, http.ClientSource(), http.RequestAborted), client, http);
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return Error(401, "invalid_credentials");
+        if (client != session.Client) return Error(400, "invalid_request");                                    // S2 review L1
         return EnrolResult(await auth.ConfirmEnrolmentWithSessionAsync(session, body.Code, http.ClientSource(), http.RequestAborted), client, http);
     }
 

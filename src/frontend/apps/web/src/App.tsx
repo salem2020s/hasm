@@ -8,6 +8,7 @@ import { AuthProvider, createSessionBridge, useAuth, type SessionBridge } from "
 import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
+import { StepUpHost, createStepUpBridge, type StepUpBridge } from "./stepUp";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
 import { ImportsPage } from "./pages/Imports";
@@ -287,17 +288,19 @@ function Gate() {
   return <Shell />;
 }
 
-export function App({ client, bridge }: { client?: ApiClient; bridge?: SessionBridge }) {
+export function App({ client, bridge, stepUpBridge }: { client?: ApiClient; bridge?: SessionBridge; stepUpBridge?: StepUpBridge }) {
   const { t } = useI18n();
   const own = useMemo(() => {
-    if (client) return { api: client, bridge };
+    const step = stepUpBridge ?? createStepUpBridge();
+    if (client) return { api: client, bridge, step };
     const b = createSessionBridge();
-    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire }), bridge: b };
-  }, [client, bridge]);
+    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, stepUp: step.request }), bridge: b, step };
+  }, [client, bridge, stepUpBridge]);
   return (
     <AuthProvider api={own.api} bridge={own.bridge}>
       <a className="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById("content")?.focus(); }}>{t("skip_to_content")}</a>
       <UnsavedProvider><Gate /></UnsavedProvider>
+      <StepUpHost bridge={own.step} />
     </AuthProvider>
   );
 }
