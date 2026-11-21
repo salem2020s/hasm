@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #131 (Phase R slice R1: attachment retention policy, legal holds and eligibility preview; company 0031, system 0030)
-* **Head SHA reviewed (full 40 characters):** 49a355706342b296ddee338bb7028d1f0a281d41
+* **Head SHA reviewed (full 40 characters):** c8cf2bf52dec2e93c35280d044f6e5dd4e7ca4f6 (the full review was at 49a355706342b296ddee338bb7028d1f0a281d41; the delta 49a3557..c8cf2bf was confirmed at c8cf2bf)
 * **Reviewer context:** Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent review of #131 (Phase R slice R1: retention policy, legal holds, eligibility preview; company 0031, system 0030) against D-082, merged plan #114 (D-108..D-115) and my R1 checklist; pins roles 7→8 and admin permissions 142→146 without approve; TRUNCATE 0A000"; Head SHA reviewed 49a355706342b296ddee338bb7028d1f0a281d41.
 * **Scope read:** `git diff origin/main...49a3557`: migrations 0031 and 0030, PermissionCatalog, presets, AccessService, the retention model, service and endpoints, backend.yml; `CompanyRuntimePrivileges` checked for the new tables; hosted check runs queried and the failing backend-build-test log read.
 * **Checks run (commands and results):** by the reviewer: `git diff origin/main...49a3557`; CompanyRuntimePrivileges inspected for the new tables; hosted check runs queried; the failing backend-build-test log read (company-0024 generator collision on t_f3dfaa38); no local PostgreSQL run (harness reserved for A; hosted CI is the arbiter). By the author after the fixes: `node tools/schema/company-00NN-*.cjs --check` for every generator 0022-0031 (all pass); `dotnet test tests/unit/Hasm.Infrastructure.Tests` 1203 passed, 0 failed; the integration test project builds. The new PostgreSQL role test `AttachmentRetentionRuntimeRoleTests` has NOT been executed locally (see NOT VERIFIED).
@@ -15,6 +15,8 @@
 | L1 | Low | no `Hasm.Admin` command grants Retention Approver | Recorded as a follow-up in `docs/PHASE-R-attachment-retention.md` ("R1 follow-ups"): a later command must go through Phase 4.1's `role.grant.sensitive` (D-105); the role is privileged and MFA-mandatory (D-096). |
 | L2 | Low | comment that revoked versions still count for the at-removal period | Fixed in f389c14: comment in `AttachmentRetentionEligibility.Evaluate` at the at-removal lookup. |
 
-* **Blocker or High findings open:** none after f389c14, pending G's confirmation and hosted CI on the new head.
+* **Blocker or High findings open:** none (fixed in f389c14, confirmed by G at c8cf2bf).
 * **NOT VERIFIED:** the PostgreSQL role test `AttachmentRetentionRuntimeRoleTests` and the full PostgreSQL suite on the new head have not been run locally (shared harness reserved for other agents); hosted CI is the arbiter. Observation outside this PR: `CompanyRuntimePrivileges.Tables` on `main` has no entry for the 3.13 S2 document-link table (reported to the lead).
-* **Verdict:** request changes
+* **Verdict:** approve
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #131 delta 49a3557..c8cf2bf (H1 0024 generator excludes only 0031's own files, H2 runtime privileges and runtime-role test, M1 0031 generator CI step, L1 recorded, L2 comment)"; Head SHA reviewed c8cf2bf52dec2e93c35280d044f6e5dd4e7ca4f6; executed: `git diff 49a3557 f389c14` (generator, CompanyRuntimePrivileges, backend.yml, unit and PostgreSQL tests, model comment, plan note), 0031 generator collision scope read (no exclusion), own worktree all company generator `--check` 0022-0031 (match), `dotnet build src/backend/Hasm.slnx` and the integration test project (0 errors), unit tests AttachmentRetention* and CompanyRuntimeUnitTests (30/30 passed); hosted CI on c8cf2bf still running at review time; verdict APPROVE; findings 0 open (H1, H2, M1, L1, L2 fixed in f389c14).
