@@ -180,8 +180,20 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         catch
         {
             // undo every write of the failed attempt (also clears an aborted state after a database error), forget its audit receipts, and let the exception reach the caller
-            try { await work.Transaction.RollbackAsync(savepoint, CancellationToken.None); work.DiscardReceiptsSince(mark); await work.RestoreTouchedAsync(touchedMark, CancellationToken.None); }
-            catch (Exception) { /* the connection is unusable: the original exception still propagates and the caller's transaction ends without a commit */ }
+            work.InvalidateTouched();                                                  // first, and it cannot fail: whatever else goes wrong below, the next audit append re-runs the full first-touch check
+            try
+            {
+                if (work.CleanupProbe is { } probe) await probe("rollback");
+                await work.Transaction.RollbackAsync(savepoint, CancellationToken.None);
+                work.DiscardReceiptsSince(mark);
+                if (work.CleanupProbe is { } probe2) await probe2("restore");
+                await work.RestoreTouchedAsync(touchedMark, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // the cleanup itself failed: the partial effects, the receipts or the audit memory may be left behind, so the work must never commit (a caller that catches the refusal below would otherwise commit them)
+                work.Poison();
+            }
             throw;
         }
     }

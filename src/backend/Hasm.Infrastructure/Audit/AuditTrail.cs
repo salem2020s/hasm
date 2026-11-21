@@ -58,6 +58,7 @@ public sealed class AuditTrail
     /// </summary>
     internal async Task<AuditTouchedMark> MarkTouchedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct = default)
     {
+        // NOTE: reading the id FORCES PostgreSQL to assign a transaction id now (a read-only transaction would not have one yet); acceptable because the caller is about to write.
         var current = await CurrentXidAsync(conn, tx, ct);
         return new AuditTouchedMark(current, touched.TryGetValue(tx, out var state) && state.Xid == current ? [.. state.Streams] : []);
     }
@@ -68,11 +69,21 @@ public sealed class AuditTrail
     /// </summary>
     internal async Task RestoreTouchedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, AuditTouchedMark mark, CancellationToken ct = default)
     {
-        var current = await CurrentXidAsync(conn, tx, ct);
+        // Invalidate FIRST: if reading the transaction id fails, the state is already empty with no id, so any later append re-runs the full first-touch check (fail closed).
         var state = touched.GetOrCreateValue(tx);
         state.Streams.Clear();
+        state.Xid = "";
+        var current = await CurrentXidAsync(conn, tx, ct);
         state.Xid = current;
         if (mark.Xid == current) foreach (var k in mark.Streams) state.Streams.Add(k);
+    }
+
+    /// <summary>Forgets everything this trail remembers about the transaction (cannot fail): used first in a cleanup path, so that whatever else fails afterwards the next append re-runs the full first-touch check.</summary>
+    internal void InvalidateTouched(NpgsqlTransaction tx)
+    {
+        var state = touched.GetOrCreateValue(tx);
+        state.Streams.Clear();
+        state.Xid = "";
     }
 
     public AuditTrail(Func<AuditServices> factory, TimeProvider clock, ILogger? logger = null)

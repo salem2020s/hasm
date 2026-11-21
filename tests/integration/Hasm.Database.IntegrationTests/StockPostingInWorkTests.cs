@@ -329,4 +329,68 @@ public class StockPostingInWorkTests : StockPostingTestBase
         await tx2.RollbackAsync();
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
     }
+
+    private Task CreateAuditFailureTrigger() =>
+        Sql(FailFunction + $" CREATE TRIGGER zz_forced_failure BEFORE INSERT ON {Audit_.Table} FOR EACH ROW WHEN (NEW.{Audit_.EventType} = {StockPostingAuditEvents.Posted}) EXECUTE FUNCTION zz_forced_failure();");
+
+    /// <summary>Review M1 of the adaptation delta: if the cleanup of a failed in-work step itself fails (here: the savepoint rollback), the partial effects may remain, so the work refuses to commit.</summary>
+    [PostgresFact]
+    public async Task A_failed_savepoint_rollback_poisons_the_work_so_a_caller_that_catches_the_refusal_cannot_commit_the_partial_effects()
+    {
+        await PreparePosting(configure: false);
+        await Cost.ReceiveAsync(Company.Id, Admin.Id, new CostingReceiptRequest("seed", D1, null, [new CostingReceiptLine(Fifo.Id, W1.Id, 10m, 80m)]));
+        var issue = await Approved(Issue(W1, "2026-03-12", L(Fifo, Pcs, 4)));
+        var seeded = await Everything();
+
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            work.CleanupProbe = step => step == "rollback" ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Posting.PostInWorkAsync(work, Admin.Id, issue.Id, issue.Revision, null));
+            Assert.Equal("inventory_accounting_not_configured", refusal.Message);                                  // the original refusal still reaches the caller
+            Assert.Equal("audit_state_unknown", work.PoisonCode);
+            await work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "the caller carries on and would commit"));
+        }));
+        Assert.Equal("audit_state_unknown", ex.Code);
+        Assert.Equal(seeded, await Everything());                                                                 // the costing writes of the failed attempt were NOT committed
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
+    }
+
+    /// <summary>Review M1, restore step: a failure while restoring the audit memory also poisons the work (the commit is refused).</summary>
+    [PostgresFact]
+    public async Task A_failed_restore_of_the_audit_memory_poisons_the_work_and_the_commit_is_refused()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        await CreateAuditFailureTrigger();
+        var before = await Sql<long>($"SELECT count(*) FROM {Audit_.Table}");
+
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            work.CleanupProbe = step => step == "restore" ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+            await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m)));
+            Assert.Equal("audit_state_unknown", work.PoisonCode);
+            await work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "legitimate caller append"));   // the rolled-back savepoint left the transaction usable
+        }));
+        Assert.Equal("audit_state_unknown", ex.Code);
+        Assert.Equal(before, await Sql<long>($"SELECT count(*) FROM {Audit_.Table}"));                            // nothing committed
+    }
+
+    /// <summary>Review M1(a): when the restore fails, the audit memory is already invalidated, so the caller's next append re-runs the full first-touch check (a forged head is refused) instead of trusting stale state.</summary>
+    [PostgresFact]
+    public async Task A_failed_restore_still_forces_the_next_audit_append_to_re_run_the_first_touch_check()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        await CreateAuditFailureTrigger();
+
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            work.CleanupProbe = step => step == "restore" ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+            await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m)));
+            await ForgeHead();
+            await work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "caller append onto a forged head"));
+        }));
+        Assert.Equal("audit_head_corrupt", ex.Code);
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
+    }
 }

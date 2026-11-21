@@ -32,6 +32,16 @@ public sealed class CompanyAuditedWork
     internal Task<AuditTouchedMark> TouchedMarkAsync(CancellationToken ct = default) => trail.MarkTouchedAsync(Connection, Transaction, ct);
     /// <summary>Forgets the streams first touched after <paramref name="mark"/> (after ROLLBACK TO SAVEPOINT), so the caller's next append re-takes the stream lock and re-runs the first-touch head and anchor checks; a mark of another transaction counts as empty.</summary>
     internal Task RestoreTouchedAsync(AuditTouchedMark mark, CancellationToken ct = default) => trail.RestoreTouchedAsync(Connection, Transaction, mark, ct);
+    /// <summary>Forgets the audit first-touch state of this transaction without any database round trip (it cannot fail): the first step of a cleanup path.</summary>
+    internal void InvalidateTouched() => trail.InvalidateTouched(Transaction);
+
+    private string? poisonCode;
+    /// <summary>The code with which this work refuses to commit, or null. Set when a cleanup after a failed in-work step itself failed: the state of the transaction (partial effects, receipts, audit memory) is unknown.</summary>
+    internal string? PoisonCode => poisonCode;
+    /// <summary>Marks the work as unfit to commit (<c>audit_state_unknown</c>): the commit refuses and the transaction is rolled back, so nothing partial or unanchored can persist.</summary>
+    internal void Poison(string code = "audit_state_unknown") => poisonCode ??= code;
+    /// <summary>TEST SEAM (internal): called with the name of each cleanup step of an in-work savepoint ("rollback", "restore") before the step runs, so tests can inject a failure.</summary>
+    internal Func<string, Task>? CleanupProbe { get; set; }
 
     /// <summary>
     /// Appends one authenticated event to the company's business stream INSIDE the transaction. Take every business lock first: the
@@ -60,6 +70,8 @@ public sealed class CompanyAuditedTransactions(CompanyDatabaseResolver resolver,
         await using var tx = await conn.BeginTransactionAsync(ct);
         var unit = new CompanyAuditedWork(companyId, conn, tx, trail, clock);
         var result = await work(unit);      // an exception disposes the transaction without committing: nothing is persisted
+        if (unit.PoisonCode is { } poison)
+            throw new AuditIntegrityException(poison, "A cleanup after a failed step did not complete, so the state of the transaction is unknown; it was rolled back.");
         if (unit.Receipts.Count == 0)
             throw new InvalidOperationException("A company business mutation must append at least one audit event.");
         await trail.CommitAsync(tx, unit.Receipts, ct);
