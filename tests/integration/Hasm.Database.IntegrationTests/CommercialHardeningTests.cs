@@ -99,6 +99,35 @@ public class CommercialHardeningTests : CommercialTestBase
     }
 
     [PostgresFact]
+    public async Task Approval_in_a_soft_or_final_closed_period_is_refused_issues_no_number_and_leaves_the_document_submitted()
+    {
+        await Prepare();
+        var approver = await NewApprover();
+        var branch = await NewBranchId("BA"); var party = await NewCustomerId("C1"); var (item, unit) = await NewItemAndUnit("PC1");
+        var cal = new FiscalCalendarService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), new PeriodCloseGuard(), new FinancialHistoryGuard(), Clock);
+        var doc = await Submitted(branch, party, item, unit, "period-key-0001");                                               // dated in June, submitted while June is open
+        async Task AssertUntouched()
+        {
+            var after = (await Docs.GetAsync(Company.Id, doc.Id))!;
+            Assert.Equal((CommercialStatus.Submitted, doc.Revision, (string?)null, (Guid?)null), (after.Status, after.Revision, after.OfficialNumber, after.ApprovedBy));
+            Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {NI.Table} WHERE {NI.DocType} = '{CommercialTestType.Name}'"));   // no number issued
+            Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {NC.Table} WHERE {NC.DocType} = '{CommercialTestType.Name}'"));   // and no counter moved
+        }
+
+        var june = (await cal.FindPeriodAsync(Company.Id, Day))!;
+        var soft = Ok(await cal.SoftCloseAsync(Admin.Id, Company.Id, june.Id, june.Revision));
+        Fails(await Docs.ApproveAsync(approver, Company.Id, doc.Id, doc.Revision), ConfigStatus.Conflict, PostingPeriodCheck.SoftClosed);
+        await AssertUntouched();
+        Ok(await cal.FinalCloseAsync(Admin.Id, Company.Id, june.Id, soft.Revision));
+        Fails(await Docs.ApproveAsync(approver, Company.Id, doc.Id, doc.Revision), ConfigStatus.Conflict, PostingPeriodCheck.FinalClosed);
+        await AssertUntouched();
+
+        // control: a document dated in the open July is approved and receives the FIRST number, so the refusals consumed none
+        var july = await Submitted(branch, party, item, unit, "period-key-0002", new DateOnly(2026, 7, 15));
+        Assert.Equal("2026-000001", Ok(await Docs.ApproveAsync(approver, Company.Id, july.Id, july.Revision)).OfficialNumber);
+    }
+
+    [PostgresFact]
     public async Task A_rollback_after_the_number_was_issued_leaves_no_gap_or_reuse()
     {
         await Prepare();

@@ -44,6 +44,7 @@ public class CommercialSnapshotTests : CommercialTestBase
         var json = await Sql<string>($"SELECT {CDS.PricingSnapshot} FROM {CL.Table} WHERE {CL.DocumentId} = '{draft.Id}'");
         Assert.Contains(independent.ContentHash, json);
         Assert.Contains("34.8", await Sql<string>($"SELECT {CDA.TaxSnapshot} FROM {CD.Table} WHERE {CD.Id} = '{draft.Id}'"));
+        Assert.Equal("base", await Sql<string>($"SELECT {CDA.ExchangeRateRef} FROM {CD.Table} WHERE {CD.Id} = '{draft.Id}'"));   // a base-currency document names no rate record
 
         // a foreign-currency document takes the dated rate of ITS date; no rate is a refusal, never a guess
         var usdList = Ok(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, new PriceListInput("PL-USD", "قائمة", "USD list", 10, "USD", Jan, null, true, null)));
@@ -51,6 +52,8 @@ public class CommercialSnapshotTests : CommercialTestBase
         var usd = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "snap-key-00002", qty: 1m) with { Currency = "usd" }));
         var su = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, usd.Id, usd.Revision));
         Assert.Equal(0.71m, su.ExchangeRate);
+        var usdRate = await Sql<long>($"SELECT {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.Id} FROM {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.Table} WHERE {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.CurrencyCode} = 'USD'");
+        Assert.Equal($"rate:{usdRate}", await Sql<string>($"SELECT {CDA.ExchangeRateRef} FROM {CD.Table} WHERE {CD.Id} = '{usd.Id}'"));   // the rate is traceable to the exact dated rate record it came from
         Assert.Equal(14m, su.Lines[0].LineNet);
         var eur = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "snap-key-00003") with { Currency = "eur" }));
         Invalid(await Docs.SubmitAsync(Admin.Id, Company.Id, eur.Id, eur.Revision), "currency", "exchange_rate_missing");
