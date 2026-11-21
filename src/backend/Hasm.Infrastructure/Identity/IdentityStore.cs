@@ -307,9 +307,9 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
             cmd.Parameters.AddWithValue("u", userId);
             if (await cmd.ExecuteScalarAsync(ct) is true) reasons |= MfaMandatoryReason.IdentityAdministrator;
         }
-        var roles = new Dictionary<Guid, (string? Preset, List<string> Permissions)>();
+        var roles = new Dictionary<Guid, List<string>>();
         await using (var cmd = new NpgsqlCommand(
-            $"SELECT DISTINCT r.{RL.Id}, r.{RL.PresetKey}, p.{RP.Permission} FROM {RA.Table} a JOIN {RL.Table} r ON r.{RL.Id} = a.{RA.RoleId} AND r.{RL.IsActive} " +
+            $"SELECT DISTINCT r.{RL.Id}, p.{RP.Permission} FROM {RA.Table} a JOIN {RL.Table} r ON r.{RL.Id} = a.{RA.RoleId} AND r.{RL.IsActive} " +
             $"LEFT JOIN {RP.Table} p ON p.{RP.RoleId} = r.{RL.Id} WHERE a.{RA.UserId} = @u AND a.{RA.RevokedAtUtc} IS NULL", conn))
         {
             cmd.Parameters.AddWithValue("u", userId);
@@ -317,14 +317,14 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
             while (await reader.ReadAsync(ct))
             {
                 var id = reader.GetGuid(0);
-                if (!roles.TryGetValue(id, out var entry)) roles[id] = entry = (reader.IsDBNull(1) ? null : reader.GetString(1), []);
-                if (!reader.IsDBNull(2)) entry.Permissions.Add(reader.GetString(2));
+                if (!roles.TryGetValue(id, out var entry)) roles[id] = entry = [];
+                if (!reader.IsDBNull(1)) entry.Add(reader.GetString(1));
             }
         }
-        foreach (var (preset, permissions) in roles.Values)
+        foreach (var (roleId, permissions) in roles)
         {
-            if (preset == PresetRoles.CompanyAdministratorKey) reasons |= MfaMandatoryReason.CompanyAdministratorPreset;
-            if (MfaClassification.IsPrivilegedRole(preset, permissions)) reasons |= MfaMandatoryReason.PrivilegedRole;
+            if (roleId == PresetRoles.CompanyAdministratorId) reasons |= MfaMandatoryReason.CompanyAdministratorPreset;
+            if (PrivilegedAccess.IsPrivilegedRole(roleId, permissions)) reasons |= MfaMandatoryReason.PrivilegedRole;      // the ONE central definition (LEAD D-096)
         }
         return new MfaRequirement(reasons);
     }
