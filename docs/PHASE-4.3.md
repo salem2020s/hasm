@@ -276,6 +276,9 @@ Goal: one company is backed up and trial-restored END TO END from the company re
     * Two runs started in the same second sort by their random suffix rather than by time. This is practically excluded: one run at a time, and a run takes longer than a second.
     * A `run.json` whose finish time lies in the future (clock skew or a manipulated report) is never reported stale until that time passes. Keep the server clock synchronised (NTP); a future check is a follow-up for the monitoring UI slice.
   * **L5, fixed:** this status states why `totp` is not yet excluded (above).
+* **Review of PR #104, confirmation (Agent C on f087cef: approve), new Lows, both fixed:**
+  * **L6:** the keep-alive is stopped, then the run lock is checked SYNCHRONOUSLY in `pg_locks` (this session, the run namespace, granted) before the verdict, so a loss in the last interval is never reported ok. Any failure counts as `run_lock_lost`.
+  * **L7:** every exception in the keep-alive loop marks it failed, and its disposal never throws.
 * Local verification and CI results: see the PR description.
 
 ### Plan (as approved)
