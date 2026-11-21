@@ -118,12 +118,35 @@ public static class AttachmentRetentionEndpoints
         return CompanyConfigurationEndpoints.Map(await svc.ReleaseHoldAsync(actor!.UserId, actor.CompanyId, id, expected, body?.Reason, http.RequestAborted), Body, v => v.Revision);
     }
 
-    private static async Task<IResult> Preview(string? offset, string? limit, HttpContext http, AccessService access, AttachmentRetentionManagementService svc)
+    /// <summary>
+    /// The optional preview filter: <c>subjectKind</c> (a registered attachment record kind) and <c>subjectId</c> (a GUID, only together with a kind). Anything else answers the standard
+    /// <c>invalid_request</c> body naming the field: <c>subject_kind_invalid</c> (unknown kind), <c>required</c> (an id without a kind), <c>invalid_value</c> (not a GUID).
+    /// </summary>
+    private static IResult? PreviewFilterError(string? subjectKind, string? subjectId, out string? kind, out Guid? id)
+    {
+        kind = null; id = null;
+        static IResult Bad(string field, string code) => Results.Json(new { error = "invalid_request", fields = new[] { new { field, code } } }, statusCode: StatusCodes.Status400BadRequest);
+        if (!string.IsNullOrWhiteSpace(subjectKind))
+        {
+            if (!AttachmentSubjects.Kinds.ContainsKey(subjectKind.Trim())) return Bad("subjectKind", "subject_kind_invalid");
+            kind = subjectKind.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(subjectId))
+        {
+            if (kind is null) return Bad("subjectKind", "required");
+            if (!Guid.TryParse(subjectId.Trim(), out var g)) return Bad("subjectId", "invalid_value");
+            id = g;
+        }
+        return null;
+    }
+
+    private static async Task<IResult> Preview(string? offset, string? limit, string? subjectKind, string? subjectId, HttpContext http, AccessService access, AttachmentRetentionManagementService svc)
     {
         if (ListParameters.TryParse(null, offset, limit, out var q) is { } bad) return ListParameters.Invalid(bad);
+        if (PreviewFilterError(subjectKind, subjectId, out var kind, out var id) is { } badFilter) return badFilter;
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return CompanyConfigurationEndpoints.Map(await svc.PreviewAsync(actor!.UserId, actor.CompanyId, q.Offset, q.Limit, http.RequestAborted), p => new
+        return CompanyConfigurationEndpoints.Map(await svc.PreviewAsync(actor!.UserId, actor.CompanyId, q.Offset, q.Limit, kind, id, http.RequestAborted), p => new
         {
             total = p.Total, basisConfirmed = p.BasisConfirmed, reasonCounts = p.ReasonCounts,
             items = p.Items.Select(i => new { attachmentId = i.AttachmentId, subjectKind = i.SubjectKind, subjectId = i.SubjectId, isSensitive = i.IsSensitive, removedAtUtc = i.RemovedAtUtc, reason = i.Reason, eligibleAtUtc = i.EligibleAtUtc, holdId = i.HoldId, policyVersion = i.PolicyVersion }),

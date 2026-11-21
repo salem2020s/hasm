@@ -56,6 +56,31 @@ function HoldRecordPicker({ kind, value, onChange, error }: { kind: string; valu
   );
 }
 
+interface RemovedChoice { id: string; label: string }
+
+/**
+ * Picks ONE removed attachment of the chosen record from the filtered preview (ids and dates only, never a file name; gated by retention view like the preview). The preview has no text search, so the
+ * list is the record's removed attachments (at most one bounded page) in a select; the shared SearchPicker still gives the load error with retry and the "more match" hint.
+ */
+function HoldAttachmentPicker({ kind, subjectId, value, onChange, error }: { kind: string; subjectId: string; value: string; onChange: (id: string) => void; error?: string }) {
+  const { t } = useI18n();
+  const auth = useAuth();
+  const load = useCallback((): Promise<{ items: RemovedChoice[]; total: number }> =>
+    auth.api.previewRetention(0, RECORD_PAGE_LIMIT, { subjectKind: kind, subjectId })
+      .then((r) => ({ items: r.items.map((i) => ({ id: i.attachmentId, label: `${isolate(i.attachmentId.slice(0, 8))} \u2014 ${day(i.removedAtUtc)}${i.isSensitive ? ` (${t("ret.preview.sensitive")})` : ""}` })), total: r.total }))
+      .catch((e) => { auth.handleError(e); throw e; }), [auth.api, auth.handleError, kind, subjectId, t]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className={`field${error ? " field-invalid" : ""}`} data-testid="ret-hold-attachment-picker">
+      <label htmlFor="ret-hatt-list">{t("ret.hold.attachment")}<span aria-hidden="true" className="required"> *</span></label>
+      {subjectId === ""
+        ? <p className="hint">{t("ret.hold.attachment_pick_record")}</p>
+        : <SearchPicker id="ret-hatt-list" label={t("ret.hold.attachment")} value={value} onChange={(id) => onChange(id)} load={load} getId={(r: RemovedChoice) => r.id} getLabel={(r) => r.label}
+            noneLabel={t("ret.hold.attachment_choose")} searchDisabled reloadKey={`${kind}:${subjectId}`} invalid={!!error} required describedBy={error ? "ret-hatt-error" : undefined} />}
+      {error && <p id="ret-hatt-error" className="field-error">{error}</p>}
+    </div>
+  );
+}
+
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 export function AttachmentRetentionPage() {
@@ -116,6 +141,7 @@ export function AttachmentRetentionPage() {
   const [hKind, setHKind] = useState("local_party");
   const [hSubject, setHSubject] = useState("");
   const [hAttachment, setHAttachment] = useState("");
+  const [attTyped, setAttTyped] = useState(false);   // false: pick the record, then one of its removed attachments; true: type the attachment id
   const [hReason, setHReason] = useState("");
   const [hRef, setHRef] = useState("");
   const holdDirty = hReason !== "" || hRef !== "" || hSubject !== "" || hAttachment !== "";
@@ -266,16 +292,20 @@ export function AttachmentRetentionPage() {
             <Field id="ret-scope" label={t("ret.hold.scope")} error={f.scope}>
               {(p) => <select {...p} value={scope} onChange={(e) => setScope(e.target.value as "1" | "2" | "3")}>{["1", "2", "3"].map((s) => <option key={s} value={s}>{t(`ret.hold.scope.${s}`)}</option>)}</select>}
             </Field>
-            {scope === "2" && (<>
+            {(scope === "2" || (scope === "3" && !attTyped)) && (<>
               <Field id="ret-hkind" label={t("ret.rule.kind")} error={f.subjectKind}>
-                {(p) => <select {...p} value={hKind} onChange={(e) => { setHKind(e.target.value); setHSubject(""); }}>{KINDS.filter((k) => k !== "*").map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}</select>}
+                {(p) => <select {...p} value={hKind} onChange={(e) => { setHKind(e.target.value); setHSubject(""); setHAttachment(""); }}>{KINDS.filter((k) => k !== "*").map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}</select>}
               </Field>
-              <HoldRecordPicker kind={hKind} value={hSubject} onChange={setHSubject} error={f.subjectId} />
+              <HoldRecordPicker kind={hKind} value={hSubject} onChange={(id) => { setHSubject(id); setHAttachment(""); }} error={f.subjectId} />
             </>)}
-            {scope === "3" && (
+            {scope === "3" && !attTyped && <HoldAttachmentPicker kind={hKind} subjectId={hSubject.trim()} value={hAttachment} onChange={setHAttachment} error={f.attachmentId} />}
+            {scope === "3" && attTyped && (
               <Field id="ret-hatt" label={t("ret.hold.attachment_id")} required error={f.attachmentId} hint={t("ret.hold.attachment_hint")}>
                 {(p) => <input {...p} dir="ltr" value={hAttachment} onChange={(e) => setHAttachment(e.target.value)} />}
               </Field>
+            )}
+            {scope === "3" && (
+              <div className="actions"><button type="button" className="ghost" onClick={() => { setAttTyped((v) => !v); setHAttachment(""); }}>{attTyped ? t("ret.hold.attachment_use_picker") : t("ret.hold.attachment_use_id")}</button></div>
             )}
             <Field id="ret-hreason" label={t("ret.reason")} required error={f.reason}>
               {(p) => <input {...p} value={hReason} maxLength={500} onChange={(e) => setHReason(e.target.value)} />}

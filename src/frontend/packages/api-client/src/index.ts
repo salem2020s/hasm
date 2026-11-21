@@ -1305,7 +1305,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listLegalHolds: (includeReleased = false) => get<{ holds: LegalHold[] }>(`/api/v1/company/attachment-retention/holds${includeReleased ? "?includeReleased=true" : ""}`),
     placeLegalHold: (input: LegalHoldInput) => request<LegalHold>("POST", "/api/v1/company/attachment-retention/holds", { body: input }),
     releaseLegalHold: (id: string, revision: number, reason: string) => request<LegalHold>("POST", `/api/v1/company/attachment-retention/holds/${enc(id)}/release`, { body: { reason }, ifMatch: revision }),
-    previewRetention: (offset = 0, limit = 50) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}`),
+    previewRetention: (offset = 0, limit = 50, filter?: { subjectKind?: string; subjectId?: string }) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}${filter?.subjectKind ? `&subjectKind=${enc(filter.subjectKind)}` : ""}${filter?.subjectId ? `&subjectId=${enc(filter.subjectId)}` : ""}`),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
     /**
