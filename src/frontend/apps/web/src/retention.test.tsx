@@ -153,15 +153,71 @@ describe("attachment retention screen", () => {
     expect(client.draftRetentionPolicy).not.toHaveBeenCalled();
   });
 
-  it("shows field errors from the server in the scoped wording", async () => {
+  it("shows a server field error for the months in the scoped wording, inline and in the banner (the value is client-valid, so the server path runs)", async () => {
     localStorage.setItem("hasm.locale", "en");
-    render({ draftRetentionPolicy: vi.fn().mockRejectedValue(apiError(400, "invalid_request", { fields: [{ field: "rules[0].months", code: "out_of_range" }] })) });
+    const draftRetentionPolicy = vi.fn().mockRejectedValue(apiError(400, "invalid_request", { fields: [{ field: "rules[0].months", code: "duplicate_rule" }] }));
+    render({ draftRetentionPolicy });
     await go();
     await screen.findByTestId("policy-2");
-    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: "5000" } });
     fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: "60" } });
     await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
-    expect((await screen.findAllByText(E("field.ret.out_of_range"))).length).toBeGreaterThan(0);
+    await waitFor(() => expect(draftRetentionPolicy).toHaveBeenCalledTimes(1));
+    const shown = await screen.findAllByText(E("field.ret.duplicate_rule"));
+    expect(shown.length).toBeGreaterThanOrEqual(2);                                                    // the inline field error and the banner list
+    expect(shown.some((el) => el.classList.contains("field-error"))).toBe(true);
+    expect(shown.some((el) => el.closest(".banner") !== null)).toBe(true);
+  });
+
+  it("does not let an emptied client error hide the server's inline error for the same rule", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const draftRetentionPolicy = vi.fn().mockRejectedValue(apiError(400, "invalid_request", { fields: [{ field: "rules[0].months", code: "out_of_range" }] }));
+    render({ draftRetentionPolicy });
+    await go();
+    await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    const months = () => screen.getByLabelText(E("ret.rule.months"));
+    fireEvent.change(months(), { target: { value: "x" } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    expect(await screen.findByText(E("field.ret.out_of_range"))).toBeInTheDocument();                // the client error
+    fireEvent.change(months(), { target: { value: "60" } });                                          // fixing the value empties the client error
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    await waitFor(() => expect(draftRetentionPolicy).toHaveBeenCalledTimes(1));
+    const shown = await screen.findAllByText(E("field.ret.out_of_range"));
+    expect(shown.some((el) => el.classList.contains("field-error"))).toBe(true);                      // the server's inline error is visible
+  });
+
+  it("keeps a months error on its own rule when another rule is removed", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const draftRetentionPolicy = vi.fn();
+    render({ draftRetentionPolicy });
+    await go();
+    await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.rule.add") }));
+    const inputs = () => screen.getAllByLabelText(E("ret.rule.months"));
+    fireEvent.change(inputs()[0]!, { target: { value: "60" } });
+    fireEvent.change(inputs()[1]!, { target: { value: "x" } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    expect(await screen.findAllByText(E("field.ret.out_of_range"))).toHaveLength(1);
+    expect(inputs()[1]).toHaveAttribute("aria-invalid", "true");
+    await userEvent.click(screen.getAllByRole("button", { name: E("ret.rule.remove") })[0]!);          // remove the FIRST rule
+    expect(inputs()).toHaveLength(1);
+    expect(inputs()[0]).toHaveAttribute("aria-invalid", "true");                                       // the error followed its rule (the invalid one)
+    expect(screen.getAllByText(E("field.ret.out_of_range"))).toHaveLength(1);
+    expect(draftRetentionPolicy).not.toHaveBeenCalled();
+  });
+
+  it.each(["60.0", "6,0", "٦٫٠", "۶٫۰"])("refuses the non-integer months value '%s' (pure digits only)", async (text) => {
+    localStorage.setItem("hasm.locale", "en");
+    const client = render();
+    await go();
+    await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: text } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    expect(await screen.findByText(E("field.ret.out_of_range"))).toBeInTheDocument();
+    expect(client.draftRetentionPolicy).not.toHaveBeenCalled();
   });
 
   it("releases a hold placed by someone else and not the user's own", async () => {

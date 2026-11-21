@@ -15,8 +15,10 @@ import { useReportUnsaved } from "../unsaved";
 const KINDS = ["*", "local_party", "inventory_item"] as const;
 const PAGE = 50;
 
-interface RuleDraft { kind: string; sensitivity: string; mode: "months" | "indefinite"; months: string }
-const blankRule = (): RuleDraft => ({ kind: "*", sensitivity: "0", mode: "months", months: "" });
+interface RuleDraft { key: string; kind: string; sensitivity: string; mode: "months" | "indefinite"; months: string }
+let ruleSeq = 0;   // a stable key per rule row, so row state (errors) follows the row when another row is removed
+const blankRule = (): RuleDraft => ({ key: `r${++ruleSeq}`, kind: "*", sensitivity: "0", mode: "months", months: "" });
+const isBlank = (r: RuleDraft) => r.kind === "*" && r.sensitivity === "0" && r.mode === "months" && r.months === "";
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 export function AttachmentRetentionPage() {
@@ -55,17 +57,17 @@ export function AttachmentRetentionPage() {
   const [effective, setEffective] = useState("");
   const [note, setNote] = useState("");
   const [rules, setRules] = useState<RuleDraft[]>([blankRule()]);
-  const draftDirty = effective !== "" || note !== "" || rules.length !== 1 || JSON.stringify(rules[0]) !== JSON.stringify(blankRule());
+  const draftDirty = effective !== "" || note !== "" || rules.length !== 1 || !isBlank(rules[0]!);
   const setRule = (i: number, patch: Partial<RuleDraft>) => setRules((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   // Months are typed in a text field (Latin, Arabic-Indic or Persian digits, also mixed); a blank, fractional or out-of-range value is refused here and never sent (the server validates again).
-  const [monthErr, setMonthErr] = useState<Record<number, string>>({});
+  const [monthErr, setMonthErr] = useState<Record<string, string>>({});
   const monthsOf = (r: RuleDraft) => (r.mode === "indefinite" ? null : parseIntegerInRange(r.months, 1, 1200));
   const toRules = (): RetentionRuleInfo[] => rules.map((r) => ({
     subjectKind: r.kind, sensitivity: Number(r.sensitivity), indefinite: r.mode === "indefinite", months: monthsOf(r),
   }));
   const saveDraft = async () => {
-    const bad: Record<number, string> = {};
-    rules.forEach((r, i) => { const m = monthsOf(r); if (m !== null && Number.isNaN(m)) bad[i] = t("field.ret.out_of_range"); });
+    const bad: Record<string, string> = {};
+    rules.forEach((r) => { const m = monthsOf(r); if (m !== null && Number.isNaN(m)) bad[r.key] = t("field.ret.out_of_range"); });
     setMonthErr(bad);
     if (Object.keys(bad).length > 0) return;
     const ok = await runner.run(() => auth.api.draftRetentionPolicy({ effectiveFrom: effective, note: note.trim() || null, rules: toRules() }), t("ret.policy.saved"));
@@ -159,7 +161,7 @@ export function AttachmentRetentionPage() {
               {(p) => <input {...p} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />}
             </Field>
             {rules.map((r, i) => (
-              <fieldset key={i}>
+              <fieldset key={r.key}>
                 <legend>{t("ret.rules")} {i + 1}</legend>
                 <div className="fields">
                 <Field id={`ret-kind-${i}`} label={t("ret.rule.kind")} error={f[`rules[${i}].subjectKind`]}>
@@ -173,8 +175,8 @@ export function AttachmentRetentionPage() {
                     <option value="months">{t("ret.rule.mode_months")}</option><option value="indefinite">{t("ret.rule.mode_indefinite")}</option></select>}
                 </Field>
                 {r.mode === "months" && (
-                  <Field id={`ret-months-${i}`} label={t("ret.rule.months")} error={monthErr[i] ?? f[`rules[${i}].months`]}>
-                    {(p) => <input {...p} inputMode="numeric" dir="ltr" autoComplete="off" maxLength={4} value={r.months} onChange={(e) => { setMonthErr((m) => ({ ...m, [i]: "" })); setRule(i, { months: e.target.value }); }} />}
+                  <Field id={`ret-months-${i}`} label={t("ret.rule.months")} error={monthErr[r.key] || f[`rules[${i}].months`]}>
+                    {(p) => <input {...p} inputMode="numeric" dir="ltr" autoComplete="off" maxLength={4} value={r.months} onChange={(e) => { setMonthErr((m) => ({ ...m, [r.key]: "" })); setRule(i, { months: e.target.value }); }} />}
                   </Field>
                 )}
                 </div>
