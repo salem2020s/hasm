@@ -39,18 +39,18 @@ public static class FiscalEndpoints
         years.MapGet("", List);
         years.MapPost("", CreateYear).WithMetadata(new BodyLimit());
         years.MapGet("/{id:guid}", GetYear);
-        years.MapPost("/{id:guid}/close", CloseYear);
+        years.MapPost("/{id:guid}/close", CloseYear).WithMetadata(new BodyLimit());
         years.MapPost("/{id:guid}/reopen-requests", RequestYearReopen).WithMetadata(new BodyLimit());
         var periods = app.MapGroup("/api/v1/company/fiscal-periods").RequireAuthorization();
-        periods.MapPost("/{id:guid}/soft-close", SoftClose);
-        periods.MapPost("/{id:guid}/reopen", Reopen);
-        periods.MapPost("/{id:guid}/final-close", FinalClose);
+        periods.MapPost("/{id:guid}/soft-close", SoftClose).WithMetadata(new BodyLimit());
+        periods.MapPost("/{id:guid}/reopen", Reopen).WithMetadata(new BodyLimit());
+        periods.MapPost("/{id:guid}/final-close", FinalClose).WithMetadata(new BodyLimit());
         periods.MapPost("/{id:guid}/reopen-requests", RequestPeriodReopen).WithMetadata(new BodyLimit());
         var requests = app.MapGroup("/api/v1/company/fiscal-reopen-requests").RequireAuthorization();
         requests.MapGet("", ListRequests);
-        requests.MapPost("/{id:guid}/approve", ApproveRequest);
+        requests.MapPost("/{id:guid}/approve", ApproveRequest).WithMetadata(new BodyLimit());
         requests.MapPost("/{id:guid}/deny", DenyRequest).WithMetadata(new BodyLimit());
-        requests.MapPost("/{id:guid}/cancel", CancelRequest);
+        requests.MapPost("/{id:guid}/cancel", CancelRequest).WithMetadata(new BodyLimit());
     }
 
     private static object PeriodBody(FiscalPeriodView p) => new

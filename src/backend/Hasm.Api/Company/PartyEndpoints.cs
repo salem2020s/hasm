@@ -48,8 +48,8 @@ public static class PartyEndpoints
         g.MapGet("/capabilities", Capabilities);
         g.MapGet("", List);
         g.MapPost("", Create).WithMetadata(new BodyLimit());
-        g.MapPost("/sync", Sync);
-        g.MapPost("/reconcile", Reconcile);
+        g.MapPost("/sync", Sync).WithMetadata(new BodyLimit());
+        g.MapPost("/reconcile", Reconcile).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/propose", Propose).WithMetadata(new BodyLimit());

@@ -31,7 +31,7 @@ public static class StockAdjustmentEndpoints
 
     public static void MapStockAdjustmentEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/v1/company/stocktakes/{id:guid}/adjustment", Generate).RequireAuthorization();
+        app.MapPost("/api/v1/company/stocktakes/{id:guid}/adjustment", Generate).RequireAuthorization().WithMetadata(new BodyLimit());
         var g = app.MapGroup("/api/v1/company/stock-adjustments").RequireAuthorization();
         g.MapGet("/{id:guid}", Get);
         g.MapPost("/{id:guid}/posting", Post).WithMetadata(new BodyLimit());

@@ -59,7 +59,7 @@ public static class AccessEndpoints
         access.MapGet("/roles", ListRoles);
         access.MapPost("/roles", CreateRole).WithMetadata(new BodyLimit());
         access.MapPut("/roles/{id:guid}/permissions", SetRolePermissions).WithMetadata(new BodyLimit());
-        access.MapPost("/roles/{id:guid}/deactivate", DeactivateRole);
+        access.MapPost("/roles/{id:guid}/deactivate", DeactivateRole).WithMetadata(new BodyLimit());
         access.MapGet("/members", ListMembers);
         access.MapPost("/members", GrantMembership).WithMetadata(new BodyLimit());
         access.MapDelete("/members/{userId:guid}", RevokeMembership);
