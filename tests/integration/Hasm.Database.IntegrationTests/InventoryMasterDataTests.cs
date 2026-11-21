@@ -116,6 +116,52 @@ public class InventoryMasterDataTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task Units_and_groups_can_be_looked_up_by_ids_with_the_same_permission_ordering_and_valuation_resolution_as_the_search()
+    {
+        await PrepareInventory();
+        var units = new Dictionary<string, UnitView>();
+        foreach (var code in new[] { "U1", "U2", "U3", "U4" }) units[code] = Ok(await Inv.CreateUnitAsync(Admin.Id, Company.Id, new UnitInput(code, "وحدة", "Unit " + code, 0)));
+        Ok(await Inv.SaveSettingsAsync(Admin.Id, Company.Id, 0, new InventorySettingsInput(1)));
+        var root = await Group("G1", null, 2);
+        var child = await Group("G2", root.Id);
+        var leaf = await Group("G3", child.Id);
+        await Group("G4", null, 1);
+        static string[] UCodes(UnitPage p) => [.. p.Items.Select(u => u.Code)];
+        static string[] GCodes(ItemGroupPage p) => [.. p.Items.Select(g => g.Code)];
+        UnitPage ByUnits(params Guid[] ids) => Ok(InvMgmt.SearchUnitsAsync(Admin.Id, Company.Id, null, null, null, ids).Result);
+        ItemGroupPage ByGroups(params Guid[] ids) => Ok(InvMgmt.SearchGroupsAsync(Admin.Id, Company.Id, null, null, null, ids).Result);
+
+        // exactly the named rows, ordered by code (not by the order of the ids), with the total; unknown ids and ids of the OTHER kind match nothing; repeated ids count once
+        var two = ByUnits(units["U3"].Id, units["U1"].Id, units["U3"].Id, Guid.NewGuid());
+        Assert.Equal(["U1", "U3"], UCodes(two));
+        Assert.Equal(2L, two.Total);
+        Assert.Empty(ByUnits(Guid.NewGuid()).Items);
+        Assert.Empty(ByUnits(root.Id).Items);                                      // a group id is not a unit
+        Assert.Empty(ByGroups(units["U1"].Id).Items);                              // and the other way round
+        // the page default is the maximum when ids name the rows (not 50), limit and offset still apply, a search narrows further
+        Assert.Equal(4, ByUnits([.. units.Values.Select(u => u.Id)]).Items.Count);
+        Assert.Equal(["U2"], UCodes(Ok(await InvMgmt.SearchUnitsAsync(Admin.Id, Company.Id, null, 1, 1, [.. units.Values.Select(u => u.Id)]))));
+        Assert.Equal(["U2"], UCodes(Ok(await InvMgmt.SearchUnitsAsync(Admin.Id, Company.Id, "u2", null, null, [units["U1"].Id, units["U2"].Id]))));
+        Assert.Equal(4, Ok(await InvMgmt.SearchUnitsAsync(Admin.Id, Company.Id, null, null, null, ids: null)).Items.Count);   // no ids: unchanged behaviour of the search
+
+        // groups: the effective valuation still resolves through ancestors that were not asked for
+        var found = ByGroups(leaf.Id, root.Id);
+        Assert.Equal(["G1", "G3"], GCodes(found));
+        Assert.Equal(2L, found.Total);
+        Assert.Equal(2, found.Items.Single(g => g.Code == "G3").EffectiveValuation);   // inherited from G1 through G2, which was not on the page
+
+        // the permission is the one of the unpaged lists
+        var outsider = await NewUser("idsoutsider");
+        Fails(await InvMgmt.SearchUnitsAsync(outsider.Id, Company.Id, null, null, null, [units["U1"].Id]), ConfigStatus.Forbidden, "forbidden");
+        Fails(await InvMgmt.SearchGroupsAsync(outsider.Id, Company.Id, null, null, null, [root.Id]), ConfigStatus.Forbidden, "forbidden");
+        var (unitViewer, _) = await Member([PermissionCatalog.Codes.UnitsView], ScopeKind.Company, null);
+        Assert.Equal(["U1"], UCodes(Ok(await InvMgmt.SearchUnitsAsync(unitViewer.Id, Company.Id, null, null, null, [units["U1"].Id]))));
+        Fails(await InvMgmt.SearchGroupsAsync(unitViewer.Id, Company.Id, null, null, null, [root.Id]), ConfigStatus.Forbidden, "forbidden");
+        var (itemViewer, _) = await Member([PermissionCatalog.Codes.ItemsView], ScopeKind.Company, null);
+        Assert.Equal(["G1"], GCodes(Ok(await InvMgmt.SearchGroupsAsync(itemViewer.Id, Company.Id, null, null, null, [root.Id]))));
+    }
+
+    [PostgresFact]
     public async Task Units_are_unique_case_insensitively_keep_code_and_decimals_and_are_deactivated_never_deleted()
     {
         await PrepareInventory();

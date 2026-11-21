@@ -316,6 +316,51 @@ describe("units and item groups screens", () => {
     expect(await screen.findByText("رمز الوحدة مستخدم.")).toBeInTheDocument();
   });
 
+  it("reloads the latest version of THE edited unit by its id after a revision conflict (no full-list read)", async () => {
+    const latest = unit({ revision: 7, nameAr: "قطعة جديدة" });
+    const client = setup({ updateInventoryUnit: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryUnits: vi.fn().mockResolvedValue([latest]) });
+    await go("#/inventory/units");
+    await userEvent.click(await within(await screen.findByTestId("unit-PCS")).findByRole("button", { name: "تعديل" }));
+    const fullListReads = vi.mocked(client.listInventoryUnits).mock.calls.length;
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    const conflict = await screen.findByTestId("form-conflict");
+    expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("تعديلي");                 // the user's edit survives until the reload is chosen
+    await userEvent.click(within(conflict).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    await waitFor(() => expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("قطعة جديدة"));
+    expect(client.lookupInventoryUnits).toHaveBeenCalledWith(["u-pcs"]);
+    expect(vi.mocked(client.listInventoryUnits).mock.calls.length).toBe(fullListReads);              // only this unit was asked for
+  });
+
+  it("reloads the latest version of THE edited group by its id after a revision conflict (no full-list read)", async () => {
+    const latest = group({ revision: 4, nameAr: "أغذية جديدة" });
+    const client = setup({ updateInventoryGroup: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryGroups: vi.fn().mockResolvedValue([latest]) });
+    await go("#/inventory/groups");
+    await userEvent.click(await within(await screen.findByTestId("group-FOOD")).findByRole("button", { name: "تعديل" }));
+    const fullListReads = vi.mocked(client.listInventoryGroups).mock.calls.length;
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getAllByRole("button", { name: "حفظ" }).at(-1)!);
+    const conflict = await screen.findByTestId("form-conflict");
+    await userEvent.click(within(conflict).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    await waitFor(() => expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("أغذية جديدة"));
+    expect(client.lookupInventoryGroups).toHaveBeenCalledWith(["g-food"]);
+    expect(vi.mocked(client.listInventoryGroups).mock.calls.length).toBe(fullListReads);
+  });
+
+  it("keeps the editor as it is when the lookup finds nothing (the unit was removed or is not visible)", async () => {
+    setup({ updateInventoryUnit: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryUnits: vi.fn().mockResolvedValue([]) });
+    await go("#/inventory/units");
+    await userEvent.click(await within(await screen.findByTestId("unit-PCS")).findByRole("button", { name: "تعديل" }));
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await userEvent.click(within(await screen.findByTestId("form-conflict")).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("تعديلي");
+    expect(screen.getByTestId("form-conflict")).toBeInTheDocument();
+  });
+
   it("shows the group tree with inherited valuation and saves the company default valuation with the revision", async () => {
     const client = setup({ putInventorySettings: vi.fn().mockResolvedValue({ defaultValuation: 2, revision: 1 }) });
     await go("#/inventory/groups");
