@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "471dfe1b13dd606570fd3a6394a0d7dd6baeb558",
-    "note": "Refresh after the merges of #189, #190, #184 and #183. main = 471dfe1 (merge of #183), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml on main). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to #181; company 0033 allocated to the duplicate-approval-policies pull request (D-209); #48 takes the next free company number at its merge."
+    "verifiedHead": "f254722588c9c963679cabfac71a35884321be05",
+    "note": "Refresh after the merges of #192, #193 and #194. main = f254722 (merge of #194), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml on main). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to #181; company 0033 allocated to the duplicate-approval-policies pull request (D-209); #48 takes the next free company number at its merge."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -390,10 +390,28 @@
       "phase": "HBE1 exhaustive deterministic tamper tests (tests only; merged on the owner's condition D-237)",
       "mergeCommit": "471dfe1b13dd606570fd3a6394a0d7dd6baeb558",
       "headMerged": "77820d1e2caea8971216f74b8d1fc8b38e72590d"
+    },
+    {
+      "pr": 192,
+      "phase": "review Lows L-A to L-D of #190 (test-pg one-shot runner)",
+      "mergeCommit": "bd24264ce0b9ca1f874e04579215255d0740b64d",
+      "headMerged": "eae1bde6e6b2cf39be203432ffa6197e6ae189a8"
+    },
+    {
+      "pr": 193,
+      "phase": "handoff refresh after the merges of #189, #190, #184 and #183",
+      "mergeCommit": "5c563465dbbb07ad49333493a411071739f242c1",
+      "headMerged": "efd827cecfd6bcb5d5bf19893d8daf75742dc88f"
+    },
+    {
+      "pr": 194,
+      "phase": "Phase 3.8D inventory revaluation accounting contract (PROPOSAL; execution closed; RQ-1..RQ-16 open with the owner)",
+      "mergeCommit": "f254722588c9c963679cabfac71a35884321be05",
+      "headMerged": "d06cb30ea4522e3c1aa08975332ee86894bee457"
     }
   ],
   "active": {
-    "phase": "Refresh after the merges of #189, #190, #184 and #183; team running",
+    "phase": "Refresh after the merges of #192, #193 and #194; team running",
     "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh. D-237: #183 merged on the owner's condition; FH's record states the single exception (hbe_not_authenticated accepted under the test helper's digest for the SPKI-length bytes 53/54, the false flaky assertion, replaced by a stricter check under the parser-framed digest).",
     "knownIssues": [
       "Decisions: next free ID D-240. D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
@@ -405,17 +423,18 @@
     ]
   },
   "next": [
-    "Merge queue (registry serial, main = 1262): #181 (system 0034) then #185 (stacked; conflicts with main); #182 (+8; conflicts with main); #191; #192. #188 only on the owner's explicit instruction. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
+    "Merge queue (registry serial, main = 1262): #181 (system 0034) then #185 (stacked; conflicts with main); #182 (+8; conflicts with main); #191. #188 only on the owner's explicit instruction. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
     "#176 merged (2d5da1f). BINDING for the slice 8 implementation (FG's L-FG3, Low, recorded on the merged plan's review record): when a backup-retention-apply finds a matching 2015 with no 2016 and the run folder present, it closes that orphan 2015 with an audit event (2017 deletion_not_started with run id, status hash and destination id), and a closed 2015 is never a basis for resume, recovery or the 2015/2016 pair; with its test (crash before the rename, hold placed, folder removed by hand: the run must stay pending and be copied again). ALSO BINDING for slice 8 (owner, MD-Q2, D-230): deletion cannot be enabled while the backup destinations lack the required independent protection (no-second-destination case included until decided otherwise).",
     "Consolidated package (D-198..D-239): the lead assigns the unblocked slices in dependency order (list in docs/INTEGRATION-STATUS.md, 'Now unblocked'); implementation gaps first in 3.13: backend Reject rule (D-208) and duplicate-policy rule with its migration (D-209).",
     "#48: implement the approved final design (c73b643; G approve); execution stays closed until the full N1-N32 tests and review pass (D-190, D-195).",
     "3.8D design only: the Q3 revaluation accounting contract (independent accounting review, owner approval) and the Q4 conversion design (guard untouched).",
     "Follow-ups in docs/INTEGRATION-STATUS.md (Lows of #155, #161, #172, #173, #174, #177, #178; load test stage 2).",
     "#188 (D-194 migration-guard hardening): FG's findings with FS; two owner questions; merges only on the owner's explicit instruction.",
-    "Follow-ups recorded: #190 L-A..L-D (#192), #184 L4/L5, #183 L7 (description wording), #187 L5."
+    "Revaluation contract (merged proposal, #194): the owner answers RQ-1..RQ-16; a database-safety review of its section 7 (RQ-9) is outstanding; execution stays closed.",
+    "Follow-ups recorded: #192 L1..L4, #184 L4/L5, #183 L7 (description wording), #187 L5; intermittent test-run-isolated-recovery.sh case 2 (once in 12 for FG, cause unknown, NOT VERIFIED)."
   ],
   "openDecisions": [
-    "3.8D-Q3 accounting contract (policy direction approved, D-198; contract, independent review and tests outstanding; revaluation execution closed)",
+    "REVALUATION-CONTRACT: RQ-1..RQ-16 of docs/PHASE-3.8D-REVALUATION-CONTRACT.md (PROPOSAL merged with #194; proposed defaults and the accounting reviewer's recommendations in the register; RQ-5 differs: document per layer, reviewer per position); database-safety review of section 7 (RQ-9) outstanding; revaluation execution closed (D-192, D-198)",
     "3.8D-Q4 guard modification (policy direction approved, D-199; dedicated independent review and protected-change approval outstanding)",
     "4.3-ACT (confirmed CLOSED by the owner, D-227; activation PR owner-instructed)",
     "CUTOVER-ACT (confirmed CLOSED by the owner, D-229; activation PR owner-instructed, documented recovery drill)",
@@ -462,8 +481,8 @@
     {
       "pr": 188,
       "branch": "security/migration-guard-hardening",
-      "head": "1658f0a7767ccb888488fca85b785b7d66407fca",
-      "state": "migration-guard hardening (D-194); +8 PostgreSQL tests; per the lead FG request changes at 1658f0a (1 High, 3 Medium, 8 Low), FS fixing; merges only on the owner's explicit instruction; two owner questions"
+      "head": "85b9de4b691395efa25b531688a643bfb1294805",
+      "state": "migration-guard hardening (D-194); +8 PostgreSQL tests; per the lead FG request changes at 1658f0a (1 High, 3 Medium, 8 Low), FS fixing, head moved since (review state not re-read); merges only on the owner's explicit instruction; two owner questions"
     },
     {
       "pr": 191,
@@ -472,15 +491,9 @@
       "state": "approval rejection (and approval) requires the stage authority for the document branch (D-208); per the lead under review by FE; registry count to be re-read at merge"
     },
     {
-      "pr": 192,
-      "branch": "tooling/test-pg-oneshot-review-lows-2",
-      "head": "54855e00733d0c0a07f6f00aa55594485e46500f",
-      "state": "review Lows L-A to L-D of #190 (test-pg); not re-read"
-    },
-    {
       "pr": 48,
       "branch": "feature/phase-3-8d-impact-preview",
-      "head": "c0e15d9443da89c3a127759cfaa67445e32ebfe1",
+      "head": "357d43a5614e2a554d853212ff8e27e7e4b84155",
       "state": "P 3.8D; G approve of the final design revision at c73b643 (record on the branch); implementation authorization effective; execution closed until the full N1-N32 tests and review; not merged before the complete phase scope (D-195); X1-A takes the next free company migration number at its merge"
     }
   ],
@@ -489,8 +502,7 @@
     181,
     185,
     182,
-    191,
-    192
+    191
   ],
   "agents": {
     "lead": "Claude Opus",
@@ -626,5 +638,9 @@
     },
     "note": "queued numbers are not verified by this refresh"
   },
-  "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging."
+  "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging.",
+  "flaggedForOwnerNotBlocking": [
+    "M2-TOTP slice (D-235): a start-up refusal note, reported by the lead; no pull request at this read, details not verified",
+    "Session-expiry slice (D-236): team readings of the owner's text, reported by the lead; no pull request at this read, details not verified"
+  ]
 }
