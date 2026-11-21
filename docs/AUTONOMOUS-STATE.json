@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "0aeeab77b68f7151cdc7df059c1b6cacd85ef614",
-    "note": "main = 0aeeab7 (merge of #128), read from git and GitHub REST on 2026-11-21 (sprint 2 handoff refresh). PostgreSQL registry 1149 (.github/workflows/backend.yml). Migrations: company 0001-0031, system 0001-0030; allocation: system 0031 #133, 0032 #134, 0033 D's S2; company 0032 S5a (#136)."
+    "verifiedHead": "70f1695ed3227d9dd0e2cad2f52338926cf02157",
+    "note": "main = 70f1695 (merge of #136), read from git and GitHub REST on 2026-11-21 (sprint 3 handoff refresh). PostgreSQL registry 1184 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0032 (counted in the migration folders of origin/main); allocation: system 0033 #157 (4.1 S2); no company number allocated ahead."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -84,19 +84,105 @@
       "phase": "4.3 slice 5 encrypted backup sets",
       "mergeCommit": "0aeeab77b68f7151cdc7df059c1b6cacd85ef614",
       "headMerged": "dfcceab6fa328a765c2c4b7862bdfb79ecf48c79"
+    },
+    {
+      "pr": 142,
+      "phase": "whole-number input with Arabic-Indic and Persian digits",
+      "mergeCommit": "daebeea008b2890f145b166b599462b3ed44fc62",
+      "headMerged": "9736fa7711da78bff9dedbe47b047773be7f8268"
+    },
+    {
+      "pr": 144,
+      "phase": "sprint-2 handoff refresh",
+      "mergeCommit": "75c871a9bd4a8dfd9ee53653ebf43c243de1f7ca",
+      "headMerged": "ac9fc8551e4d291407200ec45c2654b7c33c2754"
+    },
+    {
+      "pr": 125,
+      "phase": "journal and commercial database invariant tests",
+      "mergeCommit": "4e02d2fe390823ff73e33d4e3c83595520a18e33",
+      "headMerged": "2f9ee37c36f7b4002f8f08813960b9e013d79af1"
+    },
+    {
+      "pr": 145,
+      "phase": "retention legal-hold record targets via the shared search picker",
+      "mergeCommit": "6733f2d8e531e4894f708de20b3103c338642c27",
+      "headMerged": "97631d128bf1a772720db80c298eb86ce9cad26b"
+    },
+    {
+      "pr": 146,
+      "phase": "retention hold-picker follow-ups",
+      "mergeCommit": "ee09a6066b04978ca919b9780a6e8fa42c4eb419",
+      "headMerged": "26119cf90f5760e68eda83ff95555b1fbb7476eb"
+    },
+    {
+      "pr": 143,
+      "phase": "4.3 slice 7 plan, single-company restore cutover (D-143..D-153)",
+      "mergeCommit": "8b9d49fc8ca6d31e798271518aa4061126d3c0aa",
+      "headMerged": "5f64053fb49a1f5aec723113e88225c28e214bb4"
+    },
+    {
+      "pr": 133,
+      "phase": "4.1 S1 MFA storage (system 0031, D-121)",
+      "mergeCommit": "ff0fccadeda5d3f60757d3f93b31b8bd6ab8590d",
+      "headMerged": "e6a445ba21c0815e33cafa84b75825014688b0d9"
+    },
+    {
+      "pr": 148,
+      "phase": "3.14 cash and bank plan (D-154..D-159)",
+      "mergeCommit": "09261b2a2e67e7d7e20c8b4328d0b1ad9b26bad0",
+      "headMerged": "0ae2dba369cfb5c6dd128b005e9e75d1c3bab1cc"
+    },
+    {
+      "pr": 127,
+      "phase": "inventory period invariant tests",
+      "mergeCommit": "456eb3875fc2edbdfabba3519e9721cb0055722e",
+      "headMerged": "7ab232d284fefb1bc13432706bb8460ad39f0c07"
+    },
+    {
+      "pr": 134,
+      "phase": "4.3 slice 6 backup retention, deletion inactive (system 0032)",
+      "mergeCommit": "b17cc67616c80f222ca6e43f89d5eab0bd300992",
+      "headMerged": "1d968513c691911ca03c466e543f1afa22eadca5"
+    },
+    {
+      "pr": 152,
+      "phase": "4.4 signed manual updates plan (D-170..D-178)",
+      "mergeCommit": "0009bd20afa02b22fbe7de59f36acec04f5095ab",
+      "headMerged": "d2508cb2910457ae71e4d0e678271b14cfc62cc6"
+    },
+    {
+      "pr": 150,
+      "phase": "Web/Desktop E2E parity and api-client adapter contract tests",
+      "mergeCommit": "112a1534fc4f87e2d5da8642b796f9e0e677ed4d",
+      "headMerged": "d87ddf3ef29f6fffcc71f97825b24e50bb3b77dc"
+    },
+    {
+      "pr": 154,
+      "phase": "load-test harness stage 1",
+      "mergeCommit": "24c66f2df4ac4cba225929a6ea558416cc1e61c6",
+      "headMerged": "c2d7043dc251c44bec09eb580d79a88785b449cb"
+    },
+    {
+      "pr": 136,
+      "phase": "3.13 S5a approval policies (company 0032, D-140/D-141)",
+      "mergeCommit": "70f1695ed3227d9dd0e2cad2f52338926cf02157",
+      "headMerged": "fc5736675cbf44711e4bd333516b31d2735855aa"
     }
   ],
   "active": {
-    "phase": "Release 1 sprint 2 (cloud team)",
-    "state": "Open Draft PRs, the merge queue and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
+    "phase": "Release 1 sprint 3 (cloud team)",
+    "state": "Open Draft PRs, the merge queue, the follow-ups and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
     "knownIssues": [
-      "Decisions: next free ID D-152; D-140..D-141 (A, #136), D-142 (D, S2 branch) and D-143..D-151 (B, #143) are not on main; D-108..D-115 and D-121..D-129 allocated and not on main.",
-      "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7.",
-      "Release acceptance stays blocked per owner item 11 (D-088) until encryption and authenticated manifests are tested."
+      "Decisions: next free ID D-160 (D-160..D-169 free; D-170..D-178 on main via #152; next after them D-179). D-142 is on #157 (not merged); D-108..D-115 and D-122..D-129 allocated and not on main.",
+      "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2100-2199 Phase 3.14.",
+      "Release acceptance stays blocked per owner item 11 (D-088): unencrypted backup sets are DEV/TEST only, and release acceptance stays blocked until encryption and authenticated manifests are tested; the acceptance evidence #149 is not merged."
     ]
   },
   "next": [
-    "Merge in the recorded queue order, re-reconciling the registry, migration numbers, decision and audit ranges and the exact head at each step.",
+    "Merge in the recorded queue order (#137, #147, #149, #151, #153, #155, #158, #157), re-reconciling the registry, migration numbers, decision and audit ranges and the exact head at each step.",
+    "#156 stays outside the queue until its independent security review is recorded.",
+    "Follow-ups: session expiry with unsaved input; #150 Low (fixed 0.8 s quiet period); #137 gate Approve and Reject by can for the document's branch; the 10.2585 rounding-pin test; constraint matrix part 2 (in progress); load test stage 2.",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
@@ -119,13 +205,17 @@
     "R-Q3 (D-109 and D-113 owner-pending)",
     "4.3-ACT",
     "4.3-S6-Q1..Q7",
-    "4.3-S7-Q1..Q6",
+    "4.3-S7-Q1..Q9",
     "S5a-Reject",
     "S5a-DIGIT",
     "S5b",
     "STOCK-PERIOD-DB (proposal recommends option b)",
     "M2-TOTP (production-readiness blocker)",
-    "REL-ACC (release acceptance blocked, D-088)"
+    "REL-ACC (release acceptance blocked, D-088)",
+    "CUTOVER-ACT",
+    "3.14-Q1..Q11",
+    "4.4-Q1..Q4",
+    "T-1"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -144,77 +234,67 @@
   },
   "openPullRequests": [
     {
-      "pr": 125,
-      "branch": "test/journal-commercial-invariants",
-      "head": "2f9ee37c36f7b4002f8f08813960b9e013d79af1",
-      "owner": "F (Opus)",
-      "state": "journal and commercial invariants; queue 1"
-    },
-    {
-      "pr": 133,
-      "branch": "feature/phase-4-1-s0",
-      "head": "3a7a51760ccf1378e5b9bb648110bd171182cb6c",
-      "owner": "D (Sonnet)",
-      "state": "4.1 S1 MFA state and TOTP secret store (system 0031); approved; queue 2"
-    },
-    {
-      "pr": 127,
-      "branch": "test/inventory-period-invariants",
-      "head": "113b285edf158833b5f3f6f751f0023d1571dc7a",
-      "owner": "F (Opus)",
-      "state": "inventory period invariants; queue 3"
-    },
-    {
-      "pr": 136,
-      "branch": "feature/phase-3-13-s5a",
-      "head": "3bb88dfe85637615912252fe75f509fadae18ea1",
-      "owner": "A (Sonnet)",
-      "state": "3.13 S5a approval policies (company 0032, D-140/D-141); queue 4"
-    },
-    {
       "pr": 137,
       "branch": "feature/phase-3-13-s5a-ui",
-      "head": "218046de81173882ec2a36b9d7d5fea4f45ae655",
+      "head": "f74e9a6935ff4562250c8a33fd40e7e968d7170b",
       "owner": "A (Sonnet)",
-      "state": "S5a approval-progress panel, stacked on #136; queue 5"
+      "state": "S5a approval-progress panel (base #136 merged); registry +0; queue 1"
     },
     {
-      "pr": 134,
-      "branch": "feature/phase-4-3-slice6-impl",
-      "head": "016d0f81f12fc9f9927a0a0be84fc81524ae3832",
-      "owner": "B (Opus)",
-      "state": "4.3 slice 6 backup retention (system 0032); approved; red until #133 lands; queue 6"
+      "pr": 147,
+      "branch": "feat/retention-preview-filter",
+      "head": "556c65782bd15d4e27fccda603ab87cc3380cc79",
+      "state": "retention ids-only preview filters and attachment-hold picker; registry +1; queue 2"
     },
     {
-      "pr": 142,
-      "branch": "feat/numeric-input-digits",
-      "head": "9736fa7711da78bff9dedbe47b047773be7f8268",
-      "owner": "E (Sonnet)",
-      "state": "shared whole-number parsing for non-Latin digits; approved; outside the queue"
+      "pr": 149,
+      "branch": "test/backup-acceptance-evidence",
+      "head": "e93b83d672de03943b87cda5c54448ee76e14e8d",
+      "state": "backup encryption acceptance evidence for owner item 11 (D-088); registry +5; queue 3"
     },
     {
-      "pr": 143,
-      "branch": "docs/phase-4-3-slice7-plan",
-      "head": "63299f7b285a4a4ae09fe45e4999051b2e3163e9",
-      "owner": "B (Opus)",
-      "state": "4.3 slice 7 plan, live company restore cutover (docs only, D-143..D-151); under C's review; outside the queue"
+      "pr": 151,
+      "branch": "test/acceptance-21-10-physical-names",
+      "head": "8d74e9d969962aca62a71f816b665d10e9e98456",
+      "state": "scenario 21.10 and schema upgrade, opaque physical names; registry +3; queue 4"
+    },
+    {
+      "pr": 153,
+      "branch": "test/scenario-218-isolation",
+      "head": "9d76476f8bd84baae8767dd0d5e7af64414b1656",
+      "state": "scenario 21.8 isolation proof on the trial restore path; registry +2; queue 5"
+    },
+    {
+      "pr": 155,
+      "branch": "test/constraint-violation-matrix",
+      "head": "f7bcc78a48d39f70beb6939ee493d688d185694b",
+      "state": "constraint-violation matrix part 1; registry +4; queue 6"
+    },
+    {
+      "pr": 158,
+      "branch": "test/api-hardening-matrix",
+      "head": "c18ce97081730c567b5e3832b26e25004e1cdb88",
+      "state": "hostile-input sweep over every endpoint; registry +3; queue 7"
+    },
+    {
+      "pr": 157,
+      "branch": "feature/phase-4-1-s2",
+      "head": "c945fb95b64086b80e84a80ec040efe29e024bee",
+      "owner": "D (Sonnet)",
+      "state": "4.1 S2 MFA login and enrolment (system 0033, D-142); registry +27; queue 8"
+    },
+    {
+      "pr": 156,
+      "branch": "fix/phase-4-3-retention-activation-prereqs",
+      "head": "39782e71f3256276fe6dbd1db8a35bccccd155d0",
+      "state": "clears retention activation prerequisites L1, L2 and L6 of #134 (deletion stays inactive); awaiting independent security review; outside the queue"
     }
   ],
   "inertPullRequests": [
     {
-      "pr": 48,
-      "branch": "feature/phase-3-8d-impact-preview",
-      "head": "1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb"
-    },
-    {
-      "pr": 51,
-      "branch": "feature/security-picomatch-retirement",
-      "head": "fe2ee06b1fabd13406428239e5462bb95384d3db"
-    },
-    {
-      "pr": 55,
-      "branch": "docs/security-consolidated-proposal",
-      "head": "23d485054cdae935a1e27c03ea4d56943a8d3cb1"
+      "pr": 85,
+      "branch": "feature/tooling-linux-pg-test-harness",
+      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a"
     },
     {
       "pr": 62,
@@ -222,18 +302,30 @@
       "head": "85526937ee631c2d8acef0fa4b22f0f767b13bd7"
     },
     {
-      "pr": 85,
-      "branch": "feature/tooling-linux-pg-test-harness",
-      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a"
+      "pr": 55,
+      "branch": "docs/security-consolidated-proposal",
+      "head": "23d485054cdae935a1e27c03ea4d56943a8d3cb1"
+    },
+    {
+      "pr": 51,
+      "branch": "feature/security-picomatch-retirement",
+      "head": "fe2ee06b1fabd13406428239e5462bb95384d3db"
+    },
+    {
+      "pr": 48,
+      "branch": "feature/phase-3-8d-impact-preview",
+      "head": "1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb"
     }
   ],
   "mergeSequence": [
-    125,
-    133,
-    127,
-    136,
     137,
-    134
+    147,
+    149,
+    151,
+    153,
+    155,
+    158,
+    157
   ],
   "agents": {
     "lead": "Claude Opus",
@@ -251,7 +343,6 @@
     ]
   },
   "outsideQueue": [
-    142,
-    143
+    156
   ]
 }
