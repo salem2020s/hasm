@@ -96,6 +96,7 @@ function existingNames() {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { if (e.name !== "bin" && e.name !== "obj") scan(p); continue; }
       if (p === outSql || p === outCs) continue;
+      if (/0031_company_attachment_retention\.sql$|CompanySchema\.AttachmentRetention\.cs$/.test(p)) continue;   // a later migration: it REFERENCES the names of this one (same rule as the 0028 generator)
       if (!/\.(sql|cs)$/.test(e.name)) continue;
       for (const m of fs.readFileSync(p, "utf8").matchAll(/\b[tcfkr]_[0-9a-f]{8}\b/g)) names.add(m[0]);
     }

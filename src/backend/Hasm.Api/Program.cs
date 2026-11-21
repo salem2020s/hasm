@@ -3,6 +3,7 @@ using Hasm.Api.Access;
 using Hasm.Api.Auth;
 using Hasm.Api.Company;
 using Hasm.Api.Hosting;
+using Hasm.Infrastructure.Attachments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +36,7 @@ builder.Services.AddHasmPricing();
 builder.Services.AddHasmCommercial();
 builder.Services.AddHasmPartyRoles();
 builder.Services.AddHasmAttachments(builder.Configuration);
+builder.Services.AddAttachmentRetention();
 builder.Services.AddHasmInventory();
 builder.Services.AddHasmStockDocuments();
 builder.Services.AddHasmInventoryAccounting();
@@ -86,6 +88,7 @@ app.MapPricingEndpoints();
 app.MapCommercialEndpoints();
 app.MapPartyRoleEndpoints();
 app.MapAttachmentEndpoints();
+app.MapAttachmentRetentionEndpoints();
 app.MapInventoryEndpoints();
 app.MapStockDocumentEndpoints();
 app.MapStockPostingEndpoints();
