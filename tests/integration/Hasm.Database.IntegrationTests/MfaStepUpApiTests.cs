@@ -145,6 +145,23 @@ public class MfaStepUpApiTests : IdentityTestBase
     }
 
     [PostgresFact]
+    public async Task The_status_endpoint_reports_the_central_requirement_without_changing_what_a_user_without_MFA_can_do()
+    {
+        await StartApi();
+        await NewUser("admin", admin: true);
+        await NewUser("plain");
+        foreach (var (login, expected) in new[] { ("admin", true), ("plain", false) })
+        {
+            var token = await DesktopLogin(login);
+            var status = await SendAsync(HttpMethod.Get, "/api/v1/auth/status", token);
+            Assert.Equal(HttpStatusCode.OK, status.Status);
+            var mfa = JsonDocument.Parse(status.Body).RootElement.GetProperty("mfa");
+            Assert.Equal(expected, mfa.GetProperty("required").GetBoolean());
+            Assert.Equal("none", mfa.GetProperty("state").GetString());                                                                    // reported, not enforced (D-165 (c)): the session exists and works
+        }
+    }
+
+    [PostgresFact]
     public async Task Session_mode_enrolment_refuses_a_transport_that_differs_from_the_sessions_client()
     {
         await StartApi();

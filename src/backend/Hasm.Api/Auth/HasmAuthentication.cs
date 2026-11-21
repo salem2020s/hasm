@@ -108,6 +108,8 @@ public static class AuthenticationSetup
         services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
         services.AddAuthorizationBuilder()
+            // the default policy of every plain RequireAuthorization(): an authenticated session that carries the second-factor proof where MFA applies (S3b-1, D-166; pass-through for state None, D-161)
+            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()).Build())
             .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
             .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>

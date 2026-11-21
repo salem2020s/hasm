@@ -60,7 +60,7 @@ public sealed class MfaAuthorizationResultHandler : IAuthorizationMiddlewareResu
 public static class MfaEnforcement
 {
     /// <summary>Every route under these prefixes must carry the MfaVerified policy.</summary>
-    public static readonly string[] PrivilegedPrefixes = ["/api/v1/access", "/api/v1/admin/users"];
+    public static readonly string[] PrivilegedPrefixes = ["/api/v1/access", "/api/v1/admin/users", "/api/v1/admin/parties"];
 
     /// <summary>Every one of these operations (method, route pattern as mapped) must carry the MfaFresh policy.</summary>
     public static readonly (string Method, string Pattern)[] FreshOperations =
@@ -70,5 +70,5 @@ public static class MfaEnforcement
     ];
 
     /// <summary>Admin-style prefixes that are candidates for a later slice (decided with S4's routing of privilege-granting paths); documented, not enforced.</summary>
-    public static readonly string[] UnclassifiedCandidatePrefixes = ["/api/v1/admin/parties"];
+    public static readonly string[] UnclassifiedCandidatePrefixes = [];
 }
