@@ -72,18 +72,27 @@ cluster_pid() {            # prints the verified postmaster PID of data director
   [ -f "$pidfile" ] && [ ! -L "$pidfile" ] || return 0
   pid="$(head -1 "$pidfile" 2>/dev/null || true)"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
-  [ -r "/proc/$pid/cmdline" ] || return 0
-  if tr '\0' ' ' < "/proc/$pid/cmdline" | grep -qF -- "-D $1"; then echo "$pid"; fi
+  kill -0 "$pid" 2>/dev/null || return 0                       # not running: nothing to stop
+  if [ ! -r "/proc/$pid/cmdline" ]; then echo "unverifiable"; return 0; fi   # alive but cannot be identified: reported as NOT stopped (fail closed)
+  if tr '\0' ' ' < "/proc/$pid/cmdline" | grep -qF -- "-D $1 "; then echo "$pid"; fi
 }
 stop_cluster() {           # $1 = data directory
   local pid; pid="$(cluster_pid "$1")"
   [ -n "$pid" ] || return 0
-  pgrun "$PGBIN/pg_ctl" -D "$1" -m immediate -w stop >/dev/null 2>&1 || true
+  if [ "$pid" != "unverifiable" ]; then pgrun "$PGBIN/pg_ctl" -D "$1" -m immediate -w stop >/dev/null 2>&1 || true; fi
   pid="$(cluster_pid "$1")"
   if [ -n "$pid" ]; then sleep 2; pid="$(cluster_pid "$1")"; fi
-  if [ -n "$pid" ]; then kill -KILL "$pid" 2>/dev/null || true; sleep 1; fi
+  if [ -n "$pid" ] && [ "$pid" != "unverifiable" ]; then kill -KILL "$pid" 2>/dev/null || true; sleep 1; fi
   pid="$(cluster_pid "$1")"
   [ -z "$pid" ]
+}
+# True when 127.0.0.1:$PORT can be bound, i.e. nothing holds it (bind test only; never connects).
+port_free() {
+  node -e '
+const s = require("net").createServer();
+s.once("error", () => process.exit(1));
+s.listen({ port: Number(process.argv[1]), host: "127.0.0.1", exclusive: true }, () => s.close(() => process.exit(0)));
+' "$PORT" 9>&-
 }
 
 # ---------------------------------------------------------------- cleanup (always)
@@ -106,6 +115,8 @@ cleanup() {
     find "$WORK" -maxdepth 2 -type f \( -name '*.pw' -o -name '*.env' \) -exec shred -u {} + 2>/dev/null
     rm -rf "$WORK"
     [ -e "$WORK" ] && { echo "WARNING: could not remove $WORK" >&2; rc=$((rc==0?2:rc)); }
+    # Final proof that nothing of ours is left behind: the port must be bindable again.
+    if ! port_free; then echo "WARNING: port $PORT is still held after teardown (a postmaster of this run may be left running)" >&2; rc=$((rc==0?2:rc)); fi
   fi
   case "$rc" in 0|1|2|4|130|143) ;; *) rc=2;; esac     # unexpected tool exit codes (e.g. psql's 3) must not collide with documented ones
   unset PGPASSWORD HASM_TEST_PG_ADMIN_CONNECTION HASM_TEST_PG_ROLE_ADMIN_CONNECTION HASM_TEST_PG_CLUSTER_FINGERPRINT SUPW ADMPW ROLEPW FP
@@ -135,11 +146,7 @@ done
 # Fail-closed ownership test: try to BIND 127.0.0.1:$PORT ourselves (nothing is connected to, nothing is sent to whoever may own the port).
 # Bind succeeds only when no listener holds the port (an existing 127.0.0.1 or wildcard listener makes it fail). /proc/net/tcp is not used because
 # some sandboxes do not expose it, which would make a listener invisible (fail-open). Any outcome other than a clean bind-and-release refuses.
-node -e '
-const s = require("net").createServer();
-s.once("error", () => process.exit(1));
-s.listen({ port: Number(process.argv[1]), host: "127.0.0.1", exclusive: true }, () => s.close(() => process.exit(0)));
-' "$PORT" 9>&- || die "port $PORT is not free (or cannot be tested); refusing (this script only ever creates its own cluster)"
+port_free || die "port $PORT is not free (or cannot be tested); refusing (this script only ever creates its own cluster)"
 
 # ---------------------------------------------------------------- fresh directory and credentials
 WORK="$(mktemp -d "${RUN_PREFIX}XXXXXXXX")"
@@ -196,7 +203,7 @@ fi
 chmod 700 "$RESULTS_DIR"; rm -f "$RESULTS_DIR/pg-integration.trx"
 log "results directory: $RESULTS_DIR"
 log "restore + Release build"
-dotnet restore src/backend/Hasm.slnx >/dev/null 9>&-
+dotnet restore src/backend/Hasm.slnx -v quiet -nologo 9>&-
 dotnet build src/backend/Hasm.slnx --no-restore --configuration Release -v quiet -nologo 9>&- 2>&1 | tail -3
 
 TEST_ARGS=(tests/integration/Hasm.Database.IntegrationTests --no-build --configuration Release
