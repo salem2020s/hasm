@@ -125,21 +125,118 @@ public sealed class Hbe1Tests
 
     // ---- authenticity (signed digest) and integrity (format) --------------------------------------
 
-    [Fact]
-    public async Task Any_altered_byte_is_refused_by_the_signed_digest_and_also_by_the_format_itself()
+    // ---- every altered byte, exhaustively --------------------------------------------------------
+    //
+    // The refusal that fires first depends on WHERE the byte is. A header field that frames the rest (a length) changes how the parser reads everything after it; for the SPKI length that can run into the
+    // chunk bytes, whose content is random per run, so the same position gave "hbe_malformed" in almost every run and "hbe_not_authenticated" in about one run in 256 (the stray four bytes read as the chunk
+    // size happened to be in range, the parse completed, and the header hash of what was parsed no longer equalled the digest the test had computed over the ORIGINAL header). Both refusals are legitimate there;
+    // the test now says so per region instead of accepting one code everywhere, and it covers every header position with every flip value.
+
+    private enum Part { Magic, Version, KeyIdLength, KeyId, PurposeLength, Purpose, NameLength, Name, SpkiLength, Spki, Salt, NoncePrefix, ChunkSize, HeaderTag, Chunk }
+
+    private sealed record Region(Part Part, int Start, int Length);
+
+    /// <summary>The layout of the header of an UNTAMPERED file (magic, version, then the length-prefixed fields, salt, nonce prefix, chunk size and the header tag), derived from its own length fields.</summary>
+    private static List<Region> HeaderRegions(byte[] file)
     {
-        var plain = RandomNumberGenerator.GetBytes(2 * Chunk + 7);
+        var regions = new List<Region>(); var at = 0;
+        void Add(Part part, int length) { regions.Add(new(part, at, length)); at += length; }
+        Add(Part.Magic, 4); Add(Part.Version, 1);
+        var keyIdLength = file[at]; Add(Part.KeyIdLength, 1); Add(Part.KeyId, keyIdLength);
+        var purposeLength = file[at]; Add(Part.PurposeLength, 1); Add(Part.Purpose, purposeLength);
+        var nameLength = (file[at] << 8) | file[at + 1]; Add(Part.NameLength, 2); Add(Part.Name, nameLength);
+        var spkiLength = (file[at] << 8) | file[at + 1]; Add(Part.SpkiLength, 2); Add(Part.Spki, spkiLength);
+        Add(Part.Salt, Hbe1.SaltLength); Add(Part.NoncePrefix, Hbe1.NoncePrefixLength); Add(Part.ChunkSize, 4); Add(Part.HeaderTag, Hbe1.HeaderTagLength);
+        return regions;
+    }
+
+    private const string Malformed = "hbe_malformed", Unsupported = "hbe_unsupported_version", NotAuthenticated = "hbe_not_authenticated", AuthFailed = "hbe_authentication_failed", KeyMismatch = "recovery_key_mismatch", WrongFile = "hbe_wrong_file";
+
+    /// <summary>Refusals that are legitimate for a byte of this part when the digest is the one signed for the ORIGINAL file: the header is parsed first (a field the parser rejects, <c>hbe_malformed</c> or <c>hbe_unsupported_version</c>), then compared with the signed digest, so a header that parses but differs is <c>hbe_not_authenticated</c>; nothing after the digest check can be reached.</summary>
+    private static string[] AllowedUnderOriginalDigest(Part part) => part switch
+    {
+        Part.Magic or Part.KeyIdLength or Part.PurposeLength or Part.NameLength => [Malformed],                          // the magic is checked first; a changed length makes the id, purpose or name unparseable
+        Part.Version => [Unsupported],                                                                                  // any other version number
+        Part.KeyId or Part.Purpose or Part.Name or Part.SpkiLength or Part.ChunkSize => [Malformed, NotAuthenticated],    // still valid text or a range the parser accepts: digest mismatch; invalid: refused by the parser
+        Part.Spki or Part.Salt or Part.NoncePrefix or Part.HeaderTag or Part.Chunk => [NotAuthenticated],                // content the parser does not validate: only the digest can refuse it
+        _ => throw new ArgumentOutOfRangeException(nameof(part)),
+    };
+
+    /// <summary>Refusals that are legitimate when the digest was recomputed over the tampered bytes (a compromised signer), so the format's own checks must catch the byte: the order is parse, digest, key id, purpose and name, point, header MAC, chunk tags.</summary>
+    private static string[] AllowedUnderResignedDigest(Part part) => part switch
+    {
+        Part.Magic or Part.KeyIdLength or Part.PurposeLength or Part.NameLength => [Malformed],
+        Part.Version => [Unsupported],
+        Part.SpkiLength => [Malformed, NotAuthenticated],                                                               // the length reframes the rest: the parse fails, or (the stray bytes read as the chunk size in range) completes over different bytes than the digest covers
+        Part.KeyId => [Malformed, KeyMismatch],                                                                         // not a key id, or another well-formed one
+        Part.Purpose or Part.Name => [Malformed, WrongFile],                                                            // not a valid purpose or name, or another valid one than the caller expects
+        Part.Spki => [Malformed, AuthFailed],                                                                           // not a P-256 point, or another point: another shared secret, so the header MAC fails
+        Part.ChunkSize => [Malformed, AuthFailed],                                                                      // out of range, or in range: the header MAC covers it
+        Part.Salt or Part.NoncePrefix or Part.HeaderTag or Part.Chunk => [AuthFailed],                                  // header MAC, or the chunk tag (the nonce, the associated data and the key all derive from these)
+        _ => throw new ArgumentOutOfRangeException(nameof(part)),
+    };
+
+    [Fact]
+    public async Task Every_altered_byte_of_the_header_with_every_flip_value_is_refused_by_the_signed_digest_and_by_the_format_itself_with_the_refusal_its_region_allows()
+    {
+        var plain = RandomNumberGenerator.GetBytes(Chunk + 7);                                                          // two chunks: a full one and a short last one
         var (file, digest) = await Encrypt(plain);
-        var h = HeaderLength(file, plain.Length);
-        var positions = Enumerable.Range(0, h).Concat([h, h + Chunk - 1, h + Chunk, h + Stored, file.Length - 1]);
-        foreach (var pos in positions)
-        {
-            var copy = (byte[])file.Clone();
-            copy[pos] ^= 0x01;
-            Assert.Equal("hbe_not_authenticated", await Refused(copy, digest) is var c1 && c1 is "hbe_not_authenticated" or "hbe_malformed" or "hbe_unsupported_version" or "recovery_key_mismatch" or "hbe_wrong_file" ? "hbe_not_authenticated" : c1);
-            var c2 = await Refused(copy, SelfDigest(copy, h));                                                         // even a re-signed tampered file fails the format checks
-            Assert.True(c2 is "hbe_authentication_failed" or "hbe_malformed" or "recovery_key_mismatch" or "hbe_wrong_file" or "hbe_unsupported_version", $"position {pos}: {c2}");
-        }
+        var header = HeaderLength(file, plain.Length);
+        var regions = HeaderRegions(file);
+        Assert.Equal(header, regions[^1].Start + regions[^1].Length);                                                   // the derived layout covers exactly the header
+        var findings = new List<string>();
+        foreach (var region in regions)
+            for (var pos = region.Start; pos < region.Start + region.Length; pos++)
+                for (var flip = 1; flip <= 255; flip++)
+                {
+                    var copy = (byte[])file.Clone();
+                    copy[pos] ^= (byte)flip;
+                    var original = await Refused(copy, digest);
+                    if (!AllowedUnderOriginalDigest(region.Part).Contains(original)) findings.Add($"signed digest of the original: {region.Part} at {pos} ^ 0x{flip:x2}: {original}");
+                    var resigned = await Refused(copy, SelfDigest(copy, header));
+                    if (!AllowedUnderResignedDigest(region.Part).Contains(resigned)) findings.Add($"digest recomputed over the tampered bytes: {region.Part} at {pos} ^ 0x{flip:x2}: {resigned}");
+                }
+        Assert.True(findings.Count == 0, $"{findings.Count} unexpected refusals (first 20):\n" + string.Join("\n", findings.Take(20)));
+    }
+
+    [Fact]
+    public async Task Every_altered_byte_of_every_chunk_is_refused_by_the_signed_digest_and_by_the_chunk_tag_and_the_edges_with_every_flip_value()
+    {
+        var plain = RandomNumberGenerator.GetBytes(Chunk + 7);
+        var (file, digest) = await Encrypt(plain);
+        var header = HeaderLength(file, plain.Length);
+        var edges = new HashSet<int> { header, header + Chunk - 1, header + Chunk, header + Stored - 1, header + Stored, file.Length - 1 };   // first, last ciphertext byte and first, last tag byte of both chunks
+        var findings = new List<string>();
+        for (var pos = header; pos < file.Length; pos++)
+            foreach (var flip in edges.Contains(pos) ? Enumerable.Range(1, 255) : [0x01, 0x80, 0xff])
+            {
+                var copy = (byte[])file.Clone();
+                copy[pos] ^= (byte)flip;
+                var original = await Refused(copy, digest);
+                if (original != NotAuthenticated) findings.Add($"signed digest of the original: chunk byte {pos - header} ^ 0x{flip:x2}: {original}");   // the chunk hash is compared before the chunk is decrypted
+                var resigned = await Refused(copy, SelfDigest(copy, header));
+                if (resigned != AuthFailed) findings.Add($"digest recomputed over the tampered bytes: chunk byte {pos - header} ^ 0x{flip:x2}: {resigned}");   // only the AEAD tag can refuse it now
+            }
+        Assert.True(findings.Count == 0, $"{findings.Count} unexpected refusals (first 20):\n" + string.Join("\n", findings.Take(20)));
+    }
+
+    [Fact]
+    public async Task The_spki_length_flip_that_made_the_old_test_flaky_is_hbe_not_authenticated_when_the_stray_bytes_read_as_the_chunk_size_are_in_range()
+    {
+        // deterministic reproduction of the failure seen once in CI ("position 53: hbe_not_authenticated"): the high byte of the SPKI length (53 in this layout) flipped makes the parser read 256 bytes too many, into the first chunk;
+        // the four bytes it then takes as the chunk size are random ciphertext, almost always out of range (hbe_malformed) and in range about once in 256 runs. Here they are made in range on purpose.
+        var plain = RandomNumberGenerator.GetBytes(Chunk + 7);
+        var (file, _) = await Encrypt(plain);
+        var header = HeaderLength(file, plain.Length);
+        var spkiLength = HeaderRegions(file).Single(r => r.Part == Part.SpkiLength);
+        Assert.Equal(53, spkiLength.Start);
+        var copy = (byte[])file.Clone();
+        copy[spkiLength.Start] ^= 0x01;                                                                                  // the SPKI length 91 becomes 347
+        var chunkSizeAt = spkiLength.Start + 2 + 347 + Hbe1.SaltLength + Hbe1.NoncePrefixLength;
+        BitConverter.GetBytes(System.Buffers.Binary.BinaryPrimitives.ReverseEndianness((uint)Chunk)).CopyTo(copy, chunkSizeAt);   // a valid chunk size where the parser will look
+        Assert.Equal(NotAuthenticated, await Refused(copy, SelfDigest(copy, header)));                                  // a refusal all the same: the header it parsed is not the one the digest covers
+        copy[chunkSizeAt] ^= 0x01;                                                                                       // 0x01000400 is above the maximum chunk size: the parser's own refusal
+        Assert.Equal(Malformed, await Refused(copy, SelfDigest(copy, header)));
     }
 
     [Fact]
