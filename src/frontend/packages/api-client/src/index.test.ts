@@ -670,3 +670,58 @@ describe("api client: document links (S6 follow-up)", () => {
     expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/types");
   });
 });
+
+describe("api client: the second factor (Phase 4.1; one implementation for Web and Desktop)", () => {
+  it("names the next step when the password is not enough, and keeps no bearer token", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ status: "mfa_required", challenge: "c1", challengeExpiresAtUtc: "2026-11-21T12:00:00Z" }))
+      .mockResolvedValueOnce(json({ status: "mfa_enrolment_required", challenge: "c2" }))
+      .mockResolvedValueOnce(json({ status: "mfa_recovery_required" }))
+      .mockImplementation(() => Promise.resolve(json({ companies: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_required", challenge: "c1" } });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_enrolment_required", challenge: "c2" } });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_recovery_required" } });
+    await client.listCompanies();
+    expect((call(fetchMock, 3).init.headers as Record<string, string>)["Authorization"]).toBeUndefined();   // no session was created by any of them
+  });
+
+  it("completes a login with the challenge and the code, anonymously, and the desktop keeps the new token in memory", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: "tok" }))
+      .mockImplementation(() => Promise.resolve(json({ companies: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    const result = await client.verifyMfa("c1", "123456");
+    expect(result).toMatchObject({ user: { id: "u" } });
+    expect(call(fetchMock).url).toBe("https://x/api/v1/auth/mfa/verify");
+    expect(JSON.parse(call(fetchMock).init.body as string)).toEqual({ challenge: "c1", code: "123456", client: "desktop" });
+    await client.listCompanies();
+    expect((call(fetchMock, 1).init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+  });
+
+  it("does not notify the session-ended handler for a refused second step", async () => {
+    const onUnauthenticated = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "invalid_credentials" }, { status: 401 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { onUnauthenticated });
+    await expect(client.verifyMfa("c", "000000")).rejects.toMatchObject({ status: 401 });
+    await expect(client.beginEnrolment({ challenge: "c", enrolmentCode: "x" })).rejects.toMatchObject({ status: 401 });
+    await expect(client.confirmEnrolment({ challenge: "c", code: "000000" })).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+  });
+
+  it("begins an enrolment with the one-time code or, voluntarily, with the password, and confirms it", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=AAAA", secret: "AAAA" }))
+      .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=BBBB", secret: "BBBB" }))
+      .mockResolvedValueOnce(json({ mfa: "enrolled" }))
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: null }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect((await client.beginEnrolment({ challenge: "c", enrolmentCode: "CODE" })).secret).toBe("AAAA");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ challenge: "c", enrolmentCode: "CODE", client: "web" });
+    expect((await client.beginEnrolment({ password: "pw" })).secret).toBe("BBBB");
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ password: "pw", client: "web" });
+    expect(await client.confirmEnrolment({ code: "123456" })).toEqual({ mfa: "enrolled" });
+    expect(await client.confirmEnrolment({ challenge: "c", code: "123456" })).toMatchObject({ user: { id: "u" } });
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/auth/mfa/enrol/confirm");
+  });
+});

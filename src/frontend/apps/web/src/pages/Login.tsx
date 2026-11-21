@@ -3,10 +3,12 @@ import { useI18n } from "@hasm/ui";
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Field } from "../components";
+import { MfaStep } from "./MfaStep";
 
 export function LoginPage() {
   const { t } = useI18n();
   const auth = useAuth();
+  if (auth.phase === "mfa" && auth.mfa) return <MfaStep />;
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);

@@ -279,7 +279,7 @@ function Gate() {
       </AuthLayout>
     );
   }
-  if (auth.phase === "anonymous") return <AuthLayout><LoginPage /></AuthLayout>;
+  if (auth.phase === "anonymous" || auth.phase === "mfa") return <AuthLayout><LoginPage /></AuthLayout>;
   if (auth.phase === "needCompany") return <AuthLayout><CompanySelectPage /></AuthLayout>;
   return <Shell />;
 }
