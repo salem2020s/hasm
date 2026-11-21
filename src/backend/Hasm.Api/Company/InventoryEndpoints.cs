@@ -106,13 +106,13 @@ public static class InventoryEndpoints
 
     // ---- units
     /// <summary>Without <c>search</c>, <c>offset</c> or <c>limit</c> exactly the unpaged list (no <c>total</c>); with any of them one bounded page (default 50, at most 500, ordered by code) plus <c>total</c>. Same permission in both forms.</summary>
-    private static async Task<IResult> ListUnits(string? search, int? offset, int? limit, HttpContext http, AccessService access, InventoryManagementService svc)
+    private static async Task<IResult> ListUnits(string? search, string? offset, string? limit, HttpContext http, AccessService access, InventoryManagementService svc)
     {
-        if (ListPaging.IsRequested(search, offset, limit) && (offset is < 0 || limit is < 1 || !ListPaging.TryCleanSearch(search, out _))) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+        if (ListParameters.TryParse(search, offset, limit, out var q) is { } bad) return ListParameters.Invalid(bad);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        if (!ListPaging.IsRequested(search, offset, limit)) return List(await svc.ListUnitsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "units", u => Body(u));
-        var r = await svc.SearchUnitsAsync(actor!.UserId, actor.CompanyId, search, offset, limit, http.RequestAborted);
+        if (!q.Requested) return List(await svc.ListUnitsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "units", u => Body(u));
+        var r = await svc.SearchUnitsAsync(actor!.UserId, actor.CompanyId, q.Search, q.Offset, q.Limit, http.RequestAborted);
         return r.IsOk ? Results.Json(new { units = r.Value!.Items.Select(u => Body(u)).ToList(), total = r.Value.Total }) : CompanyConfigurationEndpoints.Map(r, _ => new { });
     }
 
@@ -142,13 +142,13 @@ public static class InventoryEndpoints
 
     // ---- groups
     /// <summary>Without <c>search</c>, <c>offset</c> or <c>limit</c> exactly the unpaged list (no <c>total</c>); with any of them one bounded page (default 50, at most 500, ordered by code) plus <c>total</c>. Same permission in both forms.</summary>
-    private static async Task<IResult> ListGroups(string? search, int? offset, int? limit, HttpContext http, AccessService access, InventoryManagementService svc)
+    private static async Task<IResult> ListGroups(string? search, string? offset, string? limit, HttpContext http, AccessService access, InventoryManagementService svc)
     {
-        if (ListPaging.IsRequested(search, offset, limit) && (offset is < 0 || limit is < 1 || !ListPaging.TryCleanSearch(search, out _))) return CompanyConfigurationEndpoints.Error(400, "invalid_request");
+        if (ListParameters.TryParse(search, offset, limit, out var q) is { } bad) return ListParameters.Invalid(bad);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        if (!ListPaging.IsRequested(search, offset, limit)) return List(await svc.ListGroupsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "groups", g => Body(g));
-        var r = await svc.SearchGroupsAsync(actor!.UserId, actor.CompanyId, search, offset, limit, http.RequestAborted);
+        if (!q.Requested) return List(await svc.ListGroupsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "groups", g => Body(g));
+        var r = await svc.SearchGroupsAsync(actor!.UserId, actor.CompanyId, q.Search, q.Offset, q.Limit, http.RequestAborted);
         return r.IsOk ? Results.Json(new { groups = r.Value!.Items.Select(g => Body(g)).ToList(), total = r.Value.Total }) : CompanyConfigurationEndpoints.Map(r, _ => new { });
     }
 

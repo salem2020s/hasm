@@ -171,6 +171,34 @@ public class PartyRoleApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
+    public async Task The_list_endpoints_answer_a_malformed_query_parameter_with_the_standard_validation_body_naming_the_parameter()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        // party roles: every parameter, units, item groups and customer groups: the paging parameters
+        var cases = new (string Url, string Field)[]
+        {
+            ($"{Roles}?limit=abc", "limit"), ($"{Roles}?limit=0", "limit"), ($"{Roles}?offset=-1", "offset"), ($"{Roles}?offset=x", "offset"), ($"{Roles}?kind=7", "kind"), ($"{Roles}?kind=abc", "kind"),
+            ($"{Roles}?ids=not-a-guid", "ids"), ($"{Roles}?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"), ($"{Roles}?search={new string('x', 101)}", "search"),
+            ("/api/v1/company/inventory/units?limit=abc", "limit"), ("/api/v1/company/inventory/units?offset=-1", "offset"), ("/api/v1/company/inventory/units?search=a%0Ab", "search"),
+            ("/api/v1/company/inventory/groups?limit=0", "limit"), ("/api/v1/company/inventory/groups?offset=1.5", "offset"),
+            ("/api/v1/company/pricing/customer-groups?limit=-2", "limit"), ("/api/v1/company/pricing/customer-groups?offset=zz", "offset"),
+        };
+        foreach (var (url, field) in cases)
+        {
+            var r = await Send(HttpMethod.Get, url, cookie: cookie);
+            Assert.True(r.Status == HttpStatusCode.BadRequest, $"{url} -> {(int)r.Status}");
+            Assert.Equal("invalid_request", r.Error);                                       // the standard validation body, not the framework's bare 400
+            var named = Assert.Single(r.Json.GetProperty("fields").EnumerateArray());
+            Assert.Equal((field, "invalid_value"), (named.GetProperty("field").GetString(), named.GetProperty("code").GetString()));
+        }
+        // valid and absent values still work, an empty offset or limit counts as absent, and an unauthenticated caller still gets 401 before any parameter is looked at
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Roles}?limit=&offset=", cookie: cookie)).Status);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, "/api/v1/company/inventory/units?limit=5&offset=0", cookie: cookie)).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Roles}?limit=abc")).Status);
+    }
+
+    [PostgresFact]
     public async Task A_user_without_the_permissions_reads_and_writes_nothing_and_a_viewer_cannot_configure()
     {
         await StartApi();
