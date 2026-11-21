@@ -11,7 +11,7 @@ public static class StockDocumentSetup
 {
     public static IServiceCollection AddHasmStockDocuments(this IServiceCollection services)
     {
-        services.AddSingleton(sp => new StockDocumentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new StockDocumentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Hasm.Numbering")));
         services.AddSingleton(sp => new StockDocumentManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<StockDocumentService>()));
         return services;
     }

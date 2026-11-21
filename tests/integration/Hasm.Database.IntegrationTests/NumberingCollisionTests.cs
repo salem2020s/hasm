@@ -17,8 +17,8 @@ namespace Hasm.Database.IntegrationTests;
 /// Gapless numbering under failure, for every numbered operation outside the commercial track (which has its own tests): stock document approval, stocktake approval, stock adjustment generation and journal posting.
 /// Each test proves two things. (1) Next-number reuse after a failure AFTER the issue, without a planted duplicate and without a test seam: the operation is held, after its number was issued, by a SHARE lock on
 /// the table it writes next, and its backend is cancelled (pg_cancel_backend); the whole transaction rolls back, the counter does not move, and the retry receives exactly that number. (2) A number collision
-/// (the next number is already issued, e.g. after a direct write) is the stable refusal <c>concurrent_change</c>, never an unhandled 23505: nothing changes, the counter does not move, a retry is refused the same
-/// way (no number is skipped). Disposable cluster only.
+/// (the next number is already issued, e.g. after a direct write) is the stable, NOT retryable refusal <c>number_already_issued</c> (409; a warning naming the document type is logged), never an unhandled
+/// 23505: nothing changes, the counter does not move, a retry is refused the same way (no number is skipped). Disposable cluster only.
 /// </summary>
 public class NumberingCollisionTests : StockAdjustmentTestBase
 {
@@ -46,7 +46,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
         var pid = 0;
         for (var i = 0; i < 600 && pid == 0; i++)
         {
-            pid = await Sql<int>("SELECT coalesce(min(pid), 0) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'");
+            pid = await Sql<int>($"SELECT coalesce(min(pid), 0) FROM pg_locks WHERE NOT granted AND locktype = 'relation' AND relation = '{table}'::regclass");   // the backend waiting for exactly this table
             if (pid == 0) await Task.Delay(50);
         }
         Assert.True(pid != 0, "the operation never reached the table it writes after issuing its number");
@@ -58,7 +58,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
     }
 
     [PostgresFact]
-    public async Task Stock_document_approval_reuses_the_number_after_a_failure_and_refuses_a_collision_with_concurrent_change()
+    public async Task Stock_document_approval_reuses_the_number_after_a_failure_and_refuses_a_collision_with_number_already_issued()
     {
         await PrepareAdjustments();
         var approver = await Approver();
@@ -76,7 +76,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
         await Occupy(DocumentTypes.StockReceipt, "SR-2026-000002");
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            Fails(await Docs.ApproveAsync(approver.Id, Company.Id, next.Id, next.Revision), ConfigStatus.Conflict, "concurrent_change");
+            Fails(await Docs.ApproveAsync(approver.Id, Company.Id, next.Id, next.Revision), ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued);
             var after = (await Docs.GetAsync(Company.Id, next.Id))!;
             Assert.Equal((next.Status, next.Revision, (string?)null), (after.Status, after.Revision, after.Number));
             Assert.Equal((1L, 2L), (await LastValue(DocumentTypes.StockReceipt), await Issued(DocumentTypes.StockReceipt)));   // the counter stays at 1; only the first number and the foreign row exist
@@ -84,7 +84,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
     }
 
     [PostgresFact]
-    public async Task Stocktake_approval_reuses_the_number_after_a_failure_and_refuses_a_collision_with_concurrent_change()
+    public async Task Stocktake_approval_reuses_the_number_after_a_failure_and_refuses_a_collision_with_number_already_issued()
     {
         await PrepareAdjustments();
         var approver = (await Member([PermissionCatalog.Codes.StocktakeView, PermissionCatalog.Codes.StocktakeApprove], ScopeKind.Company, null)).User;
@@ -102,7 +102,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
         await Occupy(DocumentTypes.Stocktake, "STK-2026-000002");
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            Fails(await Takes.ApproveAsync(approver.Id, Company.Id, next.Id, next.Revision), ConfigStatus.Conflict, "concurrent_change");
+            Fails(await Takes.ApproveAsync(approver.Id, Company.Id, next.Id, next.Revision), ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued);
             var after = (await Takes.GetAsync(Company.Id, next.Id))!;
             Assert.Equal((next.Status, next.Revision, (string?)null), (after.Status, after.Revision, after.Number));
             Assert.Equal((1L, 2L), (await LastValue(DocumentTypes.Stocktake), await Issued(DocumentTypes.Stocktake)));
@@ -110,7 +110,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
     }
 
     [PostgresFact]
-    public async Task Stock_adjustment_generation_reuses_the_number_after_a_failure_and_refuses_a_collision_with_concurrent_change()
+    public async Task Stock_adjustment_generation_reuses_the_number_after_a_failure_and_refuses_a_collision_with_number_already_issued()
     {
         await PrepareAdjustments();
         var first = await ApprovedTake(W1, C(Fifo, Pcs, 1m));
@@ -122,14 +122,14 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
         await Occupy(DocumentTypes.StockAdjustment, "SA-2026-000002");
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            Fails(await Generate(second), ConfigStatus.Conflict, "concurrent_change");
+            Fails(await Generate(second), ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued);
             Assert.Null((await Takes.GetAsync(Company.Id, second.Id))!.AdjustmentId);
             Assert.Equal((1L, 2L, 1L), (await LastValue(DocumentTypes.StockAdjustment), await Issued(DocumentTypes.StockAdjustment), await Sql<long>($"SELECT count(*) FROM {SA.Table}")));
         }
     }
 
     [PostgresFact]
-    public async Task Journal_posting_reuses_the_number_after_a_failure_and_refuses_a_collision_with_concurrent_change()
+    public async Task Journal_posting_reuses_the_number_after_a_failure_and_refuses_a_collision_with_number_already_issued()
     {
         await PrepareAdjustments();
         var poster = await Poster();
@@ -148,7 +148,7 @@ public class NumberingCollisionTests : StockAdjustmentTestBase
         await Occupy(DocumentTypes.JournalEntry, "JV-2026-000002");
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            Fails(await Journal.PostAsync(poster.Id, Company.Id, next.Header.Id, next.Header.Revision, false), ConfigStatus.Conflict, "concurrent_change");
+            Fails(await Journal.PostAsync(poster.Id, Company.Id, next.Header.Id, next.Header.Revision, false), ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued);
             var after = (await Journal.GetAsync(Company.Id, next.Header.Id))!;
             Assert.Equal((JournalStatus.Approved, (string?)null), (after.Header.Status, after.Header.Number));
             Assert.Equal((1L, 2L), (await LastValue(DocumentTypes.JournalEntry), await Issued(DocumentTypes.JournalEntry)));
