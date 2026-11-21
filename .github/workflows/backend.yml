@@ -44,6 +44,8 @@ jobs:
         run: node tools/schema/company-0029-commercial-approval.cjs --check
       - name: Document-links schema files match the deterministic generator (Phase 3.13 S2, company migration 0030)
         run: node tools/schema/company-0030-document-links.cjs --check
+      - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
+        run: node tools/schema/company-0031-attachment-retention.cjs --check
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
@@ -137,7 +139,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1127 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1132 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -234,7 +236,7 @@ jobs:
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
-                "AttachmentTests": 10, "AttachmentApiTests": 8,
+                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 3, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
