@@ -1,6 +1,7 @@
 import {
   ApiError, type InventoryBarcode, type InventoryCapabilities, type InventoryGroup, type InventoryItem, type InventoryItemInput, type InventoryUnit, type ItemTypeCode, type ValuationMethodCode,
 } from "@hasm/api-client";
+import { toLatinDigits } from "../ledgerCommon";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -333,7 +334,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
                 </td>
                 <td>
                   <Field id={`alt-factor-${i}`} label={t("inv.item.alt_factor")} error={errors[`alternateUnits[${i}].factor`]} hint={t("inv.item.alt_factor_hint", { base: unitById.get(form.baseUnitId)?.code ?? "…" })}>
-                    {(aria) => <input {...aria} value={a.factor} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => set("alts", form.alts.map((r) => (r.key === a.key ? { ...r, factor: e.target.value } : r)))} />}
+                    {(aria) => <input {...aria} value={a.factor} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => set("alts", form.alts.map((r) => (r.key === a.key ? { ...r, factor: toLatinDigits(e.target.value) } : r)))} />}
                   </Field>
                 </td>
                 <td>{canEdit && <button type="button" onClick={() => set("alts", form.alts.filter((r) => r.key !== a.key))}>{t("inv.item.remove")}</button>}</td>

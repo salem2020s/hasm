@@ -1,6 +1,7 @@
 import {
   ApiError, type StockDocType, type StockDocument, type StockPosting, type StockDocumentCapabilities, type StockDocumentInput, type StockDocumentSummary, type StockItemRef, type StockWarehouseRef,
 } from "@hasm/api-client";
+import { toLatinDigits } from "../ledgerCommon";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -315,7 +316,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
                       </td>
                       <td>
                         <Field id={`sd-qty-${i}`} label={t("stock.quantity")} error={errors[`lines[${i}].quantity`]}>
-                          {(aria) => <input {...aria} value={l.quantity} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setForm((f) => ({ ...f, lines: f.lines.map((r) => (r.key === l.key ? { ...r, quantity: e.target.value } : r)) }))} />}
+                          {(aria) => <input {...aria} value={l.quantity} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setForm((f) => ({ ...f, lines: f.lines.map((r) => (r.key === l.key ? { ...r, quantity: toLatinDigits(e.target.value) } : r)) }))} />}
                         </Field>
                       </td>
                       <td><bdi dir="ltr" data-testid={`base-${i}`}>{doc && !dirty && doc.lines[i] ? `${doc.lines[i]!.baseQuantity} ${doc.lines[i]!.baseUnitCode}` : preview}</bdi></td>

@@ -1,4 +1,5 @@
 import { ApiError, type InventoryCapabilities, type InventoryUnit } from "@hasm/api-client";
+import { toLatinDigits } from "../ledgerCommon";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -119,8 +120,8 @@ function UnitForm({ editor, canEdit, onClose, onSaved }: { editor: Editor; canEd
     if (isNew) {
       const code = form.code.trim().toUpperCase();
       if (!code) v.code = t("field.required"); else if (!CODE_SHAPE.test(code)) v.code = t("field.invalid_format");
-      const d = Number(form.decimals);
-      if (!Number.isInteger(d) || d < 0 || d > 6) v.decimals = t("inv.field.out_of_range");
+      // a blank or non-digit value is refused (Number("") would silently be 0)
+      if (!/^[0-6]$/.test(form.decimals.trim())) v.decimals = t("inv.field.out_of_range");
     }
     if (!form.nameAr.trim() && !form.nameEn.trim()) { v.nameAr = t("inv.name_required"); v.nameEn = t("inv.name_required"); }
     setErrors(v);
@@ -162,7 +163,7 @@ function UnitForm({ editor, canEdit, onClose, onSaved }: { editor: Editor; canEd
           <Field id="u-nameAr" label={t("inv.name_ar")} error={errors.nameAr}>{(aria) => <input {...aria} name="nameAr" value={form.nameAr} onChange={set("nameAr")} readOnly={!canEdit} dir="rtl" autoComplete="off" />}</Field>
           <Field id="u-nameEn" label={t("inv.name_en")} error={errors.nameEn}>{(aria) => <input {...aria} name="nameEn" value={form.nameEn} onChange={set("nameEn")} readOnly={!canEdit} dir="ltr" autoComplete="off" />}</Field>
           <Field id="u-decimals" label={t("inv.units.decimals")} error={errors.decimals} required={isNew} hint={t("inv.units.decimals_hint")}>
-            {(aria) => <input {...aria} name="decimals" type="number" min={0} max={6} value={form.decimals} onChange={set("decimals")} readOnly={!canEdit || !isNew} dir="ltr" />}
+            {(aria) => <input {...aria} name="decimals" inputMode="numeric" maxLength={1} value={form.decimals} onChange={(e) => setForm((f) => ({ ...f, decimals: toLatinDigits(e.target.value) }))} readOnly={!canEdit || !isNew} dir="ltr" />}
           </Field>
         </div>
         <div className="actions">
