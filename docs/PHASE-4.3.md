@@ -1011,12 +1011,190 @@ Each question's default is the preserving one. An answer that relaxes one is an 
 ### Owner decisions this slice relies on (not re-asked)
 D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 (pins only; the cutover is slice 7), D-085, D-114.
 
+## Slice 7: live company restore (cutover) with acknowledgement, independent approval and a new audit checkpoint epoch (D-081) - PLAN (docs only)
+Sources:
+* owner decision **D-081**: a live company restore requires explicit acknowledgement, independent administrative approval and comprehensive audit. Cutover creates a new audit checkpoint epoch while the previous audit chain is preserved and verified; epoch rotation never conceals earlier audit failures or bypasses tamper detection. Required: pre-cutover validation, a secure backup taken before cutover, consistent database and attachment restoration, runtime permissions, a rollback plan and post-restore integrity checks;
+* **D-080(6)** (independent approval for restore operations) and **D-118** (trial restore and the recovery test are restore operations);
+* the Phase 4.1 independent-approval framework (`docs/PHASE-4.1.md` section 7, slice S4: operation `restore.execute`, "the 4.3 slice integrates it"; S8 wires it);
+* D-099 (named administrator with MFA in the administrative tool), D-102 (notifications), D-106, D-107 and D-119 (restore effects on credentials);
+* the code of slices 3-6: `CompanyBackupService.TrialRestoreAsync`, `EncryptedSets`, `SignedDocuments`, `RecoveryTestService`, `BackupRetentionPin`, `RestoreSafeguards.CutoverAvailable`, `AuditTrail` / `AuditVerifier` / `FileCheckpointStore`.
+
+Decision ids D-143..D-151 (allocated by the lead; technical defaults under D-048, chosen fail-closed). Audit block 2020-2029 (allocated). Risk: **Critical**: it replaces live financial data and changes the audit-integrity mechanism.
+
+### Scope
+* **In scope:** the restore of ONE company's database and attachment folder from an encrypted, signed company set (slice 5), replacing the live ones.
+  * the request with a typed acknowledgement;
+  * the independent approval through the Phase 4.1 framework;
+  * pre-cutover validation and a pinned, encrypted safety backup;
+  * the switch, which is journaled, resumable and reversible;
+  * runtime permissions and post-restore integrity checks;
+  * the new checkpoint epoch of the company's business audit stream;
+  * the rollback window;
+  * the system and business audit events.
+* **Not in scope (later slice 8, "full-installation restore"):**
+  * restoring the SYSTEM database or a whole run;
+  * its credential effects (D-106, D-107, D-119: logins blocked until post-backup revocations are re-applied, and an installation-id change makes users `RecoveryRequired`);
+  * system-stream epochs.
+
+  A company cutover never touches the system database's data: users, credentials, memberships, roles, the registry row and the company's access stream (`company:<id>`, in the system database) stay live. So D-106 and D-107 are NOT triggered by this slice. This is stated, not assumed: a test pins that a cutover writes nothing to the user, session or credential tables.
+* Unencrypted (DEV/TEST) sets are never cut over, whatever the acknowledgement: `unencrypted_set_refused`.
+* No UI in this slice (administrative tool, like the other 4.3 commands). The API exposes nothing new.
+
+### Dependencies and the gate (D-144)
+* **The independent approval comes ONLY from the Phase 4.1 framework** (`admin_approval_request`, operation `restore.execute`, approver independent of the requester, MFA-fresh, bound to `payload_hash`, single use, expiry, restore-epoch expiry). This slice adds no second approval mechanism.
+* **`RestoreSafeguards.CutoverAvailable`** (slice 6, today `false`) is the code gate of every cutover entry point. It is also layer 2 of the slice 6 deletion gate. It stays `false` until ALL of these are on main:
+  * this slice's engine;
+  * the 4.1 approval framework (S4) with the D-099 named-administrator login in the administrative tool;
+  * the S8 wiring of `restore.execute`.
+
+  Until then every cutover command refuses (`restore_cutover_unavailable`, audited 2027). The engine is tested through an internal test seam, as in slice 6 (the gate is checked in the lowest-level switch routine too; review M1 of #130 applies).
+* **Implementation split:**
+  * **7a** builds the engine, the epochs and the journal behind the gate. It can merge before S4.
+  * **7b** (with 4.1 S8) wires `restore.execute` and the named login.
+  * Flipping `CutoverAvailable` is its own PR. Agents never self-merge that PR: it needs an explicit owner instruction (owner question Q3) and a recorded drill.
+
+### The procedure
+1. **Request** (`restore-cutover-request <set-dir> <company-id> --recovery-key <file> --signing-trust <file> [--passphrase-stdin]`, by a named administrator; D-099):
+   * The set is verified as in slice 5: signatures, stored digests, run id. Then it is restored into a NEW, unregistered database and a staging attachment folder ON THE SAME FILESYSTEM as live storage (the rename in step 3 must be atomic), using the slice 3 trial-restore path, KEPT.
+   * The copy is migrated FORWARD to this installation's company level when it is older (owner question Q5; a newer set is refused, as today).
+   * The slice 3 checks run against the LIVE system database: shared links, attachment rows against files, migration compatibility. The copy's business audit stream is verified as an authentic PREFIX of the live stream's checkpoints (D-147); a copy that is not a prefix is refused (`restore_set_not_a_prefix`).
+   * **Typed acknowledgement:** the requester types the company id, the source run id (or set id) and the phrase `replace live company data`. Its SHA-256 is recorded.
+   * An approval request (`restore.execute`) is filed with a canonical payload:
+     * company id;
+     * the set's signed manifest hash and run id;
+     * the copy's database tag and migration level;
+     * the restored business-stream head (seq, hash);
+     * the live stream's verification verdict and head at request time;
+     * the acknowledgement hash.
+   * Audit 2020. Nothing live has changed. The request expires (framework default); an expired request drops its prepared copy through the slice 3 kept-trial path (audit 2028).
+2. **Independent approval** (4.1 framework): another named administrator, MFA-fresh, approves the exact payload. When the live stream did not verify, the approver must also re-type each failure code (owner question Q4). Audit: the framework's own events, plus 2021 when the cutover consumes the approval.
+3. **Execute** (`restore-cutover-execute <request-id>`, by a named administrator, attributed). Under the company provisioning lock, the backup run lock and the restore lock (no backup, retention, trial restore, migration or runtime grant of this company meanwhile):
+   1. **Re-validate:**
+      * the approval is valid and unconsumed, and the payload hash matches;
+      * the prepared copy is unchanged (its tag and its business-stream head);
+      * the live company is Ready;
+      * the gate is open.
+   2. **Block the company:** a new registry state `Restoring` (system migration). The API resolves only `Ready` companies, so every request now gets the generic `503`. The engine waits out the 15-second state cache (production blocker 5) and then terminates the remaining sessions of the live database (`pg_terminate_backend` for that database only).
+   3. **Verify the live business stream** (read-only `AuditVerifier`) and record its verdict and head (V_old, seq_old, hash_old). A failed verdict is never hidden (D-147).
+   4. **Safety backup (D-146):**
+      * an ENCRYPTED, signed `backup-company` of the live company into the backup root's cutover folder;
+      * pinned in `backup_retention_pin` (kind 1) until the rollback window ends;
+      * its run id recorded.
+
+      If it cannot be taken, the cutover stops before anything is switched (owner question Q1 for a live database that is lost).
+   5. **Switch (D-145), journaled step by step in the new system table `restore_cutover`:**
+      * `ALTER DATABASE <live> RENAME TO <retained, generated opaque name>`, then `ALTER DATABASE <copy> RENAME TO <live name>`. The registry row, the runtime role name and the credential stay valid because the physical name is unchanged.
+      * The attachment folder: `rename(live, retained)`, then `rename(staging, live)`.
+      * Every step is recorded before and after it runs. A crash resumes forward or backward from the journal (`restore-cutover-resume <id>`); never by hand.
+   6. **Runtime permissions:** `grant-company-runtime` on the switched database (the restored copy has no grants: `--no-privileges`), then the runtime login and the schema gate are verified.
+   7. **Post-restore integrity checks (read-only):**
+      * the slice 3 checks again on the switched database;
+      * the business stream verified as a prefix of the previous epoch (D-147);
+      * every attachment row checked against its file;
+      * the migration level and checksums.
+
+      **Any failure here reverses step 5 from the journal** (the old database and folder are live again, the epoch is NOT rotated), sets the state back to Ready, consumes the approval as failed, and writes audit 2024.
+   8. **New checkpoint epoch (D-147):** the epoch-start checkpoint is written, then the business-stream event 2026 is the first event of the new epoch in the switched database. The system-stream events 2026 and 2023 carry:
+      * the old and new heads;
+      * V_old;
+      * the epoch numbers;
+      * the safety-backup run id;
+      * the retained database tag.
+   9. **Ready:** the state returns to `Ready`; notifications go out per D-102. Audit 2023 (completed) is written in the same system transaction that consumes the approval.
+4. **Rollback window (D-149):**
+   * The retained database, the retained folder and the pinned safety backup stay for the window (owner question Q2).
+   * `restore-cutover-rollback <cutover-id>` is a restore operation with its own `restore.execute` approval. It switches back by the same journaled mechanism, re-applies the runtime grants and starts ANOTHER epoch whose parent is the epoch the retained database belongs to. Events written in between remain in the preserved epoch and in the system stream. Audit 2025.
+   * The end of the window only expires the pin. Removing the retained database and folder is not built (owner question Q2).
+
+### Checkpoint epochs (D-147): how the previous chain stays preserved and verified
+Today a restored company database rolls its business stream back while the external checkpoints stay ahead (`tail_truncated`, and every later write is refused with `audit_stream_truncated`). An epoch is the controlled, audited answer: never an edit of checkpoint files.
+* **Files:** the checkpoint file of a stream (one JSON-lines file per stream, named by a hash of the stream key) stays as it is and becomes epoch 0. Each cutover appends a NEW file `<hash>.e<n>.hcp` for epoch n. Old files are never modified, truncated or deleted.
+* **The epoch-start checkpoint** is the first line of epoch n, a new checkpoint format version. It is authenticated with the checkpoint key and carries:
+  * the epoch number and the parent epoch;
+  * the restored head (seq_r, hash_r);
+  * the parent epoch's LAST checkpoint MAC, so removing or replacing an epoch file breaks the chain between epochs;
+  * the cutover id and the approval request id;
+  * the parent epoch's verdict (V_old) with its failure codes.
+* **Prefix rule:** the restored stream 1..seq_r must equal the parent epoch's checkpointed history wherever a parent checkpoint exists at or below seq_r (same hash). This is checked at request, again before the switch, and by every later verification. A restore cannot smuggle in a forged history (`restore_set_not_a_prefix` / `epoch_prefix_mismatch`).
+* **Verifier** (`audit-verify`):
+  * It verifies the current epoch as today, plus the prefix rule and the inter-epoch chain.
+  * It ALWAYS reports the history: `epoch 0: <verdict at rotation, its failure codes>; epoch 1: ...`.
+  * A failed earlier epoch keeps the overall verdict at `Failed` (exit 6) until an auditor reviews it. The epoch record cannot clear it: "never conceals earlier audit failures".
+  * The lost tail of the parent epoch (seq_r+1..seq_old) is preserved in the pinned safety backup. `audit-verify --epoch <n> --from-set <safety set>` verifies it from a trial restore of that backup against the parent epoch's file.
+* **Runtime** (`AuditTrail`): before the first write of a transaction it reads the newest epoch file. A stream shorter than the newest epoch's last checkpoint is still `audit_stream_truncated`: an epoch is never inferred, only created by the cutover.
+* **System and company streams are not rotated by this slice:** the system database is not restored.
+* Alternative rejected: re-anchoring the restored head in the same file with `--establish-baseline`. It would make the restored state the trusted baseline and hide the lost tail; the anchor command refuses this, rightly.
+
+### Persistence (one system migration; its number is allocated by the lead at implementation)
+* **`restore_cutover`** (append-only):
+  * the request id, company id, set reference (run id, signed manifest hash), prepared copy tag, acknowledgement hash and approval request id;
+  * the steps journal (step, state, at);
+  * the old and new heads, V_old, the epochs, the safety-backup run id, the retained database tag and the retained folder name;
+  * the status, a closed set: `Prepared|Approved|Switching|Completed|Reversed|Failed|RolledBack|Expired`.
+  * Status transitions are guarded by a trigger; nothing is ever deleted.
+* The registry state CHECK gains `Restoring`; the provisioning and migration services treat it as busy.
+* No company migration.
+
+### Audit (system stream; business stream for 2026; D-150)
+| Code | Event | Detail (ids, codes, hashes, tags; never names or paths) |
+|---|---|---|
+| 2020 | `RestoreCutoverRequested` | operator, company, run id, manifest hash, copy tag, restored head, live verdict, acknowledgement hash, approval request id |
+| 2021 | `RestoreCutoverApproved` | approval request id, approver (as recorded by the framework), payload hash; written when consumed |
+| 2022 | `RestoreCutoverStarted` | cutover id, live head and V_old, safety-backup run id |
+| 2023 | `RestoreCutoverCompleted` | cutover id, old/new heads, parent/new epoch, retained database tag |
+| 2024 | `RestoreCutoverReversed` | cutover id, the failed step and code (automatic reversal before the epoch rotation) |
+| 2025 | `RestoreCutoverRolledBack` | cutover id, rollback approval id, new epoch |
+| 2026 | `AuditEpochStarted` | stream, epoch, parent epoch, restored head, parent verdict and failure codes (in the system stream AND as the first event of the new epoch in the business stream) |
+| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`) |
+| 2028 | `RestoreCutoverExpired` | request id (the prepared copy is dropped) |
+| 2029 | reserved | |
+
+* Every step fails closed when its event cannot be written.
+* The detail carries database TAGS only.
+
+### Exact tests (implementation PR)
+* **Unit tests:**
+  * the epoch file format and MAC chain (version pinned with a golden test, like format 1);
+  * inter-epoch linking (a removed, replaced or reordered epoch file is detected);
+  * the prefix rule (equal, shorter, diverging);
+  * the verifier always reporting a failed earlier epoch (exit 6) after a rotation;
+  * the runtime never inferring an epoch;
+  * the journal state machine (every crash point resumes forward or backward);
+  * the gate (`CutoverAvailable == false` pinned; every entry point refuses; the lowest-level switch routine refuses without the seam; no production use of the seam);
+  * the typed acknowledgement;
+  * the payload canonicalization and hash;
+  * refusal of unencrypted sets.
+* **PostgreSQL** (isolated runner; about 8 tests; the registry is raised at push time):
+  * the request prepares a copy and changes nothing live;
+  * the seam execute switches the database and the folder, re-applies grants, verifies, rotates the epoch, writes 2020-2023 and 2026, and the company serves the restored data;
+  * a post-check failure reverses the switch (old data live, no epoch, 2024);
+  * crash-resume at each journal step;
+  * a forged or non-prefix set is refused;
+  * a live stream that did not verify is recorded in the epoch and stays reported as Failed;
+  * rollback through a second approval creates another epoch and restores the old data;
+  * concurrent backup, retention, trial restore, migration and runtime grant are blocked while `Restoring`;
+  * nothing in the user, session or credential tables changes.
+
+### Decisions (D-143..D-151; recorded in `docs/DECISIONS.md`, status planned)
+D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework).
+
+### Open questions for the owner (not decided here; the safe default applies until answered)
+* **Q1. The live database is lost or unreadable**, so no pre-cutover safety backup can be taken. **Default: the cutover is refused.** A disaster variant without the safety backup (with the gap recorded) would need the owner's decision.
+* **Q2. How long the rollback window lasts, and what happens to the replaced database and folder after it.** **Default: a 7-day window; the replaced database and folder are never removed automatically.** Removal would need a separately approved, audited step that is not built.
+* **Q3. Who may turn cutovers on.** **Default: only an activation PR merged on the owner's explicit instruction**, after a recorded drill (as for the 4.3-ACT deletion activation).
+* **Q4. Cutover when the live audit chain does not verify** (corruption may be the very reason for the restore). **Default: allowed only when the approver re-types every failure code; the failure stays reported forever** (D-081: never concealed).
+* **Q5. A set from an older migration level.** **Default: migrated forward on the prepared copy BEFORE the switch, with the checks run after migration;** a newer set is refused.
+* **Q6. Who is notified, and how.** **Default: per D-102 (audit and in-app to every company administrator of the company, and to the identity administrators).**
+
+### Owner decisions this slice relies on (not re-asked)
+D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system restore here), D-085..D-088.
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
 * Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling (by the operating system), monitoring and measured durations: slice 4 (implemented). Set encryption and retention: owner package 4.3-2.
 
 ## BLOCKED / owner decisions
-* Audited restore acknowledgement and a new checkpoint epoch after a company restore (`docs/DEVELOPMENT.md`, restore limitations): policy needs an owner decision.
+* Audited restore acknowledgement and a new checkpoint epoch after a company restore: decided (D-081); planned in slice 7 (D-143..D-151). Cutovers stay unavailable (`RestoreSafeguards.CutoverAvailable = false`) until the engine, the Phase 4.1 approval framework (S4/S8) and an owner-instructed activation are in place; owner questions Q1-Q6 of slice 7.
 * Retention/purge of removed attachments (decision R).
 * Set encryption and authentication and the key-directory export: decided (D-085, D-087, D-088), slice 5. Retention and deletion of backups: decided (D-086), planned in slice 6; automatic deletion stays INACTIVE until its activation PR (D-137), and the month-end/year-end legal policy waits for owner questions Q1-Q3 of slice 6. Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
