@@ -1,0 +1,51 @@
+# Phase 4.1 slice S1 - schema design (WORK IN PROGRESS, no migration number taken)
+
+Status: working note on the `feature/phase-4-1-s0` branch; not a PR and not reviewed. It implements section 4 of `docs/PHASE-4.1.md` (PR #113) and changes nothing until the slice migration (**M-A**) receives its system number at merge time. Physical identifiers (`t_xxxxxxxx`, `c_xxxxxxxx`, `k_...`, `f_...`, `r_...`) are DERIVED from a seed that includes the migration number (as in the party-registry derivation tests), so they cannot be generated, and `SystemSchema` constants and the derivation test cannot be written, until the number is assigned. The logical names below are the keys that will go into `SystemSchema.Map`.
+
+## 1. `Users` additions (backed up: the user row is in the system dump)
+| Logical column | Type | Meaning |
+|---|---|---|
+| `User.MfaState` | smallint NOT NULL DEFAULT 0 | 0 `None`, 1 `EnrolmentRequired`, 2 `Enrolled`, 3 `RecoveryRequired` |
+| `User.MfaStateChangedAtUtc` | timestamptz NULL | last transition (audit cross-check) |
+| `User.MfaEnrolmentCodeHash` | bytea NULL | SHA-256 of the one-time enrolment code of a `bootstrap-admin` administrator (all other codes live in the approval request under its MAC) |
+| `User.MfaEnrolmentCodeExpiresAtUtc` | timestamptz NULL | at most 24 hours after issue |
+| `User.MfaEnrolmentCodeConsumedAtUtc` | timestamptz NULL | single use |
+
+Constraints: `CheckMfaState` (`MfaState BETWEEN 0 AND 3`); `CheckMfaEnrolmentCode` (hash NULL or 32 bytes; expiry NOT NULL when a hash is present; consumed only with a hash). The existing user guard trigger is extended so that `MfaState`, the code columns and the transition time change only through the service (same guard family as the state column); the service never moves a user from `Enrolled` or `RecoveryRequired` to `None` (a transition test pins the allowed graph: `None -> EnrolmentRequired -> Enrolled`, `Enrolled -> EnrolmentRequired` only by recovery or DR, `Enrolled -> RecoveryRequired` only by the restore procedure, `RecoveryRequired -> EnrolmentRequired` only by recovery or DR).
+Existing rows are `None`: the requirement (privileged, company policy) is computed (slice S3), and S3 moves a user who becomes subject to it to `EnrolmentRequired`. S1 itself changes no behaviour.
+
+## 2. `user_totp` (logical `UserTotp`): secret store, per-table backup rule "included only in encrypted runs"
+| Logical column | Type | Notes |
+|---|---|---|
+| `UserTotp.SecretId` | uuid PK | AAD component |
+| `UserTotp.UserId` | uuid NOT NULL, FK Users | AAD component |
+| `UserTotp.Cipher` | bytea NOT NULL | length = 20 (the secret size) |
+| `UserTotp.Nonce` | bytea NOT NULL | 12 bytes |
+| `UserTotp.Tag` | bytea NOT NULL | 16 bytes |
+| `UserTotp.KekId` | text NOT NULL | pattern of `KekRing.IsValidKeyId`; AAD component |
+| `UserTotp.State` | smallint NOT NULL | 0 `Pending`, 1 `Active`, 2 `Revoked` |
+| `UserTotp.CreatedAtUtc` | timestamptz NOT NULL | |
+| `UserTotp.ConfirmedAtUtc` | timestamptz NULL | NOT NULL iff the row was ever `Active` |
+| `UserTotp.LastStep` | bigint NULL | replay CAS; only increases |
+| `UserTotp.FailedConfirmations` | integer NOT NULL DEFAULT 0 | enrolment confirmation attempts |
+
+Constraints and indexes: `PkUserTotp` (SecretId); `UqUserTotpActive` unique on (UserId) WHERE State = 1; `UqUserTotpPending` unique on (UserId) WHERE State = 0 (review M2); `CkUserTotpState` (0..2); `CkUserTotpLengths` (cipher 20, nonce 12, tag 16); `CkUserTotpConfirmed` (State = 1 or 2 with `ConfirmedAtUtc` NOT NULL for Active). A guard trigger forbids changing `UserId`, `Cipher`, `Nonce`, `Tag`, `KekId` and `SecretId` except by the rewrap procedure (a transaction-local setting the rewrap path sets, like the other guarded tables) and forbids decreasing `LastStep`; rows are never deleted by the runtime role (revocation is `State = 2`).
+The replay compare-and-set used by `MfaVerifier` is exactly `UPDATE UserTotp SET LastStep = @s WHERE SecretId = @id AND State = 1 AND (LastStep IS NULL OR LastStep < @s)` with one affected row required.
+**Privileges:** the runtime role gets SELECT, INSERT and UPDATE (no DELETE); reporting roles get nothing on this table.
+**Backup rule:** `SystemSchema.SecretStoreTables` gains `UserTotp.Table` with the per-table rule "included only in encrypted runs" (the pin of slice 4 / PR #116 becomes per-table: `Session.Table` and `LoginThrottle.Table` are "always excluded"). Until #116 lands, the pinning test of #104 requires every secret-store table to be in `SystemDumpExclusions`; S1 therefore waits for #116's per-table rule (or, if #116 lands later, temporarily lists `UserTotp.Table` as excluded and flips it to the rule when #116 merges: the choice is the lead's).
+
+## 3. Throttle scope
+`LoginThrottle` scope CHECK widens from `0..1` to `0..2` (2 = `Mfa`, `ThrottleScope.Mfa`, already an enum member in this branch). Key hashes keep their domain-separated prefixes (`mfa-pair:<user>|<source>` and `mfa-user:<user>`), SHA-256, never the raw key.
+
+## 4. Store seams (code, no schema)
+* `IMfaSecretStore` (implemented over `UserTotp` and `TotpSecretProtector`): `FindActiveSecretAsync` reads the Active row, decrypts, returns `MfaSecret`; a missing key or authentication failure surfaces as `MfaUnavailableException` (no downgrade). `TryAdvanceLastStepAsync` is the compare-and-set above.
+* `IMfaAttemptLimiter` (implemented over `LoginThrottle` with `ThrottleScope.Mfa`, bounds `MfaThrottleOptions`: 5 per user and source, 100 per user, 15 minutes window and block); the per-user bound crossing is reported for the alert.
+* `totp-rewrap` / `--check` (admin tool, authorization per the table in plan section 5): batches of rows inside transactions, resumable, idempotent; `--check` lists the key ids still referenced.
+* Restore procedure hooks (plan section 4, D-106/D-107): after a system restore, every `Enrolled` user without an Active `UserTotp` row (or whose secret cannot be read) becomes `RecoveryRequired`, unconsumed enrolment codes are invalidated, and logins stay blocked until the audited completion step.
+
+## 5. Tests planned for S1
+Schema derivation and uniqueness tests (once names exist); constraint tests for each CHECK and unique index (second Active and second Pending row refused; wrong lengths refused); guard-trigger tests (immutable columns, `LastStep` cannot decrease, no DELETE for the runtime role); the replay CAS under concurrency against PostgreSQL (exactly one of N wins); the user-row MFA state graph; the backup-rule pin; `totp-rewrap` idempotence and resumption; restore tests that never decrypt `UserTotp` rows (state, counts and the `RecoveryRequired` transitions only; D-107).
+
+## 6. Open points (for the lead, none blocks WIP)
+* The migration number (assigned at merge) and therefore the derived names.
+* Whether S1 waits for #116's per-table backup rule or ships first with `UserTotp.Table` in the exclusion list.
