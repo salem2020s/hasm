@@ -531,6 +531,19 @@ describe("pricing administration screen", () => {
       expect(list).toHaveBeenCalledTimes(1);                                                                 // the preload only
     });
 
+    it("a transient preload failure (500) does not lock a permitted user out: search stays enabled and a search request is made", async () => {
+      const list = vi.fn().mockImplementation((_k?: number, q?: { search?: string }) => (q ? Promise.resolve({ items: [customer], total: 1, can: { configure: true } }) : Promise.reject(apiError(500, "internal"))));
+      render({ listPartyRoles: list });
+      await go("#/company/pricing");
+      expect(await screen.findByTestId("pricing-pickers-failed")).toBeInTheDocument();                       // the page's helper-lists warning may stay
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeEnabled();
+      const box = await panel.findByRole("combobox", { name: label("pricing.customer") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /CUST1/ })).toBeInTheDocument());
+      expect(list).toHaveBeenCalledWith(1, { limit: 50 });                                                   // the picker's own request
+    });
+
     it("the customer picker is keyboard operable and a failing search shows a retryable error", async () => {
       let failNext = true;                                                                                   // all three customer pickers (the panels stay mounted) load; only the SEARCH "c" fails, once
       const list = vi.fn().mockImplementation((_k?: number, q?: { search?: string }) => (q?.search === "c" && failNext ? (failNext = false, Promise.reject(apiError(500, "internal"))) : Promise.resolve(q ? { items: [customer], total: 1, can: { configure: true } } : { items: [customer], can: { configure: true } })));
