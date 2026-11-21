@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-18",
+  "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "aba3e916524a22a0d422a2f44a54557ad5f584db",
-    "note": "PR50 all seven exact-head gates and review passed; merge tree/ancestry verified. Post-merge Verification, Frontend and Desktop passed; Backend and artifact workflow pending."
+    "verifiedHead": "045dd2a30c4e271edac14e12ae7bdaa38bb014d5",
+    "note": "main = 045dd2a (merge of #116), read from git and GitHub REST on 2026-11-21 (sprint 1 handoff refresh). PostgreSQL registry 1092 (.github/workflows/backend.yml). Migrations: company 0001-0029, system 0001-0029; company 0030 allocated to #108."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -14,103 +14,120 @@
   },
   "mergedRecently": [
     {
-      "pr": 32,
-      "phase": "4.0",
-      "mergeCommit": "7e05052"
+      "pr": 110,
+      "phase": "owner decisions 1-11 (D-078..D-088)",
+      "mergeCommit": "e31c823090921c18dce032f7a24c3efea1113e7c",
+      "headMerged": "74298754023f595ec2407fcf4c5dcd10404a8788"
     },
     {
-      "pr": 33,
-      "phase": "3.7B",
-      "mergeCommit": "5e4d627"
+      "pr": 111,
+      "phase": "CI: PostgreSQL client/server major-version assertion (D-084)",
+      "mergeCommit": "3e5a3eba5fab2b1275e5ac036034cfd4f0507431",
+      "headMerged": "e10d37ded18c8939508be16ec14e7864b19c6608"
     },
     {
-      "pr": 35,
-      "phase": "3.7C",
-      "mergeCommit": "484b4be"
+      "pr": 104,
+      "phase": "4.3 slice 4 backup run of the whole installation",
+      "mergeCommit": "db2a55ebe835dc3e987e22fa2dd7b86b51a31571",
+      "headMerged": "cdb35478e8f25d4da4e0b16b26810dcf3a82763a"
     },
     {
-      "pr": 36,
-      "phase": "CI hybrid runner mode",
-      "mergeCommit": "33b2251"
+      "pr": 114,
+      "phase": "plan for attachment retention, decision R (D-082)",
+      "mergeCommit": "b676f5ff025e4a800e2f85113215e1b523fb00fc",
+      "headMerged": "0c0c6b520731d1e98c3af9232cada86ff4a2c0f8"
     },
     {
-      "pr": 39,
-      "phase": "Playwright git-info fix",
-      "mergeCommit": "855b013"
+      "pr": 113,
+      "phase": "4.1 MFA and identity security plan (D-080)",
+      "mergeCommit": "002ffa3d65b7fc8feabc04be21f8f7566ada2d9e",
+      "headMerged": "f555856ca7e9f36ba2367df50e0ad2c1b6168cd4"
     },
     {
-      "pr": 37,
-      "phase": "3.7D",
-      "mergeCommit": "ab60b55"
+      "pr": 120,
+      "phase": "D-120, user_totp always excluded from S1",
+      "mergeCommit": "039ad5841034b76b9b45aec0f8ba0a2655c8cc9f",
+      "headMerged": "c7da2bc2bbf5fa4fe84d30600490835c64a13412"
     },
     {
-      "pr": 40,
-      "phase": "3.8A",
-      "mergeCommit": "9c43fc9"
+      "pr": 112,
+      "phase": "AuditTrail first-touch state scoped to one PostgreSQL transaction",
+      "mergeCommit": "7f65b3222c54ffb17079db0b7f7fd03d5229b972",
+      "headMerged": "75983c448121ab2c6581831a006ba9be00e3fe8d"
     },
     {
-      "pr": 41,
-      "phase": "progress docs",
-      "mergeCommit": "fb4ce69"
+      "pr": 115,
+      "phase": "endpoint authorization inventory",
+      "mergeCommit": "bdb63f844fba56dfe7bbee4287afd6a56e2b5b71",
+      "headMerged": "6157778cac5a871b614a71ed1b903ef46d9196aa"
     },
     {
-      "pr": 42,
-      "phase": "3.8B-1",
-      "mergeCommit": "84dbb4e"
+      "pr": 118,
+      "phase": "frontend i18n parity, permission/session states, Arabic-digit input",
+      "mergeCommit": "b8f551e46900b66f1143d720dd5e843a6b7966a0",
+      "headMerged": "0282f92fbc3845d3b5b672a010e758ceeecfd89b"
     },
     {
-      "pr": 43,
-      "phase": "3.8B-2",
-      "mergeCommit": "981e991"
+      "pr": 116,
+      "phase": "4.3 slice 5 plan (encrypted and signed backup sets)",
+      "mergeCommit": "045dd2a30c4e271edac14e12ae7bdaa38bb014d5",
+      "headMerged": "6fd39d97e96f9e1baee5afd410b259356e463b68"
     },
     {
-      "pr": 45,
-      "phase": "3.8B-3",
-      "mergeCommit": "4b79030"
+      "pr": 105,
+      "phase": "handoff refresh",
+      "mergeCommit": "d3bee747a46242baa2a7231ee3970f68090330c4",
+      "headMerged": "e0e4250755a2c1e538e06fe03dad019da366584c"
     },
     {
-      "pr": 46,
-      "phase": "3.9A",
-      "mergeCommit": "bd56a25",
-      "reviewedHead": "6f5765173c470d8511c63d2167bb71c43c1868b5"
+      "pr": 99,
+      "phase": "3.13 S1b",
+      "mergeCommit": "98c3a0adc62659d8725a307d82fb8afb37ea61e5",
+      "headMerged": "3fc0d4f6fcf908bba8b66951a0328973767ee7d5"
     },
     {
-      "pr": 47,
-      "phase": "Roadmap checkpoint",
-      "mergeCommit": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb"
+      "pr": 106,
+      "phase": "by-ids lookup of units and item groups",
+      "mergeCommit": "61ee7bed74cd550dc82084b95dd66fa13e4254c2",
+      "headMerged": "c9c157cff5a4f6aece2560ea3b0344386e3bbee3"
     },
     {
-      "pr": 50,
-      "phase": "OwnerD046 exact temporary development dependency policy",
-      "mergeCommit": "aba3e916524a22a0d422a2f44a54557ad5f584db",
-      "reviewedHead": "ab7eba8ad9224946c434d4ca1b9cfc0b24505206"
+      "pr": 82,
+      "phase": "CLAUDE.md standing authorization",
+      "mergeCommit": "0c4661dc04bcf7c8670ef705d95a2485f979958f",
+      "headMerged": "e9c5f688f59433f0366b551c47e4846c10ef1e82"
     }
   ],
   "active": {
-    "phase": "Codex workflow documentation; Phase 3.8D continues independently",
-    "branch": "feature/codex-workflow-optimization",
-    "pr": 49,
-    "state": "Five existing documents preserved; verified main merged; independent review clear except fixed Low prose issue; new exact-head CI pending",
+    "phase": "Release 1 sprint 1 (cloud team)",
+    "state": "Open Draft PRs and the merge sequence are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
     "knownIssues": [
-      "PR50 merged. Actual High picomatch advisory remains under exact D046 exception until2026-11-24T00:00:00Z, without renewal.",
-      "PR49 document scope reviewed; no changes to binding CLAUDE or mandatory gates. Final updated-head confirmation and CI pending.",
-      "PR48 preserved at676c77ebfa420e11618bbf12a100ec67e37083f8; complete phase remains unfinished/Draft; PostgreSQL CI pending.",
-      "Post-merge main Backend and artifact workflow still running; do not claim green until observed."
+      "Decisions: D-130 is the next free ID; D-108..D-115 (E, R), D-121..D-129 (D) and D-074..D-077 (A) are allocated and not yet on main.",
+      "Audit-event blocks: 2000-2009 for R; 2010-2019 requested for 4.3 slice 5, unconfirmed.",
+      "Migration numbers follow merge order; R1 is expected to take system 0030 and company 0031 after #108's company 0030."
     ]
   },
   "next": [
-    "Push PR49 readability correction; obtain final exact-head CI and independent full-diff confirmation.",
-    "Verify PR49 with main copy of verify-head before merging only when every gate passes.",
-    "Observe all main post-merge gates and PR48 revalidation; fix verified failures without weakening checks.",
-    "Continue Phase3.8D complete history closure, incremental valuation and guarded execution/UI contracts; keep Draft until complete."
+    "Merge in the recorded sequence, re-reconciling the PostgreSQL registry, migration numbers, decision and audit ranges and the exact head at each step.",
+    "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
-    "OD-1",
-    "OD-2",
+    "X1-X8",
     "OD-11",
-    "OD-12",
-    "T-1",
-    "T-2"
+    "Q",
+    "S",
+    "C",
+    "3.13-Q2",
+    "3.13-Q3",
+    "3.13-Q4",
+    "3.13-Q5",
+    "3.13-Q6",
+    "3.13-Q12",
+    "3.13-Q16",
+    "3.13-Q17",
+    "R-Q1",
+    "R-Q2",
+    "R-Q3 (D-109 and D-113 owner-pending)"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -118,24 +135,6 @@
     "mainProtection": "ruleset ProtectMain active: PR required (0 approvals), no force push, no deletion, required checks ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest; GitHub enforces ONLY these five always-on checks (strict up-to-date policy off); build, test, PostgreSQL, E2E and desktop checks are path-filtered and are verified by tools/verify/verify-head.js before every merge",
     "ciPathFiltered": true
   },
-  "parallelWork": [
-    {
-      "branch": "feature/phase-3-8d-impact-preview",
-      "head": "676c77ebfa420e11618bbf12a100ec67e37083f8",
-      "pr": 48
-    },
-    {
-      "branch": "feature/codex-workflow-optimization",
-      "head": "dfe86dd2179f3d63be978d17e23554d3cb9e72bc",
-      "pr": 49
-    },
-    {
-      "lastPushedReportHead": "e6a2746ee0e7c56cccdbefc26b05a9db8c01eb12",
-      "branch": "feature/security-picomatch",
-      "approval": "PR50 merged under explicit conditional approval; all required pre-merge gates passed",
-      "pr": 50
-    }
-  ],
   "sessionContinuity": {
     "automaticAfterUsageReset": "NOT CONFIRMED",
     "lastPushedProposalHead": "3b029f40f5bc6bc47a15de373e6748fea4504865",
@@ -144,5 +143,115 @@
     "goalsFeatureEnabled": true,
     "restartInstruction": "docs/RESUME-CODEX.md",
     "backgroundRestartConfigured": false
+  },
+  "openPullRequests": [
+    {
+      "pr": 109,
+      "branch": "feature/party-picker-search",
+      "head": "d6e9ff4676248227ab87182557d6ba849b30d2ab",
+      "owner": "E (Sonnet)",
+      "state": "party picker searches the server; first in the merge sequence"
+    },
+    {
+      "pr": 108,
+      "branch": "feature/phase-3-13-s2",
+      "head": "e0483b5fb574fcd3a3e4048ec921db19d8a92743",
+      "owner": "A (Sonnet)",
+      "state": "3.13 S2 document links, company 0030, D-074..D-077"
+    },
+    {
+      "pr": 107,
+      "branch": "feature/stock-posting-in-work",
+      "head": "a81d15c60aac4cdd3f026935cb808695291b699c",
+      "owner": "D (Sonnet)",
+      "state": "3.7B in-transaction PostInWorkAsync"
+    },
+    {
+      "pr": 117,
+      "branch": "test/cross-module-scenarios",
+      "head": "b85e77018732fd2fe66390028617bff30e68c7bc",
+      "owner": "F (Opus)",
+      "state": "cross-module accounting scenarios"
+    },
+    {
+      "pr": 121,
+      "branch": "test/concurrency-invariants",
+      "head": "146a66e0fbce1da6c99909a235704deee95fb35c",
+      "owner": "H (Sonnet)",
+      "state": "concurrency invariants, registry +6; F reviewing"
+    },
+    {
+      "pr": 123,
+      "branch": "feature/frontend-followups-118",
+      "head": "849e8422936c066a4043cdb39765ac4e5c3ca4c1",
+      "owner": "H (Sonnet)",
+      "state": "#118 follow-ups; approved, waiting for hosted CI; second in the sequence; no registry change"
+    },
+    {
+      "pr": 119,
+      "branch": "test/endpoint-permission-matrix",
+      "head": "9a014302d112ce9b49ca0597510271424d75d086",
+      "owner": "C (Opus)",
+      "state": "endpoint permission matrix; under construction"
+    },
+    {
+      "pr": 122,
+      "branch": "feature/phase-3-13-s6",
+      "head": "2d524f0d1d70a9f9ef2b8ab4339c0e7c5ea09133",
+      "owner": "A (Sonnet)",
+      "state": "3.13 S6 screen, built from main (not stacked); Links tab after #108; 1 PostgreSQL test, registry reconciled at merge"
+    }
+  ],
+  "inertPullRequests": [
+    {
+      "pr": 48,
+      "branch": "feature/phase-3-8d-impact-preview",
+      "head": "1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb"
+    },
+    {
+      "pr": 51,
+      "branch": "feature/security-picomatch-retirement",
+      "head": "fe2ee06b1fabd13406428239e5462bb95384d3db"
+    },
+    {
+      "pr": 55,
+      "branch": "docs/security-consolidated-proposal",
+      "head": "23d485054cdae935a1e27c03ea4d56943a8d3cb1"
+    },
+    {
+      "pr": 62,
+      "branch": "integration/chain-with-security",
+      "head": "85526937ee631c2d8acef0fa4b22f0f767b13bd7"
+    },
+    {
+      "pr": 85,
+      "branch": "feature/tooling-linux-pg-test-harness",
+      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a"
+    }
+  ],
+  "mergeSequence": [
+    109,
+    123,
+    108,
+    107,
+    117,
+    121,
+    119,
+    122
+  ],
+  "agents": {
+    "lead": "Claude Opus 5.5",
+    "sonnet": [
+      "A",
+      "D",
+      "E",
+      "H"
+    ],
+    "opus": [
+      "B",
+      "C",
+      "F",
+      "G"
+    ]
   }
 }
