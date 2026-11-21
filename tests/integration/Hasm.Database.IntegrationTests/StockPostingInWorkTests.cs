@@ -100,7 +100,7 @@ public class StockPostingInWorkTests : StockPostingTestBase
         Assert.Equal((0L, 0L, 0L, 0L, 0L, 0L), await Everything());
         var position = await Cost.GetPositionAsync(Company.Id, Fifo.Id, W1.Id);
         Assert.True(position is null || position.Quantity == 0m);                                              // no stock movement
-        Assert.Equal(0L, await Sql<long>($"SELECT coalesce(sum({PO.Value}), 0) FROM {PO.Table}"));             // no cost
+        Assert.Equal(0m, await Sql<decimal>($"SELECT coalesce(sum({PO.Value}), 0) FROM {PO.Table}"));            // no cost
         var untouched = (await Docs.GetAsync(Company.Id, doc.Id))!;
         Assert.Equal((StockDocStatus.Approved, doc.Revision), ((StockDocStatus)untouched.Status, untouched.Revision));
         // nothing is half done: the document can still be posted, once

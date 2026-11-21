@@ -133,7 +133,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1072 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1077 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -199,7 +199,7 @@ jobs:
                 # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
                 "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
                 # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
-                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6, "StockPostingInWorkTests": 5,
                 # Phase 3.7C reversal of executed stock documents, valuation close probe (company migration 0017, system migration 0019).
                 "StockReversalTests": 8, "StockReversalApiTests": 1, "StockReversalScenarioTests": 5,
                 # Phase 3.8A stock balances, item ledger and reconciliation (system migration 0020).
