@@ -139,6 +139,165 @@ public class MigrationGuardTests
     [InlineData("END;")]
     public void Statements_that_could_neutralize_a_guard_or_escape_the_check_are_refused(string sql) => Assert.Contains("not allowed", Refused(sql));
 
+    // ---------------------------------------------------------------- review findings (independent review of PR 188)
+
+    [Theory]
+    // H1: a plpgsql variable may be called "function" or "procedure"; "EXECUTE function" is then dynamic SQL, not a trigger clause
+    [InlineData("DO $$ DECLARE function text := 'ALTER TABLE t DISA' || 'BLE TRIGGER tg'; BEGIN EXECUTE function; END $$;")]
+    [InlineData("DO $$ DECLARE procedure text := 'ALTER TABLE t DISA' || 'BLE TRIGGER tg'; BEGIN EXECUTE procedure; END $$;")]
+    [InlineData("DO $$ BEGIN EXECUTE function('ALTER TABLE t DISA' || 'BLE TRIGGER tg'); END $$;")]
+    [InlineData("DO $$ BEGIN EXECUTE procedure('x'); END $$;")]
+    [InlineData("DO $$ DECLARE function text := 'x'; BEGIN EXECUTE function || 'y'; END $$;")]
+    [InlineData("DO $$ DECLARE function text := 'x'; BEGIN EXECUTE function USING 1; END $$;")]
+    [InlineData("DO $$ DECLARE \"on\" text := 'x'; BEGIN EXECUTE on; END $$;")]
+    [InlineData("DO $$ BEGIN EXECUTE FUNCTION f(); END $$;")]                                                        // the accepted phrase, but not in a CREATE TRIGGER
+    [InlineData("DO $$ BEGIN CREATE TRIGGER r BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION f(); END $$;")]       // nor inside a block
+    [InlineData("SELECT 1; EXECUTE FUNCTION f();")]
+    [InlineData("CREATE TRIGGER r BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION f(); EXECUTE p;")]
+    [InlineData("CREATE TRIGGER r BEFORE UPDATE ON t FOR EACH ROW EXECUTE f();")]
+    [InlineData("CREATE FUNCTION g() RETURNS void LANGUAGE plpgsql AS $$ DECLARE function text; BEGIN EXECUTE function; END $$;")]
+    [InlineData("EXECUTE ON;")]
+    public void Execute_is_accepted_only_as_a_trigger_function_clause_or_a_privilege(string sql) => Assert.Contains("EXECUTE", Refused(sql));
+
+    [Fact]
+    public void Every_existing_EXECUTE_is_one_of_the_two_accepted_forms()
+    {
+        var uses = 0;
+        foreach (var script in MigrationScript.LoadEmbedded().Concat(MigrationScript.LoadEmbeddedCompany()))
+        {
+            var code = System.Text.RegularExpressions.Regex.Replace(script.Sql, "--[^\n]*", "");
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(code, @"\bEXECUTE\b\s+(\w+)\s+\w+\s*\("))
+            {
+                Assert.Equal("FUNCTION", m.Groups[1].Value);
+                uses++;
+            }
+        }
+        Assert.True(uses >= 286, $"expected the 286 known trigger clauses, found {uses}");
+    }
+
+    [Theory]
+    // M1: nothing may decide which "=" or which function an unqualified name means
+    [InlineData("SET search_path = evil, pg_catalog;")]
+    [InlineData("SET LOCAL search_path TO evil;")]
+    [InlineData("ALTER ROLE r SET search_path = evil, pg_catalog;")]
+    [InlineData("ALTER DATABASE d SET search_path = evil;")]
+    [InlineData("ALTER ROLE r IN DATABASE d SET search_path = evil;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SET search_path = evil AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE OPERATOR evil.= (LEFTARG = oid, RIGHTARG = oid, FUNCTION = evil.never);")]
+    [InlineData("DO $$ BEGIN CREATE OPERATOR evil.= (LEFTARG = oid, RIGHTARG = oid, FUNCTION = evil.never); END $$;")]
+    // M2: a setting changed through a function call, whatever the setting
+    [InlineData("SELECT set_config('search_' || 'path', 'evil', false);")]
+    [InlineData("SELECT pg_catalog.set_config('session_' || 'replication_role', 'replica', true);")]
+    [InlineData("DO $$ BEGIN PERFORM set_config ('x' || 'y', 'z', true); END $$;")]
+    // M3: direct catalog writes
+    [InlineData("UPDATE pg_trigger SET tgenabled = 'D';")]
+    [InlineData("UPDATE pg_catalog.pg_trigger SET tgenabled = 'D';")]
+    [InlineData("UPDATE ONLY pg_catalog . pg_trigger SET tgenabled = 'D';")]
+    [InlineData("UPDATE \"pg_trigger\" SET tgenabled = 'D';")]
+    [InlineData("UPDATE \"pg_catalog\".\"pg_trigger\" SET tgenabled = 'D';")]
+    [InlineData("update pg_proc set prosrc = 'begin return new; end';")]
+    [InlineData("INSERT INTO pg_catalog.pg_depend SELECT 1;")]
+    [InlineData("INSERT INTO pg_attrdef VALUES (1);")]
+    [InlineData("DELETE FROM pg_trigger;")]
+    [InlineData("MERGE INTO pg_trigger t USING s ON true WHEN MATCHED THEN UPDATE SET tgenabled = 'D';")]
+    [InlineData("COPY pg_trigger FROM STDIN;")]
+    [InlineData("DO $$ BEGIN UPDATE pg_trigger SET tgenabled = 'D'; END $$;")]
+    // L1: COPY in any form, extensions
+    [InlineData("COPY t FROM '/etc/passwd';")]
+    [InlineData("COPY t TO PROGRAM 'sh';")]
+    [InlineData("COPY (SELECT 1) TO STDOUT;")]
+    [InlineData("CREATE EXTENSION plpython3u;")]
+    [InlineData("CREATE EXTENSION IF NOT EXISTS pgcrypto;")]
+    // L4: MERGE (it can delete without the words DELETE FROM)
+    [InlineData("MERGE INTO t USING s ON t.a = s.a WHEN MATCHED THEN DELETE;")]
+    [InlineData("MERGE INTO t USING s ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (1);")]
+    public void Settings_operators_catalog_writes_copy_extensions_and_merge_are_refused(string sql) => Assert.Contains("not allowed", Refused(sql));
+
+    [Theory]
+    // M2: an identifier written with Unicode escapes can spell a guarded name without the guard seeing it
+    [InlineData("ALTER TABLE t DISABLE TRIGGER U&\"\\0061ll\";")]
+    [InlineData("CREATE OR REPLACE FUNCTION U&\"f\\005fguard\"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;")]
+    [InlineData("SELECT 1 AS u&\"x\";")]
+    [InlineData("DO $$ BEGIN PERFORM U&\"set\\005fconfig\"('a', 'b', true); END $$;")]
+    // L3: a "$" that may or may not open a dollar quote
+    [InlineData("SELECT 1$$; ALTER TABLE t DISABLE TRIGGER r; --$$;")]
+    [InlineData("SELECT $$a$$$$; ALTER TABLE t DISABLE TRIGGER r; --$$;")]
+    [InlineData("SELECT $a$ x $a$$b$; ALTER TABLE t DISABLE TRIGGER r; --$b$;")]
+    [InlineData("SELECT 1$x$; ALTER TABLE t DISABLE TRIGGER r; --$x$;")]
+    public void Unicode_escaped_identifiers_and_ambiguous_dollar_quotes_are_refused(string sql) => Assert.Contains("cannot be read safely", Refused(sql));
+
+    [Fact]
+    public void Unicode_escaped_string_literals_stay_accepted_and_parameters_are_not_dollar_quotes()
+    {
+        P("INSERT INTO t VALUES (U&'\\0627\\0644');");                              // company 0004 seeds an Arabic name this way
+        P("CREATE FUNCTION f(a int, b int) RETURNS int LANGUAGE sql AS $$ SELECT $1+$2 $$;");
+    }
+
+    [Theory]
+    // L2: names are compared part by part; a quoted name that contains a dot is one part, not schema.table
+    [InlineData("ALTER TABLE \"a.b\" DISABLE TRIGGER r; ALTER TABLE a.b ENABLE TRIGGER r;")]
+    [InlineData("ALTER TABLE a.b DISABLE TRIGGER r; ALTER TABLE \"a.b\" ENABLE TRIGGER r;")]
+    [InlineData("ALTER TABLE a.\"b.c\" DISABLE TRIGGER r; ALTER TABLE \"a.b\".c ENABLE TRIGGER r;")]
+    public void A_quoted_name_with_a_dot_is_not_confused_with_a_qualified_name(string sql) => Assert.Contains("does not re-enable", Refused(sql));
+
+    [Fact]
+    public void A_quoted_trigger_called_all_is_a_name_but_is_refused_like_the_keyword_only_when_unquoted()
+    {
+        Assert.Contains("TRIGGER ALL", Refused("ALTER TABLE t DISABLE TRIGGER all; ALTER TABLE t ENABLE TRIGGER all;"));
+        Assert.Contains("TRIGGER USER", Refused("ALTER TABLE t DISABLE TRIGGER User; ALTER TABLE t ENABLE TRIGGER User;"));
+        P("ALTER TABLE t DISABLE TRIGGER \"all\"; SELECT 1; ALTER TABLE t ENABLE TRIGGER \"all\";");
+    }
+
+    [Fact]
+    public void A_function_in_a_quoted_schema_with_a_dot_is_compared_by_its_function_name()
+    {
+        var first = P(Create, "0001_a.sql");
+        var later = P("CREATE OR REPLACE FUNCTION \"x.y\".f_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;", "0002_b.sql");
+        Assert.Throws<MigrationException>(() => MigrationScript.Validate([first, later]));
+        // "x.f_guard" in quotes is ONE name, a different function: not a replacement of f_guard.
+        MigrationScript.Validate([first, P("CREATE OR REPLACE FUNCTION \"x.f_guard\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;", "0002_b.sql")]);
+    }
+
+    // ---------------------------------------------------------------- the runner's decisions (pure parts)
+
+    private static MigrationRunner.TriggerState T(uint table, string name, uint function, char enabled = 'O') => new(table, $"t{table}", name, function, enabled);
+
+    [Theory]
+    [InlineData('O', true)]
+    [InlineData('A', true)]
+    [InlineData('D', false)]
+    [InlineData('R', false)]
+    [InlineData('X', false)]        // an unknown state is not trusted
+    public void Only_origin_and_always_fire_in_a_normal_session(char enabled, bool fires) => Assert.Equal(fires, MigrationRunner.FiresInNormalSession(enabled));
+
+    [Fact]
+    public void The_post_migration_decision_refuses_switched_off_removed_and_rebound_triggers()
+    {
+        MigrationRunner.TriggerState[] before = [T(1, "r_a", 10), T(2, "r_b", 20)];
+
+        Assert.Null(MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10), T(2, "r_b", 20), T(3, "r_new", 30)], []));
+        Assert.Null(MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10, 'A'), T(2, "r_b", 20)], []));
+
+        Assert.Contains("t1.r_a (D)", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10, 'D'), T(2, "r_b", 20)], []));
+        Assert.Contains("t2.r_b (R)", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10), T(2, "r_b", 20, 'R')], []));
+        Assert.Contains("t3.r_new (D)", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10), T(2, "r_b", 20), T(3, "r_new", 30, 'D')], []));
+        Assert.Contains("event trigger e (D)", MigrationRunner.PostMigrationProblem(before, [.. before], ["event trigger e (D)"]));
+        Assert.Contains("removes", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10)], []));
+        Assert.Contains("t2.r_b", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10)], []));
+        Assert.Contains("removes", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 10), T(9, "r_b", 20)], []));       // same name on another table is another trigger
+        Assert.Contains("another function", MigrationRunner.PostMigrationProblem(before, [T(1, "r_a", 11), T(2, "r_b", 20)], []));
+    }
+
+    [Theory]
+    [InlineData("origin", "origin", true)]
+    [InlineData("origin", "replica", false)]
+    [InlineData("origin", "local", false)]
+    [InlineData("replica", "replica", false)]       // unchanged is not enough: it must be origin
+    [InlineData("replica", "origin", false)]
+    [InlineData("local", "local", false)]
+    public void The_replication_role_must_be_origin_before_and_unchanged_after(string before, string after, bool accepted) =>
+        Assert.Equal(accepted, MigrationRunner.ReplicationRoleProblem(before, after) is null);
+
     // ---------------------------------------------------------------- negative: hiding a statement
 
     [Theory]

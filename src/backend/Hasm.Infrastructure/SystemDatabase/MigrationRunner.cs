@@ -8,13 +8,22 @@ public sealed record MigrationResult(IReadOnlyList<int> Applied, int AlreadyAppl
 /// Applies versioned SQL scripts exactly once, in order, each in its own transaction, recording
 /// a checksum in the journal. Re-running is a no-op. Applied scripts that were edited, or a database
 /// newer than this build, abort the run. Serialised across processes with a PostgreSQL advisory lock.
-/// After every script, inside its transaction, and once more at the end of every run (also when nothing was applied), the runner
-/// verifies that no trigger of the database is left switched off; a script that leaves one off is rolled back and the run fails.
+/// After every script, inside its transaction, the runner verifies that no trigger or event trigger is switched off, that every
+/// trigger that existed before the script still exists and is still bound to the same function, and that session_replication_role
+/// is unchanged; a script that fails this is rolled back and the run fails. The switched-off check runs once more at the end of
+/// every run (also when nothing was applied), and a run does not start when session_replication_role is not "origin".
 /// </summary>
 public sealed class MigrationRunner(string connectionString)
 {
     // Arbitrary constant key identifying "HASM system migrations" for pg_advisory_lock.
     private const long AdvisoryLockKey = 0x4841534D_0001;
+
+    /// <summary>
+    /// TEST SEAM. An ADDITIONAL reading of session_replication_role taken after a script, checked with the same rule as the real
+    /// reading. It can only add a refusal, never remove one: the real reading is always taken and always checked. It exists because
+    /// only a superuser can change the setting, and the test clusters deliberately have none.
+    /// </summary>
+    internal Func<string>? AdditionalReplicationRoleReading { get; init; }
 
     public async Task<MigrationResult> ApplyAsync(IReadOnlyList<MigrationScript> scripts, CancellationToken ct = default)
     {
@@ -44,10 +53,17 @@ public sealed class MigrationRunner(string connectionString)
                     throw new MigrationException($"Migration {script.Name} was modified after it was applied (checksum mismatch). Applied migrations are immutable; add a new migration instead.");
             }
 
+            // Triggers do not fire unless session_replication_role is "origin": such a session never runs a migration.
+            var roleAtStart = await ReplicationRole(conn, null, ct);
+            if (!string.Equals(roleAtStart, "origin", StringComparison.Ordinal))
+                throw new MigrationException($"The session has session_replication_role = '{roleAtStart}' (triggers do not fire); refusing to run migrations.");
+
             var newlyApplied = new List<int>();
             foreach (var script in scripts.Where(s => !applied.ContainsKey(s.Version)))
             {
                 await using var tx = await conn.BeginTransactionAsync(ct);
+                var roleBefore = await ReplicationRole(conn, tx, ct);
+                var triggersBefore = await Triggers(conn, tx, ct);
                 await using (var run = new NpgsqlCommand(script.Sql, conn, tx)) await run.ExecuteNonQueryAsync(ct);
                 await using (var journal = new NpgsqlCommand(
                     $"INSERT INTO {SystemSchema.MigrationJournalTable} (version, name, checksum, applied_at) VALUES (@v, @n, @c, now())", conn, tx))
@@ -58,17 +74,17 @@ public sealed class MigrationRunner(string connectionString)
                     await journal.ExecuteNonQueryAsync(ct);
                 }
                 // Post-migration safeguard check, before the commit: leaving the "await using" scope by exception rolls the script back.
-                var left = await SwitchedOffTriggers(conn, tx, ct);
-                if (left.Count > 0)
-                    throw new MigrationException($"Migration {script.Name} leaves trigger(s) switched off: {string.Join(", ", left)}. The migration was rolled back; a migration must re-enable every trigger it disables.");
-                var role = await ReplicationRole(conn, tx, ct);
-                if (!string.Equals(role, "origin", StringComparison.Ordinal))
-                    throw new MigrationException($"Migration {script.Name} ends with session_replication_role = '{role}' (triggers do not fire). The migration was rolled back.");
+                var problem = PostMigrationProblem(triggersBefore, await Triggers(conn, tx, ct), await SwitchedOffEventTriggers(conn, tx, ct))
+                              ?? ReplicationRoleProblem(roleBefore, await ReplicationRole(conn, tx, ct))
+                              ?? (AdditionalReplicationRoleReading is { } extra ? ReplicationRoleProblem(roleBefore, extra()) : null);
+                if (problem is not null)
+                    throw new MigrationException($"Migration {script.Name} {problem} The migration was rolled back.");
                 await tx.CommitAsync(ct);
                 newlyApplied.Add(script.Version);
             }
             // Also when nothing was applied: a database whose safeguard trigger was switched off by any means is not accepted as migrated.
-            var off = await SwitchedOffTriggers(conn, null, ct);
+            var off = SwitchedOff(await Triggers(conn, null, ct));
+            off.AddRange(await SwitchedOffEventTriggers(conn, null, ct));
             if (off.Count > 0)
                 throw new MigrationException($"The database has trigger(s) switched off: {string.Join(", ", off)}. Every trigger must be enabled; refusing to continue.");
             return new MigrationResult(newlyApplied, applied.Count);
@@ -79,24 +95,74 @@ public sealed class MigrationRunner(string connectionString)
         }
     }
 
+    /// <summary>One non-internal trigger: where it is, what it is called, which function it runs, and its firing state (pg_trigger.tgenabled).</summary>
+    internal sealed record TriggerState(uint TableOid, string Table, string Name, uint FunctionOid, char Enabled);
+
     /// <summary>
-    /// Every non-internal trigger of the database that does not fire in a normal session: tgenabled 'D' (disabled) or 'R' (fires only
-    /// when session_replication_role = replica). 'O' (origin, the default) and 'A' (always) fire and are accepted.
+    /// Every non-internal trigger of the database. The statement uses no operator and no unqualified name on purpose, so nothing a
+    /// migration creates or sets (an operator named "=" in another schema, a changed search_path) can change what it returns; the
+    /// filtering and comparing are done here, not in SQL.
     /// </summary>
-    private static async Task<List<string>> SwitchedOffTriggers(NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
+    private static async Task<List<TriggerState>> Triggers(NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
     {
         const string sql =
-            "SELECT n.nspname || '.' || c.relname || '.' || t.tgname || ' (' || t.tgenabled::text || ')' " +
-            "FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace " +
-            "WHERE NOT t.tgisinternal AND t.tgenabled IN ('D', 'R') ORDER BY 1";
-        var found = new List<string>();
+            "SELECT t.tgrelid::pg_catalog.oid, t.tgrelid::pg_catalog.regclass::pg_catalog.text, t.tgname::pg_catalog.text, t.tgfoid::pg_catalog.oid, t.tgenabled::pg_catalog.text " +
+            "FROM pg_catalog.pg_trigger t WHERE NOT t.tgisinternal";
+        var found = new List<TriggerState>();
         await using var cmd = new NpgsqlCommand(sql, conn, tx);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct)) found.Add(reader.GetString(0));
+        while (await reader.ReadAsync(ct))
+            found.Add(new TriggerState(reader.GetFieldValue<uint>(0), reader.GetString(1), reader.GetString(2), reader.GetFieldValue<uint>(3), reader.GetString(4)[0]));
         return found;
     }
 
-    private static async Task<string> ReplicationRole(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+    /// <summary>Event triggers that do not fire in a normal session (evtenabled 'D' or 'R'); same construction as <see cref="Triggers"/>.</summary>
+    private static async Task<List<string>> SwitchedOffEventTriggers(NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
+    {
+        var found = new List<string>();
+        await using var cmd = new NpgsqlCommand("SELECT e.evtname::pg_catalog.text, e.evtenabled::pg_catalog.text FROM pg_catalog.pg_event_trigger e", conn, tx);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            if (FiresInNormalSession(reader.GetString(1)[0]) is false) found.Add($"event trigger {reader.GetString(0)} ({reader.GetString(1)})");
+        found.Sort(StringComparer.Ordinal);
+        return found;
+    }
+
+    /// <summary>'O' (origin, the default) and 'A' (always) fire in a normal session; 'D' (disabled) and 'R' (replica only) do not. Any other value is treated as not firing.</summary>
+    internal static bool FiresInNormalSession(char enabled) => enabled is 'O' or 'A';
+
+    internal static List<string> SwitchedOff(IEnumerable<TriggerState> triggers)
+    {
+        var off = triggers.Where(t => !FiresInNormalSession(t.Enabled)).Select(t => $"{t.Table}.{t.Name} ({t.Enabled})").ToList();
+        off.Sort(StringComparer.Ordinal);
+        return off;
+    }
+
+    /// <summary>
+    /// What a script did to the triggers that it must not do, or null: left a trigger or event trigger switched off, removed a trigger
+    /// that existed before it, or bound an existing trigger to another function.
+    /// </summary>
+    internal static string? PostMigrationProblem(IReadOnlyList<TriggerState> before, IReadOnlyList<TriggerState> after, IReadOnlyList<string> eventTriggersOff)
+    {
+        var off = SwitchedOff(after);
+        off.AddRange(eventTriggersOff);
+        if (off.Count > 0) return $"leaves trigger(s) switched off: {string.Join(", ", off)}. A migration must re-enable every trigger it disables.";
+
+        var now = after.ToDictionary(t => (t.TableOid, t.Name));
+        var removed = before.Where(t => !now.ContainsKey((t.TableOid, t.Name))).Select(t => $"{t.Table}.{t.Name}").Order(StringComparer.Ordinal).ToList();
+        if (removed.Count > 0) return $"removes trigger(s) that existed before it: {string.Join(", ", removed)}.";
+        var rebound = before.Where(t => now[(t.TableOid, t.Name)].FunctionOid != t.FunctionOid).Select(t => $"{t.Table}.{t.Name}").Order(StringComparer.Ordinal).ToList();
+        if (rebound.Count > 0) return $"binds existing trigger(s) to another function: {string.Join(", ", rebound)}.";
+        return null;
+    }
+
+    /// <summary>The setting must be "origin" before the script and unchanged after it.</summary>
+    internal static string? ReplicationRoleProblem(string before, string after) =>
+        string.Equals(before, "origin", StringComparison.Ordinal) && string.Equals(after, before, StringComparison.Ordinal)
+            ? null
+            : $"runs with or ends with session_replication_role = '{after}' (it was '{before}' before the script; triggers do not fire unless it is 'origin').";
+
+    private static async Task<string> ReplicationRole(NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand("SELECT pg_catalog.current_setting('session_replication_role')", conn, tx);
         return (string)(await cmd.ExecuteScalarAsync(ct))!;

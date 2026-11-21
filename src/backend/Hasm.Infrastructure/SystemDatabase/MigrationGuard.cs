@@ -31,32 +31,50 @@ public static partial class MigrationGuard
     private const string Ident = @"(?:""(?:[^""]|"""")+""|[A-Za-z_][A-Za-z0-9_$]*)";
     private const string QualifiedIdent = Ident + @"(?:\s*\.\s*" + Ident + ")?";
 
-    [GeneratedRegex(@"--[^\n]*")]
+    [GeneratedRegex(@"--[^\n]*", RegexOptions.CultureInvariant)]
     private static partial Regex LegacyLineComment();
 
     // "BEFORE TRUNCATE" is the append-only guard trigger (protective); every other TRUNCATE statement stays forbidden.
-    [GeneratedRegex(@"\bDROP\b|(?<!\bBEFORE\s+)\bTRUNCATE\b|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bDROP\b|(?<!\bBEFORE\s+)\bTRUNCATE\b|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Destructive();
 
-    [GeneratedRegex(@"\b(?:DISABLE|ENABLE)\s+(?:(?:REPLICA|ALWAYS)\s+)?(?:TRIGGER|RULE)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(?:DISABLE|ENABLE)\s+(?:(?:REPLICA|ALWAYS)\s+)?(?:TRIGGER|RULE)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TriggerSwitch();
 
-    [GeneratedRegex(@"^ALTER\s+TABLE\s+(" + QualifiedIdent + @")\s+(DISABLE|ENABLE)\s+TRIGGER\s+(" + Ident + @")$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^ALTER\s+TABLE\s+(" + QualifiedIdent + @")\s+(DISABLE|ENABLE)\s+TRIGGER\s+(" + Ident + @")$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CanonicalTriggerSwitch();
 
-    [GeneratedRegex(@"\bCREATE\s+(OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b(?:\s+(" + QualifiedIdent + @")\s*\()?", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bCREATE\s+(OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b(?:\s+(" + QualifiedIdent + @")\s*\()?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CreateFunction();
 
-    [GeneratedRegex(@"\bEXECUTE\b(?!\s+(?:FUNCTION|PROCEDURE|ON)\b)", RegexOptions.IgnoreCase)]
-    private static partial Regex DynamicExecute();
+    // EXECUTE is accepted in exactly two places: the function of a trigger definition ("EXECUTE FUNCTION|PROCEDURE <name> (") in a
+    // top-level CREATE TRIGGER statement, and the EXECUTE privilege ("EXECUTE ON") in a top-level GRANT / REVOKE / ALTER DEFAULT
+    // PRIVILEGES statement. Every other EXECUTE (dynamic SQL, PREPARE/EXECUTE, anything inside a body) is refused.
+    [GeneratedRegex(@"\bEXECUTE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AnyExecute();
 
-    [GeneratedRegex(@"\bLANGUAGE\s+(?!(?:sql|plpgsql)\b)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+" + QualifiedIdent + @"\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex TriggerExecute();
+
+    [GeneratedRegex(@"\bEXECUTE\s+ON\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex PrivilegeExecute();
+
+    [GeneratedRegex(@"^CREATE\s+(?:CONSTRAINT\s+)?TRIGGER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CreateTriggerStatement();
+
+    [GeneratedRegex(@"^(?:GRANT|REVOKE|ALTER\s+DEFAULT\s+PRIVILEGES)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex PrivilegeStatement();
+
+    [GeneratedRegex(@"\b(?:COPY|MERGE)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CopyOrMerge();
+
+    [GeneratedRegex(@"\bLANGUAGE\s+(?!(?:sql|plpgsql)\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ForeignLanguage();
 
-    [GeneratedRegex(@"^(?:BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|ABORT|END|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|ABORT|END|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TransactionControl();
 
-    [GeneratedRegex(@"\s+")]
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex Whitespace();
 
     private static readonly (Regex Pattern, string Reason)[] Neutralizers =
@@ -67,6 +85,11 @@ public static partial class MigrationGuard
         (new(@"\bALTER\s+(?:EVENT\s+)?TRIGGER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains ALTER TRIGGER (rename or re-bind of a trigger)"),
         (new(@"\bCREATE\s+OR\s+REPLACE\s+(?:CONSTRAINT\s+)?TRIGGER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE OR REPLACE TRIGGER (it can re-bind an existing guard trigger; use CREATE TRIGGER)"),
         (new(@"\bCREATE\s+(?:OR\s+REPLACE\s+)?RULE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE RULE (a rewrite rule can route statements around a guard trigger)"),
+        (new(@"\bsearch_path\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "changes or mentions search_path (it decides which function or operator an unqualified name means)"),
+        (new(@"\bset_config\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "calls set_config (a setting changed through a function call cannot be judged by the guard)"),
+        (new(@"\bCREATE\s+OPERATOR\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE OPERATOR (an operator can shadow a built-in one)"),
+        (new(@"\bCREATE\s+EXTENSION\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE EXTENSION (code the guard cannot read)"),
+        (new(@"\b(?:INSERT\s+INTO|UPDATE(?:\s+ONLY)?)\s+(?:""?pg_catalog""?\s*\.|""?pg_)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "writes to a system catalog (pg_*)"),
         (new(@"\bBEGIN\s+ATOMIC\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains a BEGIN ATOMIC function body (the guard cannot read it; use a dollar-quoted body)"),
     ];
 
@@ -127,8 +150,8 @@ public static partial class MigrationGuard
         foreach (var (pattern, reason) in Neutralizers)
             if (pattern.IsMatch(lexed.Scan)) return Refuse($"{reason}; not allowed.");
 
-        if (DynamicExecute().IsMatch(lexed.Code))
-            return Refuse("contains dynamic SQL (EXECUTE of a string, or PREPARE/EXECUTE); the guard cannot read it; not allowed.");
+        if (CopyOrMerge().IsMatch(lexed.Code))
+            return Refuse("contains COPY or MERGE (bulk or conditional data changes, including deletion and file access, that the guard does not judge); not allowed.");
         if (ForeignLanguage().IsMatch(lexed.Code))
             return Refuse("declares a function or block in a language other than sql or plpgsql (written unquoted); the guard cannot read it; not allowed.");
 
@@ -136,23 +159,27 @@ public static partial class MigrationGuard
         // "ALTER TABLE <table> ENABLE TRIGGER <trigger>" for exactly the same table and trigger, both as whole top-level statements.
         var disabled = new List<(string Table, string Trigger)>();
         var canonical = 0;
+        var acceptedExecutes = 0;
         foreach (var raw in lexed.Statements)
         {
             var statement = Whitespace().Replace(raw, " ").Trim();
             if (statement.Length == 0) continue;
             if (TransactionControl().IsMatch(statement))
                 return Refuse("contains a transaction-control statement (BEGIN/COMMIT/ROLLBACK/SAVEPOINT...); a migration runs in the runner's single transaction; not allowed.");
+            if (CreateTriggerStatement().IsMatch(statement) && AnyExecute().Count(statement) == 1 && TriggerExecute().Count(statement) == 1) acceptedExecutes++;
+            else if (PrivilegeStatement().IsMatch(statement) && AnyExecute().Count(statement) == PrivilegeExecute().Count(statement)) acceptedExecutes += AnyExecute().Count(statement);
             var m = CanonicalTriggerSwitch().Match(statement);
             if (!m.Success) continue;
             canonical++;
-            var table = Normalize(m.Groups[1].Value);
-            var trigger = Normalize(m.Groups[3].Value);
-            if (trigger is "all" or "user")
-                return Refuse($"switches TRIGGER {trigger.ToUpperInvariant()} on {table}; only a single named trigger may be switched; not allowed.");
+            // Compared as tuples of name parts (never as one dotted string: a quoted name may itself contain a dot).
+            var table = Key(m.Groups[1].Value);
+            var trigger = Key(m.Groups[3].Value);
+            if (m.Groups[3].Value.Equals("all", StringComparison.OrdinalIgnoreCase) || m.Groups[3].Value.Equals("user", StringComparison.OrdinalIgnoreCase))
+                return Refuse($"switches TRIGGER {m.Groups[3].Value.ToUpperInvariant()}; only a single named trigger may be switched; not allowed.");
             var pair = (table, trigger);
             if (m.Groups[2].Value.Equals("DISABLE", StringComparison.OrdinalIgnoreCase))
             {
-                if (disabled.Contains(pair)) return Refuse($"disables trigger {trigger} on {table} twice without re-enabling it; not allowed.");
+                if (disabled.Contains(pair)) return Refuse($"disables trigger {Show(trigger)} on {Show(table)} twice without re-enabling it; not allowed.");
                 disabled.Add(pair);
             }
             else
@@ -164,8 +191,11 @@ public static partial class MigrationGuard
         if (TriggerSwitch().Count(lexed.Scan) != canonical)
             return Refuse("switches a trigger or rule in a form other than the whole top-level statements \"ALTER TABLE <table> DISABLE TRIGGER <name>\" / " +
                           "\"ALTER TABLE <table> ENABLE TRIGGER <name>\" (for example ALL, USER, REPLICA, ALWAYS, RULE, several actions in one ALTER TABLE, or inside a DO block, function or string); not allowed.");
+        if (AnyExecute().Count(lexed.Code) != acceptedExecutes)
+            return Refuse("contains EXECUTE outside the two accepted forms (\"EXECUTE FUNCTION|PROCEDURE <name>(\" in a top-level CREATE TRIGGER, \"EXECUTE ON\" in a top-level GRANT/REVOKE): " +
+                          "dynamic SQL, PREPARE/EXECUTE and any EXECUTE inside a DO block or function body cannot be read by the guard; not allowed.");
         if (disabled.Count > 0)
-            return Refuse($"disables trigger {disabled[0].Trigger} on {disabled[0].Table} and does not re-enable exactly that trigger on exactly that table later in the same migration; not allowed.");
+            return Refuse($"disables trigger {Show(disabled[0].Trigger)} on {Show(disabled[0].Table)} and does not re-enable exactly that trigger on exactly that table later in the same migration; not allowed.");
 
         var created = new HashSet<string>(StringComparer.Ordinal);
         var replaced = new HashSet<string>(StringComparer.Ordinal);
@@ -173,17 +203,20 @@ public static partial class MigrationGuard
         {
             if (!m.Groups[2].Success)
                 return Refuse("creates a function or procedure whose name the guard cannot read; not allowed.");
-            var name = Normalize(m.Groups[2].Value);
-            name = name[(name.LastIndexOf('.') + 1)..];     // compared by name only, whatever the schema or the argument list (stricter)
+            var name = Parts(m.Groups[2].Value)[^1];     // compared by the function name only, whatever the schema or the argument list (stricter)
             created.Add(name);
             if (m.Groups[1].Success) replaced.Add(name);
         }
         return new Analysis(null, created, replaced);
     }
 
-    /// <summary>Unquoted identifiers fold to lower case as PostgreSQL does; quoted ones keep their exact spelling.</summary>
-    private static string Normalize(string identifier) =>
-        string.Join('.', Regex.Matches(identifier, Ident).Select(p => p.Value.StartsWith('"') ? p.Value[1..^1].Replace("\"\"", "\"") : p.Value.ToLowerInvariant()));
+    /// <summary>The parts of a (possibly schema-qualified) name: unquoted parts fold to lower case as PostgreSQL does, quoted ones keep their exact spelling.</summary>
+    private static string[] Parts(string identifier) =>
+        [.. Regex.Matches(identifier, Ident, RegexOptions.CultureInvariant).Select(p => p.Value.StartsWith('"') ? p.Value[1..^1].Replace("\"\"", "\"") : p.Value.ToLowerInvariant())];
+
+    // NUL cannot occur in a PostgreSQL identifier, so the joined key is an unambiguous tuple.
+    private static string Key(string identifier) => string.Join('\0', Parts(identifier));
+    private static string Show(string key) => key.Replace('\0', '.');
 }
 
 /// <summary>
@@ -268,6 +301,9 @@ internal static class MigrationSqlLexer
             }
             if (c == '"')
             {
+                // U&"..." is an identifier written with Unicode escapes: it can spell any name (also a guarded one) without the guard seeing it.
+                if (i >= 2 && s[i - 1] == '&' && (s[i - 2] == 'U' || s[i - 2] == 'u') && (i == 2 || !IsIdentChar(s[i - 3])))
+                    throw new MigrationException("an identifier is written with Unicode escapes (U&\"...\")");
                 var start = i; i++; var closed = false;
                 while (i < n)
                 {
@@ -296,6 +332,15 @@ internal static class MigrationSqlLexer
                     i = end + tag.Length;
                     continue;
                 }
+            }
+            if (c == '$' && i > 0 && (char.IsDigit(s[i - 1]) || s[i - 1] == '$'))
+            {
+                // "1$$...$$" or "$$...$$$$...$$": whether this "$" opens a dollar quote depends on details of the server's scanner.
+                var j = i + 1;
+                if (j < n && (char.IsLetter(s[j]) || s[j] == '_' || s[j] >= 0x80))
+                    while (j < n && s[j] != '$' && IsIdentChar(s[j])) j++;
+                if (j < n && s[j] == '$')
+                    throw new MigrationException("a dollar quote opens directly after a digit or after another dollar quote (ambiguous)");
             }
             if (c == ';' && !nested)
             {
