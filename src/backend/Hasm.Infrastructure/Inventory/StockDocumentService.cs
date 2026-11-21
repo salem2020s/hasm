@@ -3,6 +3,7 @@ using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Ledger;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using D = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockDocument;
@@ -25,7 +26,7 @@ namespace Hasm.Infrastructure.Inventory;
 /// Every mutation runs in <see cref="CompanyAuditedTransactions"/> (change, history row and authenticated audit event commit or roll back together) after the same advisory lock that serialises warehouse structure
 /// changes, so a warehouse can never be deactivated underneath a document being written. Transitions are fenced by the revision (a repeated or concurrent request fails and does nothing twice).
 /// </summary>
-public sealed class StockDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
+public sealed class StockDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ILogger? logger = null)
 {
     internal sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
@@ -367,7 +368,8 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
                 yearId = r.GetGuid(0); yearLabel = r.GetInt32(1);
             }
             var docType = DocTypeOf((StockDocType)cur.DocType);
-            var number = await NumberingService.IssueAsync(work.Connection, work.Transaction, docType, new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, Now, ct);
+            var number = await NumberingService.IssueOrRefuseAsync(() => NumberingService.IssueAsync(work.Connection, work.Transaction, docType, new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, Now, ct),
+                docType, logger, () => new Abort(ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued));
             await SetStatus(work, id, StockDocStatus.Approved, Now, $"{D.Number} = @num, {D.FiscalYearId} = @fy, {D.DecidedBy} = @who, {D.DecidedAtUtc} = @now", c => { c.Parameters.AddWithValue("num", number.Number); c.Parameters.AddWithValue("fy", yearId); c.Parameters.AddWithValue("who", actor); }, ct);
             await RecordAsync(work, StockEventKind.Approved, actor, id, StockDocStatus.Submitted, StockDocStatus.Approved, null, $"stock document approved number={number.Number}", ct);
         }, ct);
