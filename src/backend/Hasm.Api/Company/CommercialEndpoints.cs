@@ -38,6 +38,7 @@ public static class CommercialEndpoints
         var g = app.MapGroup("/api/v1/company/commercial-documents").RequireAuthorization();
         g.MapGet("/", List);
         g.MapPost("/", Create).WithMetadata(new BodyLimit());
+        g.MapGet("/types", Types);   // S6: the registered document types, names only (empty in production until 3.15/3.16)
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/submit", Submit);
@@ -54,7 +55,7 @@ public static class CommercialEndpoints
     private static object Body(CommercialDocumentView d) => new
     {
         id = d.Id, docType = d.DocType, branchId = d.BranchId, partyId = d.PartyId, currency = d.Currency, documentDate = d.DocumentDate, mode = (short)d.Mode, status = (short)d.Status, note = d.Note,
-        submittedBy = d.SubmittedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
+        submittedBy = d.SubmittedBy, lastEditedBy = d.LastEditedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
         lines = d.Lines.Select(l => new { lineNo = l.LineNo, itemId = l.ItemId, unitId = l.UnitId, quantity = l.Quantity, warehouseId = l.WarehouseId, lineNet = l.LineNet, pricingHash = l.PricingHash }),
         events = d.Events.Select(e => new { kind = (short)e.Kind, fromStatus = e.FromStatus is { } f ? (short?)f : null, toStatus = (short)e.ToStatus, revision = e.Revision, actorUserId = e.ActorUserId, reason = e.Reason, atUtc = e.AtUtc }),
     };
@@ -71,6 +72,8 @@ public static class CommercialEndpoints
     private static Task<IResult> List(HttpContext http, AccessService access, CommercialDocumentManagementService svc, int? status, string? docType, Guid? branchId, int? limit, int? offset) =>
         Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0), http.RequestAborted),
             v => new { documents = v.Select(Body) }, null);
+    private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.GetAsync(u, c, id, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Create(CommercialDocumentInput? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
