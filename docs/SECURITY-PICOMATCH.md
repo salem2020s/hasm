@@ -1,6 +1,16 @@
 # Shared picomatch security blocker
 
-Status: **UNRESOLVED — blocks release and merging any PR whose required security scan fails.** Investigation date: 2026-11-17. No dependency, lockfile, severity threshold, scan or application rule was changed.
+Status (2026-11-21, verified on `main` = `9ffaa6c`): **RETIRED, advisory withdrawn. Strict mode, zero exceptions.** **The installed dependency is unchanged:** `src/frontend/package-lock.json` on `main` still resolves `node_modules/picomatch` to version 4.0.7. The strict audit passes because GitHub withdrew the advisory, NOT because picomatch was upgraded or replaced. GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18. The owner-approved retirement (approval A, D-047, superseding D-046) was applied by PR #61, merged as `215da56` on 2026-11-20. Evidence on `main`:
+* `tools/verify/picomatch-exception.json` has status `RETIRED-ADVISORY-WITHDRAWN`.
+* `tools/verify/dependency-audit-policy.cjs` binds that record to the owner-approved retirement hash and, in that state, authorizes ZERO exceptions; every High or Critical finding blocks.
+* The always-on `dependency-scan` job (`.github/workflows/verification.yml`, step "Full npm audit (strict; temporary exception retired)") passed on `9ffaa6c`.
+* The review of the applying PR is `docs/review-records/PR-security-picomatch-apply.md`.
+
+This entry does not close production-readiness owner decisions **S** (bundler and Tauri inspection hardening, review residuals M1-M5) and **C** (a mandatory Rust `cargo audit` job, M6). Both stay **OPEN** in the owner-decision register of `docs/INTEGRATION-STATUS.md`.
+
+The text below is the original investigation of 2026-11-17, kept as history; its "UNRESOLVED" status is superseded by the entry above.
+
+Historical status (2026-11-17, superseded): **UNRESOLVED — blocks release and merging any PR whose required security scan fails.** Investigation date: 2026-11-17. No dependency, lockfile, severity threshold, scan or application rule was changed.
 
 ## Verified scope
 
