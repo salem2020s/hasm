@@ -13,7 +13,7 @@ import { useReportUnsaved } from "../unsaved";
  * (revision fences, the policy version fence, append-only history, no deletion, ambiguity and customer-role checks); this screen only shows and submits. Nothing here ever deletes: lists, entries and rules are deactivated.
  * Customer GROUPS (migration 0027): a tab manages the group master and the one-group-per-customer assignment; a price list or discount rule is scoped to a customer OR a group (the two selects exclude each other).
  */
-interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; baseCurrency: string; currencyFailed: boolean; itemsFailed: boolean; failed: boolean }
+interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; baseCurrency: string; customersFailed: boolean; currencyFailed: boolean; itemsFailed: boolean; failed: boolean }
 const PICKER_LIMIT = 500;
 interface Data { policy: PricingPolicyResponse; lists: PriceListsResponse; discounts: DiscountRulesResponse; pickers: Pickers }
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -41,15 +41,16 @@ export function PricingPage() {
       let failed = false;
       let currencyFailed = false;
       let itemsFailed = false;
+      let customersFailed = false;
       const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
       const [units, groups, items, customers, customerGroups, assignments, baseCurrency] = await Promise.all([
         soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
-        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items).catch((e) => { itemsFailed = true; throw e; })), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
+        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items).catch((e) => { itemsFailed = true; throw e; })), soft(auth.api.listPartyRoles(1).then((r) => r.items).catch((e) => { customersFailed = true; throw e; })),
         soft(auth.api.listCustomerGroups().then((r) => r.customerGroups)), soft(auth.api.listCustomerGroupAssignments().then((r) => r.assignments)),
         // the default currency of a new list/quote is the company base currency when the user may read it; otherwise it stays empty (never guessed). Not counted as a failed helper list: it needs its own permission.
         auth.api.getCurrencies().then((r) => r.baseCurrency ?? "").catch((e) => { if (!auth.handleError(e)) currencyFailed = true; return ""; }),
       ]);
-      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, baseCurrency, currencyFailed, itemsFailed, failed } }); setLoadError(null);
+      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, baseCurrency, customersFailed, currencyFailed, itemsFailed, failed } }); setLoadError(null);
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pricing.error.")); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -91,12 +92,25 @@ function Notices({ runner, id }: { runner: ReturnType<typeof useRunner>; id: str
 
 const customerName = (p: Pickers, id: string | null, none: string) => (id ? p.customers.find((c) => c.partyId === id)?.partyCode ?? id : none);
 
+const CUSTOMER_PICKER_LIMIT = 50;
+
+/** Customer picker: a bounded server-side SEARCH (shared SearchPicker over the party-role search API) instead of a list of every customer. Without the party-role permission the preload failed: the picker then offers only "all customers", as before (no request is sent). */
 function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id: string; value: string; onChange: (v: string) => void; pickers: Pickers; error?: string; disabled?: boolean }) {
   const { t } = useI18n();
+  const auth = useAuth();
+  const unavailable = pickers.customersFailed;
+  const load = useCallback((search: string) => unavailable ? Promise.resolve({ items: [] as PartyRole[], total: 0 })
+    : auth.api.listPartyRoles(1, { search: search === "" ? undefined : search, limit: CUSTOMER_PICKER_LIMIT }).then((r) => ({ items: r.items, total: r.total ?? r.items.length })).catch((e) => { auth.handleError(e); throw e; }),
+  [auth.api, auth.handleError, unavailable]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hintId = `${id}-hint`;
   return (
-    <Field id={id} label={t("pricing.customer")} hint={t("pricing.customer_hint")} error={error}>
-      {(a) => <select {...a} disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)}><option value="">{t("pricing.all_customers")}</option>{pickers.customers.map((c) => <option key={c.partyId} value={c.partyId}>{codeName(c.partyCode, c.partyName)}</option>)}</select>}
-    </Field>
+    <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
+      <label htmlFor={`${id}-list`}>{t("pricing.customer")}</label>
+      <SearchPicker id={`${id}-list`} label={t("pricing.customer")} value={value} onChange={(v) => onChange(v)} load={load} getId={(c: PartyRole) => c.partyId} getLabel={(c: PartyRole) => codeName(c.partyCode, c.partyName)}
+        noneLabel={t("pricing.all_customers")} disabled={disabled} invalid={!!error} describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
+      <p id={hintId} className="hint">{t("pricing.customer_hint")}</p>
+      {error && <p id={`${id}-error`} className="field-error">{error}</p>}
+    </div>
   );
 }
 

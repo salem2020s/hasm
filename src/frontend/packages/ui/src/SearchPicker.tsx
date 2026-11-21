@@ -28,6 +28,8 @@ export interface SearchPickerProps<T> {
   getLabel: (item: T) => string;
   /** Label of the current value when it is not (yet) among the loaded items, e.g. an inactive or not-yet-loaded record. Callers should always pass it for a preselected id; without it a generic text is shown, never the raw id. */
   selectedLabel?: string;
+  /** Text of the empty choice (default: the catalog `picker.none`), for example "All customers". */
+  noneLabel?: string;
   /** Allow choosing nothing (default true). */
   allowNone?: boolean;
   disabled?: boolean;
@@ -43,7 +45,7 @@ export interface SearchPickerProps<T> {
   testId?: string;
 }
 
-export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, disabled, debounceMs = 250, reloadKey, testId, id, invalid, describedBy, required }: SearchPickerProps<T>) {
+export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, noneLabel, disabled, debounceMs = 250, reloadKey, testId, id, invalid, describedBy, required }: SearchPickerProps<T>) {
   const { t } = useI18n();
   const generated = useId();
   const base = id ?? generated;
@@ -86,7 +88,7 @@ export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel,
         onChange={(e) => setSearch(e.target.value)} />
       <select id={id ?? `${base}-list`} aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy} aria-required={required || undefined} value={value} disabled={disabled}
         onChange={(e) => { const id = e.target.value; onChange(id, id === "" ? null : known.current.get(id) ?? null); }}>
-        {allowNone && <option value="">{t("picker.none")}</option>}
+        {allowNone && <option value="">{noneLabel ?? t("picker.none")}</option>}
         {value !== "" && !selectedInList && <option value={value}>{pinnedLabel ?? t("picker.unknown_selection")}</option>}
         {shown.map((i) => <option key={getId(i)} value={getId(i)}>{getLabel(i)}</option>)}
       </select>
