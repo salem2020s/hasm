@@ -48,8 +48,9 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe("route permission gates (both languages)", () => {
   it("covers a meaningful number of guarded routes", () => expect(guarded.length).toBeGreaterThan(25));
 
-  it("leaves only the home page unguarded (removing a guard from any other route fails here)", () => {
-    expect(routes.filter((r) => !guarded.includes(r)).map((r) => r.path)).toEqual(["/"]);
+  it("leaves only the home page and the user's own security settings unguarded (removing a guard from any other route fails here)", () => {
+    // /account/security is an ACCOUNT screen, not a company one: every signed-in user may open it, there is no company permission to hold; the server decides each action by the session and the password.
+    expect(routes.filter((r) => !guarded.includes(r)).map((r) => r.path)).toEqual(["/", "/account/security"]);
   });
 
   for (const lang of ["ar", "en"] as const) {
@@ -97,7 +98,7 @@ describe("server refusals while a screen loads (both languages)", () => {
       // Positive assertion on a stable loaded state: the screen shows the translated refusal (the shared one or its own wording of it).
       // Home states its own "activity unavailable" wording; the report screens run only on demand and make no call when they open,
       // so their stable loaded state is their own heading.
-      const own: Record<string, string> = { "/": "dash.activity_unavailable", "/accounting/reports": "rep.title", "/accounting/statements": "st.title" };
+      const own: Record<string, string> = { "/": "dash.activity_unavailable", "/accounting/reports": "rep.title", "/accounting/statements": "st.title", "/account/security": "sec.mfa.unknown_note" };   // the only call it makes on open is /auth/status (an access-bootstrap call that is not refused here): its stable state is the "no state reported" note
       const refusals = (own[path] ? [own[path]] : ["error.forbidden", "rep.error.forbidden", "sm.error.forbidden"]).map((k) => catalog[lang][k]!);
       await waitFor(() => expect(refusals.some((r) => content.textContent!.includes(r)), `${path}: ${content.textContent?.slice(0, 120)}`).toBe(true), { timeout: 3000 });
       expect(document.querySelector("[aria-busy='true']")).toBeNull();
