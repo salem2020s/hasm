@@ -22,6 +22,10 @@ public sealed class CompanyAuditedWork
     public Guid CompanyId { get; }
     /// <summary>The company-database connection (runtime role). Business statements must run on it, inside <see cref="Transaction"/>.</summary>
     public NpgsqlConnection Connection { get; }
+    /// <summary>
+    /// The company transaction. Business code must NEVER commit, roll back or dispose it: <see cref="CompanyAuditedTransactions"/> commits it (with the audit receipts and the anchoring) or rolls it back, and a direct commit would bypass the
+    /// audit requirement and the poison check. Only savepoints (<c>SaveAsync</c>/<c>RollbackAsync(name)</c>/<c>ReleaseAsync</c>) are allowed; a unit test scans the sources for a direct commit.
+    /// </summary>
     public NpgsqlTransaction Transaction { get; }
     internal IReadOnlyList<AuditReceipt> Receipts => receipts;
     /// <summary>The number of audit receipts so far: a savepoint's mark, so that a rollback to it can forget exactly the receipts of the events it rolled back.</summary>

@@ -174,7 +174,12 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         catch (Replay r)
         {
             // the replay check precedes every write: nothing was written and the ambient transaction is untouched
-            await work.Transaction.ReleaseAsync(savepoint, ct);
+            try
+            {
+                if (work.CleanupProbe is { } probe) await probe("release");
+                await work.Transaction.ReleaseAsync(savepoint, ct);
+            }
+            catch (Exception) { work.Poison(); }                                       // uniform with the failure path: a savepoint that cannot be released leaves the state unknown, so the work never commits
             return r.View;
         }
         catch

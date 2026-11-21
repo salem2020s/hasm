@@ -330,6 +330,28 @@ public class StockPostingInWorkTests : StockPostingTestBase
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
     }
 
+    /// <summary>Review L-1: a failing release of the savepoint on the replay path poisons the work too (uniform with the failure path).</summary>
+    [PostgresFact]
+    public async Task A_failed_savepoint_release_on_the_replay_path_poisons_the_work_and_the_commit_is_refused()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        Ok(await Post(doc, Amounts(100m)));                                                                       // posted once (public entry)
+        var before = await Everything();
+
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            work.CleanupProbe = step => step == "release" ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+            var replay = await Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m));
+            Assert.True(replay.Replayed);                                                                          // the replay itself still answers
+            Assert.Equal("audit_state_unknown", work.PoisonCode);
+            await work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "caller append"));
+        }));
+        Assert.Equal("audit_state_unknown", ex.Code);
+        Assert.Equal(before, await Everything());
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
+    }
+
     private Task CreateAuditFailureTrigger() =>
         Sql(FailFunction + $" CREATE TRIGGER zz_forced_failure BEFORE INSERT ON {Audit_.Table} FOR EACH ROW WHEN (NEW.{Audit_.EventType} = {StockPostingAuditEvents.Posted}) EXECUTE FUNCTION zz_forced_failure();");
 
