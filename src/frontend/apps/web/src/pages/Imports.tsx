@@ -423,7 +423,7 @@ function MappingCard({ batch, act }: { batch: ImportBatch; act: Act }) {
             try {
               const res = await auth.api.applyImportTemplate(batch.id, tplPick);
               setState(fromMapping(res.mapping));
-              setTplNote(res.unmatched.length === 0 ? t("imp.tpl.applied") : t("imp.tpl.applied_unmatched", { n: String(res.unmatched.length), fields: res.unmatched.map((k) => { const d = defs.fields.find((f) => f.key === k); return d ? localName(d, locale) : k; }).join("، ") }));
+              setTplNote(res.unmatched.length === 0 ? t("imp.tpl.applied") : t("imp.tpl.applied_unmatched", { n: String(res.unmatched.length), fields: res.unmatched.map((k) => { const d = defs.fields.find((f) => f.key === k); return d ? localName(d, locale) : k; }).join(t("list.separator")) }));
             } catch (e) { if (!auth.handleError(e)) act.setError(importError(tRef.current, e)); }
             finally { setTplBusy(false); }
           })()}>{t("imp.tpl.apply")}</button>

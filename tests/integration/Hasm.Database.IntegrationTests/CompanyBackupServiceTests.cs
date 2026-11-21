@@ -228,6 +228,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         Assert.Empty(r.Failures); Assert.Empty(r.Warnings);
         Assert.Equal(2, r.AttachmentFiles); Assert.Equal(0, r.UnreferencedFiles);
         Assert.Null(r.KeptFile);
+        Assert.True(r.Elapsed > TimeSpan.Zero);                                                                     // slice 4 (D-073): the measured restore time
         Assert.Equal(1, trialNames);
         Assert.False(await Exists(GeneratedDatabaseNames[^1]));                                                     // the trial database was dropped
         Assert.Equal(system, await Digest(SystemConnection));                                                       // registry and Hasm_System untouched

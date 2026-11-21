@@ -39,7 +39,11 @@ public sealed class AuditTrail
 
     // Streams this transaction has already appended to. Their head is our own uncommitted record: it was validated when the transaction
     // first touched the stream and must never be anchored before it commits (a rollback would leave a checkpoint for a record that never existed).
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<NpgsqlTransaction, HashSet<string>> touched = new();
+    // The state is keyed by the NpgsqlTransaction OBJECT, which Npgsql reuses for later transactions of the same connection, so it also records the
+    // PostgreSQL transaction id (xid8, never reused) it belongs to: a reused object with another xid starts empty, so a rolled-back or abandoned
+    // transaction can never make the next one skip the first-touch head and anchor checks.
+    private sealed class TouchedState { public string Xid = ""; public readonly HashSet<string> Streams = []; }
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<NpgsqlTransaction, TouchedState> touched = new();
 
     public AuditTrail(Func<AuditServices> factory, TimeProvider clock, ILogger? logger = null)
     {
@@ -84,7 +88,13 @@ public sealed class AuditTrail
         }
 
         var head = await ReadHeadAsync(conn, tx, map, stream.Key, ct);
-        var firstTouch = touched.GetOrCreateValue(tx).Add(stream.Key);
+        var state = touched.GetOrCreateValue(tx);
+        await using (var xid = new NpgsqlCommand("SELECT pg_current_xact_id()::text", conn, tx))       // assigns the transaction id (this transaction is about to write anyway)
+        {
+            var current = (string)(await xid.ExecuteScalarAsync(ct))!;
+            if (state.Xid != current) { state.Streams.Clear(); state.Xid = current; }                // a recycled transaction object from an earlier transaction: forget its state
+        }
+        var firstTouch = state.Streams.Add(stream.Key);
         if (firstTouch) await EnsureHeadIsSoundAndAnchoredAsync(svc, stream.Key, head, ct);     // committed state only
 
         var detail = data.Detail is { Length: > AuditEventData.MaxDetailLength } d ? d[..(AuditEventData.MaxDetailLength - 3)] + "..." : data.Detail;

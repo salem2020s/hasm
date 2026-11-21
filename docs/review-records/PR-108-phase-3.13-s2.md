@@ -1,7 +1,7 @@
 # Independent review record - PR #108, Phase 3.13 slice S2 (document links and partial fulfilment)
 
 * **Pull request:** #108
-* **Head SHA reviewed (full 40 characters):** 47f2c0b857951e4823f2f18e44b62fa27bbb08b5
+* **Head SHA reviewed (full 40 characters):** e0483b5fb574fcd3a3e4048ec921db19d8a92743 (the delta confirmation; F's full review of round 1 was at 47f2c0b857951e4823f2f18e44b62fa27bbb08b5)
 * **Reviewer context:** Reviewer: Agent F (independent accounting/integration QA, separate agent; not the author); model family Claude Opus; prompt: "independent full-diff review of PR #108 (3.13 S2 document links): accounting/data integrity, concurrency of over-fulfilment guard, append-only, idempotency, cross-company/branch isolation and RBAC, migration safety and generator --check, tests at service and SQL level with zero skips, PostgreSQL registry raise-only, consistency with PHASE-3.13 S2 and D-074..D-077".
 * **Scope read:** the full diff against origin/main.
 * **Checks run (commands and results):** executed: full diff vs origin/main read, Release build, dotnet test (unit 1160/1160, API 100/100), 0028/0029/0030 generator --check, registry sum 1085 to 1092 verified, disposable-cluster PostgreSQL run of DocumentLink*/Commercial*/pin-affected classes 76/76 passed 0 skipped (cluster created and destroyed by the reviewer, sole holder), hosted check-runs on head all success, merge-tree against main 3e5a3eb (conflict in docs/DECISIONS.md).
@@ -17,5 +17,6 @@
 
 * **Merge conflict (docs/DECISIONS.md with main's D-078..D-088):** resolved by merge c4c7110 (D-074..D-077 kept before D-078..D-088, each id once); registry raised to main 1085 + 8 = 1093 in 7cbb0d2.
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** the delta 47f2c0b..7cbb0d2 has not been confirmed by the reviewer yet (confirmation pending). The author ran, through the harness (sole holder, status checked, cluster destroyed), the classes DocumentLink*, CommercialStateMachine, CommercialHardening and CommercialIsolation: 17/17; hosted CI on the new head is checked separately.
-* **Verdict:** request changes (round 1, head 47f2c0b); the findings above are fixed, confirmation by Agent F pending.
+* **NOT VERIFIED:** hosted CI on the final head
+* **Delta confirmation (round 2):** Reviewer: Agent F (independent accounting/integration QA, separate agent; not the author); model family Claude Opus; prompt: "confirm A's fix delta for F's #108 findings (M1 lock order incl. trigger and direct-SQL path, race test, no inverted lock order in cancel/ToDraft/submit; L1-L4), separating the main merge"; Head SHA reviewed e0483b5fb574fcd3a3e4048ec921db19d8a92743 (delta 47f2c0b..e0483b5: merge c4c7110 = DECISIONS.md conflict resolution only; fix 7cbb0d2; review record e0483b5); executed: full delta read, remerge-diff of c4c7110, lock-order analysis of the 0030 guard, DocumentLinkService and every CommercialDocumentService transition, 0028/0029/0030 generator --check, Release build, DocumentLinkSchemaDerivationTests 4/4, hosted check-runs on 7cbb0d2 all success; PostgreSQL not run locally (cluster held by another agent); verdict approve; findings Critical 0, High 0, Medium 0 (M1 fixed), Low 0 open (L1-L4 fixed); note: the race test depends on timing, and the lock-order argument is the proof.
+* **Verdict:** approve

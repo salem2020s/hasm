@@ -1,6 +1,7 @@
 import {
   ApiError, type InventoryBarcode, type InventoryCapabilities, type InventoryGroup, type InventoryItem, type InventoryItemInput, type InventoryUnit, type ItemTypeCode, type ValuationMethodCode,
 } from "@hasm/api-client";
+import { parsePositiveDecimal } from "../numberInput";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -215,8 +216,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
       else if (a.unitId === form.baseUnitId) v[`${key}.unitId`] = t("inv.field.equals_base_unit");
       else if (seen.has(a.unitId)) v[`${key}.unitId`] = t("inv.field.duplicate");
       seen.add(a.unitId);
-      const n = Number(a.factor);
-      if (!a.factor.trim() || !Number.isFinite(n) || n <= 0 || !/^\d+(\.\d{1,10})?$/.test(a.factor.trim())) v[`${key}.factor`] = t("inv.field.invalid_factor");
+      if (Number.isNaN(parsePositiveDecimal(a.factor))) v[`${key}.factor`] = t("inv.field.invalid_factor");
     });
     for (const k of ["purchaseUnitId", "salesUnitId"] as const) if (form[k] && form[k] !== form.baseUnitId && !form.alts.some((a) => a.unitId === form[k])) v[k] = t("inv.field.unit_not_defined_for_item");
     return v;
@@ -240,7 +240,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
       const body: InventoryItemInput = {
         code: isNew ? blankToNull(form.code.trim().toUpperCase()) : undefined, nameAr: blankToNull(form.nameAr), nameEn: blankToNull(form.nameEn), itemType: form.itemType, groupId: form.groupId, baseUnitId: form.baseUnitId,
         purchaseUnitId: form.purchaseUnitId || null, salesUnitId: form.salesUnitId || null, isLot: goods && form.isLot, isSerial: goods && form.isSerial, hasExpiry: goods && form.hasExpiry, notes: blankToNull(form.notes),
-        alternateUnits: form.alts.map((a) => ({ unitId: a.unitId, factor: Number(a.factor) })),
+        alternateUnits: form.alts.map((a) => ({ unitId: a.unitId, factor: parsePositiveDecimal(a.factor) })),
       };
       if (editor.mode === "new") { await auth.api.createInventoryItem(body); onSaved(t("inv.created")); }
       else { await auth.api.updateInventoryItem(item!.id, body, item!.revision); onSaved(t("inv.updated")); }
