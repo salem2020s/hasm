@@ -22,7 +22,7 @@ function parseDictionary(file) {
     for (const c of m[2].matchAll(/public const string (\w+) = "([tcfkr]_[0-9a-f]{8})";/g)) map.set(`${m[1]}.${c[1]}`, c[2]);
   return map;
 }
-const EXISTING = new Map([...parseDictionary("CompanySchema.Commercial.cs"), ...parseDictionary("CompanySchema.CommercialApproval.cs"), ...parseDictionary("CompanySchema.LedgerApprovals.cs"), ...parseDictionary("CompanySchema.LedgerPolicies.cs")]);
+const EXISTING = new Map([...parseDictionary("CompanySchema.Configuration.cs"), ...parseDictionary("CompanySchema.Commercial.cs"), ...parseDictionary("CompanySchema.CommercialApproval.cs"), ...parseDictionary("CompanySchema.LedgerApprovals.cs"), ...parseDictionary("CompanySchema.LedgerPolicies.cs")]);
 const ext = (key) => { const v = EXISTING.get(key); if (!v) throw new Error("unknown existing name " + key); return v; };
 
 const TEMPLATE = `-- Migration ${MIGRATION}: approval policies for commercial documents (Phase 3.13 slice S5a). Forward-only and ADDITIVE: new functions and two new triggers only; no table is created or altered, no existing function or trigger
@@ -30,7 +30,7 @@ const TEMPLATE = `-- Migration ${MIGRATION}: approval policies for commercial do
 -- (logical dictionary: CompanySchema.CommercialPolicy.cs). Do not edit by hand: re-run the generator.
 --
 -- WHAT THIS IS (docs/PHASE-3.13.md S5a; decisions D-140 and D-141): the ordered approval-policy engine of 3.2C (ApprovalPolicy, ApprovalPolicyStage, DocumentApprovalBinding, ApprovalDecision) was wired to the journal in SQL.
--- These functions give a SUBMITTED COMMERCIAL DOCUMENT the same rules: the governing policy is picked by document type, branch and the BASE value of the SEALED total (gross times the sealed exchange rate) at submit (D-140);
+-- These functions give a SUBMITTED COMMERCIAL DOCUMENT the same rules: the governing policy is picked by document type, branch and the BASE value of the SEALED total (gross times the sealed exchange rate, rounded to the minor units of the base currency like the journal) at submit (D-140);
 -- the plan is the stages of that policy, raised to the plan the revision was submitted under (an append-only floor, so a policy can only get stricter for a pending document); every decision is cast for the first open stage by
 -- someone independent of the creator, the last editor and the submitter; and the document cannot become approved before the plan of its revision is satisfied. A document with NO matching policy has an empty plan and keeps
 -- the single independent approval of S1b (D-141).
@@ -44,14 +44,17 @@ const TEMPLATE = `-- Migration ${MIGRATION}: approval policies for commercial do
 CREATE FUNCTION {{CommercialPolicy.FnPick}}(p_doc uuid) RETURNS TABLE (policy_id uuid, policy_revision bigint) LANGUAGE sql STABLE AS $$
     WITH d AS (
         SELECT cd.[[CommercialDocument.Id]] AS id, cd.[[CommercialDocument.DocType]] AS doc_type, cd.[[CommercialDocument.BranchId]] AS branch,
-               COALESCE(cd.[[CommercialDocumentApproval.TotalGross]] * cd.[[CommercialDocumentApproval.ExchangeRate]], 0) AS base_total
+               -- the BASE value, rounded half away from zero to the minor units of the base currency of the company exactly as the journal compares base amounts (F review M1); when the base currency or its minor units are
+               -- undefined the value is NULL and every policy of the type and branch applies (fail closed: the stricter reading)
+               (SELECT ROUND(COALESCE(cd.[[CommercialDocumentApproval.TotalGross]] * cd.[[CommercialDocumentApproval.ExchangeRate]], 0), cu.[[Currency.MinorUnits]]::integer)
+                  FROM [[CompanyCurrency.Table]] cc JOIN [[Currency.Table]] cu ON cu.[[Currency.Code]] = cc.[[CompanyCurrency.Code]] WHERE cc.[[CompanyCurrency.IsBase]] AND cc.[[CompanyCurrency.Enabled]] LIMIT 1) AS base_total
         FROM [[CommercialDocument.Table]] cd WHERE cd.[[CommercialDocument.Id]] = p_doc),
     cand AS (
         SELECT p.[[ApprovalPolicy.Id]] AS pid, p.[[ApprovalPolicy.Revision]] AS prev, p.[[ApprovalPolicy.CreatedAtUtc]] AS created, COALESCE(st.[[ApprovalPolicyStage.Required]], p.[[ApprovalPolicy.RequiredApprovals]]) AS required
         FROM [[ApprovalPolicy.Table]] p CROSS JOIN d
         LEFT JOIN [[ApprovalPolicyStage.Table]] st ON st.[[ApprovalPolicyStage.PolicyId]] = p.[[ApprovalPolicy.Id]] AND st.[[ApprovalPolicyStage.PolicyRevision]] = p.[[ApprovalPolicy.Revision]]
         WHERE p.[[ApprovalPolicy.IsActive]] AND p.[[ApprovalPolicy.DocType]] = d.doc_type AND p.[[ApprovalPolicy.Source]] IN (1, 3)
-          AND (p.[[ApprovalPolicy.BranchId]] IS NULL OR p.[[ApprovalPolicy.BranchId]] = d.branch) AND d.base_total >= p.[[ApprovalPolicy.MinAmount]]
+          AND (p.[[ApprovalPolicy.BranchId]] IS NULL OR p.[[ApprovalPolicy.BranchId]] = d.branch) AND (d.base_total IS NULL OR d.base_total >= p.[[ApprovalPolicy.MinAmount]])
           AND p.[[ApprovalPolicyConditions.JournalType]] IS NULL AND p.[[ApprovalPolicyConditions.RateOverride]] IS NULL AND p.[[ApprovalPolicyConditions.SoftClosed]] IS NULL AND p.[[ClosingLogic.PolicyClosingKind]] IS NULL)
     SELECT pid, prev FROM cand GROUP BY pid, prev, created ORDER BY sum(required) DESC, count(*) DESC, created ASC, pid ASC LIMIT 1
 $$;

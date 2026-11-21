@@ -3,7 +3,7 @@
 -- (logical dictionary: CompanySchema.CommercialPolicy.cs). Do not edit by hand: re-run the generator.
 --
 -- WHAT THIS IS (docs/PHASE-3.13.md S5a; decisions D-140 and D-141): the ordered approval-policy engine of 3.2C (ApprovalPolicy, ApprovalPolicyStage, DocumentApprovalBinding, ApprovalDecision) was wired to the journal in SQL.
--- These functions give a SUBMITTED COMMERCIAL DOCUMENT the same rules: the governing policy is picked by document type, branch and the BASE value of the SEALED total (gross times the sealed exchange rate) at submit (D-140);
+-- These functions give a SUBMITTED COMMERCIAL DOCUMENT the same rules: the governing policy is picked by document type, branch and the BASE value of the SEALED total (gross times the sealed exchange rate, rounded to the minor units of the base currency like the journal) at submit (D-140);
 -- the plan is the stages of that policy, raised to the plan the revision was submitted under (an append-only floor, so a policy can only get stricter for a pending document); every decision is cast for the first open stage by
 -- someone independent of the creator, the last editor and the submitter; and the document cannot become approved before the plan of its revision is satisfied. A document with NO matching policy has an empty plan and keeps
 -- the single independent approval of S1b (D-141).
@@ -17,14 +17,17 @@
 CREATE FUNCTION f_19221e35(p_doc uuid) RETURNS TABLE (policy_id uuid, policy_revision bigint) LANGUAGE sql STABLE AS $$
     WITH d AS (
         SELECT cd.c_cceb8d4c AS id, cd.c_56e38e95 AS doc_type, cd.c_aae9b28d AS branch,
-               COALESCE(cd.c_f510980d * cd.c_e05c15dc, 0) AS base_total
+               -- the BASE value, rounded half away from zero to the minor units of the base currency of the company exactly as the journal compares base amounts (F review M1); when the base currency or its minor units are
+               -- undefined the value is NULL and every policy of the type and branch applies (fail closed: the stricter reading)
+               (SELECT ROUND(COALESCE(cd.c_f510980d * cd.c_e05c15dc, 0), cu.c_b037f3d5::integer)
+                  FROM t_f5bc326a cc JOIN t_451e91be cu ON cu.c_b6064cf1 = cc.c_6da45b20 WHERE cc.c_5cdc1bc7 AND cc.c_702730ab LIMIT 1) AS base_total
         FROM t_04d17dc0 cd WHERE cd.c_cceb8d4c = p_doc),
     cand AS (
         SELECT p.c_a2b53e06 AS pid, p.c_c9bff476 AS prev, p.c_bc3b07c1 AS created, COALESCE(st.c_002a7676, p.c_a874380a) AS required
         FROM t_8f2462c5 p CROSS JOIN d
         LEFT JOIN t_e8cadae9 st ON st.c_85629458 = p.c_a2b53e06 AND st.c_41aad198 = p.c_c9bff476
         WHERE p.c_61d707fd AND p.c_9c04c465 = d.doc_type AND p.c_b130782f IN (1, 3)
-          AND (p.c_5d70e226 IS NULL OR p.c_5d70e226 = d.branch) AND d.base_total >= p.c_a0b367ec
+          AND (p.c_5d70e226 IS NULL OR p.c_5d70e226 = d.branch) AND (d.base_total IS NULL OR d.base_total >= p.c_a0b367ec)
           AND p.c_1a2f7f5e IS NULL AND p.c_6088d474 IS NULL AND p.c_ca9500fa IS NULL AND p.c_43137a95 IS NULL)
     SELECT pid, prev FROM cand GROUP BY pid, prev, created ORDER BY sum(required) DESC, count(*) DESC, created ASC, pid ASC LIMIT 1
 $$;

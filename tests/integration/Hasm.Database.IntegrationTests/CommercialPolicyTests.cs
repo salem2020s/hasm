@@ -54,6 +54,12 @@ public class CommercialPolicyTests : CommercialTestBase
         $"INSERT INTO {AD.Table} ({AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment}, {AD.AuditStream}, {AD.AuditSeq}, {AG.DecisionStage}) " +
         $"VALUES ('commercial_test', '{doc}', {revision}, '{approver}', {decision}, now(), {(decision == 2 ? "'no'" : "NULL")}, 'x', 1, {stage})";
 
+    /// <summary>A decision insert that satisfies the foreign key to the business audit: it borrows an audit event no decision uses yet.</summary>
+    private string ValidRawDecision(Guid doc, long revision, Guid approver, int stage) =>
+        $"INSERT INTO {AD.Table} ({AD.DocType}, {AD.DocumentId}, {AD.DocumentRevision}, {AD.Approver}, {AD.Decision}, {AD.DecidedAtUtc}, {AD.Comment}, {AD.AuditStream}, {AD.AuditSeq}, {AG.DecisionStage}) " +
+        $"SELECT 'commercial_test', '{doc}', {revision}, '{approver}', 1, now(), NULL, a.{CompanySchema.BusinessAudit.StreamKey}, a.{CompanySchema.BusinessAudit.Seq}, {stage} FROM {CompanySchema.BusinessAudit.Table} a " +
+        $"WHERE NOT EXISTS (SELECT 1 FROM {AD.Table} d WHERE d.{AD.AuditStream} = a.{CompanySchema.BusinessAudit.StreamKey} AND d.{AD.AuditSeq} = a.{CompanySchema.BusinessAudit.Seq}) ORDER BY a.{CompanySchema.BusinessAudit.Seq} LIMIT 1";
+
     private async Task<IReadOnlyList<ApprovalStageProgress>> Plan(Guid doc) => (await Docs.ApprovalProgressAsync(Company.Id, doc))!.Plan;
 
     [PostgresFact]
@@ -158,9 +164,29 @@ public class CommercialPolicyTests : CommercialTestBase
         var p2 = Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1], min: 5000m)));                       // not matching: keeps the earlier policy for this document
         Assert.NotNull(p2);
         Ok(await Docs.ApproveAsync(approvers[0], Company.Id, single.Id, single.Revision));                                 // the plan was [2]: stage 1 holds one of two
+        // the same approver again, directly: the decision trigger runs BEFORE the unique key is checked and the document is still on its open stage, so the trigger is what refuses it; the same approver is refused by the
+        // "independent of the creator ..." rule only when he is one of those, otherwise the unique key answers. The unique decision key is the deterministic guard here: 23505 (the stage check passes first because stage 1 still needs one more approver).
         var (state, message) = await Run(RawDecision(single.Id, single.Revision, approvers[0], 1, 1));
-        Assert.Equal("23505", state is null ? "none" : state == "P0001" ? "P0001" : state);                              // the same approver again: the unique decision key (or the trigger, whichever answers first)
-        Assert.True(state is "23505" or "P0001", message);
+        Assert.Equal("23505", state);
+        Assert.Contains("unique", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [PostgresFact]
+    public async Task The_value_threshold_compares_the_base_value_rounded_to_the_base_currency_minor_units_exactly_like_the_journal()
+    {
+        var (branch, party, item, unit) = await Setup();
+        // a USD price of 14.45 and a USD document of one piece, sealed at the USD rate 0.71: 10.2595 raw, 10.260 rounded half away from zero to the three minor units of the base currency JOD
+        var usdList = Ok(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, new Hasm.Infrastructure.Pricing.PriceListInput("PL-PL1USD", "قائمة", "List", 11, "USD", new DateOnly(2026, 1, 1), null, true, null)));
+        Ok(await Pricing.CreateEntryAsync(Admin.Id, Company.Id, usdList.Id, new Hasm.Infrastructure.Pricing.PriceEntryInput(item, null, unit, 0m, 14.45m, null)));
+        var d = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "rnd-key-000001", 1m) with { Currency = "USD" }));
+        var one = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, d.Id, d.Revision));
+        Assert.Equal((14.45m, 0.71m), (one.TotalGross, one.ExchangeRate));
+        Assert.Empty(await Plan(one.Id));                                                                                    // no policy yet
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1], min: 10.260m)));                              // 10.2595 raw is BELOW this minimum, 10.260 rounded meets it: the journal compares the rounded amount
+        Assert.Equal([1], (await Plan(one.Id)).Select(p => p.Required));
+        // a minimum one thousandth above the rounded value does not apply, so the plan stays that of the 10.260 policy
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1, 1], min: 10.261m)));
+        Assert.Equal([1], (await Plan(one.Id)).Select(p => p.Required));
     }
 
     [PostgresFact]
@@ -193,7 +219,12 @@ public class CommercialPolicyTests : CommercialTestBase
         var other = await Submitted(branch, party, item, unit, "sql-key-000004", 10m);
         Ok(await Docs.ApproveAsync(a1, Company.Id, other.Id, other.Revision)); Ok(await Docs.ApproveAsync(a2, Company.Id, other.Id, other.Revision));   // approved: its decisions exist
         var third = await Submitted(branch, party, item, unit, "sql-key-000005", 10m);
-        Assert.Contains("required approvals for this revision are missing", Msg(Approve(third.Id, third.Revision, a3)));     // a stranger with no decisions on this revision
+        Assert.Contains("required approvals for this revision are missing", Msg(Approve(third.Id, third.Revision, a3)));     // a stranger with no decisions on this revision while the plan is open
+        // L1: satisfy the plan with DIRECT-SQL decision inserts (valid audit events, stage order respected), then approve as a stranger: the plan is satisfied, so ONLY the "approver must be a decider" rule can refuse
+        Assert.Null((await Run(ValidRawDecision(third.Id, third.Revision, a1, 1))).State);
+        Assert.Null((await Run(ValidRawDecision(third.Id, third.Revision, a2, 2))).State);
+        Assert.Contains("approver of a document must be one of the approvers of its revision", Msg(Approve(third.Id, third.Revision, a3)));
+        Assert.Equal(CommercialStatus.Submitted, (await Docs.GetAsync(Company.Id, third.Id))!.Status);
     }
 
     [PostgresFact]
