@@ -54,6 +54,28 @@ public class CompanyRuntimePrivilegesCompletenessTests
         Assert.DoesNotContain("DELETE", Of(CompanySchema.CommercialDocument.Table));
     }
 
+    /// <summary>Every table name a migration creates, in any spelling PostgreSQL accepts: UNLOGGED/TEMP[ORARY], IF NOT EXISTS, an optional (quoted) <c>public.</c> prefix, a quoted name. Line comments are ignored.</summary>
+    private static readonly System.Text.RegularExpressions.Regex CreateTable = new(
+        "CREATE\\s+(?:UNLOGGED\\s+|TEMP(?:ORARY)?\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:\"?public\"?\\.)?\"?([A-Za-z_][A-Za-z0-9_]*)\"?",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static IEnumerable<string> CreatedTableNames(string sql) =>
+        CreateTable.Matches(System.Text.RegularExpressions.Regex.Replace(sql, @"--[^\r\n]*", "")).Select(m => m.Groups[1].Value);
+
+    [Fact]
+    public void The_create_table_scan_recognises_every_spelling_of_a_table_creation()
+    {
+        // the scan must not miss a creation just because of its spelling (G review L of #132): a miss would let an unregistered table escape the guard
+        Assert.Equal(["t_aaaaaaaa"], CreatedTableNames("CREATE TABLE t_aaaaaaaa (a int);"));
+        Assert.Equal(["t_bbbbbbbb"], CreatedTableNames("create table if not exists t_bbbbbbbb (a int);"));
+        Assert.Equal(["t_cccccccc"], CreatedTableNames("CREATE UNLOGGED TABLE t_cccccccc (a int);"));
+        Assert.Equal(["t_dddddddd"], CreatedTableNames("CREATE TEMP TABLE t_dddddddd (a int); "));
+        Assert.Equal(["t_eeeeeeee"], CreatedTableNames("CREATE TEMPORARY TABLE IF NOT EXISTS public.t_eeeeeeee (a int);"));
+        Assert.Equal(["t_ffffffff"], CreatedTableNames("CREATE TABLE \"public\".\"t_ffffffff\" (a int);"));
+        Assert.Equal(["Plain_Name"], CreatedTableNames("CREATE TABLE \"Plain_Name\" (a int);"));                                   // a non-opaque name is captured too, so the guard can refuse it
+        Assert.Empty(CreatedTableNames("-- CREATE TABLE t_99999999 would be a comment\nSELECT 1;"));
+    }
+
     [Fact]
     public void Every_table_created_by_a_company_migration_is_registered_in_the_schema_dictionary()
     {
@@ -63,10 +85,11 @@ public class CompanyRuntimePrivilegesCompletenessTests
         foreach (var name in assembly.GetManifestResourceNames().Where(n => n.Contains("CompanyDatabase.Migrations.", StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.Ordinal)))
         {
             using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
-            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(reader.ReadToEnd(), @"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(t_[0-9a-f]{8})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                created.Add(m.Groups[1].Value);
+            foreach (var table in CreatedTableNames(reader.ReadToEnd())) created.Add(table);
         }
         Assert.True(created.Count > 90, "the company migrations were not read");
+        var nonOpaque = created.Where(t => !System.Text.RegularExpressions.Regex.IsMatch(t, "^t_[0-9a-f]{8}$")).ToList();
+        Assert.True(nonOpaque.Count == 0, "tables created by a company migration with a name that is not an opaque t_xxxxxxxx name: " + string.Join(", ", nonOpaque));
         var registered = TableTokens().Select(t => t.Value).ToHashSet();
         var unregistered = created.Where(t => !registered.Contains(t)).ToList();
         Assert.True(unregistered.Count == 0, "tables created by a company migration but absent from CompanySchema.Map: " + string.Join(", ", unregistered));
