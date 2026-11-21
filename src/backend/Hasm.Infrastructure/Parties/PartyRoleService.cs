@@ -174,6 +174,36 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
         return await LoadRoles(conn, null, null, kind, false, ct);
     }
 
+    /// <summary>
+    /// One page of roles for an optional search (party code or name, literal and case-insensitive) and kind, ordered by party code then role (stable), with the total of matching rows.
+    /// All values are parameters; the limit is clamped to <see cref="PartyRoleSearch.MaxLimit"/>.
+    /// </summary>
+    public async Task<PartyRolePage> SearchRolesAsync(Guid companyId, PartyRoleKind? kind, string? search, int? offset, int? limit, CancellationToken ct = default)
+    {
+        PartyRoleSearch.TryCleanSearch(search, out var cleaned);   // an invalid text is refused by the caller; here it simply means no filter
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        var where = new List<string>();
+        await using var q = new NpgsqlCommand { Connection = conn };
+        if (kind is { } k) { where.Add($"r.{PR.Role} = @k"); q.Parameters.AddWithValue("k", (short)k); }
+        if (cleaned is not null)
+        {
+            where.Add($"(upper(p.{LP.Code}) LIKE @like ESCAPE '\\' OR upper(p.{LP.DisplayName}) LIKE @like ESCAPE '\\')");
+            q.Parameters.AddWithValue("like", PartyRoleSearch.LikePattern(cleaned));
+        }
+        var w = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
+        q.CommandText = $"SELECT count(*) FROM {PR.Table} r JOIN {LP.Table} p ON p.{LP.Id} = r.{PR.PartyId}{w}";
+        var total = Convert.ToInt64(await q.ExecuteScalarAsync(ct));
+        q.Parameters.AddWithValue("lim", PartyRoleSearch.ClampLimit(limit));
+        q.Parameters.AddWithValue("off", PartyRoleSearch.ClampOffset(offset));
+        q.CommandText = RoleSelect + w + $" ORDER BY p.{LP.Code}, r.{PR.Role} LIMIT @lim OFFSET @off";
+        var rows = new List<PartyRoleView>();
+        await using var r = await q.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            rows.Add(new PartyRoleView(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), (PartyRoleKind)r.GetInt16(4), r.GetBoolean(5), (PartyPaymentMode)r.GetInt16(6), r.GetInt32(7), r.IsDBNull(8) ? null : r.GetDecimal(8),
+                r.IsDBNull(9) ? null : r.GetGuid(9), r.IsDBNull(10) ? null : r.GetString(10), r.IsDBNull(11) ? null : r.GetGuid(11), r.GetInt64(12)));
+        return new PartyRolePage(rows, total);
+    }
+
     /// <summary>Validates the terms and the references of a role; throws the field errors. Locks the referenced account and representative against concurrent change.</summary>
     private static async Task ValidateTerms(CompanyAuditedWork work, PartyRoleKind kind, PartyRoleInput input, PartyRoleView? current, CancellationToken ct)
     {
@@ -298,6 +328,8 @@ public sealed class PartyRoleManagementService(AccessService access, PartyRoleSe
     }
 
     public Task<ConfigResult<IReadOnlyList<PartyRoleView>>> ListRolesAsync(Guid user, Guid company, PartyRoleKind? kind, CancellationToken ct = default) => Read(user, company, PermissionCatalog.Codes.PartyRolesView, () => roles.ListRolesAsync(company, kind, ct), ct);
+    /// <summary>The same permission (<c>company.partyroles.view</c>) and company scoping as <see cref="ListRolesAsync"/>; adds nothing that list does not already expose, only an optional search and paging.</summary>
+    public Task<ConfigResult<PartyRolePage>> SearchRolesAsync(Guid user, Guid company, PartyRoleKind? kind, string? search, int? offset, int? limit, CancellationToken ct = default) => Read(user, company, PermissionCatalog.Codes.PartyRolesView, () => roles.SearchRolesAsync(company, kind, search, offset, limit, ct), ct);
     public Task<ConfigResult<PartyRoleView>> CreateRoleAsync(Guid user, Guid company, PartyRoleInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.PartyRolesConfigure, () => roles.CreateRoleAsync(user, company, input, ct), ct);
     public Task<ConfigResult<PartyRoleView>> UpdateRoleAsync(Guid user, Guid company, Guid id, long? revision, PartyRoleInput? input, CancellationToken ct = default) => Write(user, company, PermissionCatalog.Codes.PartyRolesConfigure, () => roles.UpdateRoleAsync(user, company, id, revision, input, ct), ct);
     public Task<ConfigResult<IReadOnlyList<SalesRepresentativeView>>> ListRepresentativesAsync(Guid user, Guid company, CancellationToken ct = default) => Read(user, company, PermissionCatalog.Codes.SalesRepsView, () => roles.ListRepresentativesAsync(company, ct), ct);

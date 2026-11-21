@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Parties;
@@ -189,6 +190,57 @@ public class PartyRoleTests : InventoryTestBase
         Assert.Equal(1L, await Count(Company, PR.Table));
         Assert.Equal(role.Id, (await Roles.ListRolesAsync(Company.Id, null)).Single().Id);
         Assert.Equal(rep.Id, (await Roles.ListRepresentativesAsync(Company.Id)).Single().Id);
+    }
+
+    [PostgresFact]
+    public async Task The_role_search_matches_party_code_and_name_literally_pages_with_a_total_in_a_stable_order_and_keeps_the_permission()
+    {
+        await Prepare();
+        async Task<Guid> Named(string code, string name)
+        {
+            var id = Guid.NewGuid();
+            await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{id}', '{code}', '{name}', true, 1, 1, '{Admin.Id}', now(), now())");
+            return id;
+        }
+        foreach (var (code, name) in new[] { ("S01", "Alpha Trading"), ("S02", "alpha Holdings"), ("S03", "Beta 100%"), ("S04", "Gamma_Co"), ("S05", "GammaXCo") })
+            Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, Customer(await Named(code, name))));
+        Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, new PartyRoleInput(await Named("S06", "Delta"), PartyRoleKind.Supplier, PartyPaymentMode.Credit, 10, null, null, null)));
+        static string[] Codes(PartyRolePage p) => [.. p.Items.Select(i => i.PartyCode)];
+        PartyRolePage Search(string? q, PartyRoleKind? kind = null, int? offset = null, int? limit = null) => Ok(RolesMgmt.SearchRolesAsync(Admin.Id, Company.Id, kind, q, offset, limit).Result);
+
+        // code and name, case-insensitive, ordered by code
+        Assert.Equal(["S01", "S02"], Codes(Search("alpha")));
+        Assert.Equal(2L, Search("alpha").Total);
+        Assert.Equal(["S01", "S02"], Codes(Search("aLPHA")));
+        Assert.Equal(["S02"], Codes(Search("s02")));
+        Assert.Equal(["S01", "S02"], Codes(Search("  alpha  ")));                       // trimmed
+        // the LIKE wildcards are literal
+        Assert.Equal(["S03"], Codes(Search("%")));
+        Assert.Equal(["S04"], Codes(Search("_")));
+        Assert.Equal(["S04"], Codes(Search("Gamma_")));
+        Assert.Equal(["S04", "S05"], Codes(Search("gamma")));
+        Assert.Empty(Search("a'; DROP TABLE x; --").Items);                             // text is a parameter, never SQL
+        // kind and search combine; the total is the matching rows before paging
+        Assert.Equal(["S06"], Codes(Search(null, PartyRoleKind.Supplier)));
+        Assert.Equal(5L, Search(null, PartyRoleKind.Customer).Total);
+        Assert.Empty(Search("delta", PartyRoleKind.Customer).Items);
+        // paging: bounds, total, stable order
+        Assert.Equal(["S01", "S02"], Codes(Search(null, null, 0, 2)));
+        Assert.Equal(6L, Search(null, null, 0, 2).Total);
+        Assert.Equal(["S05", "S06"], Codes(Search(null, null, 4, 2)));
+        Assert.Empty(Search(null, null, 99, 5).Items);
+        Assert.Equal(6L, Search(null, null, 99, 5).Total);
+        Assert.Equal(6, Search(null).Items.Count);                                      // default page size 50
+        Assert.Single(Search(null, null, 0, 0).Items);                                  // a limit below 1 is clamped to 1
+        Assert.Equal(6, Search(null, null, 0, 100000).Items.Count);                     // a limit above the maximum is clamped
+        Assert.Equal(["S01", "S02", "S03", "S04", "S05", "S06"], Codes(Search(null, null, 0, 6)));
+        var singles = Enumerable.Range(0, 6).Select(i => Codes(Search(null, null, i, 1)).Single()).ToArray();
+        Assert.Equal((await Roles.ListRolesAsync(Company.Id, null)).Select(r => r.PartyCode), singles);   // pages of one reproduce the unpaged order
+        // the permission is the same as the unpaged list
+        var outsider = await NewUser("searchoutsider");
+        Fails(await RolesMgmt.SearchRolesAsync(outsider.Id, Company.Id, null, "alpha", null, null), ConfigStatus.Forbidden, "forbidden");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PartyRolesView], ScopeKind.Company, null);
+        Assert.Equal(["S01", "S02"], Codes(Ok(await RolesMgmt.SearchRolesAsync(viewer.Id, Company.Id, null, "alpha", null, null))));
     }
 
     [PostgresFact]
