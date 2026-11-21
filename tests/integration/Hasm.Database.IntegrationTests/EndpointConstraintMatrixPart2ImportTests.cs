@@ -5,6 +5,7 @@ using Hasm.Infrastructure.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Cc = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostCenter;
+using Ib = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ImportBatch;
 using Mode = Hasm.Database.IntegrationTests.EndpointConstraintMatrixPart2Tests.Mode;
 
 namespace Hasm.Database.IntegrationTests;
@@ -37,11 +38,12 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
         return r;
     }
 
-    private async Task<ApiResponse> Upload(string adapter, string csv)
+    private async Task<ApiResponse> Upload(string adapter, string csv, string? key = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{Base}?adapter={adapter}&fileName={adapter}.csv") { Content = new ByteArrayContent(Bytes(csv)) };
         request.Headers.Add("X-Hasm-Request", "1");
         request.Headers.Add("Cookie", $"{CookieName}={cookie}");
+        if (key is not null) request.Headers.Add("Idempotency-Key", key);
         using var response = await client.SendAsync(request);
         return new ApiResponse(response.StatusCode, response.Headers, await response.Content.ReadAsStringAsync());
     }
@@ -88,9 +90,10 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
         Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantImportApproverOfflineAsync(approverUser.Login, Company.Id));
         var approver = await SignIn(approverUser);
 
-        // POST /imports/ stays PENDING: identical concurrent uploads with one Idempotency-Key answer 409 idempotency_key_reused to some losers instead of the documented replay
-        // (exactly one batch is written); reported to the lead as a contract finding, never pinned here as if it were the contract
-        var up = await Uploaded("ccenters", "code,name\nM1,Matrix one\nM2,Matrix two\n");
+        // an upload with an idempotency key (the key race is resolved to the original batch, #165): every answer is that batch, and exactly ONE exists
+        const string key = "cvm2-upload-0001";
+        var up = Won(await races.Run("import upload", ["2xx"], () => Upload("ccenters", "code,name\nM1,Matrix one\nM2,Matrix two\n", key), Mode.Same));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Ib.Table} WHERE {Ib.IdempotencyKey} = '{key}'"));
         var id = IdOf(up);
 
         // the wizard steps, each from one revision
@@ -128,8 +131,8 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
         await Race("import apply template", ["2xx"], HttpMethod.Post, $"{Base}/{itemsId}/mapping/apply-template", new { name = "Matrix" }, mode: Mode.Same);
         await Race("import retire template", ["412:revision_conflict"], HttpMethod.Post, $"{Base}/templates/items/Matrix/retire", new { expectedVersion = 1 });
 
-        // PUT /imports/settings stays PENDING: parallel first saves from revision 0 answer 503 service_unavailable (the singleton INSERT meets its unique key unmapped), a REAL 5xx
-        // reported to the lead with its reproduction. Maintenance is repeatable.
+        // settings from one revision, the first save included (#165); maintenance is repeatable
+        await Race("import settings", R, HttpMethod.Put, $"{Base}/settings", new ImportSettingsInput(30, 14), "\"0\"");
         await Race("import maintenance", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/run", null, mode: Mode.Same);
         await Race("import rewrap", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/rewrap", null, mode: Mode.Same);
 
