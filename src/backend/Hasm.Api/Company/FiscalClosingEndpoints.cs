@@ -23,8 +23,8 @@ public static class FiscalClosingEndpoints
         g.MapPut("/settings", PutSettings).WithMetadata(new BodyLimit());
         g.MapGet("/years", List);
         g.MapGet("/years/{yearId:guid}/preview", Preview);
-        g.MapPost("/years/{yearId:guid}/close", Close);
-        g.MapPost("/years/{yearId:guid}/carry-forward", CarryForward);
+        g.MapPost("/years/{yearId:guid}/close", Close).WithMetadata(new BodyLimit());
+        g.MapPost("/years/{yearId:guid}/carry-forward", CarryForward).WithMetadata(new BodyLimit());
         g.MapPost("/years/{yearId:guid}/reverse-opening", ReverseOpening).WithMetadata(new BodyLimit());
         g.MapPost("/years/{yearId:guid}/reverse-closing", ReverseClosing).WithMetadata(new BodyLimit());
     }
