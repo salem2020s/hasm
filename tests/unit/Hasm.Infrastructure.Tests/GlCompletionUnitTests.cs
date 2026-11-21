@@ -117,7 +117,7 @@ public class GlCompletionUnitTests
         foreach (var table in new[] { CompanySchema.ApprovalPolicyStage.Table, CompanySchema.DocumentApprovalBinding.Table, CompanySchema.FiscalYearClosing.Table, CompanySchema.FiscalYearCarryforward.Table })
             Assert.Equal(["INSERT", "SELECT"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == table).Privileges.Order());
         Assert.Equal(["INSERT", "SELECT", "UPDATE"], CompanyRuntimePrivileges.Tables.Single(t => t.Table == CompanySchema.ClosingSettings.Table).Privileges.Order());
-        Assert.DoesNotContain("DELETE", CompanyRuntimePrivileges.Tables.Where(t => t.Table != CompanySchema.JournalLine.Table && t.Table != CompanySchema.JournalAllocation.Table && t.Table != CompanySchema.ImportRow.Table && t.Table != CompanySchema.ItemUnit.Table && t.Table != CompanySchema.StockDocumentLine.Table && t.Table != CompanySchema.StocktakeLine.Table && t.Table != CompanySchema.TaxItemClass.Table && t.Table != CompanySchema.TaxPartyClass.Table && t.Table != CompanySchema.TaxRuleBase.Table).SelectMany(t => t.Privileges));
+        Assert.DoesNotContain("DELETE", CompanyRuntimePrivileges.Tables.Where(t => t.Table != CompanySchema.JournalLine.Table && t.Table != CompanySchema.JournalAllocation.Table && t.Table != CompanySchema.ImportRow.Table && t.Table != CompanySchema.ItemUnit.Table && t.Table != CompanySchema.StockDocumentLine.Table && t.Table != CompanySchema.StocktakeLine.Table && t.Table != CompanySchema.TaxItemClass.Table && t.Table != CompanySchema.TaxPartyClass.Table && t.Table != CompanySchema.TaxRuleBase.Table && t.Table != CompanySchema.CommercialDocumentLine.Table).SelectMany(t => t.Privileges));
     }
 
     [Theory]

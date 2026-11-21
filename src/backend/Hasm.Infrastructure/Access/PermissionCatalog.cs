@@ -154,6 +154,8 @@ public sealed partial class PermissionCatalog
         new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
+        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve and reject arrive with S1b and, like the journal approver, will be outside the Company Administrator preset.
+        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Cancel]),
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
     ]);
@@ -276,6 +278,11 @@ public sealed partial class PermissionCatalog
         public const string PricingView = "company.pricing.view";
         public const string PricingConfigure = "company.pricing.configure";
         public const string PricingOverride = "company.pricing.override";
+        public const string CommercialView = "company.commercialdocs.view";
+        public const string CommercialCreate = "company.commercialdocs.create";
+        public const string CommercialUpdate = "company.commercialdocs.update";
+        public const string CommercialSubmit = "company.commercialdocs.submit";
+        public const string CommercialCancel = "company.commercialdocs.cancel";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
         public const string PartyRolesView = "company.partyroles.view";
