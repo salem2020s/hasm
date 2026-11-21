@@ -87,13 +87,17 @@ public class BackupRetentionTests : PostgresTestBase
         if (zone is null) return c;
         var db = Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName);
         await Exec(db, $"INSERT INTO {ST.Table} ({ST.TimeZone}, {ST.UpdatedAtUtc}) VALUES ('{zone}', now()) ON CONFLICT ({ST.Singleton}) DO UPDATE SET {ST.TimeZone} = EXCLUDED.{ST.TimeZone}, {ST.Revision} = {ST.Table}.{ST.Revision} + 1, {ST.UpdatedAtUtc} = now()");
+        // a fiscal year and its periods in ONE transaction (the calendar is checked at commit)
         var year = Guid.NewGuid();
-        await Exec(db, $"INSERT INTO {FY.Table} ({FY.Id}, {FY.Name}, {FY.StartDate}, {FY.EndDate}, {FY.PeriodType}, {FY.TimeZone}, {FY.CreatedAtUtc}, {FY.CreatedBy}) VALUES ('{year}', 'FY2026', '2026-01-01', '2026-12-31', 1, '{zone}', now(), gen_random_uuid())");
+        var sql = new StringBuilder("BEGIN;\n");
+        sql.Append($"INSERT INTO {FY.Table} ({FY.Id}, {FY.Name}, {FY.StartDate}, {FY.EndDate}, {FY.PeriodType}, {FY.TimeZone}, {FY.CreatedAtUtc}, {FY.CreatedBy}) VALUES ('{year}', 'FY2026', '2026-01-01', '2026-12-31', 1, '{zone}', now(), gen_random_uuid());\n");
         for (var m = 1; m <= 12; m++)
         {
             var start = new DateOnly(2026, m, 1);
-            await Exec(db, $"INSERT INTO {FP.Table} ({FP.YearId}, {FP.Number}, {FP.StartDate}, {FP.EndDate}, {FP.CreatedAtUtc}) VALUES ('{year}', {m}, '{start:yyyy-MM-dd}', '{start.AddMonths(1).AddDays(-1):yyyy-MM-dd}', now())");
+            sql.Append($"INSERT INTO {FP.Table} ({FP.YearId}, {FP.Number}, {FP.StartDate}, {FP.EndDate}, {FP.CreatedAtUtc}) VALUES ('{year}', {m}, '{start:yyyy-MM-dd}', '{start.AddMonths(1).AddDays(-1):yyyy-MM-dd}', now());\n");
         }
+        sql.Append("COMMIT;");
+        await Exec(db, sql.ToString());
         return c;
     }
 

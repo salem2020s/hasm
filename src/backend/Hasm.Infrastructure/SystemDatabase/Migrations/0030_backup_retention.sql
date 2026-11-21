@@ -21,8 +21,8 @@ CREATE TABLE t_4caa7490 (
     c_d2976757 varchar(500) NULL,
     CONSTRAINT k_624dbb7d PRIMARY KEY (c_cac29687),
     CONSTRAINT k_9ae8fd8d CHECK (
-        (c_1ea28b23 = 1 AND c_65d245cf ~ '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$' AND c_29d8b5b4 IS NULL AND c_a88bdba2 IS NULL AND c_5cb55291 IS NULL)
-        OR (c_1ea28b23 = 2 AND c_65d245cf IS NULL AND c_29d8b5b4 IS NOT NULL AND (c_a88bdba2 IS NULL OR c_5cb55291 IS NULL OR c_a88bdba2 <= c_5cb55291)))
+        ((c_1ea28b23 = 1 AND c_65d245cf ~ '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$' AND c_29d8b5b4 IS NULL AND c_a88bdba2 IS NULL AND c_5cb55291 IS NULL)
+         OR (c_1ea28b23 = 2 AND c_65d245cf IS NULL AND c_29d8b5b4 IS NOT NULL AND (c_a88bdba2 IS NULL OR c_5cb55291 IS NULL OR c_a88bdba2 <= c_5cb55291)))
         AND char_length(btrim(c_d77f1c27)) >= 3 AND char_length(btrim(c_a231fa62)) >= 1),
     CONSTRAINT k_b0ad7db5 CHECK ((c_cc1f1452 IS NULL AND c_32d04987 IS NULL AND c_d2976757 IS NULL)
         OR (char_length(btrim(c_cc1f1452)) >= 1 AND c_32d04987 IS NOT NULL AND char_length(btrim(c_d2976757)) >= 3))

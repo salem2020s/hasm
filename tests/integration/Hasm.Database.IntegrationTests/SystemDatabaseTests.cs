@@ -14,7 +14,7 @@ public class SystemDatabaseTests : PostgresTestBase
     {
         var result = await Init();
         Assert.True(result.DatabaseCreated);
-        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], result.AppliedMigrations);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], result.AppliedMigrations);
         Assert.Equal(30L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
@@ -76,7 +76,7 @@ public class SystemDatabaseTests : PostgresTestBase
     public async Task Failed_migration_rolls_back_completely()
     {
         await Init();
-        var bad = MigrationScript.Parse("0030_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
+        var bad = MigrationScript.Parse($"{MigrationScript.LoadEmbedded().Max(s => s.Version) + 1:0000}_bad.sql", "CREATE TABLE zz_partial (a int); SELECT 1/0;");
         var scripts = MigrationScript.LoadEmbedded().Append(bad).ToList();
         var runner = new MigrationRunner(Options.BuildSystemConnectionString(admin: true));
 
