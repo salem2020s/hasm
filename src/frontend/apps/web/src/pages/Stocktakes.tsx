@@ -1,4 +1,5 @@
 import { ApiError, type StockItemRef, type StockWarehouseRef, type Stocktake, type StocktakeCapabilities, type StocktakeInput, type StocktakeStatus, type StocktakeSummary } from "@hasm/api-client";
+import { parseDecimalInput } from "../numberInput";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -19,7 +20,8 @@ const STATUSES: StocktakeStatus[] = [1, 2, 3, 4, 5];
 const todayIso = () => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 /** Display of an exact decimal coming from the server or computed for a preview (trailing zeros and floating-point noise removed). */
 const qty = (n: number | null | undefined) => (n === null || n === undefined ? "—" : String(Number(n.toFixed(10))));
-const COUNT = /^\d+(\.\d{1,10})?$/;
+/** A counted quantity: zero is a valid count, so this is a non-negative decimal with at most 10 decimals (NaN when invalid). */
+const parseCount = (s: string): number => { const n = parseDecimalInput(s); return Number.isFinite(n) && n >= 0 && Number(n.toFixed(10)) === n ? n : Number.NaN; };
 
 interface LineRow { key: number; item: StockItemRef; unitId: string; counted: string; reason: string; book: number | null }
 interface Form { countDate: string; reference: string; notes: string; lines: LineRow[] }
@@ -190,13 +192,13 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
     const v: Record<string, string> = {};
     if (isNew && !warehouseId) v.warehouseId = t("field.required");
     if (!form.countDate) v.countDate = t("field.required");
-    form.lines.forEach((l, i) => { if (l.counted.trim() && !COUNT.test(l.counted.trim())) v[`lines[${i}].countedQuantity`] = fieldText(t, "invalid_quantity"); });
+    form.lines.forEach((l, i) => { if (l.counted.trim() && Number.isNaN(parseCount(l.counted))) v[`lines[${i}].countedQuantity`] = fieldText(t, "invalid_quantity"); });
     return v;
   }
   const invalidTabs = (e: Record<string, string>) => new Set(Object.keys(e).map(TAB_OF));
   const toInput = (): StocktakeInput => ({
     warehouseId, countDate: form.countDate, reference: blankToNull(form.reference), notes: blankToNull(form.notes),
-    lines: form.lines.map((l) => ({ itemId: l.item.id, unitId: l.unitId, countedQuantity: l.counted.trim() ? Number(l.counted.trim()) : null, reason: blankToNull(l.reason) })),
+    lines: form.lines.map((l) => ({ itemId: l.item.id, unitId: l.unitId, countedQuantity: l.counted.trim() ? parseCount(l.counted) : null, reason: blankToNull(l.reason) })),
   });
 
   function showServerError(err: unknown) {
@@ -275,7 +277,7 @@ function StocktakeEditor({ editor, caps, warehouses, onClose, onChanged, onSwitc
                   const saved = !dirty ? doc.lines[i] : undefined;
                   const unit = l.item.units.find((u) => u.id === l.unitId);
                   const c = l.counted.trim();
-                  const previewBase = unit && COUNT.test(c) ? Number(c) * unit.factor : null;
+                  const previewBase = unit && !Number.isNaN(parseCount(c)) ? parseCount(c) * unit.factor : null;
                   const countedBase = saved ? saved.countedBaseQuantity : previewBase;
                   const book = saved ? saved.bookQuantity : l.book;
                   const variance = saved ? saved.variance : countedBase !== null && book !== null ? countedBase - book : null;

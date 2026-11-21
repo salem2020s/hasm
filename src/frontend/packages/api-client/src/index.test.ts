@@ -117,6 +117,12 @@ describe("api client", () => {
     expect(onUnauthenticated).toHaveBeenCalledTimes(1);
   });
 
+  it("carries the password-policy problems of a weak_password refusal (strings only)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "weak_password", problems: ["too_short", 5, "too_repetitive"] }, { status: 400 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.login("a", "b")).rejects.toMatchObject({ status: 400, code: "weak_password", details: { problems: ["too_short", "too_repetitive"] } });
+  });
+
   it("reports Retry-After for throttled logins", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ error: "too_many_attempts" }, { status: 429, headers: { "Retry-After": "42" } }));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
@@ -587,5 +593,21 @@ describe("api client: by-ids lookup of units and item groups", () => {
     expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/inventory/groups?ids=g1");
     expect((call(fetchMock, 0).init.headers as Record<string, string>)["X-Hasm-Request"]).toBeUndefined();      // a read, not a state change
     await expect(client.lookupInventoryGroups(["g2"])).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("api client: party list filters", () => {
+  it("sends active and withoutRole next to search, limit and offset, and nothing when absent", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ parties: [], total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listParties({ search: "a b", limit: 50, active: true, withoutRole: "customer" });
+    await client.listParties({ active: false, withoutRole: "supplier", offset: 5 });
+    await client.listParties();
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("active")).toBe("true");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("withoutRole")).toBe("customer");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("search")).toBe("a b");
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("active")).toBe("false");   // false is sent, not dropped
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("withoutRole")).toBe("supplier");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/parties");
   });
 });

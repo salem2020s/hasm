@@ -265,6 +265,13 @@ public static partial class SystemSchema
     /// <summary>Non-business infrastructure table that records applied migrations.</summary>
     public const string MigrationJournalTable = "migration_journal";
 
+    /// <summary>
+    /// The explicit SECRET-STORE flag of the logical schema dictionary (Phase 4.3 slice 4, D-070): the logical table names (keys of <see cref="Map"/>) whose rows hold secrets or ephemeral security data.
+    /// Their DATA never reaches an unencrypted backup set: <c>BackupRunService.SystemDumpExclusions</c> must exclude exactly these tables (pinned by a unit test in both directions). A new secret-store table
+    /// (for example the Phase 4.1 TOTP secrets) is added HERE and to the exclusions in the same change.
+    /// </summary>
+    public static IReadOnlySet<string> SecretStoreTables { get; } = new HashSet<string>(StringComparer.Ordinal) { "Session.Table", "LoginThrottle.Table" };
+
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 

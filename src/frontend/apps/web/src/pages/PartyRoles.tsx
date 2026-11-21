@@ -1,5 +1,5 @@
-import type { Account, LocalPartySummary, PartyRole, PartyRolesResponse, SalesRepresentative, SalesRepresentativesResponse } from "@hasm/api-client";
-import { Tabs, useI18n, type TabItem } from "@hasm/ui";
+import { ApiError, type Account, type LocalPartySummary, type PartyRole, type PartyRolesResponse, type SalesRepresentative, type SalesRepresentativesResponse } from "@hasm/api-client";
+import { SearchPicker, Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
@@ -23,8 +23,8 @@ export function PartyRolesPage() {
   tRef.current = t;
   const auth = useAuth();
   const canRoles = auth.can("company.partyroles.view"), canReps = auth.can("company.salesreps.view");
+  const canSearchParties = canRoles && auth.canAny("company.parties.view");   // the party picker searches the server; without the permission a new role cannot be added
   const [data, setData] = useState<Data | null>(null);
-  const [parties, setParties] = useState<LocalPartySummary[] | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState(canRoles ? "customers" : "reps");
@@ -35,7 +35,6 @@ export function PartyRolesPage() {
       const [customers, suppliers, reps] = await Promise.all([
         canRoles ? auth.api.listPartyRoles(1) : Promise.resolve(null), canRoles ? auth.api.listPartyRoles(2) : Promise.resolve(null), canReps ? auth.api.listSalesRepresentatives() : Promise.resolve(null)]);
       setData({ customers, suppliers, reps }); setLoadError(null);
-      if (canRoles && auth.canAny("company.parties.view")) { try { setParties((await auth.api.listParties({ limit: 500 })).parties); } catch { setParties(null); } }
       if (canRoles && auth.can("company.accounts.view")) { try { setAccounts((await auth.api.listAccounts()).accounts); } catch { setAccounts([]); } }
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pr.error.")); }
   }, [auth.api, auth.handleError, canRoles, canReps]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -44,8 +43,8 @@ export function PartyRolesPage() {
   if (!data) return loadError ? <Banner kind="error" testId="pr-load-error">{loadError}</Banner> : <Loading />;
   const reps = data.reps?.items ?? [];
   const tabs: TabItem[] = [
-    ...(data.customers ? [{ id: "customers", label: t("pr.tab.customers"), dirty: dirty.customers, content: <RoleTab kind={1} resp={data.customers} parties={parties} accounts={accounts} reps={reps} reload={load} onDirty={(v) => setTabDirty("customers", v)} /> } as TabItem] : []),
-    ...(data.suppliers ? [{ id: "suppliers", label: t("pr.tab.suppliers"), dirty: dirty.suppliers, content: <RoleTab kind={2} resp={data.suppliers} parties={parties} accounts={accounts} reps={[]} reload={load} onDirty={(v) => setTabDirty("suppliers", v)} /> } as TabItem] : []),
+    ...(data.customers ? [{ id: "customers", label: t("pr.tab.customers"), dirty: dirty.customers, content: <RoleTab kind={1} resp={data.customers} canSearchParties={canSearchParties} accounts={accounts} reps={reps} reload={load} onDirty={(v) => setTabDirty("customers", v)} /> } as TabItem] : []),
+    ...(data.suppliers ? [{ id: "suppliers", label: t("pr.tab.suppliers"), dirty: dirty.suppliers, content: <RoleTab kind={2} resp={data.suppliers} canSearchParties={canSearchParties} accounts={accounts} reps={[]} reload={load} onDirty={(v) => setTabDirty("suppliers", v)} /> } as TabItem] : []),
     ...(data.reps ? [{ id: "reps", label: t("pr.tab.reps"), dirty: dirty.reps, content: <RepsTab resp={data.reps} reload={load} onDirty={(v) => setTabDirty("reps", v)} /> } as TabItem] : []),
   ];
   return (
@@ -69,10 +68,37 @@ function Notices({ runner, id }: { runner: ReturnType<typeof useRunner>; id: str
   );
 }
 
-interface RoleTabProps { kind: 1 | 2; resp: PartyRolesResponse; parties: LocalPartySummary[] | null; accounts: Account[]; reps: SalesRepresentative[]; reload: () => Promise<void>; onDirty: (v: boolean) => void }
+const PARTY_PAGE_LIMIT = 50;
+
+/**
+ * Party picker for a NEW role: a bounded server-side SEARCH over the parties instead of a list silently cut off at 500. Parties that are inactive or already hold this kind of role are excluded BY THE
+ * SERVER (`active=true`, `withoutRole`), before paging, so the page, the total and "N of M" are exact (a first page full of existing customers cannot hide the eligible parties behind it). A 403 (no
+ * permission to view parties) turns the picker into the existing "cannot add a role" hint; any other failure shows the picker's own error and retry.
+ */
+function PartyPicker({ id, kind, value, onChange, usedCount, error }: { id: string; kind: 1 | 2; value: string; onChange: (v: string) => void; usedCount: number; error?: string }) {
+  const { t } = useI18n();
+  const auth = useAuth();
+  const [forbidden, setForbidden] = useState(false);
+  const load = useCallback((search: string) => auth.api.listParties({ search: search === "" ? undefined : search, limit: PARTY_PAGE_LIMIT, active: true, withoutRole: kind === 1 ? "customer" : "supplier" })
+    .then((r) => ({ items: r.parties, total: r.total }))
+    .catch((e) => { if (e instanceof ApiError && e.status === 403) setForbidden(true); else auth.handleError(e); throw e; }), [auth.api, auth.handleError, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (forbidden) return <p className="hint">{t("pr.party_unavailable")}</p>;
+  const hintId = `${id}-hint`;
+  return (
+    <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
+      <label htmlFor={`${id}-list`}>{t("pr.party")}<span aria-hidden="true" className="required"> *</span></label>
+      <SearchPicker id={`${id}-list`} label={t("pr.party")} value={value} onChange={(v) => onChange(v)} load={load} getId={(p: LocalPartySummary) => p.id} getLabel={(p) => `\u2068${p.code}\u2069 — \u2068${p.displayName}\u2069`}   /* isolates keep a Latin code in order next to an Arabic name */
+        noneLabel={t("pr.choose_party")} reloadKey={usedCount} invalid={!!error} required describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
+      <p id={hintId} className="hint">{t("pr.party_hint")}</p>
+      {error && <p id={`${id}-error`} className="field-error">{error}</p>}
+    </div>
+  );
+}
+
+interface RoleTabProps { kind: 1 | 2; resp: PartyRolesResponse; canSearchParties: boolean; accounts: Account[]; reps: SalesRepresentative[]; reload: () => Promise<void>; onDirty: (v: boolean) => void }
 const emptyForm = { partyId: "", mode: "2", days: "30", limit: "", account: "", rep: "" };
 
-function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleTabProps) {
+function RoleTab({ kind, resp, canSearchParties, accounts, reps, reload, onDirty }: RoleTabProps) {
   const { t, locale } = useI18n();
   const auth = useAuth();
   const id = kind === 1 ? "customer" : "supplier";
@@ -83,7 +109,6 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
   const wantedType = kind === 1 ? "asset" : "liability";
   const candidates = accounts.filter((a) => a.type === wantedType && !a.isGroup && a.postable && (a.isActive || a.id === form.account));   // an already-chosen account stays shown even if later deactivated, so editing never silently drops it
   const used = new Set(resp.items.map((r) => r.partyId));
-  const choices = (parties ?? []).filter((p) => p.isActive && !used.has(p.id));
   const isDirty = editing ? true : form.partyId !== "" || form.limit !== "" || form.account !== "" || form.rep !== "" || form.mode !== "2" || form.days !== "30";
   useReportUnsaved(`pr-${id}`, isDirty && (editing !== null || form.partyId !== ""), t(kind === 1 ? "pr.tab.customers" : "pr.tab.suppliers"));
   useEffect(() => { onDirty(isDirty && (editing !== null || form.partyId !== "")); }, [isDirty, editing, form.partyId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -132,10 +157,8 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
       {configure && (
         <fieldset disabled={runner.busy} data-testid={`pr-${id}-form`}>
           <legend>{editing ? `${t("pr.edit_role")} — ${editing.partyCode}` : t(kind === 1 ? "pr.add_customer" : "pr.add_supplier")}</legend>
-          {!editing && (parties === null ? <p className="hint">{t("pr.party_unavailable")}</p> : (
-            <Field id={`pr-${id}-party`} label={t("pr.party")} required hint={t("pr.party_hint")} error={runner.fields.partyId}>
-              {(a) => <select {...a} value={form.partyId} onChange={(e) => setForm({ ...form, partyId: e.target.value })}><option value="">{t("pr.choose_party")}</option>{choices.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.displayName}</option>)}</select>}
-            </Field>
+          {!editing && (!canSearchParties ? <p className="hint">{t("pr.party_unavailable")}</p> : (
+            <PartyPicker id={`pr-${id}-party`} kind={kind} value={form.partyId} onChange={(v) => setForm({ ...form, partyId: v })} usedCount={used.size} error={runner.fields.partyId} />
           ))}
           <Field id={`pr-${id}-mode`} label={t("pr.mode")} required error={runner.fields.paymentMode}>
             {(a) => <select {...a} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>{[1, 2, 3].map((n) => <option key={n} value={n}>{t(`pr.mode.${n}`)}</option>)}</select>}

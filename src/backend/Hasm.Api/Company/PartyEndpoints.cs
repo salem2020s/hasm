@@ -127,11 +127,14 @@ public static class PartyEndpoints
         return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, configure = c.Configure });
     }
 
-    private static async Task<IResult> List(HttpContext http, AccessService access, PartyManagementService svc, string? search, int? linkState, int? offset, int? limit)
+    /// <summary>Optional <c>active</c> (true/false) and <c>withoutRole</c> (customer/supplier: only parties holding no role of that kind) filters are applied in SQL before paging, so <c>total</c> and the page are exact. An unknown value answers the standard <c>invalid_request</c> 400 naming the parameter. Same permission and company scope as the unfiltered list.</summary>
+    private static async Task<IResult> List(HttpContext http, AccessService access, PartyManagementService svc, string? search, int? linkState, int? offset, int? limit, string? active, string? withoutRole)
     {
+        if (ListParameters.TryParseActive(active, out var onlyActive) is { } badActive) return ListParameters.Invalid(badActive);
+        if (ListParameters.TryParseWithoutRole(withoutRole, out var roleKind) is { } badRole) return ListParameters.Invalid(badRole);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        var r = await svc.ListAsync(actor!.UserId, actor.CompanyId, new PartyFilter(search, linkState, offset ?? 0, limit ?? 50), http.RequestAborted);
+        var r = await svc.ListAsync(actor!.UserId, actor.CompanyId, new PartyFilter(search, linkState, offset ?? 0, limit ?? 50, onlyActive, roleKind is { } k ? (PartyRoleKind)k : null), http.RequestAborted);
         return CompanyConfigurationEndpoints.Map(r, p => new
         {
             total = p.Total,
