@@ -525,6 +525,13 @@ public sealed partial class TaxConfigService(CompanyDatabaseResolver resolver, C
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
         await using (var ro = new NpgsqlCommand("SET TRANSACTION READ ONLY", conn, tx)) await ro.ExecuteNonQueryAsync(ct);
+        return await ResolveInWorkAsync(conn, tx, documentType!, operation!, itemId, partyId, taxDate, ct);
+    }
+
+    /// <summary>The same resolution inside a CALLER's transaction (a commercial document approval resolves and seals in ONE transaction). Nothing is written.</summary>
+    internal async Task<ConfigResult<TaxResolution>> ResolveInWorkAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string documentType, string operation, Guid? itemId, Guid? partyId, DateOnly taxDate, CancellationToken ct)
+    {
+        if (!KeyPattern().IsMatch(documentType ?? "") || !KeyPattern().IsMatch(operation ?? "")) return ConfigResult<TaxResolution>.Fail(ConfigStatus.Invalid, "invalid_tax_context");
         Guid? itemClass = null, partyClass = null;
         if (itemId is { } i) itemClass = await ClassOf(conn, tx, TI.Table, TI.ItemId, TI.ClassId, i, ct);
         if (partyId is { } p) partyClass = await ClassOf(conn, tx, TP.Table, TP.PartyId, TP.ClassId, p, ct);

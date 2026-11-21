@@ -149,9 +149,18 @@ public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAu
     /// Issues the next official number for a document inside the CALLER's transaction. The scope decides the counter: a per-branch rule needs a branch,
     /// a per-fiscal-year rule needs a fiscal year; a scope the rule does not use is ignored (the all-zero uuid stands for "none").
     /// </summary>
-    public static async Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
+    public static Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
     {
         if (!DocumentTypes.IsKnown(docType)) throw new ArgumentException("unknown document type", nameof(docType));
+        return IssueCoreAsync(conn, tx, docType, scope, documentId, actor, nowUtc, ct);
+    }
+
+    /// <summary>Same issue for a type the CALLER vouches for from its own registry (commercial documents: the internal test type is registered only in the test composition, D-049). Not part of the public surface.</summary>
+    internal static Task<IssuedNumber> IssueForRegisteredTypeAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct) =>
+        IssueCoreAsync(conn, tx, docType, scope, documentId, actor, nowUtc, ct);
+
+    private static async Task<IssuedNumber> IssueCoreAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
+    {
         var rule = await ReadAsync(conn, tx, docType, false, ct);
         if (rule.PerBranch && (scope.BranchId is null || string.IsNullOrWhiteSpace(scope.BranchCode))) throw new InvalidOperationException("a branch is required to number this document");
         if (rule.PerFiscalYear && (scope.FiscalYearId is null || string.IsNullOrWhiteSpace(scope.FiscalYearLabel))) throw new InvalidOperationException("a fiscal year is required to number this document");

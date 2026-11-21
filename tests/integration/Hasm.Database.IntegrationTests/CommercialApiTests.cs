@@ -11,8 +11,8 @@ public class CommercialApiTests : CommercialTestBase
     [PostgresFact]
     public async Task The_documents_api_authenticates_fences_revisions_scopes_branches_and_exposes_no_delete_or_approval()
     {
-        await Prepare();
-        await StartApi(configure: b => b.ConfigureServices(RegisterTestType));                                                  // the internal test type exists only in the test composition
+        await StartApi(configure: b => b.ConfigureServices(RegisterTestType));   // prepares the company itself; the fixtures are composed after it                                                  // the internal test type exists only in the test composition
+        await ComposeAsync();
         var a = await NewBranchId("BA"); var b2 = await NewBranchId("BB"); var party = await NewCustomerId("C1"); var (item, unit) = await NewItemAndUnit("AP1");
         var id = Guid.NewGuid();
         var routes = new (HttpMethod, string)[] { (HttpMethod.Get, Base), (HttpMethod.Post, Base), (HttpMethod.Get, $"{Base}/{id}"), (HttpMethod.Put, $"{Base}/{id}"), (HttpMethod.Post, $"{Base}/{id}/submit"), (HttpMethod.Post, $"{Base}/{id}/withdraw"), (HttpMethod.Post, $"{Base}/{id}/cancel") };
@@ -43,7 +43,7 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal("JOD", created.Json.GetProperty("currency").GetString());
         Assert.False(created.Json.GetProperty("replayed").GetBoolean());
         Assert.False(created.Json.GetProperty("lines")[0].TryGetProperty("unitPrice", out _));                                // the view carries none either
-        Assert.DoesNotContain("999", created.Body);
+        Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"(?<![0-9A-Za-z-])999(?![0-9A-Za-z-])"), created.Body);   // the client-sent price is not echoed (a random id may contain the digits, a number token may not)
         var replay = await Send(HttpMethod.Post, Base, Body("api-key-00001"), cookie);
         Assert.Equal(docId, replay.Json.GetProperty("id").GetGuid());
         Assert.True(replay.Json.GetProperty("replayed").GetBoolean());
@@ -57,7 +57,8 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal(HttpStatusCode.OK, edited.Status);
         Assert.Equal("\"2\"", Etag(edited));
         var submitted = await Send(HttpMethod.Post, $"{Base}/{docId}/submit", null, cookie, ifMatch: Etag(edited));
-        Assert.Equal((HttpStatusCode.OK, (short)2), (submitted.Status, submitted.Json.GetProperty("status").GetInt16()));
+        Assert.True(submitted.Status == HttpStatusCode.OK, submitted.Body);
+        Assert.Equal((short)2, submitted.Json.GetProperty("status").GetInt16());
         Assert.Equal(HttpStatusCode.Conflict, (await Send(HttpMethod.Put, $"{Base}/{docId}", Body("ignored-key-xx", 5m), cookie, ifMatch: Etag(submitted))).Status);   // a submitted document is not editable
         var withdrawn = await Send(HttpMethod.Post, $"{Base}/{docId}/withdraw", null, cookie, ifMatch: Etag(submitted));
         Assert.Equal((short)1, withdrawn.Json.GetProperty("status").GetInt16());
@@ -66,10 +67,21 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal((short)5, cancelled.Json.GetProperty("status").GetInt16());
         Assert.Equal(5, (await Send(HttpMethod.Get, $"{Base}/{docId}", cookie: cookie)).Json.GetProperty("events").GetArrayLength());   // created, updated, submitted, withdrawn, cancelled
 
-        // there is no delete and no approval route in S1a
+        // there is no delete route; approval and rejection exist but are NOT held by the Company Administrator preset
         Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Delete, $"{Base}/{docId}", null, cookie)).Status);
-        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Post, $"{Base}/{docId}/approve", null, cookie, ifMatch: "\"6\"")).Status);
-        Assert.Equal(HttpStatusCode.NotFound, (await Send(HttpMethod.Post, $"{Base}/{docId}/reject", null, cookie, ifMatch: "\"6\"")).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/{docId}/approve", null, cookie, ifMatch: "\"6\"")).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/{docId}/reject", new { reason = "x" }, cookie, ifMatch: "\"6\"")).Status);
+        // the delegated approver approves over HTTP: the official number and the sealed totals come back, a second approval is refused
+        var second = await Send(HttpMethod.Post, Base, Body("api-key-00009"), cookie);
+        var secondSubmitted = await Send(HttpMethod.Post, $"{Base}/{second.Json.GetProperty("id").GetGuid()}/submit", null, cookie, ifMatch: Etag(second));
+        var approverCookie = await SignIn(await NewApproverUser());
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await Send(HttpMethod.Post, $"{Base}/{second.Json.GetProperty("id").GetGuid()}/approve", null, approverCookie, ifMatch: "\"1\"")).Status);
+        var approvedHttp = await Send(HttpMethod.Post, $"{Base}/{second.Json.GetProperty("id").GetGuid()}/approve", null, approverCookie, ifMatch: Etag(secondSubmitted));
+        Assert.True(approvedHttp.Status == HttpStatusCode.OK, approvedHttp.Body);
+        Assert.Equal((short)3, approvedHttp.Json.GetProperty("status").GetInt16());
+        Assert.Matches("^2026-\\d{6}$", approvedHttp.Json.GetProperty("officialNumber").GetString()!);
+        Assert.Equal(20m, approvedHttp.Json.GetProperty("totalGross").GetDecimal());
+        Assert.NotEqual(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Base}/{second.Json.GetProperty("id").GetGuid()}/approve", null, approverCookie, ifMatch: Etag(approvedHttp))).Status);
 
         // branch-scoped authorization over HTTP
         var other = await Send(HttpMethod.Post, Base, Body("api-key-00003", branch: b2), cookie);
@@ -78,7 +90,7 @@ public class CommercialApiTests : CommercialTestBase
         var viewerCookie = await SignIn(viewerA);
         var list = await Send(HttpMethod.Get, Base, cookie: viewerCookie);
         Assert.Equal(HttpStatusCode.OK, list.Status);
-        Assert.Equal([docId], list.Json.GetProperty("documents").EnumerateArray().Select(d => d.GetProperty("id").GetGuid()));
+        Assert.Equal(new[] { docId, second.Json.GetProperty("id").GetGuid() }.Order(), list.Json.GetProperty("documents").EnumerateArray().Select(d => d.GetProperty("id").GetGuid()).Order());   // both branch A documents, never the branch B one
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Base}/{otherId}", cookie: viewerCookie)).Status);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, Base, Body("api-key-00004"), viewerCookie)).Status);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/{otherId}/submit", null, viewerCookie, ifMatch: "\"1\"")).Status);

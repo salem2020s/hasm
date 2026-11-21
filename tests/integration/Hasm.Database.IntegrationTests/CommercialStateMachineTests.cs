@@ -4,6 +4,7 @@ using Npgsql;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentEvent;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
+using CDA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentApproval;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -75,11 +76,10 @@ public class CommercialStateMachineTests : CommercialTestBase
         string RawInsert(string key, int mode, int status) => $"INSERT INTO {CD.Table} ({CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.IdempotencyKey}, {CD.PayloadHash}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}) " +
             $"VALUES (gen_random_uuid(), 'commercial_test', '{branch}', '{party}', 'JOD', '2026-06-15', {mode}, {status}, '{key}', '{new string('a', 64)}', 1, '{Admin.Id}', now(), now())";
 
-        // approval, rejection and cancel-of-approved are NOT in the S1a guard (they arrive with S1b through a new migration)
+        // a draft can never jump to approved or rejected; an approval by direct statement carries no approver, number or seal and is refused (the full S1b matrix is in the approval tests)
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.Status} = 3")));
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.Status} = 4")));
         Assert.Equal("P0001", await Fails(Up(submitted.Id, $"{CD.Status} = 3")));
-        Assert.Equal("P0001", await Fails(Up(submitted.Id, $"{CD.Status} = 4")));
         Assert.Equal("P0001", await Fails(Up(cancelled.Id, $"{CD.Status} = 1")));                                          // a cancelled document is final
         Assert.Equal("P0001", await Fails(Up(cancelled.Id, $"{CD.Status} = 2, {CD.SubmittedBy} = '{Admin.Id}'")));
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.Status} = 2")));                                              // a submitter is required
@@ -111,7 +111,7 @@ public class CommercialStateMachineTests : CommercialTestBase
         Assert.Equal("P0001", await Fails(RawEvent(draft.Id, 3, 1)));                                                      // a forged "approved" event is refused: it must carry the document's CURRENT status
         Assert.Equal("P0001", await Fails(RawEvent(draft.Id, 1, 2)));                                                      // so is an event pre-inserted for a future revision
         Assert.Equal("P0001", await Fails(RawEvent(Guid.NewGuid(), 1, 1)));                                                // and one for no document at all
-        Assert.Equal("23505", await Fails($"INSERT INTO {CE.Table} ({CE.Id}, {CE.DocumentId}, {CE.Kind}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.AtUtc}) VALUES (gen_random_uuid(), '{draft.Id}', 2, 1, 1, '{Admin.Id}', now())"));
+        Assert.Equal("23505", await Fails($"INSERT INTO {CE.Table} ({CE.Id}, {CE.DocumentId}, {CE.Kind}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.AtUtc}) VALUES (gen_random_uuid(), '{draft.Id}', 1, 1, 1, '{Admin.Id}', now())"));
         Assert.Null(await Fails(Up(draft.Id, $"{CD.Note} = 'a draft may change'")));                                        // a draft may be edited (this statement COMMITS, so it is the last one: the document moves to revision 2)
     }
 
@@ -125,7 +125,7 @@ public class CommercialStateMachineTests : CommercialTestBase
         await using var submitter = new NpgsqlConnection(connectionString); await submitter.OpenAsync();
         await using var writer = new NpgsqlConnection(connectionString); await writer.OpenAsync();
         await using var tx1 = await submitter.BeginTransactionAsync();
-        await using (var up = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 2, {CD.SubmittedBy} = '{Admin.Id}', {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{draft.Id}'", submitter, tx1)) await up.ExecuteNonQueryAsync();   // the submit is in flight, not yet committed
+        await using (var up = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 2, {CD.SubmittedBy} = '{Admin.Id}', {CDA.Fingerprint} = '{new string('a', 64)}', {CDA.TaxHash} = '{new string('b', 64)}', {CDA.TaxSnapshot} = 'x', {CDA.ExchangeRate} = 1, {CDA.TotalNet} = 0, {CDA.TotalTax} = 0, {CDA.TotalGross} = 0, {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{draft.Id}'", submitter, tx1)) await up.ExecuteNonQueryAsync();   // the submit is in flight, not yet committed
         var write = Task.Run(async () =>
         {
             try
