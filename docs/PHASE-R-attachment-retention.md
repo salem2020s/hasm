@@ -172,5 +172,5 @@ Purged content cannot be restored by the application. The only copy is an older 
 
 ### R3 follow-ups (recorded, not part of the R3 screen)
 
-* **Hold targets.** The record and attachment ids of a record-level or attachment-level hold are typed ids; a `SearchPicker` over records and attachments is a follow-up (needs a server search for removed attachments).
+* **Hold targets.** Record-level holds pick the record with the shared `SearchPicker` over the existing party and item lists (done); a user without `company.parties.view` or `company.items.view`, or whose list call answers 403, gets the typed record id with a hint. Attachment-level holds keep a typed attachment id ("copy the id from the Eligibility preview") because no existing endpoint lists REMOVED attachments with search (`GET /attachments` is subject-scoped, excludes removed ones and shows file names). Follow-up (backend slice, new PostgreSQL test and registry impact, to be scheduled after the queue drains): ids-only `subjectKind` and `subjectId` filters on `GET /attachment-retention/preview`, then pick the record and one of its removed attachments.
 * **Months field digits.** The months input accepts Western digits only; Arabic-Indic digit entry is the same follow-up as the fiscal-year screen (one shared numeric-input decision).
