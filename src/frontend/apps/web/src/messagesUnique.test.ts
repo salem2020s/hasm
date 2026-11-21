@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { fieldErrors } from "./components";
 import { catalog } from "./messages";
+import { apiError } from "./test-utils";
 
 /**
  * Catalog-wide uniqueness: messages.ts merges every module catalog with Object.assign, so a key defined in two modules is silently overwritten by the later one
@@ -21,6 +23,8 @@ describe("message catalog modules", () => {
   it("discovers the module catalogs (guards against the glob silently matching nothing)", () => {
     expect(bylang.Ar.size).toBeGreaterThan(500);
     expect(bylang.En.size).toBeGreaterThan(500);
+    expect(bylang.Ar.get("appName")).toEqual(["./messages.base.ts"]);          // the base catalog (shell, accounts, shared field messages) is covered too
+    expect(bylang.En.get("field.too_long")).toEqual(["./messages.base.ts"]);
   });
 
   it("has no key defined in two modules (per language)", () => {
@@ -32,5 +36,15 @@ describe("message catalog modules", () => {
 
   it("keeps ar and en keys identical across the merged catalog", () => {
     expect(Object.keys(catalog.ar).sort()).toEqual(Object.keys(catalog.en).sort());
+  });
+
+  it("scoped field lookups keep each screen's wording: attachments say 'text', everything else keeps the shared 'value' wording", () => {
+    const t = (lang: "ar" | "en") => (k: string) => catalog[lang][k] ?? k;
+    const err = apiError(400, "validation_failed", { fields: [{ field: "reason", code: "too_long" }] });
+    expect(fieldErrors(t("en"), err)).toEqual({ reason: "The value is longer than allowed." });
+    expect(fieldErrors(t("en"), err, "att")).toEqual({ reason: "The text is longer than allowed." });
+    expect(fieldErrors(t("ar"), err, "att").reason).toBe(catalog.ar["field.att.too_long"]);
+    expect(fieldErrors(t("ar"), err, "att").reason).not.toBe(fieldErrors(t("ar"), err).reason);
+    expect(fieldErrors(t("en"), err, "pr")).toEqual({ reason: "The value is longer than allowed." });   // a scope without its own key falls back to the shared one
   });
 });

@@ -37,7 +37,7 @@ export function AttachmentsPanel({ kind, subjectId }: { kind: AttachmentSubjectK
     catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "att.error.")); }
   }, [auth.api, auth.handleError, kind, subjectId]);
   useEffect(() => { void load(); }, [load]);
-  const runner = useRunner("att.error.", load);
+  const runner = useRunner("att.error.", load, "att");
   useReportUnsaved(`attachments-${kind}-${subjectId}`, file !== null, t("att.title"));
 
   if (!data) return loadError ? <Banner kind="error" testId="att-load-error">{loadError}</Banner> : <Loading />;

@@ -443,6 +443,19 @@ describe("pricing administration screen", () => {
       expect(await screen.findByTestId("pricing-currency-unavailable")).toHaveTextContent(A("pricing.currency_unavailable"));
     });
 
+    it("with the base currency simply unset (null, nothing failed) shows no warning, starts the currency empty and keeps create disabled", async () => {
+      render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf(null)) });
+      await go("#/company/pricing");
+      await screen.findByTestId("pricing-note");
+      expect(screen.queryByTestId("pricing-currency-unavailable")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      expect(panel.getByLabelText(label("pricing.currency"))).toHaveValue("");
+      await userEvent.type(panel.getByLabelText(label("pricing.code")), "x");
+      await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "ق");
+      expect(panel.getByRole("button", { name: A("pricing.create_list") })).toBeDisabled();
+    });
+
     it("shows no currency warning when the base currency loads", async () => {
       render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
       await go("#/company/pricing");
