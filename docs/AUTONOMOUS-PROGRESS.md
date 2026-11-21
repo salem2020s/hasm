@@ -1,5 +1,9 @@
 # HASM — Autonomous execution progress
 
+## New sprint window: #168 merged and DECISIONS.md deduplicated (2026-11-21, recovered from git and GitHub REST at `main` = `69c2916`)
+
+Merged since the end-of-sprint-3 refresh: #167 (`a7acbf6`, that refresh, docs only) and #168 (`69c2916`, constraint matrix part 2 with the 3 pending routes probed; tests only, registry +0). PostgreSQL registry on `main`: 1255. Migrations unchanged (company 0001-0032, system 0001-0033). The merge queue is empty. `docs/DECISIONS.md` held D-130..D-139 twice since #157's merge `a20b925` (the #157 branch's main-merge `7b8098a` kept its own "planned" rows next to #134's "implemented" rows); each implemented row equals its planned row with only the status phrase extended, so this branch keeps the implemented rows and changes no decision. Next: 4.1 S3b and the open follow-ups. Hosted CI NOT VERIFIED by this entry.
+
 ## End of sprint 3 of the cloud team: merges and handoff refresh (2026-11-21, recovered from git and GitHub REST at `main` = `afbf5f3`)
 
 Merged on `main` since the sprint-3 refresh (#160), each by pull request, merge commit read from `git log --first-parent origin/main` and confirmed with `gh api repos/salem2020s/hasm/pulls/<n>` (merged = true): #137 (`d607cfb`), #160 (`ee5bf02`), #147 (`d69ea21`), #162 (`97953a1`), #149 (`1aaaaf0`), #163 (`532c91a`), #151 (`be35050`), #164 (`55054fb`), #157 (`a20b925`), #165 (`ce8bed3`), #153 (`83ce5d8`), #155 (`a040894`), #158 (`4c44ad3`), #156 (`b84f75a`), #159 (`903742a`), #161 (`394148a`), #166 (`afbf5f3`).
