@@ -1,0 +1,72 @@
+diff --git a/tools/verify/inspect-production-artifacts.cjs b/tools/verify/inspect-production-artifacts.cjs
+index da01988..51c7329 100644
+--- a/tools/verify/inspect-production-artifacts.cjs
++++ b/tools/verify/inspect-production-artifacts.cjs
+@@ -56,7 +56,18 @@ function expectedNsisPayload(compiled) {
+   const expected = Buffer.from(compiled); replacement.copy(expected, offset);
+   return { bytes: expected, markerOffset: offset };
+ }
+-module.exports = { forbiddenModule, archivePaths, assertWindowsExecutable, snapshot, expectedNsisPayload };
++// Exception-era control: while an exception is in force (or its state is anything but the explicit retirement) the inspected frontend/desktop/branding inputs must be
++// EXACTLY the audited trees. After the advisory's retirement (strict full audit, zero exceptions, see docs/security/CONSOLIDATED-SECURITY-PROPOSAL.md) the strict audit passes or
++// fails for ANY tree on its own, so the pin has no remaining purpose and would only block every legitimate change of those paths. Any other status, a missing status
++// or a different spelling keeps the pins (fail closed). Every other inspection (forbidden modules, written assets, installer payload bytes) is unchanged.
++const RETIRED_STATUS = "RETIRED-ADVISORY-WITHDRAWN";
++function frozenTreePins(policy) { return policy.status === RETIRED_STATUS ? {} : policy.trees; }
++function assertFrozenTrees(policy, readTree) {
++  const pins = frozenTreePins(policy);
++  assert.ok(pins && typeof pins === "object" && !Array.isArray(pins), "Frozen source pins are missing");   // never an accidental TypeError, never a silent pass
++  for (const [tree, expected] of Object.entries(pins)) assert.equal(readTree(tree), expected, "Frozen source tree changed");
++}
++module.exports = { forbiddenModule, archivePaths, assertWindowsExecutable, snapshot, expectedNsisPayload, frozenTreePins, assertFrozenTrees };
+ 
+ async function main() {
+   assert.equal(process.argv.length, 5, "Usage: node inspect-production-artifacts.cjs <capture|installer> --root <repo>");
+@@ -65,8 +76,7 @@ async function main() {
+   const root = path.resolve(process.argv[4]);
+   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "picomatch-exception.json"), "utf8"));
+   assert.equal(scopeHash(policy), SCOPE, "Approved inputs changed");
+-  for (const [tree, expected] of Object.entries(policy.trees))
+-    assert.equal(execFileSync("git", ["rev-parse", `HEAD:${tree}`], { cwd: root, encoding: "utf8" }).trim(), expected, "Frozen source tree changed");
++  assertFrozenTrees(policy, tree => execFileSync("git", ["rev-parse", `HEAD:${tree}`], { cwd: root, encoding: "utf8" }).trim());
+   const app = path.join(root, "src/frontend/apps/web"), dist = path.join(app, "dist");
+   const config = JSON.parse(fs.readFileSync(path.join(root, "src/desktop/src-tauri/tauri.conf.json"), "utf8"));
+   assert.equal(path.resolve(root, "src/desktop/src-tauri", config.build.frontendDist), dist, "Tauri embeds different frontend inputs");
+diff --git a/tools/verify/inspect-production-artifacts.test.cjs b/tools/verify/inspect-production-artifacts.test.cjs
+index df3745a..0acbca0 100644
+--- a/tools/verify/inspect-production-artifacts.test.cjs
++++ b/tools/verify/inspect-production-artifacts.test.cjs
+@@ -1,7 +1,7 @@
+ "use strict";
+ const test = require("node:test");
+ const assert = require("node:assert/strict");
+-const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload } = require("./inspect-production-artifacts.cjs");
++const { forbiddenModule, archivePaths, assertWindowsExecutable, expectedNsisPayload, frozenTreePins, assertFrozenTrees } = require("./inspect-production-artifacts.cjs");
+ test("production inventory rejects each reviewed tool including nested and Windows paths", () => {
+   for (const name of ["picomatch", "fdir", "tinyglobby", "vite", "vitest", "@vitejs/plugin-react"])
+     for (const prefix of ["/workspace/node_modules/", "C:\\app\\node_modules\\vite\\node_modules\\"])
+@@ -34,3 +34,24 @@ test("NSIS integrity predicts only Tauri's unique bundle marker and preserves ev
+   for (const input of [Buffer.from("no marker"), Buffer.concat([compiled, compiled]), bytes, Buffer.concat([compiled, bytes])])
+     assert.throws(() => expectedNsisPayload(input));
+ });
++
++test("frozen source pins are lifted ONLY by the explicit retirement status and every other state keeps them", () => {
++  const trees = { "src/frontend": "a", "src/desktop": "b", "assets/branding": "c" };
++  const reader = actual => tree => actual[tree];
++  // retired: nothing is read and any tree content is accepted (the strict full audit decides on its own)
++  assert.deepEqual(frozenTreePins({ status: "RETIRED-ADVISORY-WITHDRAWN", trees }), {});
++  assertFrozenTrees({ status: "RETIRED-ADVISORY-WITHDRAWN", trees }, () => { throw new Error("must not read a tree"); });
++  // every other status (including a missing one and a different spelling) enforces the exact pins
++  for (const status of ["APPROVED", "CONDITIONALLY-APPROVED-INACTIVE", "retired-advisory-withdrawn", "RETIRED", "", undefined, null]) {
++    assert.deepEqual(frozenTreePins({ status, trees }), trees);
++    assertFrozenTrees({ status, trees }, reader(trees));
++    for (const tree of Object.keys(trees)) assert.throws(() => assertFrozenTrees({ status, trees }, reader({ ...trees, [tree]: "changed" })), /Frozen source tree changed/);
++  }
++  assert.throws(() => assertFrozenTrees({ status: "APPROVED" }, reader(trees)), /Frozen source pins are missing/);   // a policy without trees cannot silently pass
++  assert.throws(() => assertFrozenTrees({ status: "APPROVED", trees: [] }, reader(trees)), /Frozen source pins are missing/);
++});
++test("main() delegates the pin check to assertFrozenTrees and no longer carries its own unconditional loop", () => {
++  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "inspect-production-artifacts.cjs"), "utf8");
++  assert.match(source, /assertFrozenTrees\(policy, tree => execFileSync\("git", \["rev-parse", `HEAD:\$\{tree\}`\]/);
++  assert.doesNotMatch(source, /for \(const \[tree, expected\] of Object\.entries\(policy\.trees\)\)/);
++});
