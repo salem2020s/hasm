@@ -2,6 +2,8 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { catalog } from "./messages";
+import { customerGroupsAr, customerGroupsEn } from "./messages.customerGroups";
+import { pricingAr, pricingEn } from "./messages.pricing";
 import { ALL_PERMISSIONS, apiError, renderApp, signedIn } from "./test-utils";
 
 const A = (k: string) => catalog.ar[k]!;
@@ -327,12 +329,12 @@ describe("pricing administration screen", () => {
       const mk = (id: string, code: string, name: string) => ({ ...customer, id: `r-${id}`, partyId: id, partyCode: code, partyName: name });
       render({
         listPartyRoles: vi.fn().mockResolvedValue({ items: [mk("p2", "C10", "عشرة"), mk("p1", "C2", "اثنان")], can: { configure: true } }),
-        listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, partyId: "p2" }, { ...assignment, partyId: "unknown-id-zzzz" }, { ...assignment, partyId: "p1" }], can: { configure: true } }),
+        listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, partyId: "zzzzzzzz-9" }, { ...assignment, partyId: "p2" }, { ...assignment, partyId: "aaaaaaaa-1" }, { ...assignment, partyId: "p1" }], can: { configure: true } }),
       });
       await go("#/company/pricing");
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
       const rows = within(await screen.findByTestId("pricing-assignments-table")).getAllByRole("row").slice(1);
-      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["C2 — اثنان", "C10 — عشرة", "unknown-"]);   // numeric-aware code order; ids last by their short form
+      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["\u2068C2\u2069 — \u2068اثنان\u2069", "\u2068C10\u2069 — \u2068عشرة\u2069", "aaaaaaaa", "zzzzzzzz"]);   // numeric-aware code order; ids last by their short form
     });
 
     it("accepts a negative minimum margin and explains the range and meaning (ar and en)", async () => {
@@ -345,7 +347,9 @@ describe("pricing administration screen", () => {
       await userEvent.type(margin, "-5");
       await userEvent.click(form.getByRole("button", { name: A("pricing.policy.save") }));
       await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ minMarginPercent: -5 }), 2));
-      for (const l of ["ar", "en"] as const) expect(catalog[l]["pricing.policy.min_margin_hint"]).toMatch(/-1000/);
+      expect(catalog.en["pricing.policy.min_margin_hint"]).toMatch(/-1000/);
+      expect(catalog.ar["pricing.policy.min_margin_hint"]).toContain("\u2066\u22121000\u2069");          // an isolated U+2212: never "1000-" in RTL
+      expect(catalog.ar["pricing.policy.min_margin_hint"]).not.toContain("-1000");
       expect(form.getByText(A("pricing.policy.min_margin_hint"))).toBeInTheDocument();
     });
 
@@ -356,12 +360,68 @@ describe("pricing administration screen", () => {
       expect(await screen.findByText(A("pricing.scope_combine_hint"))).toBeInTheDocument();
     });
 
-    it("has a single source for field.ambiguous_rule (the customer-group wording wins)", async () => {
-      const { readFileSync } = await import("node:fs");
-      const src = readFileSync(`${process.cwd()}/src/messages.pricing.ts`, "utf-8");
-      expect(src).not.toContain("field.ambiguous_rule");
+    it("has a single source for every pricing message key (the customer-group wording of field.ambiguous_rule wins)", () => {
+      for (const [x, y] of [[pricingAr, customerGroupsAr], [pricingEn, customerGroupsEn]] as const) {
+        expect(Object.keys(x).filter((k) => k in y)).toEqual([]);
+      }
       expect(catalog.en["field.ambiguous_rule"]).toMatch(/group rules/);
       expect(catalog.ar["field.ambiguous_rule"]).toBeTruthy();
+    });
+    it("shows the name of an entry's item outside the preloaded page by one getInventoryItem call per id, and a short id when it cannot be read", async () => {
+      const far = { ...apple, id: "far-item-0000-1111", code: "FAR1", nameAr: "بعيد", nameEn: "Far" };
+      const getItem = vi.fn().mockImplementation((id: string) => id === far.id ? Promise.resolve(far) : Promise.reject(apiError(403, "forbidden")));
+      render({
+        getInventoryItem: getItem,
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [{ ...entry, id: "e2", itemId: far.id }, { ...entry, id: "e3", itemId: "denied-item-9999" }, { ...entry, id: "e4", itemId: far.id }], can: { configure: true } }),
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      const table = await screen.findByTestId("pricing-entries-table");
+      await waitFor(() => expect(within(table).getAllByText("\u2068FAR1\u2069 — \u2068بعيد\u2069")).toHaveLength(2));
+      expect(within(table).getByText("denied-i")).toBeInTheDocument();                                  // short id, never the full UUID
+      expect(getItem).toHaveBeenCalledTimes(2);                                                         // once per distinct id
+    });
+
+    it("links the item picker's field error to its list (aria-invalid, aria-describedby) through a real label", async () => {
+      const create = vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "itemId", code: "item_or_group_required" }] }));
+      render({ createPriceEntry: create });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      const add = within(await screen.findByTestId("pricing-entry-create"));
+      await userEvent.selectOptions(await pickItem(add, "pricing.target"), "i1");
+      await userEvent.selectOptions(add.getByLabelText(label("pricing.unit")), "u1");
+      await userEvent.type(add.getByLabelText(label("pricing.unit_price")), "5");
+      await userEvent.click(add.getByRole("button", { name: A("pricing.add_entry") }));
+      await waitFor(() => expect(create).toHaveBeenCalled());
+      const box = await add.findByRole("combobox", { name: label("pricing.target") });
+      await waitFor(() => expect(box).toHaveAttribute("aria-invalid", "true"));
+      const errorId = box.getAttribute("aria-describedby")!;
+      expect(document.getElementById(errorId)).toHaveTextContent(A("field.item_or_group_required"));
+      expect(document.querySelector(`label[for="${box.id}"]`)).not.toBeNull();                          // a real label names the list
+    });
+
+    it("isolates code and name in option labels (Latin code beside an Arabic name)", async () => {
+      render();
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      const box = await pickItem(form, "pricing.kind_item");
+      expect(within(box).getByRole("option", { name: "\u2068APPLE\u2069 — \u2068تفاح\u2069" })).toBeInTheDocument();
+    });
+
+    it("warns when the base currency cannot be read (non-401 failure) and not when it can or is simply unset", async () => {
+      render({ getCurrencies: vi.fn().mockRejectedValue(apiError(500, "internal")) });
+      await go("#/company/pricing");
+      expect(await screen.findByTestId("pricing-currency-unavailable")).toHaveTextContent(A("pricing.currency_unavailable"));
+    });
+
+    it("shows no currency warning when the base currency loads", async () => {
+      render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await screen.findByTestId("pricing-note");
+      expect(screen.queryByTestId("pricing-currency-unavailable")).not.toBeInTheDocument();
     });
   });
 });
