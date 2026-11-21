@@ -59,3 +59,6 @@ playwright-report/
 **/hasm-test.lock
 test-env.sh
 superuser.txt
+
+# Load-test harness output (never committed: measurements are only evidence on the reference environment)
+loadtest-results/
