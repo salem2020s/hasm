@@ -32,11 +32,15 @@ export class MockApi {
   readonly unhandled: string[] = [];
   readonly created: { accounts: unknown[]; journal: unknown[] } = { accounts: [], journal: [] };
   private token: string | null = null;
+  private pending = 0;
   private companyId: string | null = null;
   private accounts: Record<string, unknown>[] = [...ACCOUNTS];
   private entries: { entry: Record<string, unknown>; lines: unknown[] }[] = [];
 
   constructor(readonly mode: Mode) {}
+
+  /** Requests received and not yet answered. Zero means every request so far has completed: a deterministic "nothing is in flight" signal (no timer). */
+  get inflight(): number { return this.pending; }
 
   /** True while a session exists. The next authenticated call after expire() is answered 401, exactly like an expired or revoked session. */
   get signedIn(): boolean { return this.token !== null; }
@@ -44,7 +48,7 @@ export class MockApi {
 
   async install(page: Page): Promise<void> {
     if (this.mode === "desktop") await page.addInitScript(() => { (window as unknown as Record<string, unknown>)["__TAURI_INTERNALS__"] = { metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } }, invoke: async () => undefined, transformCallback: () => 0 }; });
-    await page.route(`${API}/**`, (route) => this.handle(route));
+    await page.route(`${API}/**`, async (route) => { this.pending++; try { await this.handle(route); } finally { this.pending--; } });
   }
 
   private cors(extra: Record<string, string> = {}): Record<string, string> {
