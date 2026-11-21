@@ -13,4 +13,4 @@
   * L3: the #119 matrix rows, the #115 inventory expectations, the runtime-role grants and the `PrivilegedAccess` pins are now part of S1, S2 and S3 each; S6 only runs the combined completeness pass.
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** G's confirmation of the delta in 59b8d563023cc6ae902b7e748d3571d428f59970; hosted CI
-* **Verdict:** request changes (M1, M2 and L1-L3 fixed in 59b8d563023cc6ae902b7e748d3571d428f59970; awaiting G's confirmation)
+* **Verdict:** request changes
