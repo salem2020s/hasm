@@ -8,7 +8,7 @@ The database enforces accounting and security invariants with triggers and guard
 ## Constraints
 - Every embedded migration is validated at every load, so a rule that refuses an applied migration stops every installation. 25 system migrations (0006-0030) contain 30 paired `DISABLE TRIGGER` / `ENABLE TRIGGER` statements on two immutability triggers; company migrations 0009, 0027 and 0029 replace six functions of earlier migrations.
 - Applied migrations and their checksums are immutable. No migration file is changed, and the checksum computation is unchanged.
-- No protected verification file is changed: the guard lives in `Hasm.Infrastructure` (`MigrationGuard`, `MigrationSqlLexer`, `MigrationRunner`) and its tests.
+- No protected verification file is changed: the guard lives in `Hasm.Infrastructure` (`MigrationGuard`, `MigrationSqlLexer`, `MigrationRunner`) and its tests. The allowlist is `MigrationSafety/ApprovedFunctionReplacements.cs`, outside the two database folders, because the schema generators (`tools/schema`) scan those folders for physical names that are already taken.
 
 ## Design
 **1. Reading the SQL (`MigrationSqlLexer`).** One pass that follows PostgreSQL's lexical rules: `--` comments, nested `/* */` comments, string literals (`''` escapes; backslash escapes only in `E''`), quoted identifiers and dollar-quoted bodies with any tag. It produces three views:
