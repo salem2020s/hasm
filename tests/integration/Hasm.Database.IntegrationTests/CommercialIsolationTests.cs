@@ -27,10 +27,12 @@ public class CommercialIsolationTests : CommercialTestBase
         var invB = new CompanyInventoryService(resolverB, txB, Clock);
         var rolesB = new PartyRoleService(resolverB, txB, Clock);
         var global = Guid.NewGuid();
-        await Sql($"UPDATE {LP.Table} SET {LP.GlobalPartyId} = '{global}' WHERE {LP.Id} = '{partyA}'");
+        var sharedA = Guid.NewGuid();                                                                                            // company A's own record of the SAME shared identity (link state 2 = linked, exactly when a global id is set)
+        await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.GlobalPartyId}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{sharedA}', 'C1S', 'p', '{global}', true, 2, 1, '{Admin.Id}', now(), now())");
+        Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, new PartyRoleInput(sharedA, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null)));
         var branchB = Guid.NewGuid(); var partyB = Guid.NewGuid();
         await Sql($"INSERT INTO {Br.Table} ({Br.Id}, {Br.Code}, {Br.NameEn}, {Br.IsActive}, {Br.IsMain}, {Br.ActivationEpoch}, {Br.Revision}, {Br.CreatedAtUtc}, {Br.UpdatedAtUtc}) VALUES ('{branchB}', 'BB', 'BB', true, false, 1, 1, now(), now())", b);
-        await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.GlobalPartyId}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{partyB}', 'C1', 'p', '{global}', true, 1, 1, '{Admin.Id}', now(), now())", b);
+        await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.GlobalPartyId}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{partyB}', 'C1', 'p', '{global}', true, 2, 1, '{Admin.Id}', now(), now())", b);
         Ok(await rolesB.CreateRoleAsync(Admin.Id, b.Id, new PartyRoleInput(partyB, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null)));
         var unitB = Ok(await invB.CreateUnitAsync(Admin.Id, b.Id, new UnitInput("PCS", "وحدة", "Piece", 0)));
         var groupB = Ok(await invB.CreateGroupAsync(Admin.Id, b.Id, new ItemGroupInput("G1", "مجموعة", "Group", null, 1)));

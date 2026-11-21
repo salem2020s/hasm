@@ -89,7 +89,6 @@ public class CommercialStateMachineTests : CommercialTestBase
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.DocType} = 'other_type'")));                                  // identity is immutable
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.BranchId} = '{other}'")));
         Assert.Equal("P0001", await Fails(Up(draft.Id, $"{CD.IdempotencyKey} = 'another-key-01'")));
-        Assert.Null(await Fails(Up(draft.Id, $"{CD.Note} = 'a draft may change'")));                                        // a draft may be edited (rolled back by the helper)
         Assert.Equal("P0001", await Fails($"DELETE FROM {CD.Table} WHERE {CD.Id} = '{draft.Id}'"));
         Assert.Equal("P0001", await Fails($"TRUNCATE {CD.Table} CASCADE"));
         Assert.Equal("P0001", await Fails(RawInsert("raw-key-0001", 1, 2)));                                               // never created submitted
@@ -113,6 +112,7 @@ public class CommercialStateMachineTests : CommercialTestBase
         Assert.Equal("P0001", await Fails(RawEvent(draft.Id, 1, 2)));                                                      // so is an event pre-inserted for a future revision
         Assert.Equal("P0001", await Fails(RawEvent(Guid.NewGuid(), 1, 1)));                                                // and one for no document at all
         Assert.Equal("23505", await Fails($"INSERT INTO {CE.Table} ({CE.Id}, {CE.DocumentId}, {CE.Kind}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.AtUtc}) VALUES (gen_random_uuid(), '{draft.Id}', 2, 1, 1, '{Admin.Id}', now())"));
+        Assert.Null(await Fails(Up(draft.Id, $"{CD.Note} = 'a draft may change'")));                                        // a draft may be edited (this statement COMMITS, so it is the last one: the document moves to revision 2)
     }
 
     [PostgresFact]
