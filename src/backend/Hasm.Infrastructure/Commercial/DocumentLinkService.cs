@@ -95,6 +95,9 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
                     await using var rd = await lk.ExecuteReaderAsync(ct);
                     while (await rd.ReadAsync(ct)) { }
                 }
+                // the idempotency key is checked AGAIN now that the lines are locked: a concurrent request with the same key may have committed while this one waited for the line locks, and the first check (before any lock) could not
+                // see it. Without this the pair check below would answer link_exists for a same-payload replay (the documented answer is the original link, Replayed). Each statement sees the rows committed so far (read committed).
+                if (await FindByKeyAsync(work.Connection, work.Transaction, actor, key, ct) is { } again) throw again.Hash == hash ? new Replay(again.Id) : new Abort(ConfigStatus.Conflict, "idempotency_key_reused");
                 if (from.Status != CommercialStatus.Approved) throw new Abort(ConfigStatus.Conflict, "document_not_approved");
                 if (to.Status != CommercialStatus.Approved) throw new Abort(ConfigStatus.Conflict, "document_not_approved");
                 if (from.PartyId != to.PartyId) throw new Abort(ConfigStatus.Conflict, "party_mismatch");
