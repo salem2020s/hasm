@@ -78,7 +78,7 @@ public sealed class SignedDocumentsTests : IDisposable
         var runId = "20261121T020000Z-0011aabb";
         var dir = Path.Combine(root, runId); Directory.CreateDirectory(dir);
         var status = new RunStatus(1, RunStatus.KindValue, runId, T0, T0.AddMinutes(3), 180000, "ok", 2, 0, 0, 0, 1, pub.KeyId, signer.KeyId,
-            Convert.ToHexStringLower(SHA256.HashData(RandomNumberGenerator.GetBytes(32))), ["session", "login_throttle"], [], true);
+            Convert.ToHexStringLower(SHA256.HashData(RandomNumberGenerator.GetBytes(32))), ["session", "login_throttle"], [], true, [new RunStatusCompany(Guid.NewGuid(), "ok")]);
         SignedDocuments.WriteRunStatus(dir, status, signer);
         Assert.Equal("ok", SignedDocuments.ReadRunStatus(dir, trust).Verdict);
         var path = Path.Combine(dir, SignedDocuments.RunStatusFileName);

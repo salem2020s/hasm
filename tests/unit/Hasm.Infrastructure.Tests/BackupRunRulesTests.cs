@@ -27,7 +27,8 @@ public sealed class BackupRunRulesTests : IDisposable
     private static RunCompany C(Guid id, string outcome) => new(id, outcome, outcome is "busy" ? "company_busy" : outcome is "failed" ? "company_database_missing" : null, T0, T0, 1, 10, 0, 0);
 
     private static string Id(DateTimeOffset t) => BackupRunFiles.NewRunId(t);
-    private static RunEntry Entry(BackupRunReport r) => new(r.RunId, r, true, r.FinishedUtc);
+    // status and retention rules are exercised on ENCRYPTED runs (slice 5); an unencrypted run always gives unencrypted_dev_test (D-095), asserted separately
+    private static RunEntry Entry(BackupRunReport r) => new(r.RunId, r with { Encrypted = true }, true, r.FinishedUtc);
 
     // ---- run id ----------------------------------------------------------------------------------
 
@@ -175,6 +176,8 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal((8, "backup_partial"), Code(BackupRunStatus.Evaluate([Entry(Report(Id(T0), "partial"))], now, max)));
         Assert.Equal((1, "backup_failed"), Code(BackupRunStatus.Evaluate([Entry(Report(Id(T0), "failed"))], now, max)));
         Assert.Equal((1, "backup_missing"), Code(BackupRunStatus.Evaluate([], now, max)));
+        Assert.Equal((8, "unencrypted_dev_test"), Code(BackupRunStatus.Evaluate([new RunEntry(ok.RunId, ok, true, ok.FinishedUtc)], now, max)));   // D-095: never green
+        Assert.Equal((1, "status_unsigned"), Code(BackupRunStatus.Evaluate([new RunEntry(ok.RunId, ok with { Verdict = "failed", Encrypted = true, Warnings = ["status_unsigned"] }, true, ok.FinishedUtc)], now, max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], T0.AddHours(27), max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], now, TimeSpan.FromHours(1))));
 
@@ -185,7 +188,7 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal((8, "unreadable_reports"), Code(s));                                                             // review L2: an unreadable report never passes silently
         Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate([incomplete, Entry(ok)], now, max)));                  // a young incomplete folder alone does not warn
         Assert.Equal((1, "backup_failed"), Code(BackupRunStatus.Evaluate([unreadable, Entry(Report(Id(T0), "failed"))], now, max)));   // a failure still wins
-        Assert.Same(ok, s.Latest);
+        Assert.Equal(ok.RunId, s.Latest!.RunId);
         Assert.Equal(0, s.IncompleteRuns);                                                                            // younger than 24 hours
         Assert.Equal(1, s.UnreadableRuns);
         Assert.Equal(1, BackupRunStatus.Evaluate([incomplete, Entry(ok)], T0.AddHours(26), TimeSpan.FromDays(2)).IncompleteRuns);

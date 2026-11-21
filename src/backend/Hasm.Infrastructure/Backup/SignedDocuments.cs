@@ -19,7 +19,7 @@ public sealed record SystemDetails(DatabaseLocale? DatabaseLocale, int? SystemMi
 /// company id, creation time, format version, recovery and signing key ids, and every file with its purpose, name, size and digest.
 /// </summary>
 public sealed record ManifestV2(int Version, string Kind, string? RunId, Guid? CompanyId, DateTimeOffset CreatedUtc, string RecoveryKeyId, string SigningKeyId,
-    IReadOnlyList<EncryptedFileEntry> Files, CompanyDetails? Company = null, SystemDetails? System = null)
+    IReadOnlyList<EncryptedFileEntry> Files, CompanyDetails? Company = null, SystemDetails? System = null, BackupRunReport? Run = null)
 {
     public const int CurrentVersion = 2;
 }
@@ -30,11 +30,14 @@ public sealed record ManifestV2(int Version, string Kind, string? RunId, Guid? C
 /// </summary>
 public sealed record RunStatus(int Version, string Kind, string RunId, DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc, long DurationMs, string Verdict,
     int CompaniesOk, int CompaniesMissingKeys, int CompaniesBusy, int CompaniesFailed, int Skipped, string RecoveryKeyId, string SigningKeyId, string CanarySha256,
-    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted)
+    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted, IReadOnlyList<RunStatusCompany> Companies)
 {
     public const int CurrentVersion = 1;
     public const string KindValue = "run-status";
 }
+
+/// <summary>A company of a run as the signed status names it (id and outcome only), for the missed-runs warning.</summary>
+public sealed record RunStatusCompany(Guid CompanyId, string Outcome);
 
 /// <summary>Writing and reading of signed documents and encrypted manifests. Every reader verifies the signature against the operator's trust list BEFORE it parses anything (review M1, L-b).</summary>
 public static class SignedDocuments
@@ -113,7 +116,8 @@ public static class SignedDocuments
         catch (JsonException) { throw new BackupException("status_invalid"); }
         if (s is null || s.Version != RunStatus.CurrentVersion || s.Kind != RunStatus.KindValue || s.RunId != Path.GetFileName(Path.TrimEndingDirectorySeparator(runDirectory))
             || !BackupRunFiles.Verdicts.Contains(s.Verdict) || s.SigningKeyId != key.KeyId || !RecoveryKeys.IsKeyId(s.RecoveryKeyId) || s.CanarySha256 is not { Length: 64 }
-            || s.Excluded is null || s.Warnings is null || !s.Encrypted)
+            || s.Excluded is null || s.Warnings is null || !s.Encrypted || s.Companies is null
+            || s.Companies.Any(c => c is null || c.CompanyId == Guid.Empty || !BackupRunFiles.CompanyOutcomes.Contains(c.Outcome)) || s.Warnings.Any(w => !BackupRunFiles.IsCode(w)) || s.Excluded.Any(e => !BackupRunFiles.IsCode(e)))
             throw new BackupException("status_invalid");
         SigningTrust.EnsureValidAt(key, s.StartedUtc);
         return s;

@@ -24,6 +24,9 @@ public sealed record BackupFinding(string Code, int Count);
 /// <summary>The outcome of <see cref="CompanyBackupService.BackupCompanyAsync"/>: the manifest, the key ids the set needs that the key directory lacks (reported, never a refusal: D-061) and the stale staging folders swept.</summary>
 public sealed record CompanyBackupResult(BackupManifest Manifest, IReadOnlyList<string> MissingKeyIds, int StagingFoldersSwept);
 
+/// <summary>The outcome of an ENCRYPTED company backup (slice 5): the version-2 manifest (as written, encrypted and signed in the set) and the key ids the key directory lacks.</summary>
+public sealed record EncryptedCompanyBackupResult(ManifestV2 Manifest, IReadOnlyList<string> MissingKeyIds, int StagingFoldersSwept);
+
 public enum TrialRestoreVerdict { Ok, OkWithWarnings, Failed }
 
 /// <summary>The outcome of a trial restore. <see cref="KeptFile"/> is the owner-only file that names a kept trial database (with <c>keep</c> only); the database name itself is never returned.</summary>
@@ -42,6 +45,7 @@ public sealed class CompanyBackupService
     internal const string CommentPrefix = "hasm-trial-restore:";
     private static readonly Regex Hex32 = new("^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private readonly IReadOnlyList<string?> protectedDirectories;
     private readonly HasmDatabaseOptions options;
     private readonly AttachmentOptions attachments;
     private readonly EncryptionOptions encryption;
@@ -53,8 +57,9 @@ public sealed class CompanyBackupService
 
     /// <param name="nameGenerator">Names of trial databases (tests inject the disposable prefix); the default is the opaque generated company name.</param>
     public CompanyBackupService(HasmDatabaseOptions options, AttachmentOptions attachments, EncryptionOptions encryption, TimeProvider? clock = null, string? pgBinDirectory = null,
-        Func<string>? nameGenerator = null, IReadOnlyList<MigrationScript>? companyScripts = null)
+        Func<string>? nameGenerator = null, IReadOnlyList<MigrationScript>? companyScripts = null, IReadOnlyList<string?>? protectedDirectories = null)
     {
+        this.protectedDirectories = protectedDirectories ?? [];
         this.options = options;
         this.attachments = attachments;
         this.encryption = encryption;
@@ -74,13 +79,24 @@ public sealed class CompanyBackupService
     // ------------------------------------------------------------------ backup
 
     /// <summary>Backs up ONE registered, Ready company into <paramref name="destination"/> (absent or empty; outside the attachment root and the key directory).</summary>
-    public async Task<CompanyBackupResult> BackupCompanyAsync(Guid companyId, string destination, CancellationToken ct = default)
+    public async Task<CompanyBackupResult> BackupCompanyAsync(Guid companyId, string destination, CancellationToken ct = default) =>
+        (await BackupCompanyCoreAsync(companyId, destination, null, null, ct)).Plain!;
+
+    /// <summary>
+    /// Backs up ONE registered, Ready company into an ENCRYPTED, signed set (slice 5, D-089..D-095, D-116): <c>pg_dump</c> is piped into the encryptor and the attachments are encrypted file by file,
+    /// so no plaintext is ever written. Same preconditions, lock and checks as the unencrypted backup.
+    /// </summary>
+    public async Task<EncryptedCompanyBackupResult> BackupCompanyEncryptedAsync(Guid companyId, string destination, BackupMaterial material, string? runId = null, CancellationToken ct = default) =>
+        (await BackupCompanyCoreAsync(companyId, destination, material, runId, ct)).Encrypted!;
+
+    private async Task<(CompanyBackupResult? Plain, EncryptedCompanyBackupResult? Encrypted)> BackupCompanyCoreAsync(Guid companyId, string destination, BackupMaterial? material, string? runId, CancellationToken ct)
     {
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
         if (!Path.IsPathFullyQualified(destination)) throw new BackupException("path_not_absolute");
         var root = AttachmentRoot();
         var dest = BackupSet.RealPath(destination);
-        foreach (var protectedDir in new[] { root, encryption.KeyDirectory })
+        // review M4 of #116: also the audit and backup signing key directories (passed by the caller)
+        foreach (var protectedDir in new[] { root, encryption.KeyDirectory }.Concat(protectedDirectories))
             if (protectedDir is not null && (BackupSet.IsInside(dest, BackupSet.RealPath(protectedDir)) || BackupSet.IsInside(BackupSet.RealPath(protectedDir), dest))) throw new BackupException("destination_overlaps_source");
         if (Directory.Exists(dest) && Directory.EnumerateFileSystemEntries(dest).Any()) throw new BackupException("destination_not_empty");
         if (Path.GetDirectoryName(dest) is not { Length: > 0 } parent || Path.GetFileName(dest) is not { Length: > 0 } leaf) throw new BackupException("target_invalid");
@@ -94,7 +110,7 @@ public sealed class CompanyBackupService
         await lockConn.OpenAsync(ct);
         // a session lock of a just-closed connection is released by the server asynchronously: the shared acquisition waits briefly (bounded) before the company is reported busy
         if (!await CompanyProvisioner.AcquireLockAsync(lockConn, companyId, ct)) throw new BackupException("company_busy");
-        try { return await BackupLockedAsync(companyId, dest, root, parent, leaf, swept, ct); }
+        try { return await BackupLockedAsync(companyId, dest, root, parent, leaf, swept, material, runId, ct); }
         finally
         {
             // released explicitly, so the next administrative command on this company does not race the asynchronous release of a closed session
@@ -103,7 +119,7 @@ public sealed class CompanyBackupService
         }
     }
 
-    private async Task<CompanyBackupResult> BackupLockedAsync(Guid companyId, string dest, string root, string parent, string leaf, int swept, CancellationToken ct)
+    private async Task<(CompanyBackupResult?, EncryptedCompanyBackupResult?)> BackupLockedAsync(Guid companyId, string dest, string root, string parent, string leaf, int swept, BackupMaterial? material, string? runId, CancellationToken ct)
     {
         var company = await registry.GetAsync(companyId, ct) ?? throw new BackupException("company_not_found");  // re-read under the lock
         if (company.State != ProvisioningState.Ready) throw new BackupException("company_not_ready");
@@ -115,6 +131,20 @@ public sealed class CompanyBackupService
             PgBackupTool.EnsureRestorable(await PgBackupTool.ReadLocaleAsync(maint, company.PhysicalDatabaseName, ct) ?? throw new BackupException("company_database_missing"));
         }
         var level = await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) ?? throw new BackupException("migration_journal_unreadable");
+
+        if (material is not null)
+        {
+            // slice 5: encrypted and signed, streamed: no plaintext dump and no staging folder exist at any time
+            var v2 = await EncryptedSets.CreateCompanyAsync(companyId, runId, consume => tool.DumpCompanyToStreamAsync(company.PhysicalDatabaseName, consume, ct), Path.Combine(root, companyId.ToString("N")),
+                dest, clock.GetUtcNow(), level, material, ct);
+            if (await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) != level)
+            {
+                try { Directory.Delete(dest, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+                throw new BackupException("migration_level_changed");
+            }
+            var have = (encryption.KeyDirectory is null ? [] : BackupSet.ListKeyIds(encryption.KeyDirectory)).ToHashSet(StringComparer.Ordinal);
+            return (null, new EncryptedCompanyBackupResult(v2, [.. v2.Company!.KeyIdsRequired.Where(k => !have.Contains(k))], swept));
+        }
 
         // review M1: the dump is written into a FRESH owner-only (0700) staging folder, so the full company dump is never readable by other local users during the dump, the copy or after a crash
         var stagingDir = CreateStagingDirectory(parent, leaf);
@@ -132,7 +162,7 @@ public sealed class CompanyBackupService
                 throw new BackupException("backup_set_not_clean");
             }
             var missing = BackupSet.CheckKeys(manifest, encryption.KeyDirectory is null ? [] : BackupSet.ListKeyIds(encryption.KeyDirectory)).Missing;
-            return new CompanyBackupResult(manifest, missing, swept);
+            return (new CompanyBackupResult(manifest, missing, swept), null);
         }
         finally
         {

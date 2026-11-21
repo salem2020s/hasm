@@ -251,14 +251,14 @@ public static class BackupSet
         return m;
     }
 
-    private enum Envelope { None, MagicOnly, Valid }
+    internal enum Envelope { None, MagicOnly, Valid }
     private const int NonceLength = 12, DekLength = 32, TagLength = 16;
 
     /// <summary>
     /// Reads at most the envelope header (never the whole file) and applies the structural rules of format v1 (see <see cref="EnvelopeEncryptor"/>): magic, key id (1..32 valid characters), fixed header fields and a ciphertext length
     /// that makes header + ciphertext + tag equal the file size exactly. The mirror of the private parser is locked by a test against a real envelope.
     /// </summary>
-    private static Envelope ClassifyEnvelope(string path, out string? keyId)
+    internal static Envelope ClassifyEnvelope(string path, out string? keyId)
     {
         keyId = null;
         using var fs = File.OpenRead(path);

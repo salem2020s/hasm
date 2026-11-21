@@ -391,6 +391,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var env = new Dictionary<string, string?>
         {
             ["Hasm__Attachments__StorageDirectory"] = Storage, ["Hasm__Encryption__KeyDirectory"] = Keys, ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+            ["Hasm__Backup__UnencryptedDevTestOnly"] = BackupOptions.UnencryptedAcknowledgement,   // slice 5, D-095: these suites run unencrypted DEV/TEST sets
         };
         var set = Path.Combine(work, "set");
         var outputs = new List<string>();

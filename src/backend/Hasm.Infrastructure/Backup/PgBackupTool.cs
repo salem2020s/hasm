@@ -59,6 +59,40 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         catch (BackupException ex) when (ex.Code == "restore_failed") { throw new BackupException("archive_unreadable"); }
     }
 
+    /// <summary>Dumps a company database to <c>pg_dump</c>'s standard output, consumed by <paramref name="consume"/> (slice 5, D-091: piped into the encryptor, no plaintext at rest).</summary>
+    public Task<DatabaseLocale> DumpCompanyToStreamAsync(string sourceDatabase, Func<Stream, CancellationToken, Task> consume, CancellationToken ct = default)
+    {
+        RequireCompanyDatabase(sourceDatabase);
+        return DumpToStreamCoreAsync(sourceDatabase, [], consume, ct);
+    }
+
+    /// <summary>Dumps the configured SYSTEM database to standard output without the data of <paramref name="excludeTableData"/>, consumed by <paramref name="consume"/>.</summary>
+    public Task<DatabaseLocale> DumpSystemToStreamAsync(IReadOnlyList<string> excludeTableData, Func<Stream, CancellationToken, Task> consume, CancellationToken ct = default)
+    {
+        var name = options.SystemDatabaseName ?? throw new BackupException("database_not_configured");
+        PhysicalIdentifier.Validate(name, nameof(name));
+        var args = new List<string>();
+        foreach (var table in excludeTableData)
+        {
+            if (!PhysicalIdentifier.IsValid(table)) throw new BackupException("exclusion_invalid");
+            args.Add("--exclude-table-data=public." + table);
+        }
+        return DumpToStreamCoreAsync(name, args, consume, ct);
+    }
+
+    private async Task<DatabaseLocale> DumpToStreamCoreAsync(string sourceDatabase, IReadOnlyList<string> extra, Func<Stream, CancellationToken, Task> consume, CancellationToken ct)
+    {
+        var psi = await PrepareAsync("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", .. extra, "--dbname", sourceDatabase], ct);
+        DatabaseLocale locale;
+        await using (var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
+        {
+            await conn.OpenAsync(ct);
+            locale = await ReadLocaleAsync(conn, sourceDatabase, ct) ?? throw new BackupException("dump_failed");
+        }
+        await RunStreamingAsync("pg_dump", psi, p => consume(p.StandardOutput.BaseStream, ct), ct);
+        return locale;
+    }
+
     private async Task<DatabaseLocale> DumpCoreAsync(string sourceDatabase, string dumpFile, IReadOnlyList<string> extra, CancellationToken ct)
     {
         if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
@@ -89,13 +123,25 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     /// </summary>
     public async Task RestoreIntoNewDatabaseAsync(string dumpFile, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale = null, CancellationToken ct = default)
     {
+        if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
+        if (!File.Exists(dumpFile)) throw new BackupException("database_dump_missing");
+        await RestoreCoreAsync(dumpFile, null, targetDatabase, sourceDatabase, sourceLocale, ct);
+    }
+
+    /// <summary>
+    /// As <see cref="RestoreIntoNewDatabaseAsync"/>, but the archive is STREAMED into <c>pg_restore</c>'s standard input by <paramref name="produce"/> (slice 5, D-091: decrypted, authenticated chunks;
+    /// no plaintext file). A producer failure is a failed restore: the new database is dropped.
+    /// </summary>
+    public Task RestoreIntoNewDatabaseFromStreamAsync(Func<Stream, CancellationToken, Task> produce, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale, CancellationToken ct = default) =>
+        RestoreCoreAsync(null, produce, targetDatabase, sourceDatabase, sourceLocale, ct);
+
+    private async Task RestoreCoreAsync(string? dumpFile, Func<Stream, CancellationToken, Task>? produce, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale, CancellationToken ct)
+    {
         RequireCompanyDatabase(targetDatabase);
         RequireCompanyDatabase(sourceDatabase);
         if (string.Equals(targetDatabase, sourceDatabase, StringComparison.Ordinal)) throw new BackupException("target_is_source");
-        if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
-        if (!File.Exists(dumpFile)) throw new BackupException("database_dump_missing");
         // the client version probe and the environment (ssl_root_certificate_required) come BEFORE CREATE DATABASE, so a refusal never costs a create/drop round trip
-        var psi = await PrepareAsync("pg_restore", ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);
+        var psi = await PrepareAsync("pg_restore", dumpFile is null ? ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase] : ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);
 
         await using (var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
         {
@@ -114,7 +160,16 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         }
         try
         {
-            await RunAsync("pg_restore", psi, ct);
+            if (produce is null) await RunAsync("pg_restore", psi, ct);
+            else
+            {
+                psi.RedirectStandardInput = true;
+                await RunStreamingAsync("pg_restore", psi, async p =>
+                {
+                    try { await produce(p.StandardInput.BaseStream, ct); }
+                    finally { p.StandardInput.Close(); }
+                }, ct);
+            }
         }
         catch (Exception ex)
         {
@@ -268,6 +323,47 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     internal static string? CreateFailureCode(string? sqlState) => sqlState == PostgresErrorCodes.DuplicateDatabase ? "target_exists" : null;
 
     /// <summary>Runs a prepared tool to completion; only its exit code is reported (<c>dump_failed</c> / <c>restore_failed</c>, <c>tool_timeout</c>, <c>cancelled</c>, <c>tool_unavailable</c>).</summary>
+    /// <summary>
+    /// Runs a prepared tool while <paramref name="io"/> feeds its standard input or consumes its standard output (the other pipe and standard error go to a null stream). Within the same time limit; a
+    /// failure of <paramref name="io"/> kills the tool and is rethrown; a non-zero exit is <c>dump_failed</c> / <c>restore_failed</c>.
+    /// </summary>
+    internal async Task RunStreamingAsync(string tool, ProcessStartInfo psi, Func<Process, Task> io, CancellationToken ct)
+    {
+        Process process;
+        try { process = Process.Start(psi) ?? throw new BackupException("tool_unavailable"); }
+        catch (Exception ex) when (ex is Win32Exception or FileNotFoundException) { throw new BackupException("tool_unavailable"); }
+        using (process)
+        {
+            var drain = psi.RedirectStandardInput
+                ? Task.WhenAll(process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, ct), process.StandardError.BaseStream.CopyToAsync(Stream.Null, ct))
+                : process.StandardError.BaseStream.CopyToAsync(Stream.Null, ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(limit);
+            try
+            {
+                await io(process).WaitAsync(cts.Token);
+                await process.WaitForExitAsync(cts.Token);
+                await drain;
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(true); } catch (InvalidOperationException) { /* already gone */ }
+                throw new BackupException(ct.IsCancellationRequested ? "cancelled" : "tool_timeout");
+            }
+            catch (IOException) when (process.HasExited)
+            {
+                // the tool stopped first (for example pg_restore refused the archive) and closed its pipe: that is the tool's failure, never an unhandled pipe error
+                throw new BackupException(tool == "pg_dump" ? "dump_failed" : "restore_failed");
+            }
+            catch
+            {
+                try { process.Kill(true); } catch (InvalidOperationException) { /* already gone */ }
+                throw;
+            }
+            if (process.ExitCode != 0) throw new BackupException(tool == "pg_dump" ? "dump_failed" : "restore_failed");
+        }
+    }
+
     internal async Task RunAsync(string tool, ProcessStartInfo psi, CancellationToken ct)
     {
         Process process;

@@ -101,7 +101,10 @@ if (command == "audit-keygen")
 if (command is "backup-status" or "backup-retention-preview")
 {
     // Read-only and without any database: usable by an operating-system monitor with no credentials at all (D-071). Nothing is written or deleted.
-    var runs = BackupRunStatus.List(args[1]);
+    // the server's own signing PUBLIC keys are the trust anchor for monitoring (an attacker controlling the server could forge a status anyway); restores use the operator's recovery-kit trust list
+    var statusOptions = BackupOptions.FromConfiguration(configuration);
+    var runs = BackupRunStatus.List(args[1], BackupMaterialLoader.ServerTrust(statusOptions));
+    if (statusOptions.UnencryptedDevTestOnly is not null) Console.WriteLine(BackupGuard.DegradedStatus);
     var now = DateTimeOffset.UtcNow;
     if (command == "backup-retention-preview")
     {
@@ -433,19 +436,40 @@ catch (Exception ex)
 static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4, Warnings = 8;
-    var service = new CompanyBackupService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration));
+    var backupOptions = BackupOptions.FromConfiguration(configuration);
+    // review M4 of #116: the audit and backup signing key directories are protected like the attachment and encryption ones
+    IReadOnlyList<string?> protectedDirs = [AuditOptions.FromConfiguration(configuration).KeyDirectory, backupOptions.SigningKeyDirectory];
+    var service = new CompanyBackupService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration), protectedDirectories: protectedDirs);
+    BackupMaterial? material = null;
     try
     {
+        if (command is "backup-company" or "backup-run")
+        {
+            // slice 5 (D-095): encrypted and signed by default; an unencrypted set only with the exact DEV/TEST acknowledgement, never silently
+            if (BackupGuard.Resolve(backupOptions) == BackupProtection.Encrypted) material = BackupMaterialLoader.Load(backupOptions);
+            else Console.Error.WriteLine($"WARNING {BackupGuard.DegradedStatus}: the set is NOT encrypted or signed (Hasm__Backup__UnencryptedDevTestOnly); never use this in production (D-088).");
+        }
         switch (command)
         {
             case "backup-company":
             {
-                var r = await service.BackupCompanyAsync(companyId, args[2]);
-                Console.WriteLine($"Backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
-                if (r.StagingFoldersSwept > 0) Console.WriteLine($"Stale staging folder(s) of earlier runs removed: {r.StagingFoldersSwept}.");
-                Console.WriteLine("Back up the key directory SEPARATELY (decision K); the set is not encrypted or signed yet.");
-                if (r.MissingKeyIds.Count == 0) return Ok;
-                Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {r.MissingKeyIds.Count} key id(s) the set needs: {string.Join(", ", r.MissingKeyIds)}.");
+                IReadOnlyList<string> missingKeys;
+                if (material is not null)
+                {
+                    var e = await service.BackupCompanyEncryptedAsync(companyId, args[2], material);
+                    Console.WriteLine($"Encrypted, signed backup of company {companyId} written and verified: {e.Manifest.Files.Count - 1} attachment file(s), {e.Manifest.Company!.KeyIdsRequired.Count} key id(s) needed, company migration level {e.Manifest.Company.CompanyMigrationVersion:0000}; recovery key {e.Manifest.RecoveryKeyId}, signing key {e.Manifest.SigningKeyId}.");
+                    missingKeys = e.MissingKeyIds;
+                }
+                else
+                {
+                    var r = await service.BackupCompanyAsync(companyId, args[2]);
+                    Console.WriteLine($"UNENCRYPTED (DEV/TEST only) backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
+                    if (r.StagingFoldersSwept > 0) Console.WriteLine($"Stale staging folder(s) of earlier runs removed: {r.StagingFoldersSwept}.");
+                    missingKeys = r.MissingKeyIds;
+                }
+                Console.WriteLine("Back up the key directories with backup-keys (D-087); never alongside the sets.");
+                if (missingKeys.Count == 0) return Ok;
+                Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {missingKeys.Count} key id(s) the set needs: {string.Join(", ", missingKeys)}.");
                 return Warnings;
             }
             case "trial-restore-company":
@@ -464,14 +488,16 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
             }
             case "backup-run":
             {
-                var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration)).RunAsync(args[1]);
+                var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration), protectedDirectories: protectedDirs).RunAsync(args[1], material);
                 Console.WriteLine($"Backup run {report.RunId}: {report.Verdict.ToUpperInvariant()} in {report.DurationMs / 1000.0:0.0} s; written to {runDir} (run.json written last).");
                 Console.WriteLine($"System database: {report.System.Outcome}{(report.System.Code is { } sc ? $" ({sc})" : "")}, {report.System.DurationMs / 1000.0:0.0} s; data excluded: {string.Join(", ", report.Excluded)}.");
                 foreach (var c in report.Companies) Console.WriteLine($"  Company {c.CompanyId}: {c.Outcome}{(c.Code is { } cc ? $" ({cc})" : "")}, {c.DurationMs / 1000.0:0.0} s, {c.AttachmentFiles} attachment file(s)");
                 if (report.Skipped > 0) Console.WriteLine($"  Not Ready (skipped): {report.Skipped}");
                 foreach (var w in report.Warnings ?? []) Console.Error.WriteLine($"WARNING {w}: the run lock connection was lost during the run (check idle_session_timeout of the admin role and the network); the sets were written and verified.");
                 if (report.MissingKeyIds.Count > 0) Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {report.MissingKeyIds.Count} key id(s) the sets need: {string.Join(", ", report.MissingKeyIds)}.");
-                Console.WriteLine("The run is NOT encrypted (owner package 4.3-2): keep the backup root on an encrypted volume; back up the key directory separately. The run is not one point in time across databases.");
+                Console.WriteLine(material is not null
+                    ? "The run is encrypted to the offline recovery key and signed (run.status.json is the only readable file). Back up the key directories with backup-keys. The run is not one point in time across databases."
+                    : $"{BackupGuard.DegradedStatus}: the run is NOT encrypted; DEV/TEST only. The run is not one point in time across databases.");
                 return report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
             }
             default: // drop-trial-restore
