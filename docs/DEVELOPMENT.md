@@ -553,7 +553,7 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   * is not a registered company, system, maintenance or built-in database;
   * carries the file's token in its comment.
   The registry is locked against changes until the drop has completed. This is the only supported way to remove a kept trial database.
-* **Not available (BLOCKED, owner decision):** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch. The procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
+* **Not available yet:** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch are decided (D-081) and planned in `docs/PHASE-4.3.md` slice 7 (D-143..D-153); cutovers stay unavailable until that slice, the Phase 4.1 approval framework and an owner-instructed activation exist. Until then the procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
 
 ### Backup runs of the whole installation, monitoring and retention preview (Phase 4.3 slice 4)
 Decisions D-069..D-073; the design is in `docs/PHASE-4.3.md` slice 4.
