@@ -133,30 +133,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         if (expectedRevision is null) return ConfigResult<StockPostingView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         try
         {
-            return ConfigResult<StockPostingView>.Ok(await transactions.ExecuteAsync(companyId, async work =>
-            {
-                await using (var lk = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@a, @b)", work.Connection, work.Transaction))
-                {
-                    lk.Parameters.AddWithValue("a", CompanyBranchService.LockKey1);
-                    lk.Parameters.AddWithValue("b", CompanyBranchService.LockKey2);
-                    await lk.ExecuteNonQueryAsync(ct);
-                }
-                var doc = await StockDocumentService.Load(work.Connection, work.Transaction, documentId, true, ct) ?? throw new StockDocumentService.Abort(ConfigStatus.NotFound, "document_not_found");
-                // a repeated request returns the original posting (idempotent retry after a lost response, also without resending the amounts); amounts that differ from the original are a conflict, never a second posting
-                if (await LoadByDocumentAsync(work.Connection, work.Transaction, documentId, true, ct) is { } existing)
-                {
-                    if (doc.DocType == (int)StockDocType.Receipt && input?.Lines is { Count: > 0 })
-                    {
-                        var again = ReadAmounts(doc, input);
-                        if (existing.Lines.Any(l => !again.TryGetValue(l.LineNo, out var a) || a != l.Amount)) throw Conflict("already_posted");
-                    }
-                    throw new Replay(existing);                              // nothing was written: the transaction ends without a mutation
-                }
-                var amounts = ReadAmounts(doc, input);
-                if (doc.Status != (int)StockDocStatus.Approved) throw Conflict("document_not_approved");
-                if (expectedRevision != doc.Revision) throw new StockDocumentService.Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, doc.Revision);
-                return await ExecuteAsync(work, actor, doc, amounts, ct);
-            }, ct));
+            return ConfigResult<StockPostingView>.Ok(await transactions.ExecuteAsync(companyId, work => PostCoreAsync(work, actor, documentId, expectedRevision.Value, input, ct), ct));
         }
         catch (Replay r) { return ConfigResult<StockPostingView>.Ok(r.View); }
         catch (StockDocumentService.Abort a) { return a.To<StockPostingView>(); }
@@ -164,6 +141,46 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         catch (CostingException c) { return ConfigResult<StockPostingView>.Fail(ConfigStatus.Conflict, c.Code); }
         catch (JournalService.Abort j) { return j.To<StockPostingView>(); }
         catch (InvalidOperationException e) when (e.Message is "inventory_accounting_not_configured" or "inventory_account_not_configured") { return ConfigResult<StockPostingView>.Fail(ConfigStatus.Conflict, e.Message); }
+    }
+
+    /// <summary>
+    /// The posting INSIDE an ambient company transaction supplied by the caller (Phase 3.13 S3: an invoice approval executes its stock document in the SAME transaction as the approval), the same refactor
+    /// pattern as <see cref="JournalService.CancelInWorkAsync"/> / <see cref="JournalService.ReverseInWorkAsync"/>: validation, locks, costing, journal creation and audit are exactly those of <see cref="PostAsync"/>
+    /// (this is the same code), only the transaction owner differs. The caller owns the commit: nothing is committed here, and an exception rolls the whole caller transaction back, so no stock movement, cost
+    /// operation, journal entry or audit event survives it. A repeated call for an already posted document returns the original posting (<c>Replayed</c> true) and writes nothing. Refusals are thrown as the
+    /// same exceptions <see cref="PostAsync"/> maps to a result (<see cref="StockDocumentService.Abort"/>, <see cref="CostingException"/>, <see cref="JournalService.Abort"/>, <see cref="InvalidOperationException"/>
+    /// for a missing accounting configuration): the caller maps them as it maps its own, or lets them abort its transaction. No authorization here: the caller authorizes.
+    /// </summary>
+    internal async Task<StockPostingView> PostInWorkAsync(CompanyAuditedWork work, Guid actor, Guid documentId, long expectedRevision, StockPostInput? input, CancellationToken ct = default)
+    {
+        try { return await PostCoreAsync(work, actor, documentId, expectedRevision, input, ct); }
+        catch (Replay r) { return r.View; }              // nothing was written; the ambient transaction is left untouched
+    }
+
+    /// <summary>The body of the posting transaction (formerly the lambda of <see cref="PostAsync"/>, unchanged): throws <see cref="Replay"/> for an already posted document, so that the public entry ends its own transaction without a mutation.</summary>
+    private async Task<StockPostingView> PostCoreAsync(CompanyAuditedWork work, Guid actor, Guid documentId, long expectedRevision, StockPostInput? input, CancellationToken ct)
+    {
+        await using (var lk = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@a, @b)", work.Connection, work.Transaction))
+        {
+            lk.Parameters.AddWithValue("a", CompanyBranchService.LockKey1);
+            lk.Parameters.AddWithValue("b", CompanyBranchService.LockKey2);
+            await lk.ExecuteNonQueryAsync(ct);
+        }
+        var doc = await StockDocumentService.Load(work.Connection, work.Transaction, documentId, true, ct) ?? throw new StockDocumentService.Abort(ConfigStatus.NotFound, "document_not_found");
+        // a repeated request returns the original posting (idempotent retry after a lost response, also without resending the amounts); amounts that differ from the original are a conflict, never a second posting
+        if (await LoadByDocumentAsync(work.Connection, work.Transaction, documentId, true, ct) is { } existing)
+        {
+            if (doc.DocType == (int)StockDocType.Receipt && input?.Lines is { Count: > 0 })
+            {
+                var again = ReadAmounts(doc, input);
+                if (existing.Lines.Any(l => !again.TryGetValue(l.LineNo, out var a) || a != l.Amount)) throw Conflict("already_posted");
+            }
+            throw new Replay(existing);                              // nothing was written: the transaction ends without a mutation
+        }
+        var amounts = ReadAmounts(doc, input);
+        if (doc.Status != (int)StockDocStatus.Approved) throw Conflict("document_not_approved");
+        if (expectedRevision != doc.Revision) throw new StockDocumentService.Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, doc.Revision);
+        return await ExecuteAsync(work, actor, doc, amounts, ct);
     }
 
     private async Task<StockPostingView> ExecuteAsync(CompanyAuditedWork work, Guid actor, StockDocumentView doc, IReadOnlyDictionary<int, decimal> amounts, CancellationToken ct)
