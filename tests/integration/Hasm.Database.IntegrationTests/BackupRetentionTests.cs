@@ -309,6 +309,26 @@ public class BackupRetentionTests : PostgresTestBase
     }
 
     [PostgresFact]
+    public async Task A_completion_event_is_recognised_only_for_its_own_run()
+    {
+        // review L-b of #156: the real stream check behind the exactly-once recovery of audit 2016 (review L2 of #134)
+        await Init();
+        var service = new RetentionService(Options, Retention);
+        var trail = Trail();
+        const string Run = "20260301T020000Z-0000abcd", Neighbour = "20260301T020000Z-0000abce";
+        Task Write(short code, string detail) => BackupAudit.WriteAsync(SystemConnection, trail, code, detail, null, default);
+        Assert.False(await service.DeletedRecordedAsync(Run, default));
+        await Write(BackupAuditEvents.DeletionStarted, $"backup deletion started operator=os:test run={Run} status=x reasons=none");
+        Assert.False(await service.DeletedRecordedAsync(Run, default));                                           // a 2015 is not a completion
+        await Write(BackupAuditEvents.Deleted, $"backup deleted operator=os:test run={Run} status=x files=1 bytes=1 tombstone=yes resumed=no");
+        Assert.True(await service.DeletedRecordedAsync(Run, default));
+        Assert.False(await service.DeletedRecordedAsync(Neighbour, default));                                    // a run id one hex digit away does not match
+        await Write(BackupAuditEvents.Deleted, $"backup deleted operator=os:test run={Neighbour} resumed=yes recovered=audit folder=absent");
+        Assert.True(await service.DeletedRecordedAsync(Neighbour, default));
+        Assert.Equal("invalid_run_id", (await Assert.ThrowsAsync<BackupException>(() => service.DeletedRecordedAsync("x%", default))).Code);
+    }
+
+    [PostgresFact]
     public async Task Deletion_never_overlaps_a_running_backup_or_a_restore()
     {
         await Init();
@@ -323,8 +343,18 @@ public class BackupRetentionTests : PostgresTestBase
             // release explicitly: closing an unpooled session frees its advisory locks only when the server backend has exited, which is asynchronous
             await using (var un = new NpgsqlCommand($"SELECT pg_advisory_unlock({BackupRunService.RunLockNamespace}, 0)", run)) await un.ExecuteNonQueryAsync();
         }
+        // review L6 of #134 (and L-a of #156, timing-free): on the holder's OWN session, after its explicit unlock and before the close, no advisory lock remains
+        long? heldBeforeClose = null;
         await using (var restore = await RetentionService.AcquireRestoreLockAsync(Options, default))
+        {
             Assert.Equal("restore_in_progress", await Code());
+            restore.BeforeCloseForTests = async c =>
+            {
+                await using var cmd = new NpgsqlCommand("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()", c);
+                heldBeforeClose = (long)(await cmd.ExecuteScalarAsync())!;
+            };
+        }
+        Assert.Equal(0L, heldBeforeClose);
         // and a restore cannot start while a deletion holds the restore lock exclusively
         await using var deletion = new NpgsqlConnection(SystemConnection);
         await deletion.OpenAsync();

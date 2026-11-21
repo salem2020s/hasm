@@ -12,6 +12,7 @@ using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LegalHold;
 using H = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupLegalHold;
 using P = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupRetentionPin;
 using ST = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
+using AE = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
 
 namespace Hasm.Infrastructure.Backup;
 
@@ -28,6 +29,8 @@ public static partial class RetentionInventory
     public const string RetentionFolder = ".retention";
     public const string TombstonesFolder = "tombstones";
     public const string DeletedMarker = "deleted.json";
+    /// <summary>Written into a tombstone after audit 2016, so a deletion whose 2016 was lost by a crash is detected and completed (review L2 of #134).</summary>
+    public const string CompletedMarker = "completed.json";
     [GeneratedRegex(@"^(run\.status\.json(\.sig)?|manifest\.json\.hbe(\.sig)?|canary\.hbe|recovery-test\.json|system/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?)|companies/[0-9a-f]{32}/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?|attachments/[0-9a-f]{32}\.att\.hbe))$", RegexOptions.CultureInvariant)]
     private static partial Regex AllowedFile();
     [GeneratedRegex(@"^(system|companies|companies/[0-9a-f]{32}|companies/[0-9a-f]{32}/attachments)$", RegexOptions.CultureInvariant)]
@@ -336,13 +339,27 @@ public sealed class RetentionService
         {
             var status = BackupRunStatus.Evaluate(BackupRunStatus.List(resolved, trust), clock.GetUtcNow(), BackupRunStatus.DefaultMaxAge);
             return await RetentionExecutor.ExecuteAsync(new RetentionExecutor.Context(resolved, retention, clock.GetUtcNow(), status.Code,
-                c => ReadInputsAsync(resolved, trust, c), audit, operatorName), seam, ct);
+                c => ReadInputsAsync(resolved, trust, c), audit, operatorName, DeletedRecordedAsync), seam, ct);
         }
         finally
         {
             try { await using var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", lockConn); await unlock.ExecuteNonQueryAsync(CancellationToken.None); }
             catch (NpgsqlException) { /* the locks end with the session anyway */ }
         }
+    }
+
+    /// <summary>True when the system stream already holds a 2016 for <paramref name="runId"/> (review L2 of #134: a recovered completion writes its 2016 exactly once).</summary>
+    internal async Task<bool> DeletedRecordedAsync(string runId, CancellationToken ct)
+    {
+        if (!BackupRunFiles.IsRunId(runId)) throw new BackupException("invalid_run_id");
+        await using var conn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT count(*) FROM {AE.Table} WHERE {AE.StreamKey} = @s AND {AE.EventType} = @t AND {AE.Detail} LIKE @d", conn);
+        cmd.Parameters.AddWithValue("s", AuditStream.SystemKey);
+        cmd.Parameters.AddWithValue("t", BackupAuditEvents.Deleted);
+        cmd.Parameters.AddWithValue("d", "% run=" + runId + " %");
+        return (long)(await cmd.ExecuteScalarAsync(ct))! > 0;
     }
 
     private static async Task<bool> TryLockAsync(NpgsqlConnection conn, int obj, CancellationToken ct)
@@ -354,10 +371,11 @@ public sealed class RetentionService
     }
 
     /// <summary>
-    /// D-135: a trial restore or recovery test holds this SHARED lock for its duration; deletion takes it exclusively, so the two never overlap. Returns the open connection that holds it
-    /// (<c>retention_in_progress</c> while a deletion runs).
+    /// D-135: a trial restore or recovery test holds this SHARED lock for its duration; deletion takes it exclusively, so the two never overlap. Returns the holder of the lock
+    /// (<c>retention_in_progress</c> while a deletion runs). Disposing the holder releases the lock EXPLICITLY before closing the session: closing an unpooled session alone frees it only when the
+    /// server backend has exited, which is asynchronous, so a deletion right after a restore could otherwise be refused (review L6 of #134).
     /// </summary>
-    public static async Task<NpgsqlConnection> AcquireRestoreLockAsync(HasmDatabaseOptions options, CancellationToken ct)
+    public static async Task<RestoreLockHolder> AcquireRestoreLockAsync(HasmDatabaseOptions options, CancellationToken ct)
     {
         var conn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         try
@@ -367,9 +385,31 @@ public sealed class RetentionService
             cmd.Parameters.AddWithValue("ns", BackupRunService.RunLockNamespace);
             cmd.Parameters.AddWithValue("o", RestoreLockObject);
             if (!(bool)(await cmd.ExecuteScalarAsync(ct))!) throw new BackupException("retention_in_progress");
-            return conn;
+            return new RestoreLockHolder(conn);
         }
         catch { await conn.DisposeAsync(); throw; }
+    }
+}
+
+/// <summary>Holds the shared restore lock (D-135) on its own session; disposal releases every advisory lock of that session explicitly, then closes it (review L6 of #134).</summary>
+public sealed class RestoreLockHolder : IAsyncDisposable
+{
+    private readonly NpgsqlConnection conn;
+    private bool disposed;
+
+    internal RestoreLockHolder(NpgsqlConnection conn) => this.conn = conn;
+
+    /// <summary>Test hook only: runs on the holder's own session after the explicit unlock and before the session is closed, so a test can assert that no advisory lock remains on it.</summary>
+    internal Func<NpgsqlConnection, Task>? BeforeCloseForTests { get; set; }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (disposed) return;
+        disposed = true;
+        try { await using var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", conn); await unlock.ExecuteNonQueryAsync(CancellationToken.None); }
+        catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { /* a broken session ends its locks with the backend anyway */ }
+        try { if (BeforeCloseForTests is { } hook) await hook(conn); }
+        finally { await conn.DisposeAsync(); }
     }
 }
 
@@ -380,7 +420,7 @@ public sealed class RetentionService
 internal static class RetentionExecutor
 {
     internal sealed record Context(string Root, RetentionOptions Options, DateTimeOffset Now, string BackupStatusCode, Func<CancellationToken, Task<RetentionInputs>> Read,
-        Func<short, string, CancellationToken, Task> Audit, string Operator);
+        Func<short, string, CancellationToken, Task> Audit, string Operator, Func<string, CancellationToken, Task<bool>> DeletedRecorded);
 
     private sealed record Tombstone(int Version, string RunId, DateTimeOffset DeletedUtc, string StatusSha256);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -401,8 +441,21 @@ internal static class RetentionExecutor
             // review L3 of #134: resume only a deletion this engine started (its tombstone, written after audit 2015, exists); anything else is left for the operator
             if (!File.Exists(Path.Combine(ctx.Root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder, folder[..25], RetentionInventory.DeletedMarker)))
             { await Refuse(folder[..25], "resume_unverified"); continue; }
-            DeleteRunFolder(Path.Combine(ctx.Root, folder), ctx.Options, seam);
+            try { DeleteRunFolder(Path.Combine(ctx.Root, folder), ctx.Options, seam); }
+            catch (BackupException ex) when (ex.Code is "symbolic_link_refused" or "path_escaped_deleting_folder") { await Refuse(folder[..25], ex.Code); continue; }
             await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={folder[..25]} resumed=yes", ct);
+            WriteCompleted(ctx.Root, folder[..25]);
+            resumed++;
+        }
+        // review L2 of #134: a deletion whose folder is gone but whose 2016 was never recorded (a crash between the delete and the event) gets its 2016 now, exactly once
+        foreach (var runId in IncompleteTombstones(ctx.Root))
+        {
+            if (Directory.Exists(Path.Combine(ctx.Root, runId)) || inputs.DeletingFolders.Any(f => f.StartsWith(runId + ".deleting-", StringComparison.Ordinal)))
+                continue;                                                                                      // not deleted yet: the run or its resume handles it
+            // the folder is absent: the engine removed it before a crash, or something outside the engine did; the event says which facts are known (review L-d of #156)
+            if (!await ctx.DeletedRecorded(runId, ct))
+                await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={runId} resumed=yes recovered=audit folder=absent", ct);
+            WriteCompleted(ctx.Root, runId);
             resumed++;
         }
         // clock sanity
@@ -432,8 +485,11 @@ internal static class RetentionExecutor
             await ctx.Audit(BackupAuditEvents.DeletionStarted, $"backup deletion started operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} reasons=none", ct);   // audit first
             WriteTombstone(ctx.Root, candidate.RunId, candidate.StatusSha256!, ctx.Now);
             var renamed = RenameForDeletion(dir, ctx.Options, seam);
-            var (files, bytes) = DeleteRunFolder(renamed, ctx.Options, seam);
+            int files; long bytes;
+            try { (files, bytes) = DeleteRunFolder(renamed, ctx.Options, seam); }
+            catch (BackupException ex) when (ex.Code is "symbolic_link_refused" or "path_escaped_deleting_folder") { await Refuse(candidate.RunId, ex.Code); continue; }   // left for the operator
             await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} files={files} bytes={bytes} tombstone=yes resumed=no", ct);
+            WriteCompleted(ctx.Root, candidate.RunId);
             deleted.Add(candidate.RunId);
         }
         return new(deleted, skipped, resumed);
@@ -470,6 +526,23 @@ internal static class RetentionExecutor
             BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(dir, RetentionInventory.DeletedMarker), JsonSerializer.SerializeToUtf8Bytes(new Tombstone(1, runId, now, statusSha256), Json));
     }
 
+    /// <summary>The run ids whose tombstone has the deletion marker but not the completion marker (review L2 of #134).</summary>
+    internal static IEnumerable<string> IncompleteTombstones(string root)
+    {
+        var dir = Path.Combine(root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder);
+        if (!Directory.Exists(dir)) return [];
+        return new DirectoryInfo(dir).EnumerateDirectories()
+            .Where(d => d.LinkTarget is null && BackupRunFiles.IsRunId(d.Name)
+                        && File.Exists(Path.Combine(d.FullName, RetentionInventory.DeletedMarker)) && !File.Exists(Path.Combine(d.FullName, RetentionInventory.CompletedMarker)))
+            .Select(d => d.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
+    }
+
+    private sealed record Completion(int Version, string RunId);
+
+    private static void WriteCompleted(string root, string runId) =>
+        BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder, runId, RetentionInventory.CompletedMarker),
+            JsonSerializer.SerializeToUtf8Bytes(new Completion(1, runId), Json));
+
     /// <summary>Renames a run folder to <c>&lt;run id&gt;.deleting-&lt;16 hex&gt;</c>, so it is no longer a run. Gate checked here as well (review M1).</summary>
     internal static string RenameForDeletion(string runDirectory, RetentionOptions options, RetentionGateOverride? seam)
     {
@@ -482,25 +555,39 @@ internal static class RetentionExecutor
     /// <summary>
     /// The lowest-level deletion routine (review M1 of #130): the code gate and the opt-in are checked HERE, so no caller can delete without them except through the test seam. Deletes only a
     /// <c>.deleting-*</c> folder, never following a symbolic link (a link itself is removed, never its target). Returns the number of files and bytes removed.
+    /// Review L1 of #134 (time of check to time of use): every directory is re-checked FRESH immediately before it is enumerated or removed, and the directory holding each file immediately before
+    /// the file is deleted. Each must not be a link and must still resolve INSIDE the deleting folder; otherwise the walk stops with <c>path_escaped_deleting_folder</c> and the remainder is left for
+    /// the operator. <paramref name="beforeDescend"/> is a test hook only (it lets a test swap an entry between the enumeration and the descent).
     /// </summary>
-    internal static (int Files, long Bytes) DeleteRunFolder(string deletingFolder, RetentionOptions options, RetentionGateOverride? seam)
+    internal static (int Files, long Bytes) DeleteRunFolder(string deletingFolder, RetentionOptions options, RetentionGateOverride? seam, Action<string>? beforeDescend = null)
     {
         RequireGate(options, seam);
         if (!RetentionInventory.DeletingFolder().IsMatch(Path.GetFileName(deletingFolder))) throw new BackupException("not_a_deleting_folder");
-        var files = 0; long bytes = 0;
-        void Remove(DirectoryInfo d)
-        {
-            foreach (var e in d.EnumerateFileSystemInfos())
-            {
-                if (e.LinkTarget is not null) { if (e is DirectoryInfo) Directory.Delete(e.FullName); else File.Delete(e.FullName); continue; }
-                if (e is DirectoryInfo sub) Remove(sub);
-                else { bytes += ((FileInfo)e).Length; files++; File.Delete(e.FullName); }
-            }
-            d.Delete();
-        }
         var root = new DirectoryInfo(deletingFolder);
         if (root.LinkTarget is not null) throw new BackupException("symbolic_link_refused");
-        Remove(root);
+        var realRoot = BackupSet.RealPath(deletingFolder);
+        var files = 0; long bytes = 0;
+        void RequireInside(string directory)
+        {
+            var fresh = new DirectoryInfo(directory);
+            if (fresh.LinkTarget is not null || !BackupSet.IsInside(BackupSet.RealPath(directory), realRoot)) throw new BackupException("path_escaped_deleting_folder");
+        }
+        void Remove(string path)
+        {
+            RequireInside(path);
+            foreach (var e in new DirectoryInfo(path).EnumerateFileSystemInfos())
+            {
+                if (e.LinkTarget is not null) { if (e is DirectoryInfo) Directory.Delete(e.FullName); else File.Delete(e.FullName); continue; }   // the link itself, never its target
+                if (e is DirectoryInfo) { beforeDescend?.Invoke(e.FullName); Remove(e.FullName); continue; }
+                RequireInside(path);
+                var f = new FileInfo(e.FullName);
+                if (f.LinkTarget is not null) { File.Delete(f.FullName); continue; }
+                bytes += f.Length; files++; File.Delete(f.FullName);
+            }
+            RequireInside(path);
+            Directory.Delete(path);
+        }
+        Remove(deletingFolder);
         return (files, bytes);
     }
 
