@@ -1,4 +1,5 @@
 import type { CustomerGroup, CustomerGroupAssignment, DiscountRule, DiscountRulesResponse, InventoryGroup, InventoryItem, InventoryUnit, PartyRole, PriceEntry, PriceList, PriceListsResponse, PricingPolicyResponse, PricingQuote } from "@hasm/api-client";
+import { ApiError } from "@hasm/api-client";
 import { SearchPicker, Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth";
@@ -45,7 +46,7 @@ export function PricingPage() {
       const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
       const [units, groups, items, customers, customerGroups, assignments, baseCurrency] = await Promise.all([
         soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
-        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items).catch((e) => { itemsFailed = true; throw e; })), soft(auth.api.listPartyRoles(1).then((r) => r.items).catch((e) => { customersFailed = true; throw e; })),
+        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items).catch((e) => { itemsFailed = true; throw e; })), soft(auth.api.listPartyRoles(1).then((r) => r.items).catch((e) => { if (e instanceof ApiError && e.status === 403) customersFailed = true; throw e; })),
         soft(auth.api.listCustomerGroups().then((r) => r.customerGroups)), soft(auth.api.listCustomerGroupAssignments().then((r) => r.assignments)),
         // the default currency of a new list/quote is the company base currency when the user may read it; otherwise it stays empty (never guessed). Not counted as a failed helper list: it needs its own permission.
         auth.api.getCurrencies().then((r) => r.baseCurrency ?? "").catch((e) => { if (!auth.handleError(e)) currencyFailed = true; return ""; }),
@@ -94,7 +95,7 @@ const customerName = (p: Pickers, id: string | null, none: string) => (id ? p.cu
 
 const CUSTOMER_PICKER_LIMIT = 50;
 
-/** Customer picker: a bounded server-side SEARCH (shared SearchPicker over the party-role search API) instead of a list of every customer. Without the party-role permission the preload failed: the picker then offers only "all customers", as before (no request is sent). */
+/** Customer picker: a bounded server-side SEARCH (shared SearchPicker over the party-role search API) instead of a list of every customer. Without the party-role permission (the preload was REFUSED with 403) the picker offers only "all customers", as before, and sends no request. Any other preload failure (500, network) leaves search enabled: the picker's own error and retry handle it. */
 function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id: string; value: string; onChange: (v: string) => void; pickers: Pickers; error?: string; disabled?: boolean }) {
   const { t } = useI18n();
   const auth = useAuth();
@@ -103,11 +104,13 @@ function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id:
     : auth.api.listPartyRoles(1, { search: search === "" ? undefined : search, limit: CUSTOMER_PICKER_LIMIT }).then((r) => ({ items: r.items, total: r.total ?? r.items.length })).catch((e) => { auth.handleError(e); throw e; }),
   [auth.api, auth.handleError, unavailable]); // eslint-disable-line react-hooks/exhaustive-deps
   const hintId = `${id}-hint`;
+  const preloaded = pickers.customers.find((c) => c.partyId === value);
+  const selectedLabel = preloaded ? codeName(preloaded.partyCode, preloaded.partyName) : undefined;   // a preselected customer outside the first search page keeps its name
   return (
     <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
       <label htmlFor={`${id}-list`}>{t("pricing.customer")}</label>
       <SearchPicker id={`${id}-list`} label={t("pricing.customer")} value={value} onChange={(v) => onChange(v)} load={load} getId={(c: PartyRole) => c.partyId} getLabel={(c: PartyRole) => codeName(c.partyCode, c.partyName)}
-        noneLabel={t("pricing.all_customers")} disabled={disabled} invalid={!!error} describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
+        noneLabel={t("pricing.all_customers")} disabled={disabled} searchDisabled={unavailable} selectedLabel={selectedLabel} invalid={!!error} describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
       <p id={hintId} className="hint">{t("pricing.customer_hint")}</p>
       {error && <p id={`${id}-error`} className="field-error">{error}</p>}
     </div>
