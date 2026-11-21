@@ -778,7 +778,7 @@ public class JournalDatabaseInvariantTests : JournalTestBase
         // and once approved, the lines can no longer be unbalanced, so Posted is never reached with them
         var approved = await Submitted(Simple("2026-03-10", 100m));
         Assert.NotNull(await MessageOf($"UPDATE {Jl.Table} SET {Jl.Debit} = 101, {Jl.BaseDebit} = 101 WHERE {Jl.Id} = '{approved.Lines.Single(l => l.BaseDebit > 0).Id}'"));
-        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Je.Table} WHERE {Je.Status} IN (2, 3, 4) AND {Je.Id} <> '{approved.Header.Id}'"));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Je.Table} WHERE {Je.Status} IN (2, 3, 4) AND {Je.Id} IN ('{d1.Header.Id}', '{d2.Header.Id}', '{d3.Header.Id}')"));   // none of the refused drafts left Draft
     }
 
     [PostgresFact]

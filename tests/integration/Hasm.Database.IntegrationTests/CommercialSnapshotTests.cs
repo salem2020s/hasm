@@ -7,6 +7,7 @@ using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CDA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentApproval;
 using CDS = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentSnapshot;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
+using XR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -52,7 +53,7 @@ public class CommercialSnapshotTests : CommercialTestBase
         var usd = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "snap-key-00002", qty: 1m) with { Currency = "usd" }));
         var su = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, usd.Id, usd.Revision));
         Assert.Equal(0.71m, su.ExchangeRate);
-        var usdRate = await Sql<long>($"SELECT {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.Id} FROM {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.Table} WHERE {Hasm.Infrastructure.CompanyDatabase.CompanySchema.ExchangeRate.CurrencyCode} = 'USD'");
+        var usdRate = await Sql<long>($"SELECT {XR.Id} FROM {XR.Table} WHERE {XR.CurrencyCode} = 'USD' AND {XR.ValidFrom} <= '{Day:yyyy-MM-dd}' ORDER BY {XR.ValidFrom} DESC, {XR.Id} DESC LIMIT 1");   // the rate record effective on the document date
         Assert.Equal($"rate:{usdRate}", await Sql<string>($"SELECT {CDA.ExchangeRateRef} FROM {CD.Table} WHERE {CD.Id} = '{usd.Id}'"));   // the rate is traceable to the exact dated rate record it came from
         Assert.Equal(14m, su.Lines[0].LineNet);
         var eur = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "snap-key-00003") with { Currency = "eur" }));
