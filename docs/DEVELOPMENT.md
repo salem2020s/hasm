@@ -797,3 +797,17 @@ Several agents work in one environment at the same time, so temporary files must
 7. **Never commit scratch files, credentials or temporary test artifacts.** Review `git status` and the staged file list before every commit.
 8. **No protected policy changes** are made through this convention.
 9. **Review records name the model family only, never a model identifier.**
+10. **No GitHub closing keywords next to a PR or issue number (permanent rule; owner decision, 2026-11-21, D-197).** Never write a closing keyword (any form of close, fix or resolve: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, in any letter case, with or without a colon) before a PR or issue reference in any form (`#<number>`, `GH-<number>`, `owner/repo#<number>`, a pull-request or issue URL, or a Markdown link whose text is the number), whatever stands between them (a space, several, a tab, a colon, a line break, or nothing), in a PR title, a PR description or a commit message. This holds for lists of next tasks, quotations and negations too: GitHub does not read the sentence, only the keyword and the number.
+    * **Why (2026-11-21 incident):** the description of PR #179 (the checkpoint handoff refresh) listed, among the next tasks, an item that put such a keyword directly before the reference to PR 176. When #179 merged into `main` (`9ffaa6c`), GitHub treated it as "this merge completes 176" and closed the open Draft PR #176 two seconds after the merge (#179 merged at 2026-11-21T20:49:15Z; #176 closed at 20:49:17Z). GitHub applies closing keywords to pull requests as well as issues, and nothing warns before the merge. Nobody had decided that PR 176 should be closed; the owner authorized reopening it, and the branch and the review history were intact.
+    * **Safe phrasing:** "addresses the findings on PR 176", "follow-up to PR 176", "the PR 176 corrections", "see #176". A bare `#176` mention with no keyword before it is safe. To state that something really is finished, name the merge: "merged as `<sha>`".
+    * **Check, by the author before every push and every PR create or update, and by the lead before every merge** (title, description and every commit message of the PR; any hit is removed first):
+
+      ```bash
+      P='\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]*(\[?#[0-9]|GH-[0-9]|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]|\[?https://github\.com/)'
+      gh api repos/salem2020s/hasm/pulls/<n> --jq '.title, .body' | grep -n -i -E "$P"
+      git log --format='%H%n%B' origin/main..HEAD | grep -n -i -E "$P"
+      ```
+
+      **The grep is a safety net, not the rule.** The rule is: never write a closing keyword before a PR or issue reference. The pattern (GNU grep, for `\b` and the character class) covers `#N`, `GH-N`, `owner/repo#N`, a PR or issue URL and a Markdown link whose text is the number or the URL, with a colon and any white space, or none, in between. It works line by line, so it cannot see a keyword at the end of one line with the reference on the next; read the text as well.
+
+      Both commands must print nothing. A commit message cannot be changed after it is pushed (history is never rewritten), so the grep on commit messages is run BEFORE the push. If a pushed commit message already contains a hit, do not rewrite history: report it to the lead and the owner before the PR is merged; the options are a merge that is known and accepted to close the referenced item, or a new branch carrying the same tree with clean messages.
