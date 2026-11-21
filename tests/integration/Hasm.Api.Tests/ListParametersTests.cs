@@ -61,6 +61,25 @@ public class ListParametersTests
     [InlineData("99999")]
     public void Any_other_kind_is_refused_by_name(string raw) => Assert.Equal("kind", ListParameters.TryParseKind(raw, out _));
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("true", true)]
+    [InlineData("False", false)]
+    [InlineData(" TRUE ", true)]
+    public void The_active_filter_is_absent_true_or_false(string? raw, bool? expected)
+    {
+        Assert.Null(ListParameters.TryParseActive(raw, out var active));
+        Assert.Equal(expected, active);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("yes")]
+    [InlineData("0")]
+    [InlineData("truee")]
+    public void Any_other_active_value_is_refused_by_name(string raw) => Assert.Equal("active", ListParameters.TryParseActive(raw, out _));
+
     [Fact]
     public void The_ids_must_be_guids_at_most_one_hundred_and_an_empty_array_means_no_ids()
     {
