@@ -40,8 +40,9 @@ Migrations on `main`: see the cloud-team handoff section below (current values a
 | D-140..D-141 | A (3.13 S5a, #136) | on the #136 branch, not on `main` |
 | D-142 | D (4.1, enrolment-code rules) | on D's S2 branch, not on `main` |
 | D-143..D-153 | B (4.3 slice 7 plan, #143; D-152 and D-153 confirmed by the lead after review round 1) | on the #143 branch (docs only, under C's review), not on `main` |
+| D-154..D-159 | H (3.14 plan, #148) | on the #148 branch (docs only), not on `main`; D-160..D-169 stay free; D-170 onward is reserved for B (4.4) |
 
-**Next free decision ID: D-154.** Audit-event blocks (lead allocation): **2000-2009** R (attachment retention), **2010-2013** 4.3 slice 5, **2014-2019** 4.3 slice 6, **2020-2029** 4.3 slice 7; the highest code in use on `main` outside these is 1908.
+**Next free decision ID: D-160** (B reserved D-170 onward for 4.4; D-160..D-169 stay free). Audit-event blocks (lead allocation): **2000-2009** R (attachment retention), **2010-2013** 4.3 slice 5, **2014-2019** 4.3 slice 6, **2020-2029** 4.3 slice 7, **2100-2199** Phase 3.14 (cash and bank, #148; no 21xx code exists on `main`); the highest code in use on `main` outside these is 1908.
 
 Cloud environment: .NET SDK 10 (installed in-session by the environment's own apt command); PostgreSQL 16 binaries; the Linux disposable-cluster harness (`scripts/test-pg/*.sh`, single holder lock, port 5433 only, destroy after use) is merged (#89). Since #135 (`38096b5`) isolated workers are the PREFERRED local runner for PostgreSQL classes: `scripts/test-pg/run-isolated.sh "$PWD" --build --filter "FullyQualifiedName~X"` from your own worktree with `main` merged in; capacity is 2 runs machine-wide, one per agent; never touch another run's directory or lock. GraphQL is blocked: exact-head verification = the unmodified `main` copy of `tools/verify/verify-head.js` with `--input` from REST data; merges via REST with the head SHA pinned; for a final head that adds only a review record or a `main` merge, the code delta is proven identical to the reviewed head by `git patch-id`.
 
