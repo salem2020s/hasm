@@ -50,6 +50,38 @@ public class InventoryApiTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task The_unit_and_group_lists_are_unchanged_without_parameters_and_page_and_search_with_them_under_the_same_permission()
+    {
+        await Start();
+        var cookie = await SignIn(Admin);
+        foreach (var (code, name) in new[] { ("U1", "Piece"), ("U2", "Box"), ("U3", "Boxes") })
+            Ok(await Inv.CreateUnitAsync(Admin.Id, Company.Id, new UnitInput(code, "وحدة", name, 0)));
+        foreach (var code in new[] { "G1", "G2", "G3" }) await Group(code);
+        foreach (var (route, key) in new[] { ("units", "units"), ("groups", "groups") })
+        {
+            // no parameters: exactly today's shape (every row, no total)
+            var all = await Send(HttpMethod.Get, $"{Base}/{route}", cookie: cookie);
+            Assert.Equal(3, all.Json.GetProperty(key).GetArrayLength());
+            Assert.False(all.Json.TryGetProperty("total", out _));
+            // with parameters: one page ordered by code plus the total
+            var page = await Send(HttpMethod.Get, $"{Base}/{route}?limit=2&offset=1", cookie: cookie);
+            Assert.Equal(3L, page.Json.GetProperty("total").GetInt64());
+            Assert.Equal(2, page.Json.GetProperty(key).GetArrayLength());
+            Assert.Equal(route == "units" ? "U2" : "G2", page.Json.GetProperty(key)[0].GetProperty("code").GetString());
+            Assert.Equal(1L, (await Send(HttpMethod.Get, $"{Base}/{route}?search={(route == "units" ? "piece" : "g3")}", cookie: cookie)).Json.GetProperty("total").GetInt64());
+            Assert.Equal(3L, (await Send(HttpMethod.Get, $"{Base}/{route}?limit=1000", cookie: cookie)).Json.GetProperty("total").GetInt64());     // clamped, not refused
+            foreach (var bad in new[] { "limit=0", "limit=-1", "offset=-1", "limit=abc", $"search={new string('x', 101)}" })
+                Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{Base}/{route}?{bad}", cookie: cookie)).Status);
+            // the permission is unchanged
+            var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+            Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Base}/{route}?search=a", cookie: await SignIn(outsider))).Status);
+            var (viewer, _) = await Member([PermissionCatalog.Codes.ItemsView], ScopeKind.Company, null);
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Base}/{route}?search=a", cookie: await SignIn(viewer))).Status);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Base}/{route}?search=a")).Status);
+        }
+    }
+
+    [PostgresFact]
     public async Task The_administrator_builds_units_groups_items_and_barcodes_end_to_end_with_etags_and_capabilities()
     {
         await Start();

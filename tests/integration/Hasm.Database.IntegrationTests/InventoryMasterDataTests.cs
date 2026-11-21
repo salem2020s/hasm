@@ -62,6 +62,60 @@ public class InventoryMasterDataTests : InventoryTestBase
     // ---------------------------------------------------------------------------------------------------------------- units
 
     [PostgresFact]
+    public async Task The_unit_and_group_search_pages_by_code_with_a_total_matches_literally_and_keeps_the_permission_of_the_unpaged_lists()
+    {
+        await PrepareInventory();
+        foreach (var (code, name) in new[] { ("U1", "Piece 100%"), ("U2", "Box_large"), ("U3", "BoxXlarge"), ("U4", "Dozen"), ("U5", "Gross") })
+            Ok(await Inv.CreateUnitAsync(Admin.Id, Company.Id, new UnitInput(code, "وحدة", name, 0)));
+        static string[] Codes(UnitPage p) => [.. p.Items.Select(u => u.Code)];
+        UnitPage Units(string? q, int? offset = null, int? limit = null) => Ok(InvMgmt.SearchUnitsAsync(Admin.Id, Company.Id, q, offset, limit).Result);
+
+        Assert.Equal(["U2", "U3"], Codes(Units("box")));
+        Assert.Equal(2L, Units("BOX").Total);                                      // either case, name or code
+        Assert.Equal(["U4"], Codes(Units("u4")));
+        Assert.Equal(["U1"], Codes(Units("%")));                                   // the wildcards are literal
+        Assert.Equal(["U2"], Codes(Units("_")));
+        Assert.Equal(["U2"], Codes(Units("box_")));
+        Assert.Empty(Units("x'; DROP TABLE t; --").Items);
+        Assert.Equal(["U1", "U2"], Codes(Units(null, 0, 2)));
+        Assert.Equal(5L, Units(null, 0, 2).Total);
+        Assert.Equal(["U5"], Codes(Units(null, 4, 2)));
+        Assert.Empty(Units(null, 99, 5).Items);
+        Assert.Equal(5L, Units(null, 99, 5).Total);                                // an offset beyond the last row still reports the total
+        Assert.Single(Units(null, 0, 0).Items);                                    // a limit below 1 is clamped to 1
+        Assert.Equal(5, Units(null, 0, 100000).Items.Count);
+        Assert.Equal(5, Units(null).Items.Count);                                  // default page 50
+        Assert.Equal(Ok(await InvMgmt.ListUnitsAsync(Admin.Id, Company.Id)).Select(u => u.Code), Enumerable.Range(0, 5).Select(i => Codes(Units(null, i, 1)).Single()));   // pages of one reproduce the unpaged order
+
+        // item groups: the effective valuation still resolves through ancestors that are not on the page
+        Ok(await Inv.SaveSettingsAsync(Admin.Id, Company.Id, 0, new InventorySettingsInput(1)));
+        var root = await Group("G1", null, 2);
+        var child = await Group("G2", root.Id);
+        await Group("G3", child.Id);
+        static string[] GCodes(ItemGroupPage p) => [.. p.Items.Select(g => g.Code)];
+        ItemGroupPage Groups(string? q, int? offset = null, int? limit = null) => Ok(InvMgmt.SearchGroupsAsync(Admin.Id, Company.Id, q, offset, limit).Result);
+        var found = Groups("group g3");
+        Assert.Equal(["G3"], GCodes(found));
+        Assert.Equal(1L, found.Total);
+        Assert.Equal(2, found.Items.Single().EffectiveValuation);                  // inherited from G1 through G2, neither on the page
+        Assert.Equal(["G1", "G2"], GCodes(Groups(null, 0, 2)));
+        Assert.Equal(3L, Groups(null, 0, 2).Total);
+        Assert.Empty(Groups(null, 50, 5).Items);
+        Assert.Equal(3L, Groups(null, 50, 5).Total);
+
+        // the permission is the one of the unpaged lists (view of the entity or of the items); nothing else
+        var outsider = await NewUser("searchoutsider");
+        Fails(await InvMgmt.SearchUnitsAsync(outsider.Id, Company.Id, "box", null, null), ConfigStatus.Forbidden, "forbidden");
+        Fails(await InvMgmt.SearchGroupsAsync(outsider.Id, Company.Id, "g", null, null), ConfigStatus.Forbidden, "forbidden");
+        var (unitViewer, _) = await Member([PermissionCatalog.Codes.UnitsView], ScopeKind.Company, null);
+        Assert.Equal(["U2", "U3"], Codes(Ok(await InvMgmt.SearchUnitsAsync(unitViewer.Id, Company.Id, "box", null, null))));
+        Fails(await InvMgmt.SearchGroupsAsync(unitViewer.Id, Company.Id, "g", null, null), ConfigStatus.Forbidden, "forbidden");
+        var (itemViewer, _) = await Member([PermissionCatalog.Codes.ItemsView], ScopeKind.Company, null);
+        Assert.Equal(2, Ok(await InvMgmt.SearchUnitsAsync(itemViewer.Id, Company.Id, "box", null, null)).Items.Count);
+        Assert.Equal(3L, Ok(await InvMgmt.SearchGroupsAsync(itemViewer.Id, Company.Id, null, null, null)).Total);
+    }
+
+    [PostgresFact]
     public async Task Units_are_unique_case_insensitively_keep_code_and_decimals_and_are_deactivated_never_deleted()
     {
         await PrepareInventory();

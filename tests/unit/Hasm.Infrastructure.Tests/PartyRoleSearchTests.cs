@@ -26,12 +26,12 @@ public class PartyRoleSearchTests
     }
 
     [Theory]
-    [InlineData("abc", "%ABC%")]
+    [InlineData("abc", "%abc%")]
     [InlineData("50%", "%50\\%%")]
-    [InlineData("a_b", "%A\\_B%")]
-    [InlineData("a\\b", "%A\\\\B%")]
-    [InlineData("x'; DROP", "%X'; DROP%")]
-    public void The_like_pattern_is_an_upper_case_literal_substring(string text, string expected)
+    [InlineData("a_b", "%a\\_b%")]
+    [InlineData("a\\b", "%a\\\\b%")]
+    [InlineData("x'; DROP", "%x'; DROP%")]
+    public void The_like_pattern_is_a_literal_substring_and_the_case_is_left_to_PostgreSQL(string text, string expected)
         => Assert.Equal(expected, PartyRoleSearch.LikePattern(text));
 
     [Theory]

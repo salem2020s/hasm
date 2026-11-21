@@ -19,6 +19,29 @@ describe("api client", () => {
     expect([0, 1, 2, 3].map((n) => call(fetchMock, n).url)).toEqual([B, B + "?kind=1", B + "?search=a%26b+c&limit=25&offset=0", B + "?kind=2"]);
   });
 
+  it("looks party roles up by party ids with repeated ids parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [], can: { configure: false }, total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listPartyRoles(1, { ids: ["p1", "p 2"] });
+    await client.listPartyRoles(undefined, { ids: [] });
+    expect([0, 1].map((n) => call(fetchMock, n).url)).toEqual(["https://x/api/v1/company/party-roles?kind=1&ids=p1&ids=p+2", "https://x/api/v1/company/party-roles"]);
+  });
+
+  it("lists units, item groups and customer groups unchanged without a query and with the optional search and paging", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({})));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listInventoryUnits();
+    await client.listInventoryUnits({ search: "pc s", limit: 20, offset: 40 });
+    await client.listInventoryGroups();
+    await client.listInventoryGroups({ search: "a&b" });
+    await client.listCustomerGroups();
+    await client.listCustomerGroups({ limit: 5, offset: 0 });
+    const I = "https://x/api/v1/company/inventory", P = "https://x/api/v1/company/pricing";
+    expect([0, 1, 2, 3, 4, 5].map((n) => call(fetchMock, n).url)).toEqual([
+      I + "/units", I + "/units?search=pc+s&limit=20&offset=40", I + "/groups", I + "/groups?search=a%26b", P + "/customer-groups", P + "/customer-groups?limit=5&offset=0",
+    ]);
+  });
+
   it("requests the health endpoint under the base url", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ status: "healthy", service: "hasm-api", version: "1.0.0" }));
     const client = createApiClient("https://localhost:7241/", fetchMock as unknown as typeof fetch);
