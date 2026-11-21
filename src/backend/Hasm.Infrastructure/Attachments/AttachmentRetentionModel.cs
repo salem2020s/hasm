@@ -194,6 +194,7 @@ public static class AttachmentRetentionEligibility
             var current = policies.Where(p => RetentionRules.InForceAt(p, now)).OrderByDescending(p => p.Version).FirstOrDefault();
             if (current is null) return new(EligibilityReason.NoValidPolicy, null, null, null);
             var removedAt = a.RemovedAtUtc.Value;
+            // A REVOKED or SUPERSEDED version still counts here: it was in force on the removal date (InForceAt), so the period promised at removal is never shortened by a later revocation.
             var atRemoval = policies.Where(p => RetentionRules.InForceAt(p, removedAt)).OrderByDescending(p => p.Version).FirstOrDefault();
             var nowPeriod = RetentionRules.PeriodMonths(RetentionRules.Match(current.Rules, a.SubjectKind, a.IsSensitive));
             // an attachment removed BEFORE any policy existed is Indefinite (no period was ever committed to; the default is preservation). Otherwise no silent retroactive shortening:

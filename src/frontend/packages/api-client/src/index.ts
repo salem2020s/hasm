@@ -510,6 +510,19 @@ export interface PartyRoleQuery extends ListQuery { ids?: string[] }
 export interface IdsQuery extends ListQuery { ids?: string[] }
 /** The most ids one by-ids request may carry (the server refuses more with 400 `invalid_request`). */
 export const MAX_LOOKUP_IDS = 100;
+function commercialQuery(q: CommercialDocumentQuery): string {
+  const p = new URLSearchParams();
+  if (q.status !== undefined) p.set("status", String(q.status));
+  if (q.docType) p.set("docType", q.docType);
+  if (q.branchId) p.set("branchId", q.branchId);
+  if (q.partyId) p.set("partyId", q.partyId);
+  if (q.currency) p.set("currency", q.currency);
+  if (q.search) p.set("search", q.search);
+  if (q.offset !== undefined) p.set("offset", String(q.offset));
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  const qs = p.toString();
+  return qs ? "?" + qs : "";
+}
 function listQueryString(q?: IdsQuery, extra?: Record<string, string>): string {
   const p = new URLSearchParams();
   if (q?.search) p.set("search", q.search);
@@ -705,7 +718,18 @@ export interface CommercialDocument {
 }
 export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
 export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
-export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; offset?: number; limit?: number }
+/** `partyId`, `currency` and `search` (a literal part of the official number) are applied by the SERVER before paging, so a page and its total are exact. */
+export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; partyId?: string; currency?: string; search?: string; offset?: number; limit?: number }
+export interface CommercialDocumentPage { documents: CommercialDocument[]; total: number }
+
+// ---- Document links (Phase 3.13 S2, shown by S6). Kind: 1 fulfils, 2 invoices, 3 returns, 4 amends. A link goes from a line of an approved SOURCE document to a line of an approved TARGET document (same party, currency and branch);
+// ordered / fulfilled / invoiced / returned are DERIVED by the server from the links. Linking needs the update permission on the target and is append-only.
+export type DocumentLinkKind = 1 | 2 | 3 | 4;
+export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; createdBy: string; createdAtUtc: string; replayed: boolean }
+/** A registered link pair: documents of `source` may be linked into documents of `target` with `kind`. Static registry data; empty in production until the concrete types are activated. */
+export interface CommercialLinkPair { source: string; target: string; kind: DocumentLinkKind }
+export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
+export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
 
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
@@ -1059,16 +1083,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     reverseStockDocument: (id: string, effectiveDate: string, reason: string) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
     /** The registered commercial document types (names only). Empty in production until the concrete types are activated (3.15/3.16): the screen then offers no creation. */
     listCommercialDocumentTypes: () => get<{ types: string[] }>("/api/v1/company/commercial-documents/types").then((r) => r.types),
-    listCommercialDocuments: (q: CommercialDocumentQuery = {}) => {
-      const p = new URLSearchParams();
-      if (q.status !== undefined) p.set("status", String(q.status));
-      if (q.docType) p.set("docType", q.docType);
-      if (q.branchId) p.set("branchId", q.branchId);
-      if (q.offset !== undefined) p.set("offset", String(q.offset));
-      if (q.limit !== undefined) p.set("limit", String(q.limit));
-      const qs = p.toString();
-      return get<{ documents: CommercialDocument[] }>(`/api/v1/company/commercial-documents${qs ? "?" + qs : ""}`).then((r) => r.documents);
-    },
+    listCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`).then((r) => r.documents),
+    /** The same list with the exact `total` of the documents matching every filter (what a paged picker needs). */
+    searchCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`),
     getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
     createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
     updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
@@ -1077,6 +1094,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
     rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
     cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    /** The registered link pairs (the same route as the types; static registry data). The screen offers link creation only for a document whose type is the target of a pair. */
+    listCommercialLinkPairs: () => get<{ types: string[]; linkPairs: CommercialLinkPair[] }>("/api/v1/company/commercial-documents/types").then((r) => r.linkPairs ?? []),
+    createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
+    listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
+    getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),

@@ -164,3 +164,8 @@ Purged content cannot be restored by the application. The only copy is an older 
 * **Two-person rules** are enforced twice: in the service (409 `approver_must_differ`, `releaser_must_differ`) and by the database CHECKs.
 * **Tests.** Unit: `AttachmentRetentionTests` (eligibility table, validation, rule precedence), `AttachmentRetentionSchemaDerivationTests` (generator output matches the committed files). PostgreSQL: `AttachmentRetentionDatabaseTests` (3) and `AttachmentRetentionApiTests` (1) registered in the backend.yml expected map (registry 1105 = main 1101 + 4).
 * **Not in R1 (unchanged plan):** purge plan, approval and execution (R2), the UI and Attachments panel states (R3), backup and key-retirement integration (R4).
+
+### R1 follow-ups (recorded, not part of R1)
+
+* **Retention Approver administration.** No `Hasm.Admin` command grants or revokes the Retention Approver preset yet (R1 grants it only through `GrantRetentionApproverOfflineAsync`). When a command is added it must go through Phase 4.1's `role.grant.sensitive` (D-105), and the role is privileged and MFA-mandatory (D-096).
+* **Runtime role.** The three retention tables are in `CompanyRuntimePrivileges.Tables` (policy and hold: SELECT, INSERT, UPDATE; rules: SELECT, INSERT; never DELETE or TRUNCATE), exercised through the real runtime role by `AttachmentRetentionRuntimeRoleTests`.
