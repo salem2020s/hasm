@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #119 (per-endpoint 403 matrix of every mutating company endpoint; test-only)
-* **Head SHA reviewed (full 40 characters):** fc6cf5c841a8bae625b6400179bc792ea8e449b2 (round 1 reviewed 39341f8722ee048474d56e7fc386571358c36ede; delta confirmations at a789498ec7c399723c770f5e85ada67a77776a84 and fc6cf5c841a8bae625b6400179bc792ea8e449b2)
+* **Head SHA reviewed (full 40 characters):** f535c5fa8607c46fda2f6616a4ecbdf394b5f01f (round 1 reviewed 39341f8722ee048474d56e7fc386571358c36ede; delta confirmations at a789498ec7c399723c770f5e85ada67a77776a84, fc6cf5c841a8bae625b6400179bc792ea8e449b2 and f535c5fa8607c46fda2f6616a4ecbdf394b5f01f)
 * **Reviewer context:** Agent H, a separate agent; the author is Agent C. Not the author's own context.
 * **Scope read:** the full diff of the PR against `origin/main` (`git diff origin/main...head`): the test file and the registry change.
 * **Checks run (commands and results):** read of the full test file and the registry change; check of the quote endpoint's documented permission; hosted check-runs on 39341f8 (all success, including postgres-integration). PostgreSQL was not run locally by the reviewer (the cluster was in use by another holder), so the mutation checks were reasoned and not executed.
@@ -20,6 +20,9 @@ Agent H confirms the delta 39341f8722ee048474d56e7fc386571358c36ede..a789498ec7c
 
 Agent H confirms the delta a789498ec7c399723c770f5e85ada67a77776a84..fc6cf5c841a8bae625b6400179bc792ea8e449b2 (14 lines in EndpointPermissionMatrixWarehouseTests.cs): the W1 control for approve, reject, cancel, negative-exception approvals, stocktake adjustment, update, submit, withdraw and generate-sheet is sound and closes the optional Low; no findings; hosted CI on fc6cf5c and a PostgreSQL run were not verified by me; verdict approve.
 
+Confirmation: Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's confirmation of the #119 delta fc6cf5c..f535c5f (0b91a67 merge of main b65b93b with registry 1139, 9d02fdf record, f535c5f five matrix rows for R1's mutating routes); Head SHA reviewed f535c5fa8607c46fda2f6616a4ecbdf394b5f01f; executed: read-only git show of f535c5f, AttachmentRetentionEndpoints.cs, AttachmentRetentionService.cs and PermissionCatalog.cs, comparison with docs/PHASE-R-attachment-retention.md (D-108..D-115), `git merge-tree` of the merge's two parents against the committed merge tree, registry parse of the merged `backend.yml` against main and the branch, hosted check-runs; PostgreSQL not run (cluster busy; hosted `postgres-integration` was still in progress when read); verdict approve; findings 0 Critical/High/Medium, 1 Low follow-up; the PostgreSQL run is NOT VERIFIED.
+
+* **Follow-up (Low, from the f535c5f confirmation; not fixed in this PR):** a test that binds permission to route for the attachment-retention endpoints, pinning that the Company Administrator is refused on approve, revoke and release and allowed on draft and place (D-108..D-115). The matrix proves only the 403 for members without permission and for read-only members.
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** none open for the reviewer's scope: H confirmed both deltas by reading them (PostgreSQL not run by H). The author ran the matrix classes through the harness on the disposable 5433 cluster: 6/6 at 0eb3e48 and the warehouse class 1/1 at fc6cf5c, 0 skipped.
+* **NOT VERIFIED:** the PostgreSQL run of the five R1 matrix rows added in f535c5f, by H. The author's local run of f535c5f is queued behind another holder of the disposable cluster, so hosted `postgres-integration` on f535c5f is the evidence. Earlier deltas were confirmed by H by reading them; the author ran the matrix classes through the harness: 6/6 at 0eb3e48 and the warehouse class 1/1 at fc6cf5c, 0 skipped.
 * **Verdict:** approve
