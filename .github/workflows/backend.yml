@@ -143,7 +143,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1193 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1195 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -265,5 +265,7 @@ jobs:
                 "EndpointConstraintMatrixPart2Tests": 6,
                 # Constraint-violation matrix, part 2, batch 3: stock documents (posting, reversal, negative-stock exception), stocktakes and stock adjustments on the stock fixture (no migration).
                 "EndpointConstraintMatrixPart2StockTests": 2,
+                # Constraint-violation matrix, part 2, batch 4: commercial documents and imports on their own fixtures (no migration).
+                "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

@@ -33,7 +33,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     private const int Parallel = 6;
     public enum Mode { One, Same, Append }
 
-    /// <summary>The routes part 2 probes (this class and <see cref="EndpointConstraintMatrixPart2StockTests"/>), each with the kind of probe.</summary>
+    /// <summary>The routes part 2 probes (this class, <see cref="EndpointConstraintMatrixPart2StockTests"/>, <see cref="EndpointConstraintMatrixPart2CommercialTests"/> and <see cref="EndpointConstraintMatrixPart2ImportTests"/>), each with the kind of probe.</summary>
     public static readonly IReadOnlyDictionary<string, string> Probed = new Dictionary<string, string>
     {
         ["PUT /api/v1/company/accounts/settings"] = "stale-revision race",
@@ -118,6 +118,30 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         ["POST /api/v1/company/stocktakes/{id:guid}/adjustment"] = "idempotent replay (same answer, one adjustment)",
         ["POST /api/v1/company/stock-adjustments/{id:guid}/posting"] = "idempotent replay (same answer, one posting)",
         ["POST /api/v1/company/stock-adjustments/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
+        // batch 4 (probed by EndpointConstraintMatrixPart2CommercialTests and EndpointConstraintMatrixPart2ImportTests): commercial documents, imports
+        ["POST /api/v1/company/commercial-documents/"] = "idempotent replay (same answer, one document)",
+        ["PUT /api/v1/company/commercial-documents/{id:guid}"] = "stale-revision race",
+        ["POST /api/v1/company/commercial-documents/{id:guid}/submit"] = "stale-revision race",
+        ["POST /api/v1/company/commercial-documents/{id:guid}/withdraw"] = "stale-revision race",
+        ["POST /api/v1/company/commercial-documents/{id:guid}/cancel"] = "stale-revision race",
+        ["POST /api/v1/company/commercial-documents/{id:guid}/approve"] = "stale-revision race",
+        ["POST /api/v1/company/commercial-documents/{id:guid}/reject"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/stage"] = "stale-revision race",
+        ["PUT /api/v1/company/imports/{id:guid}/mapping"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/dry-run"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/submit"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/withdraw"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/reject"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/approve"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/apply"] = "idempotent retry (same answer, applied once)",
+        ["POST /api/v1/company/imports/{id:guid}/renew"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/cancel"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/resolutions"] = "stale-revision race",
+        ["POST /api/v1/company/imports/{id:guid}/mapping/template"] = "version race (412 revision_conflict)",
+        ["POST /api/v1/company/imports/{id:guid}/mapping/apply-template"] = "read-only prefill (same answer)",
+        ["POST /api/v1/company/imports/templates/{adapter}/{name}/retire"] = "version race (412 revision_conflict)",
+        ["POST /api/v1/company/imports/maintenance/run"] = "idempotent (same answer)",
+        ["POST /api/v1/company/imports/maintenance/rewrap"] = "idempotent (same answer)",
     };
 
     /// <summary>The routes part 1 (<c>EndpointConstraintMatrixTests</c>, #155) probes; listed here so the completeness test is exact before the two classes are folded together.</summary>
@@ -188,34 +212,12 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     /// <summary>Mutating company routes not probed yet, listed EXPLICITLY by family: a new route must be classified here, in <see cref="Probed"/> or in part 1.</summary>
     public static readonly IReadOnlyList<string> Pending =
     [
-        // commercial-documents
-        "POST /api/v1/company/commercial-documents/",
+        // commercial-documents: identical concurrent link creates answer 409 link_exists to a loser instead of the documented replay (reported; a fix is in progress)
         "POST /api/v1/company/commercial-documents/links",
-        "POST /api/v1/company/commercial-documents/{id:guid}/approve",
-        "POST /api/v1/company/commercial-documents/{id:guid}/cancel",
-        "POST /api/v1/company/commercial-documents/{id:guid}/reject",
-        "POST /api/v1/company/commercial-documents/{id:guid}/submit",
-        "POST /api/v1/company/commercial-documents/{id:guid}/withdraw",
-        "PUT /api/v1/company/commercial-documents/{id:guid}",
-        // imports
+        // imports: identical concurrent uploads with one Idempotency-Key answer 409 idempotency_key_reused instead of the replay (reported); parallel first settings saves answer
+        // 503 service_unavailable, an unmapped unique violation (a REAL 5xx, reported with its reproduction)
         "POST /api/v1/company/imports/",
-        "POST /api/v1/company/imports/maintenance/rewrap",
-        "POST /api/v1/company/imports/maintenance/run",
-        "POST /api/v1/company/imports/templates/{adapter}/{name}/retire",
-        "POST /api/v1/company/imports/{id:guid}/apply",
-        "POST /api/v1/company/imports/{id:guid}/approve",
-        "POST /api/v1/company/imports/{id:guid}/cancel",
-        "POST /api/v1/company/imports/{id:guid}/dry-run",
-        "POST /api/v1/company/imports/{id:guid}/mapping/apply-template",
-        "POST /api/v1/company/imports/{id:guid}/mapping/template",
-        "POST /api/v1/company/imports/{id:guid}/reject",
-        "POST /api/v1/company/imports/{id:guid}/renew",
-        "POST /api/v1/company/imports/{id:guid}/resolutions",
-        "POST /api/v1/company/imports/{id:guid}/stage",
-        "POST /api/v1/company/imports/{id:guid}/submit",
-        "POST /api/v1/company/imports/{id:guid}/withdraw",
         "PUT /api/v1/company/imports/settings",
-        "PUT /api/v1/company/imports/{id:guid}/mapping",
     ];
 
 
@@ -289,7 +291,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((80, 60, 26), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal((103, 60, 3), (Probed.Count, CoveredByPart1.Count, Pending.Count));
         await Task.CompletedTask;
     }
 
