@@ -19,8 +19,8 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 ## Totals (derived)
 
 * Items traced: **127** = 115 SRS items (sections 2 to 19: 105 requirements; section 21: 10 acceptance scenarios) + 12 reporting requirements.
-* MERGED: **23** · PARTIAL: **38** · NOT STARTED: **58** · IN REVIEW: **0** · CONSTRAINT: **4** · NOT MANDATORY (R1): **4**.
-* Still incomplete (PARTIAL + NOT STARTED + CONSTRAINT awaiting its phase): **100**.
+* MERGED: **24** · PARTIAL: **37** · NOT STARTED: **58** · IN REVIEW: **0** · CONSTRAINT: **4** · NOT MANDATORY (R1): **4**.
+* Still incomplete (PARTIAL + NOT STARTED + CONSTRAINT awaiting its phase): **99**.
 * Phase evidence is reconciled through merged PR #46. Supplier-invoice GRNI remains PARTIAL, and the customer/supplier balance-query acceptance scenario remains PARTIAL until the corresponding subledger exists.
 
 ## Matrix
@@ -121,7 +121,7 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 | 18.1 | Reference test environment 8 vCPU / 32 GB / 500 GB SSD, 5 companies, 50 concurrent sessions | 5.1 | NOT STARTED | - | Environment build; if unavailable the result is recorded as NOT VERIFIED |
 | 18.2 | Reference data: 20,000 items, 10,000 customers/suppliers, 100,000 invoices, 500,000 entries and stock movements; 60-minute load | 5.1 | NOT STARTED | - | Data generator and load scripts |
 | 18.3 | P95 targets: search < 1 s, ordinary screen < 2 s, save/post invoice < 3 s, ordinary report < 5 s | 5.1 | NOT STARTED | - | Measured results |
-| 18.4 | Unit, integration and E2E tests plus ledger, costing, recalculation, import, security, concurrency, backup, restore, install and upgrade tests before a commercial release | 4.0, 5.3 | PARTIAL | Unit, PostgreSQL integration and frontend tests in CI (861 PostgreSQL tests at PR #27) | E2E, install/upgrade, backup/restore, security and load suites (4.0 and the phases that own them) |
+| 18.4 | Unit, integration and E2E tests plus ledger, costing, recalculation, import, security, concurrency, backup, restore, install and upgrade tests before a commercial release | 4.0, 5.3 | PARTIAL | Unit, PostgreSQL integration and frontend tests in CI (861 PostgreSQL tests at PR #27); schema upgrade of a populated company database compared with a new one (PhysicalNamingAcceptanceTests) | E2E, installation and installed-product upgrade (4.5), backup/restore, security and load suites (4.0 and the phases that own them) |
 | 18.5 | No release with open Critical/High defects or failing mandatory tests; entry atomicity, company isolation and duplicate-movement prevention verified under concurrency | 5.3 | CONSTRAINT | CI gates on every PR | Release gate recorded in 5.3 |
 | 18.6 | Internal DEV and TEST environments; customer is not required to keep a staging environment; isolated restore testing | 4.0 | CONSTRAINT | Disposable PostgreSQL cluster on port 5433 for destructive tests | Documented in the acceptance record |
 | 19.1 | Company database is the source of truth; no direct UI edits to the database | 3.2 | MERGED | Backend-only access (PR #5, #10); least-privilege runtime role | Continuous |
@@ -141,7 +141,7 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 | 21.7 | Scenario: a scheduled run that breaks approval/separation-of-duties rules or targets a closed period fails and the reason is kept | 3.21 | NOT STARTED | - | Scenario test |
 | 21.8 | Scenario: single-company restore without rolling back other companies or the system database; links and attachments verified | 4.3 | NOT STARTED | - | Restore drill |
 | 21.9 | Scenario: cascading menus open on hover and nothing executes before click or keyboard selection | 4.8 | MERGED | CascadingMenu tests (UI-1) | Re-verified in 4.8 and 5.3 |
-| 21.10 | Scenario: non-descriptive physical names tested on new database, schema upgrade and backup restore | 4.3 | PARTIAL | Fresh creation and upgrade tests in CI | Restore leg (4.3) |
+| 21.10 | Scenario: non-descriptive physical names tested on new database, schema upgrade and backup restore | 4.3 | MERGED | PhysicalNamingAcceptanceTests (PostgreSQL, CI): every identifier of the company and system schemas opaque and mapped in the live catalog; a new database, an upgrade of a populated company database from level 3 and a trial-path restore each give a catalog identical to a new database, unchanged data, an accepting schema gate and integrity rules enforced against a principal who knows every physical name | Re-run in final regression; the cutover restore path (slice 7) is checked by its own tests when built |
 | RR-1 | Inventory movement report | 3.8E | NOT STARTED | docs/REPORTING-REQUIREMENTS.md section 3A item 1 | Whole report |
 | RR-2 | Stocktaking and valuation as of a date, informational prices separate from official book value | 3.8E | NOT STARTED | docs/REPORTING-REQUIREMENTS.md item 2 | Whole report; price definitions: default in OD-4 |
 | RR-3 | Customer account statement | 3.23 | NOT STARTED | item 3 | After 3.17 |
