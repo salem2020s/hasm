@@ -608,6 +608,16 @@ describe("api client: commercial documents (S6)", () => {
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents");
   });
 
+  it("sends the party, currency and number search to the server and reads the exact total", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ documents: [{ id: "d" }], total: 7 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const page = await client.searchCommercialDocuments({ status: 3, branchId: "b", partyId: "p", currency: "JOD", docType: "t", search: "07 7", offset: 50, limit: 50 });
+    expect(page.total).toBe(7);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents?status=3&docType=t&branchId=b&partyId=p&currency=JOD&search=07+7&offset=50&limit=50");
+    expect(await client.listCommercialDocuments({ partyId: "p" })).toEqual([{ id: "d" }]);
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents?partyId=p");
+  });
+
   it("sends the revision as If-Match on every change and the reason in the body of reject and cancel", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "d" })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
@@ -636,5 +646,27 @@ describe("api client: party list filters", () => {
     expect(new URL(call(fetchMock, 1).url).searchParams.get("active")).toBe("false");   // false is sent, not dropped
     expect(new URL(call(fetchMock, 1).url).searchParams.get("withoutRole")).toBe("supplier");
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/parties");
+  });
+});
+
+describe("api client: document links (S6 follow-up)", () => {
+  it("posts a link to the links route, reads the links and the derived line quantities of a document", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/links") && !url.includes("/d/") ? { id: "l" } : url.endsWith("/line-quantities") ? { lines: [{ lineNo: 1 }] } : { links: [{ id: "l" }] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.createDocumentLink({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(await client.listDocumentLinks("d")).toEqual([{ id: "l" }]);
+    expect(await client.getLineQuantities("d")).toEqual([{ lineNo: 1 }]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/links");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents/d/links");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/d/line-quantities");
+  });
+
+  it("reads the registered link pairs from the types route and treats an absent field as none", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ types: ["a"], linkPairs: [{ source: "a", target: "a", kind: 1 }] })).mockResolvedValueOnce(json({ types: [] }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listCommercialLinkPairs()).toEqual([{ source: "a", target: "a", kind: 1 }]);
+    expect(await client.listCommercialLinkPairs()).toEqual([]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/types");
   });
 });
