@@ -43,7 +43,10 @@ public class BackupAcceptanceEvidenceTests : PostgresTestBase
 
     private EncryptionOptions Encryption => new() { KeyDirectory = Keys, ActiveKeyId = "k1", AllowInsecureFilePermissions = true };
     private AttachmentOptions Attachments => new() { StorageDirectory = Storage };
-    private CompanyBackupService Companies() => new(Options, Attachments, Encryption, nameGenerator: NewTestName);
+    private CompanyBackupService Companies(TimeProvider? clock = null) => new(Options, Attachments, Encryption, clock, nameGenerator: NewTestName);
+
+    /// <summary>A fixed clock for the signed creation time of a set (review L1 of #149: retirement ordering never depends on wall-clock sleeps).</summary>
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
     private static RecoveryPrivateKey PrivateOf(RecoveryKeys.GeneratedPair p, string pass) => RecoveryPrivateKey.FromEncryptedPem(p.EncryptedPrivateKeyPem, pass);
     private SigningTrust Trust => new([new TrustedSigningKey(signingId, signingPem, SigningKeyStatus.Active)]);
     private BackupMaterial Material(RecoveryKeys.GeneratedPair? p = null, string? signing = null, string? signingDir = null) =>
@@ -268,20 +271,20 @@ public class BackupAcceptanceEvidenceTests : PostgresTestBase
     {
         await Init();
         var (c, attachment) = await NewCompany();
+        // the signed creation times come from fixed clocks: the old set one hour BEFORE the retirement time, the later sets one hour AFTER it
+        var retiredAt = DateTimeOffset.UtcNow.AddHours(-2);
+        var before = new FixedClock(retiredAt.AddHours(-1)); var after = new FixedClock(retiredAt.AddHours(1));
         var oldSet = Path.Combine(work, "old");
-        await Companies().BackupCompanyEncryptedAsync(c.Id, oldSet, Material());
+        await Companies(before).BackupCompanyEncryptedAsync(c.Id, oldSet, Material());
 
         // rotation: a NEW recovery key pair and a NEW signing key; the old signing key is retired from now on, the old recovery private key is kept offline
         var pair2 = RecoveryKeys.Generate(Pass2);
         var (signing2, signing2Pem) = BackupSigningKeys.Generate(SigningDir);
-        await Task.Delay(20);                                                                                              // the retirement time lies strictly after the old set's signed creation time
-        var retiredAt = DateTimeOffset.UtcNow;
-        await Task.Delay(20);
         var rotatedTrust = new SigningTrust([new TrustedSigningKey(signingId, signingPem, SigningKeyStatus.Retired, retiredAt), new TrustedSigningKey(signing2, signing2Pem, SigningKeyStatus.Active)]);
         var newSet = Path.Combine(work, "new");
-        await Companies().BackupCompanyEncryptedAsync(c.Id, newSet, Material(pair2, signing2));
+        await Companies(after).BackupCompanyEncryptedAsync(c.Id, newSet, Material(pair2, signing2));
         var lateSet = Path.Combine(work, "late");
-        await Companies().BackupCompanyEncryptedAsync(c.Id, lateSet, Material(pair2, signingId));                           // signed with the OLD key after its retirement
+        await Companies(after).BackupCompanyEncryptedAsync(c.Id, lateSet, Material(pair2, signingId));                           // signed with the OLD key after its retirement
 
         using var oldPriv = PrivateOf(pair, Pass);
         using var newPriv = PrivateOf(pair2, Pass2);

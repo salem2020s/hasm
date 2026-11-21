@@ -34,7 +34,7 @@ Status: recorded drill (evidence for `docs/RELEASE1-ACCEPTANCE.md` section G). T
 
 This suite consolidates, end to end on PostgreSQL, what the slice 5 suites (PR #128) prove piecewise: `Hbe1Tests`, `EncryptedSetsTests`, `SignedDocumentsTests`, `KeyExportTests`, `RecoveryKitTests` (unit) and `EncryptedBackupTests` (PostgreSQL). Those stay in force unchanged.
 
-## What remains before owner item 11 can be marked met in release acceptance
+## What remains: all four items block owner item 11 (D-088) in release acceptance
 1. **The production recovery test.** Per D-085, encryption is not production-ready until a recovery test succeeds on the production installation with its real offline kit (`backup-recovery-test`, two offline copies of the private key). That is an operator drill per installation, not a CI test. It is recorded when it is performed.
 2. **The recorded limitations against G** (D-118, D-099) stay open until the Phase 4.1 approval framework and the administrative-tool login exist or the owner accepts them:
    * trial restore and the recovery test without independent approval;
@@ -42,4 +42,4 @@ This suite consolidates, end to end on PostgreSQL, what the slice 5 suites (PR #
 3. **Real-tool TLS** to the database during backup and restore is not exercised by any test (the disposable server is non-TLS). This is recorded in PHASE-4.3.
 4. **Full-installation restore** (the system set) and the live cutover are later slices (slice 7 and beyond). This drill covers the trial-restore path only.
 
-Until 1 and 2 are closed or explicitly accepted, owner item 11 / D-088 stays NOT MET for release acceptance. The automated part of the criterion ("completed and tested") is covered by this suite together with the slice 5 suites.
+**ALL FOUR items above block owner item 11 / D-088.** It stays NOT MET for release acceptance until each of 1, 2, 3 and 4 is closed, or explicitly accepted by the owner. This drill and the slice 5 suites provide automated evidence for the trial-restore path only. They do not satisfy the criterion on their own.
