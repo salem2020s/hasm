@@ -57,6 +57,7 @@ public class DocumentLinkSchemaDerivationTests
         Assert.Contains($"BEFORE INSERT OR UPDATE OR DELETE ON {link}", sql);
         Assert.Contains($"BEFORE TRUNCATE ON {link}", sql);
         Assert.Contains("FOR NO KEY UPDATE", sql);
+        Assert.True(sql.IndexOf("FOR SHARE", StringComparison.Ordinal) < sql.IndexOf("FOR NO KEY UPDATE", StringComparison.Ordinal), "the documents are locked before the lines (the order of a document edit)");   // F review M1
         Assert.Contains("over-fulfilment", sql);
         Assert.Contains($"REVOKE ALL ON TABLE {link} FROM PUBLIC", sql);
         // the document-side guard keeps a linked approved document approved

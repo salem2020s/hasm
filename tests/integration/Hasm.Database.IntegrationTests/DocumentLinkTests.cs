@@ -225,6 +225,31 @@ public class DocumentLinkTests : CommercialTestBase
     }
 
     [PostgresFact]
+    public async Task A_link_racing_a_material_edit_never_deadlocks_has_exactly_one_winner_and_keeps_every_invariant()
+    {
+        var (branch, party, approver) = await Basics();
+        var (item, unit) = await NewItemAndUnit("RE1");
+        for (var round = 0; round < 12; round++)
+        {
+            var source = await NewApproved(branch, party, $"re-src-{round:0000}", approver, CommercialTestType.Name, (item, unit, 5m));
+            var target = await NewApproved(branch, party, $"re-tgt-{round:0000}", approver, CommercialTestType.Name, (item, unit, 5m));
+            var editTarget = round % 2 == 0;                                                                                    // the edit hits the target of the link in even rounds, the source in odd rounds
+            var edited = editTarget ? target : source;
+            var link = Links.CreateAsync(Admin.Id, Company.Id, Link(source.Id, 1, target.Id, 1, 1m, $"re-link-{round:0000}"));
+            var edit = Docs.UpdateAsync(Admin.Id, Company.Id, edited.Id, edited.Revision, Doc(branch, party, item, unit, "ignored-key-xx", qty: 6m));
+            await Task.WhenAll(link, edit);
+            var l = await link; var e = await edit;
+            Assert.False(l.Code is "invariant_violation", $"round {round}: link {l.Status} {l.Code}");                           // no unmapped failure (a deadlock was a 40P01 before the fix)
+            Assert.False(e.Code is "invariant_violation", $"round {round}: edit {e.Status} {e.Code}");
+            Assert.NotEqual(l.IsOk, e.IsOk);                                                                                    // exactly one winner
+            var links = await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.FromDocumentId} = '{source.Id}' AND {DL.ToDocumentId} = '{target.Id}'");
+            var status = (await Docs.GetAsync(Company.Id, edited.Id))!.Status;
+            if (l.IsOk) { Assert.Equal(1L, links); Assert.Equal(CommercialStatus.Approved, status); Assert.Equal("document_has_links", e.Code); }   // the link won: the edited document stays approved and unchanged
+            else { Assert.Equal(0L, links); Assert.Equal(CommercialStatus.Draft, status); Assert.Equal("document_not_approved", l.Code); }          // the edit won: the document went back to draft, so it can no longer be linked
+        }
+    }
+
+    [PostgresFact]
     public async Task Linking_is_branch_scoped_needs_update_on_the_target_and_reveals_nothing_across_branches_or_companies()
     {
         var (branchA, party, approver) = await Basics();
@@ -247,6 +272,7 @@ public class DocumentLinkTests : CommercialTestBase
         Fails(await LinkMgmt.CreateAsync(linkerA.Id, Company.Id, Link(ob.Id, 1, db.Id, 1, 1m, "az-key-000004")), ConfigStatus.Forbidden, "forbidden");          // both documents are of branch B
         Fails(await LinkMgmt.CreateAsync(linkerA.Id, Company.Id, Link(o.Id, 1, Guid.NewGuid(), 1, 1m, "az-key-000005")), ConfigStatus.Forbidden, "forbidden");  // a missing target looks the same to a branch-scoped caller
         Invalid(await LinkMgmt.CreateAsync(linkerA.Id, Company.Id, Link(ob.Id, 1, d.Id, 1, 1m, "az-key-000006")), "fromDocumentId", "document_not_found");      // a source of another branch is simply not found
+        Invalid(await LinkMgmt.CreateAsync(linkerA.Id, Company.Id, Link(ob.Id, 99, d.Id, 1, 1m, "az-key-000009")), "fromDocumentId", "document_not_found");      // L1: the branch is compared BEFORE any line is looked up, so a missing line of another branch is not told apart
         Fails(await LinkMgmt.CreateAsync(Admin.Id, Company.Id, Link(o.Id, 1, Guid.NewGuid(), 1, 1m, "az-key-000007")), ConfigStatus.NotFound, "commercial_document_not_found");   // a company-wide holder may be told
         // reading: view on the document's branch only
         Assert.Single(Ok(await LinkMgmt.ListAsync(viewerA.Id, Company.Id, d.Id)));
@@ -260,5 +286,14 @@ public class DocumentLinkTests : CommercialTestBase
         var first = Ok(await LinkMgmt.CreateAsync(updaterOnly.Id, Company.Id, Link(o2.Id, 1, d4.Id, 1, 1m, "az-key-000008")));
         var replay = Ok(await LinkMgmt.CreateAsync(updaterOnly.Id, Company.Id, Link(o2.Id, 1, d4.Id, 1, 1m, "az-key-000008")));
         Assert.Equal((first.Id, true, Guid.Empty, 0m), (replay.Id, replay.Replayed, replay.FromDocumentId, replay.Quantity));
+
+        // L2: another REAL company never sees or links company A's documents (the ids do not exist in its database)
+        var other = await ReadyCompany();
+        var resolverB = SinglePrincipalResolver(other);
+        var linksB = new DocumentLinkService(resolverB, new Hasm.Infrastructure.CompanyDatabase.CompanyAuditedTransactions(resolverB, Audit, Clock), Clock, TestRegistry());
+        Invalid(await linksB.CreateAsync(Admin.Id, other.Id, Link(o.Id, 1, d.Id, 1, 1m, "az-key-000010")), "fromDocumentId", "document_not_found");
+        Assert.Empty(await linksB.ListAsync(other.Id, d.Id));
+        Assert.Empty(await linksB.QuantitiesAsync(other.Id, o.Id));
+        Assert.Equal(2m, Assert.Single(await Links.QuantitiesAsync(Company.Id, o.Id)).Fulfilled);                              // company A is untouched
     }
 }

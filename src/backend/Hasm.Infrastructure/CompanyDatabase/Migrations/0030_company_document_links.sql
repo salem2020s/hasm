@@ -7,7 +7,7 @@
 -- DERIVED from these rows and never stored, so a counter cannot drift.
 -- Invariants enforced by PostgreSQL:
 --   * a link is never changed or removed (no UPDATE, DELETE or TRUNCATE); one link per (source line, target line, kind); one idempotency key per creator;
---   * both documents are APPROVED when the link is written (they are share-locked, so a concurrent cancel or status change cannot interleave), differ, share party, currency and branch, and the named lines belong to them;
+--   * both documents are APPROVED when the link is written (they are share-locked FIRST, so a concurrent cancel or status change cannot interleave and a link never deadlocks with a document edit), differ, share party, currency and branch, and the named lines belong to them;
 --   * OVER-FULFILMENT IS REFUSED (Q3 default: tolerance 0, owner decision pending): the quantity linked from one source line for one kind never exceeds the quantity of that line, and the quantity linked into one target line
 --     for one kind never exceeds the quantity of that line. Both lines are locked (FOR NO KEY UPDATE, in id order, so concurrent links never deadlock) BEFORE the sums are read, so concurrent links against the last remaining
 --     quantity create exactly the allowed ones;
@@ -47,14 +47,16 @@ DECLARE
     fparty uuid; tparty uuid; fcur char(3); tcur char(3); fbranch uuid; tbranch uuid; used numeric;
 BEGIN
     IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'document links are append-only'; END IF;
-    -- the two lines are locked in id order BEFORE any sum is read: every link against the same line is serialized here, and the statements below see every link that committed before the lock was granted
+    -- LOCK ORDER (same as a document edit: the document row first, its lines second, so a link and a material edit can never deadlock): the two documents are share-locked in id order, a concurrent status change
+    -- (cancel, re-approval) waits for this transaction and this transaction sees the status it left; THEN the two lines are locked in id order BEFORE any sum is read, so every link against the same line is serialized
+    -- here and the statements below see every link that committed before the lock was granted
+    PERFORM 1 FROM t_04d17dc0 d WHERE d.c_cceb8d4c IN (NEW.c_dcc9ea43, NEW.c_991145c6) ORDER BY d.c_cceb8d4c FOR SHARE;
+    SELECT d.c_8cb62046, d.c_b2463fae, d.c_496bb3d6, d.c_aae9b28d INTO fstatus, fparty, fcur, fbranch FROM t_04d17dc0 d WHERE d.c_cceb8d4c = NEW.c_dcc9ea43;
+    SELECT d.c_8cb62046, d.c_b2463fae, d.c_496bb3d6, d.c_aae9b28d INTO tstatus, tparty, tcur, tbranch FROM t_04d17dc0 d WHERE d.c_cceb8d4c = NEW.c_991145c6;
     PERFORM 1 FROM t_33fca2e4 l WHERE l.c_57d9a479 IN (NEW.c_e817adff, NEW.c_8702ed66) ORDER BY l.c_57d9a479 FOR NO KEY UPDATE;
     SELECT l.c_84431fb3, l.c_30743cc1 INTO fdoc, fqty FROM t_33fca2e4 l WHERE l.c_57d9a479 = NEW.c_e817adff;
     SELECT l.c_84431fb3, l.c_30743cc1 INTO tdoc, tqty FROM t_33fca2e4 l WHERE l.c_57d9a479 = NEW.c_8702ed66;
     IF fdoc IS DISTINCT FROM NEW.c_dcc9ea43 OR tdoc IS DISTINCT FROM NEW.c_991145c6 THEN RAISE EXCEPTION 'a link names lines of its own documents'; END IF;
-    -- both documents are share-locked: a concurrent status change (cancel, re-approval) waits for this transaction, and this transaction sees the status it left
-    SELECT d.c_8cb62046, d.c_b2463fae, d.c_496bb3d6, d.c_aae9b28d INTO fstatus, fparty, fcur, fbranch FROM t_04d17dc0 d WHERE d.c_cceb8d4c = NEW.c_dcc9ea43 FOR SHARE;
-    SELECT d.c_8cb62046, d.c_b2463fae, d.c_496bb3d6, d.c_aae9b28d INTO tstatus, tparty, tcur, tbranch FROM t_04d17dc0 d WHERE d.c_cceb8d4c = NEW.c_991145c6 FOR SHARE;
     IF fstatus IS DISTINCT FROM 3 OR tstatus IS DISTINCT FROM 3 THEN RAISE EXCEPTION 'both documents of a link must be approved'; END IF;
     IF fparty IS DISTINCT FROM tparty OR fcur IS DISTINCT FROM tcur OR fbranch IS DISTINCT FROM tbranch THEN RAISE EXCEPTION 'linked documents must share the party, the currency and the branch'; END IF;
     IF NEW.c_b7e71c2d > fqty OR NEW.c_b7e71c2d > tqty THEN RAISE EXCEPTION 'a link never exceeds the quantity of either line'; END IF;

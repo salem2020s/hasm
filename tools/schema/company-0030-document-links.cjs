@@ -33,7 +33,7 @@ const TEMPLATE = `-- Migration 0030: document links and partial fulfilment (Phas
 -- DERIVED from these rows and never stored, so a counter cannot drift.
 -- Invariants enforced by PostgreSQL:
 --   * a link is never changed or removed (no UPDATE, DELETE or TRUNCATE); one link per (source line, target line, kind); one idempotency key per creator;
---   * both documents are APPROVED when the link is written (they are share-locked, so a concurrent cancel or status change cannot interleave), differ, share party, currency and branch, and the named lines belong to them;
+--   * both documents are APPROVED when the link is written (they are share-locked FIRST, so a concurrent cancel or status change cannot interleave and a link never deadlocks with a document edit), differ, share party, currency and branch, and the named lines belong to them;
 --   * OVER-FULFILMENT IS REFUSED (Q3 default: tolerance 0, owner decision pending): the quantity linked from one source line for one kind never exceeds the quantity of that line, and the quantity linked into one target line
 --     for one kind never exceeds the quantity of that line. Both lines are locked (FOR NO KEY UPDATE, in id order, so concurrent links never deadlock) BEFORE the sums are read, so concurrent links against the last remaining
 --     quantity create exactly the allowed ones;
@@ -73,14 +73,16 @@ DECLARE
     fparty uuid; tparty uuid; fcur char(3); tcur char(3); fbranch uuid; tbranch uuid; used numeric;
 BEGIN
     IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'document links are append-only'; END IF;
-    -- the two lines are locked in id order BEFORE any sum is read: every link against the same line is serialized here, and the statements below see every link that committed before the lock was granted
+    -- LOCK ORDER (same as a document edit: the document row first, its lines second, so a link and a material edit can never deadlock): the two documents are share-locked in id order, a concurrent status change
+    -- (cancel, re-approval) waits for this transaction and this transaction sees the status it left; THEN the two lines are locked in id order BEFORE any sum is read, so every link against the same line is serialized
+    -- here and the statements below see every link that committed before the lock was granted
+    PERFORM 1 FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] IN (NEW.{{DocumentLink.FromDocumentId}}, NEW.{{DocumentLink.ToDocumentId}}) ORDER BY d.[[CommercialDocument.Id]] FOR SHARE;
+    SELECT d.[[CommercialDocument.Status]], d.[[CommercialDocument.PartyId]], d.[[CommercialDocument.Currency]], d.[[CommercialDocument.BranchId]] INTO fstatus, fparty, fcur, fbranch FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] = NEW.{{DocumentLink.FromDocumentId}};
+    SELECT d.[[CommercialDocument.Status]], d.[[CommercialDocument.PartyId]], d.[[CommercialDocument.Currency]], d.[[CommercialDocument.BranchId]] INTO tstatus, tparty, tcur, tbranch FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] = NEW.{{DocumentLink.ToDocumentId}};
     PERFORM 1 FROM [[CommercialDocumentLine.Table]] l WHERE l.[[CommercialDocumentLine.Id]] IN (NEW.{{DocumentLink.FromLineId}}, NEW.{{DocumentLink.ToLineId}}) ORDER BY l.[[CommercialDocumentLine.Id]] FOR NO KEY UPDATE;
     SELECT l.[[CommercialDocumentLine.DocumentId]], l.[[CommercialDocumentLine.Quantity]] INTO fdoc, fqty FROM [[CommercialDocumentLine.Table]] l WHERE l.[[CommercialDocumentLine.Id]] = NEW.{{DocumentLink.FromLineId}};
     SELECT l.[[CommercialDocumentLine.DocumentId]], l.[[CommercialDocumentLine.Quantity]] INTO tdoc, tqty FROM [[CommercialDocumentLine.Table]] l WHERE l.[[CommercialDocumentLine.Id]] = NEW.{{DocumentLink.ToLineId}};
     IF fdoc IS DISTINCT FROM NEW.{{DocumentLink.FromDocumentId}} OR tdoc IS DISTINCT FROM NEW.{{DocumentLink.ToDocumentId}} THEN RAISE EXCEPTION 'a link names lines of its own documents'; END IF;
-    -- both documents are share-locked: a concurrent status change (cancel, re-approval) waits for this transaction, and this transaction sees the status it left
-    SELECT d.[[CommercialDocument.Status]], d.[[CommercialDocument.PartyId]], d.[[CommercialDocument.Currency]], d.[[CommercialDocument.BranchId]] INTO fstatus, fparty, fcur, fbranch FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] = NEW.{{DocumentLink.FromDocumentId}} FOR SHARE;
-    SELECT d.[[CommercialDocument.Status]], d.[[CommercialDocument.PartyId]], d.[[CommercialDocument.Currency]], d.[[CommercialDocument.BranchId]] INTO tstatus, tparty, tcur, tbranch FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] = NEW.{{DocumentLink.ToDocumentId}} FOR SHARE;
     IF fstatus IS DISTINCT FROM 3 OR tstatus IS DISTINCT FROM 3 THEN RAISE EXCEPTION 'both documents of a link must be approved'; END IF;
     IF fparty IS DISTINCT FROM tparty OR fcur IS DISTINCT FROM tcur OR fbranch IS DISTINCT FROM tbranch THEN RAISE EXCEPTION 'linked documents must share the party, the currency and the branch'; END IF;
     IF NEW.{{DocumentLink.Quantity}} > fqty OR NEW.{{DocumentLink.Quantity}} > tqty THEN RAISE EXCEPTION 'a link never exceeds the quantity of either line'; END IF;

@@ -41,6 +41,7 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == DL.UqPair) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "link_exists"); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }
+        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // safety net: a lock cycle or serialization failure is a retryable conflict, never a 500
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent link: nothing was written
     }
 
@@ -81,18 +82,19 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
             {
                 if (await FindByKeyAsync(work.Connection, work.Transaction, actor, key, ct) is { } e) throw e.Hash == hash ? new Replay(e.Id) : new Abort(ConfigStatus.Conflict, "idempotency_key_reused");
                 if (input.FromDocumentId == input.ToDocumentId) throw Invalid("toDocumentId", "same_document");
-                var fromLine = await FindLineAsync(work, input.FromDocumentId!.Value, input.FromLineNo!.Value, ct) ?? throw (await DocumentExistsAsync(work, input.FromDocumentId.Value, ct) ? Invalid("fromLineNo", "line_not_found") : NotFoundDocument("fromDocumentId"));
-                var toLine = await FindLineAsync(work, input.ToDocumentId!.Value, input.ToLineNo!.Value, ct) ?? throw (await DocumentExistsAsync(work, input.ToDocumentId.Value, ct) ? Invalid("toLineNo", "line_not_found") : NotFoundDocument("toDocumentId"));
-                // the guard's order: lines first (id order), then the documents (share lock), then every sum is read under those locks
+                // lock order = the document guard's order (documents first, then lines): the two documents are share-locked in id order, THEN the branch is compared (a source of another branch is "not found" before any line is looked at),
+                // THEN the two lines are locked in id order, and only then is any sum read. A material edit holds the document row first and the lines second, so no cycle can form (F review M1).
+                var docs = await LockDocumentsAsync(work, input.FromDocumentId!.Value, input.ToDocumentId!.Value, ct);
+                var from = docs[input.FromDocumentId.Value]; var to = docs[input.ToDocumentId.Value];
+                if (from.BranchId != to.BranchId) throw NotFoundDocument("fromDocumentId");
+                var fromLine = await FindLineAsync(work, from.Id, input.FromLineNo!.Value, ct) ?? throw Invalid("fromLineNo", "line_not_found");
+                var toLine = await FindLineAsync(work, to.Id, input.ToLineNo!.Value, ct) ?? throw Invalid("toLineNo", "line_not_found");
                 await using (var lk = new NpgsqlCommand($"SELECT {CL.Id} FROM {CL.Table} WHERE {CL.Id} = ANY(@ids) ORDER BY {CL.Id} FOR NO KEY UPDATE", work.Connection, work.Transaction))
                 {
                     lk.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = new[] { fromLine.Id, toLine.Id } });
                     await using var rd = await lk.ExecuteReaderAsync(ct);
                     while (await rd.ReadAsync(ct)) { }
                 }
-                var docs = await LockDocumentsAsync(work, input.FromDocumentId.Value, input.ToDocumentId.Value, ct);
-                var from = docs[input.FromDocumentId.Value]; var to = docs[input.ToDocumentId.Value];
-                if (from.BranchId != to.BranchId) throw NotFoundDocument("fromDocumentId");
                 if (from.Status != CommercialStatus.Approved) throw new Abort(ConfigStatus.Conflict, "document_not_approved");
                 if (to.Status != CommercialStatus.Approved) throw new Abort(ConfigStatus.Conflict, "document_not_approved");
                 if (from.PartyId != to.PartyId) throw new Abort(ConfigStatus.Conflict, "party_mismatch");
@@ -148,13 +150,6 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
         return (T)(await q.ExecuteScalarAsync())!;
     }
 
-    private static async Task<bool> DocumentExistsAsync(CompanyAuditedWork work, Guid id, CancellationToken ct)
-    {
-        await using var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {CD.Table} WHERE {CD.Id} = @id)", work.Connection, work.Transaction);
-        q.Parameters.AddWithValue("id", id);
-        return (bool)(await q.ExecuteScalarAsync(ct))!;
-    }
-
     private static async Task<LineRow?> FindLineAsync(CompanyAuditedWork work, Guid documentId, int lineNo, CancellationToken ct)
     {
         await using var q = new NpgsqlCommand($"SELECT {CL.Id}, {CL.DocumentId}, {CL.LineNo}, {CL.Quantity} FROM {CL.Table} WHERE {CL.DocumentId} = @d AND {CL.LineNo} = @n", work.Connection, work.Transaction);
@@ -170,7 +165,8 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
         q.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = new[] { a, b } });
         await using var r = await q.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) map[r.GetGuid(0)] = new DocRow(r.GetGuid(0), r.GetString(1), (CommercialStatus)r.GetInt16(2), r.GetGuid(3), r.GetString(4).Trim(), r.GetGuid(5));
-        if (!map.ContainsKey(a) || !map.ContainsKey(b)) throw new Abort(ConfigStatus.Conflict, "concurrent_change");
+        if (!map.ContainsKey(a)) throw NotFoundDocument("fromDocumentId");
+        if (!map.ContainsKey(b)) throw NotFoundDocument("toDocumentId");
         return map;
     }
 
