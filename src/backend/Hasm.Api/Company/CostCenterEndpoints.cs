@@ -23,8 +23,8 @@ public static class CostCenterEndpoints
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/recode", Recode).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/move", Move).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/deactivate", Deactivate);
-        g.MapPost("/{id:guid}/activate", Activate);
+        g.MapPost("/{id:guid}/deactivate", Deactivate).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/activate", Activate).WithMetadata(new BodyLimit());
     }
 
     private static object Body(CostCenterView c) => new

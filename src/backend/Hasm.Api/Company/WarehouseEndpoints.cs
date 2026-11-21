@@ -37,8 +37,8 @@ public static class WarehouseEndpoints
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/deactivate", Deactivate);
-        g.MapPost("/{id:guid}/activate", Activate);
+        g.MapPost("/{id:guid}/deactivate", Deactivate).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/activate", Activate).WithMetadata(new BodyLimit());
     }
 
     private static object Body(WarehouseView w) => new

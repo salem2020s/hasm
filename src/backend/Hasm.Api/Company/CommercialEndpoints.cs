@@ -42,9 +42,9 @@ public static class CommercialEndpoints
         g.MapGet("/{id:guid}", Get);
         g.MapGet("/{id:guid}/approvals", Approvals);   // S5a: the approval plan of the current revision and its decisions
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/submit", Submit);
-        g.MapPost("/{id:guid}/withdraw", Withdraw);
-        g.MapPost("/{id:guid}/approve", Approve);
+        g.MapPost("/{id:guid}/submit", Submit).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/approve", Approve).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/reject", Reject).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(new BodyLimit());
         // S2: links between approved documents (company.commercialdocs.update on the TARGET document's branch; reading needs view). No DELETE or PUT: a link is append-only. Production registers no link pair until 3.15/3.16.
