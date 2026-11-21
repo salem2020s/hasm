@@ -39,10 +39,9 @@ Risk: **High.** An update replaces all of the code, including the security code,
   A package whose own migrations need something from this phase is impossible by construction, because this phase adds no schema.
 
 ## Package format (D-171)
-* **Container:** one file, `hasm-update-<version>.hup`. It is a ZIP archive (`System.IO.Compression`, built in; no new dependency) with stored or deflated entries.
+* **Container:** one file, `hasm-update-<version>.hup`. It is a ZIP archive (`System.IO.Compression`, built in; no new dependency).
 * **Entries:**
-  * `update-manifest.json`;
-  * `update-manifest.json.sig`, a detached signature in the slice 5 format: base64 IEEE-P1363 ECDSA P-256 over the exact manifest bytes, plus the key id;
+  * `update-manifest.json` and `update-manifest.json.sig`. Each appears EXACTLY ONCE; a duplicate, including a case-insensitive duplicate, is refused (review L1 of #152). The `.sig` is a detached signature in the slice 5 format: base64 IEEE-P1363 ECDSA P-256 over the exact manifest bytes, plus the key id;
   * `payload/<platform>/...`: the backend (API and administrative tool, self-contained, so no runtime prerequisite changes) and the Web bundle;
   * optionally, `desktop/<platform>/...`: the desktop installer, separately code-signed in 4.5;
   * `notes/release-notes.<lang>.md`.
@@ -54,14 +53,16 @@ Risk: **High.** An update replaces all of the code, including the security code,
   * **database levels:** the system and company migration levels and the ordered list of EVERY migration's name and checksum. With these, preflight can compare against the live journals without running new code;
   * `postgresMajorVersions` (supported);
   * `apiCompatibility`: the API compatibility level, and the supported desktop client version range;
-  * for each payload file: its path, size, SHA-256 and platform.
+  * **the update trust list and its version** (D-172; review M3 of #152);
+  * **every entry other than the manifest and its signature** (payload, desktop installer and notes alike): its path, size, SHA-256 and platform (or `any`) (review L2 of #152).
 * **Reading rules (fail closed; stable codes):**
   * The manifest and `.sig` are read first, each with a size bound (at most 1 MiB). The signature is verified BEFORE the manifest is parsed (as D-116: nothing unauthenticated is interpreted).
-  * Then each payload entry is streamed into a private (0700) staging folder while its SHA-256 is computed over the same bytes. A mismatch or a size difference deletes the staging folder (`package_digest_mismatch`).
+  * Then each other entry is streamed into a private (0700) staging folder while its SHA-256 is computed over the same bytes. Each stream is CUT at its declared size plus one byte, so an entry longer than declared is refused without reading it to the end (L1). A mismatch or a size difference deletes the staging folder (`package_digest_mismatch`).
   * **Refused:**
     * an entry that is not listed in the manifest, or a listed entry that is missing (`package_entry_unlisted`, `package_entry_missing`);
     * duplicate names, including case-insensitive duplicates for Windows;
     * absolute paths, `..`, drive letters, symbolic links, and names that would escape the staging folder (`package_path_invalid`; zip-slip);
+    * an ENCRYPTED entry, and a compression method other than stored or deflate (`package_entry_unsupported`; L1);
     * a total uncompressed size above the manifest's declared sum, or a compression ratio beyond a fixed bound (`package_too_large`; zip bomb);
     * an unknown format version or an unknown key id.
   * Nothing from the package is executed before the whole package has been verified.
@@ -77,9 +78,17 @@ Risk: **High.** An update replaces all of the code, including the security code,
   * Update packages are signed by the PUBLISHER (HASM) with an update signing key (`uk-...`). An installation could not sign its own updates, and a server compromise must not let a forged update verify.
   * So the update trust list is SEPARATE from the backup signing trust (`--signing-trust`) and never reads it.
   * A `uk-` key is refused anywhere a backup signature is expected, and an `sk-` key is refused for packages (`signing_key_wrong_purpose`).
-* **Where the update trust comes from:**
-  * The update trust list (public keys and statuses) is compiled into each release and installed with it.
-  * A package may carry a NEW trust list, which takes effect only after the whole package has verified under the CURRENT installed list. This is how keys rotate, and how a key is marked compromised for installations that are offline.
+* **Where the update trust comes from (review M3 of #152):**
+  * The INSTALLED update trust list (public keys, statuses and a list version) is an owner-only file in the update state directory. The installer (4.5) writes the first one. After that, only `update-commit` changes it.
+  * Each package carries its trust list and the list's version INSIDE the signed manifest.
+  * **When it takes effect:** the package must verify under the CURRENTLY installed list. Its list is installed ONLY when that update is COMMITTED (`update-commit`), never on verification, preflight or an apply that rolls back. A rolled-back update leaves the installed trust unchanged.
+  * **One-way rules, checked before the apply and again at commit** (`trust_list_regression`):
+    * the list version is STRICTLY greater than the installed one;
+    * no key is ever removed;
+    * a status only gets stricter: `active` may become `retired` or `compromised`, `retired` may become `compromised`, and `compromised` never changes;
+    * a retirement date never moves later.
+  * So an older signed package can never clear a compromise mark or revive a retired key.
+  * This is how keys rotate, and how a key is marked compromised for installations that are offline.
   * Configuration cannot add a trust key: a local setting that adds keys would turn a stolen administrator account into a code-injection path.
 * **Residual limitations:**
   * An installation that never applies a later package keeps trusting a key the publisher has since compromised. The publisher's advisory is then the only channel. This is inherent to offline operation.
@@ -103,22 +112,26 @@ Risk: **High.** An update replaces all of the code, including the security code,
    * This proves on current real data that the migrations apply. A failure refuses the update with the failing database's TAG and migration (`trial_migration_failed`).
    * That the BACKUP restores is proven separately by the recovery test (slice 5). `backup-status`, which must be ok for the update (D-174), already refuses while `recovery_untested`.
 5. **Permissions (SRS "الصلاحيات"):**
-   * the operator is a named administrator with MFA (D-099; while that login does not exist, the interim mode of the administrative tool, as in slice 5);
+   * the operator is a named administrator with MFA (D-099; while that login does not exist, the interim mode of the administrative tool, as in slice 5). Preflight copies every database, so it is restricted to the named administrator too (review L6 of #152);
    * the database admin account can create databases (`CREATEDB`, for the copies) and run migrations;
+   * the role-admin account (`CREATEROLE`) can switch every runtime role to `NOLOGIN` and back (step 2);
    * the service account can write the installation directory and owns the staging folder;
    * the key, credential and checkpoint directories are readable and owner-only.
-6. **Space:**
+6. **Roles unchanged (review L3 of #152):** every runtime role's attributes, memberships and connection limit are snapshotted before the trial migration and compared after it. A difference refuses the update (`role_changed_by_update`). A package must never create, drop or alter roles.
+7. **Space:**
    * The pre-update copies need about the size of every database (`pg_database_size`), and the new version needs its payload size.
    * Space is measured where the updater can see it.
    * When PostgreSQL runs on another server (the split model), the operator confirms the free space there with a typed acknowledgement, recorded in the journal (`db_space_unconfirmed` without it).
-7. **Clients:** the report lists the desktop client range of the package, so administrators can plan the workstation installs (D-177).
+8. **Clients:** the report lists the desktop client range of the package, so administrators can plan the workstation installs (D-177).
 
-The result is a human-readable report plus a JSON report. `update-apply` re-runs checks 1-3, 5 and 6 itself, after quiescing, and refuses if anything changed.
+The result is a human-readable report plus a JSON report. `update-apply` re-runs checks 1-3 and 5-7 itself, after quiescing, and refuses if anything changed.
 
 ## Backup requirement before applying (D-174)
-* `update-apply` takes its OWN full run (system database and every company) AFTER quiescing (step 2 below), encrypted and signed (slice 5). It then requires:
-  * `backup-status` to be ok for that run;
-  * the run to verify against the backup signing trust.
+* `update-apply` takes its OWN full run (system database and every company) AFTER quiescing (step 2 below), encrypted and signed (slice 5).
+  * **The run executes INSIDE the update's held run lock, as its owner (review M1 of #152).** The updater acquires the backup run lock in step 2 and passes its holding session to the backup engine, as `backup-run` already does with its own lock session. So the backup does not try to take the lock again and refuse itself (`run_in_progress`).
+  * It then requires:
+    * `backup-status` to be ok for that run;
+    * the run to verify against the backup signing trust.
 * **Refused:**
   * no encryption configured (`backup_encryption_not_configured`);
   * an unencrypted DEV/TEST set: the update refuses outside the DEV/TEST acknowledgement, exactly as slice 5 does.
@@ -130,65 +143,89 @@ The result is a human-readable report plus a JSON report. `update-apply` re-runs
 
 ## The apply procedure (D-175)
 `update-apply <package>` is run by a named administrator (and, per Q2, with an approval). It is journaled step by step in an append-only, owner-only update journal file (`Hasm__Update__StateDirectory`): `intent` and `done` per step, with the same observed-state resume rules as the slice 7 switch (D-145).
-1. **Verify and preflight:** the package, then checks 1-3, 5 and 6 again.
-2. **Quiesce:**
-   * every API instance must be stopped, which is checked: no session of any company runtime role or the system runtime role in `pg_stat_activity` (`api_still_running`). The check is repeated before step 7;
-   * no backup, retention, restore or provisioning is running (the existing locks are taken and held until the outcome);
-   * while the copies are taken (step 5), new connections to the source databases are blocked (`ALLOW_CONNECTIONS false`), because `CREATE DATABASE ... TEMPLATE` needs a source without sessions. Connections are re-allowed for the migration, with the API still stopped.
+1. **Verify and preflight:** the package, the trust rules (M3), then checks 1-3 and 5-7 again.
+2. **Quiesce (review M2 of #152):**
+   * every API instance must be stopped (`api_still_running` otherwise). Stopping and starting the API service belongs to the installation model's service adapter (4.5). Until 4.5, the operator stops and starts it when the command asks;
+   * **every runtime role is blocked for the WHOLE window:** the system runtime role and every company runtime role are switched to `NOLOGIN`. Their prior attributes are recorded in the journal, and their remaining sessions are terminated. Then `pg_stat_activity` must show no session of any of them.
+     * An automatic restart, a second API instance or a forgotten service therefore cannot reconnect during the migration.
+     * Access is restored ONLY at reopen (step 10) or at the end of a rollback, from the journal.
+   * the backup run, retention, restore and provisioning locks are taken on the system database and held until the outcome. So no backup, retention, restore or provisioning can run meanwhile.
 3. **Audit `UpdateStarted`** in the system stream, BEFORE the copies are taken, so the copies contain it.
-4. **Pre-update backup** (D-174).
-5. **Pre-update copies:**
-   * `CREATE DATABASE <copy> TEMPLATE <live>` for the system database and every company database (generated opaque names; database TAGS only in logs and events);
-   * a TEMPLATE copy inherits the source's grants, so the runtime role's privileges, `CONNECT` included, are revoked on each copy right after it is created and verified absent. The copies are reachable only by the administrator.
+4. **Pre-update backup** (D-174), inside the held run lock as its owner (M1).
+5. **Pre-update copies (review M1 of #152):**
+   * **System database:** copied by a streamed `pg_dump | pg_restore` into a new database (no file). A TEMPLATE copy is impossible here, because the update's own sessions hold the advisory locks on that database.
+     * `pg_dump` reads one consistent snapshot. Nothing writes meanwhile: the API is stopped, every runtime role is `NOLOGIN`, and the locks are held.
+     * Privileges are restored with the data, so the copy keeps exactly the live grants.
+   * **Each company database:** `CREATE DATABASE <copy> TEMPLATE <live>`. The update holds no session there. `ALLOW_CONNECTIONS false` and the termination of any remaining session come first, because TEMPLATE needs a source without sessions; connections are re-allowed right after the copy.
+   * Generated opaque names are used, and only database TAGS appear in logs and events.
+   * **The copies KEEP the live grants**, so a rollback (which renames them back) needs no re-grant. They are unreachable meanwhile, because every runtime role is `NOLOGIN`. At reopen, the runtime roles' `CONNECT` on the copies is revoked (step 10).
 6. **Install side by side:**
    * The verified payload is moved into `versions/<version>/`, and the active-version pointer is switched atomically (a rename of a pointer file, or a symbolic link where the platform allows one).
    * The previous version's directory stays.
-7. **Migrate:** the NEW administrative tool runs `init-system-db`, `migrate-companies` and `grant-company-runtime` for every company, as in the documented upgrade order.
-8. **Health check (read-only):**
-   * the schema gate for every company, the runtime login with the installed credentials, and the privilege proof of `grant-company-runtime`;
-   * `audit-verify` of every stream, with heads equal to those recorded at step 3;
+7. **Migrate:**
+   * The NEW administrative tool runs `init-system-db`, `migrate-companies` and the privilege part of `grant-company-runtime` for every company, as in the documented upgrade order. The roles stay `NOLOGIN`.
+   * After each step the role snapshot is compared again (L3). A role difference fails the update and rolls it back.
+8. **Health check (read-only, as the administrator):**
+   * the schema-gate rules for every company;
+   * the catalog privilege proof of `grant-company-runtime`;
+   * `audit-verify` of every stream, read through the administrator connection, with heads equal to those recorded at step 3;
    * the attachment key ids and the audit key ids still resolve;
-   * the new API starts in a health-check mode (no external listener) and answers `/api/v1/health` with the package version and the compatibility level.
-9. **Reopen and await commit:**
-   * connections are re-allowed and the API starts. Stopping and starting the API service belongs to the installation model's service adapter (4.5). Until 4.5, the operator stops and starts the service when the command asks, and the command verifies each state through `pg_stat_activity` and the health endpoint;
-   * the update is `Applied`, and the operator runs `update-commit` once satisfied (see rollback). `update-status` shows the state.
-10. **Audit:** `UpdateApplied`, written in the new version's system stream (it is a continuation of the same chain).
+   * the new API binaries start in a health-check mode with no listener and no database connection, which proves the configuration and the binaries load.
+   * The runtime-login proof needs `LOGIN`, so it runs after reopening (step 10).
+9. **Audit `UpdateApplied`** (review L4 of #152): written when the health check has passed and BEFORE reopening. It is the first audit write after the copies, and from here the journal rule is FORWARD.
+10. **Reopen:**
+    * the runtime roles' `CONNECT` on the copies is revoked;
+    * the runtime roles get their recorded attributes back (`LOGIN`);
+    * the runtime-login proof runs;
+    * the API is started, and its health endpoint must answer with the package version and the compatibility level.
 
-**No audit write between the copy and the outcome.** Between step 5 and step 9, nothing writes to an audit stream:
+    A failure here is reported (`update_reopen_check_failed`) and leaves the update `Applied` for the operator. It does NOT roll back automatically, because business may already have been written (see rollback, Q3). The update changed no credential or role (L3), so such a failure is environmental.
+11. **Await commit:** the update is `Applied`, and `update-status` shows it. The operator runs `update-commit` (D-176) once satisfied.
+
+**No audit write between the copies and the outcome.** Between step 5 and step 9, nothing writes to an audit stream:
+* the runtime roles cannot log in;
 * the migrations write their journal rows only;
-* the update's own events are written at step 3 (before the copies) and at step 10 or at rollback (after the state is settled).
+* the update's own events are written at step 3 (before the copies), and at step 9 or at rollback (after the state is settled).
 
-Because of this, a rollback to the copies never leaves a checkpoint ahead of its stream (`audit_stream_truncated`). A test pins it.
+Because of this, a rollback to the copies never leaves a checkpoint ahead of its stream (`audit_stream_truncated`), and no business write can be lost by it. A test pins both.
 
-## Rollback (D-176)
-* **Automatic, before reopening:** any failure in steps 5-8 rolls back from the journal:
+## Rollback and commit (D-176)
+* **A failure in steps 1-4** changed no database: the runtime roles get their recorded attributes back, the locks are released, and `UpdateRefused` is written.
+* **Automatic, before step 9:** any failure in steps 5-8, or a failure to write `UpdateApplied`, rolls back from the journal:
   1. the pointer is switched back to the previous version;
-  2. each migrated database is renamed to a RETAINED name, and its copy is renamed back to the live name (the D-145 rename switch). The physical names, registry rows and credentials stay valid;
-  3. runtime grants are re-applied to the restored databases and verified, and the retained failed databases keep no runtime grant;
-  4. connections are re-allowed, and the old version starts and passes its own health check;
-  5. audit `UpdateRolledBack`, with the failed step and code.
+  2. **every database to be renamed** first gets `ALLOW_CONNECTIONS false`, then its remaining sessions are terminated, the updater's own included. That releases the update's locks, and nobody can reconnect to take them (review L6 of #152);
+  3. each migrated database is renamed to a RETAINED name, and its copy is renamed back to the live name (the D-145 rename switch). The physical names, registry rows and credentials stay valid, and the copies carry the live grants (M1), so nothing is re-granted;
+  4. the retained failed databases lose every runtime privilege, `CONNECT` included;
+  5. connections are re-allowed, the runtime roles get their recorded attributes back (M2), and the old version starts and passes its own health check;
+  6. audit `UpdateRolledBack`, with the failed step and code.
 
-  This meets "a failed upgrade rolls back". It needs no restore from backup.
-* **Resume:** `update-rollback` (or a restart after a crash) decides from the OBSERVED state: the pointer, the database names, `ALLOW_CONNECTIONS` and the grants. It never acts by hand-edited journal state.
-  * Before the first rename the rule is BACK.
-  * After the health check has passed the rule is FORWARD (finish reopening).
+  This meets "a failed upgrade rolls back". It needs no restore from backup, and the installed trust list is unchanged (M3).
+* **Resume:** `update-rollback` (or a restart after a crash) decides from the OBSERVED state: the pointer, the database names, `ALLOW_CONNECTIONS`, the role attributes and the grants. It never acts by hand-edited journal state.
+  * Before `UpdateApplied` the rule is BACK.
+  * From `UpdateApplied` on the rule is FORWARD (finish reopening).
 * **After reopening:**
-  * The automatic rollback window ends when the installation reopens for business (step 9). From then on, rolling back would discard business written under the new version, which is the same loss question as D-153.
-  * A rollback after reopening is therefore NOT offered. Recovery after that point uses the restore procedures (4.3 slice 7, and the full-installation restore of slice 8) with their safeguards.
+  * The automatic rollback window ends with `UpdateApplied`. From reopening on, rolling back would discard business written under the new version, which is the same loss question as D-153.
+  * A rollback after that point is therefore NOT offered. Recovery uses the restore procedures (4.3 slice 7, and the full-installation restore of slice 8) with their safeguards.
   * Owner question **Q3** holds the alternative.
+* **`update-commit` (review L4 of #152):**
+  * allowed only in state `Applied`, by a named administrator;
+  * it re-checks the trust rules and installs the package's trust list (M3);
+  * it marks the update `Committed` and its copies releasable, and writes `UpdateCommitted`.
+  * Before commit, the copies and the previous version cannot be released.
 * **What stays after commit:**
   * The pre-update copies, the retained failed databases (if any) and the previous version's directory stay until the operator releases them with `update-release <id>` (named administrator; audited `UpdateReleased`). Nothing is removed automatically.
-  * Releasing copies after a successful update loses no business data: live holds everything, and the pre-update backup run remains.
+  * Releasing copies after a committed update loses no business data: live holds everything, and the pre-update backup run remains.
 * **Not rolled back, by design:**
-  * Attachments, key directories and credential files are not changed by an update. A package that needs to change them is refused by format version (`package_requires_unsupported_step`).
-  * So only the databases and the binaries roll back.
+  * Attachments, key directories, credential files and ROLES are not changed by an update. A package that needs to change them is refused: by format version (`package_requires_unsupported_step`), and for roles by the snapshot comparison (`role_changed_by_update`, L3).
+  * So only the databases, the binaries and the runtime roles' temporary `NOLOGIN` are rolled back.
 
 ## Client compatibility (D-177)
-* **One rule for both clients:** the shared API client sends the client version on every request (header `X-Hasm-Client-Version`). The SERVER refuses a version outside the supported range with `426` and the stable code `client_version_unsupported`. This is enforced server-side, never in the frontend only.
+* **One rule for both clients:** the shared API client sends the client version on every request (header `X-Hasm-Client-Version`). The SERVER refuses a version outside the supported range with HTTP `400` and the stable code `client_version_unsupported`. This is enforced server-side, never in the frontend only.
+  * `426 Upgrade Required` is NOT used: it requires an `Upgrade` header naming a protocol, which does not apply here (review L7 of #152). Clients act on the stable code.
   * A request without the header is refused the same way. Only `GET /api/v1/health` and the anonymous login-status read are exempt, so the login screen can show the message.
 * **Web:**
   * The Web bundle ships IN the package and is served by the same backend, so its supported range is exactly the server's version.
-  * A browser still running the old bundle after an update receives `426`. It shows the shared "updated, please reload" message (Arabic RTL and English LTR) and reloads on confirmation. Unsaved form input is never discarded silently: the message comes before navigation.
+  * A browser still running the old bundle after an update receives `client_version_unsupported`. It shows the shared "updated, please reload" message (Arabic RTL and English LTR) and reloads on confirmation. Unsaved form input is never discarded silently: the message comes before navigation.
   * Sessions end at the update anyway (step 2).
 * **Desktop (Tauri):**
   * The desktop client bundles its own copy of the shared frontend, so it can be older or newer than the server.
@@ -200,11 +237,15 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
 
 ## Authorization and audit (D-178)
 * **Commands:**
-  * `update-verify` and `update-preflight`: any administrator;
-  * `update-apply`, `update-commit`, `update-rollback` and `update-release`: a named administrator with MFA (D-099).
+  * `update-verify` (it reads only the package): any administrator;
+  * `update-preflight` (it copies every database, L6), `update-apply`, `update-commit`, `update-rollback` and `update-release`: a named administrator with MFA (D-099).
   * Until the D-099 login exists, these commands run under the administrative tool's interim operating-system mode, recorded as a dated limitation in RELEASE1-ACCEPTANCE, as for slice 5.
 * **Independent approval:** owner question **Q2**.
-* **System-stream audit events** (block **2030-2039**, allocated by the lead to Phase 4.4). Each carries ids, versions, key ids, run ids and database TAGS only, and every step fails closed when its event cannot be written. The events: `UpdateVerified` (verified or refused, with the code), `UpdatePreflight`, `UpdateStarted`, `UpdateApplied`, `UpdateRolledBack`, `UpdateCommitted`, `UpdateReleased` and `UpdateRefused`.
+* **System-stream audit events** (block **2030-2039**, allocated by the lead to Phase 4.4). Each carries ids, versions, key ids, run ids and database TAGS only, and every step fails closed when its event cannot be written. The events:
+  * `UpdateVerified`: a package verified successfully;
+  * `UpdatePreflight`: a preflight passed;
+  * `UpdateRefused`: ANY refusal, with the stage (verify, preflight, apply, commit, release) and the stable code (review L5 of #152);
+  * `UpdateStarted`, `UpdateApplied`, `UpdateRolledBack`, `UpdateCommitted` and `UpdateReleased`.
 
 ## Exact tests (implementation PR)
 * **Unit tests:**
@@ -212,34 +253,39 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
   * signature verification: a tampered manifest, a tampered payload byte, a swapped entry, an unlisted or missing entry, a wrong key, an unknown key, a `compromised` key, a retired key after its date, and a `uk-`/`sk-` purpose mismatch;
   * zip-slip, absolute paths, symbolic links, case-insensitive duplicates and a zip bomb refused;
   * nothing parsed before the signature;
-  * trust rotation: a new trust list takes effect only after verifying under the old one;
+  * trust rotation (M3): a package's trust list is installed only by `update-commit`, never by verification, preflight or a rolled-back apply; a version that is not strictly greater, a removed key, a `compromised` key made `active`, a `retired` key made `active` and a retirement date moved later are each refused (`trust_list_regression`);
+  * ZIP rules (L1, L2): a duplicate manifest or signature entry, an encrypted entry, an unknown compression method, an entry longer than declared (cut at size + 1), and an unlisted desktop or notes entry are each refused;
   * the version-path rules (downgrade, re-apply, out-of-range);
   * the migration-journal prefix rule (edited, unknown, missing);
   * the journal state machine (every crash point resumes forward or backward);
-  * the client-version rule (server-side refusal; shared frontend message on Web and Desktop, Arabic and English);
+  * the client-version rule (server-side `400 client_version_unsupported`, no `426`; shared frontend message on Web and Desktop, Arabic and English);
   * a pin that no configuration can add an update trust key.
 * **PostgreSQL** (isolated runner; about 8 tests; the registry is raised at push time):
   * **Upgrade across versions:**
     * a fixture installation at version N-1 (the previous release; before Release 1, the build of the merge base), with seeded companies and audit streams;
     * apply a package of version N built in the test: migrations, grants, health check, audit heads unchanged and verified, the API answering with N.
   * **Tampered package refused** before anything changes (acceptance).
-  * **Failed upgrade rolls back** (acceptance): a package whose company migration fails on the second company. The old version and databases are live again, the copies are restored by rename, the grants are re-applied, `audit-verify` is Verified with no `audit_stream_truncated`, and there is `UpdateRolledBack`.
+  * **Failed upgrade rolls back** (acceptance): a package whose company migration fails on the second company. The old version and databases are live again, the copies are restored by rename with their grants intact, the runtime roles can log in again, `audit-verify` is Verified with no `audit_stream_truncated`, and there is `UpdateRolledBack`.
   * Crash at each journal step, then resume.
   * Preflight refuses a company that is not `Ready`, and an edited applied migration.
   * The trial migration failing on real data refuses before any downtime.
   * A running API (a session of a runtime role) refuses the apply.
+  * M2: during the window every runtime role is `NOLOGIN`, so a login attempt by a restarted API fails. Access returns only at reopen or at the end of a rollback, with the recorded attributes.
+  * M1: the system database copy is made by streaming while the update holds its locks, and the company copies by TEMPLATE. The pre-update backup runs inside the held run lock without `run_in_progress`. A rollback renames the copies back with their grants intact, after terminating every session (L6).
+  * L3: a migration that alters a role fails the trial migration (`role_changed_by_update`).
+  * L4: `UpdateApplied` precedes reopening, and a failure after it does not roll back.
   * The pre-update backup is required: no encryption configured means refused.
 * **Frontend:** shared component tests for the reload and `client_version_unsupported` messages (both languages, RTL and LTR), the typecheck, the production build and the Tauri build check.
 
 ## Decisions (D-170..D-178; recorded in `docs/DECISIONS.md`, status planned)
 * **D-170** scope and principles: manual only; no automatic updates; no migration in this phase.
 * **D-171** the package format.
-* **D-172** signature and trust: slice 5 machinery reused; a separate publisher trust domain (`uk-`); trust compiled into each release and rotated only by a verified package.
+* **D-172** signature and trust: slice 5 machinery reused; a separate publisher trust domain (`uk-`); the trust list carried in the signed manifest, installed only at commit, and one-way (strictly increasing version, statuses only stricter).
 * **D-173** compatibility and migration preflight, with a trial migration on streamed disposable copies.
 * **D-174** the pre-update encrypted, signed backup taken after quiescing.
-* **D-175** the apply procedure: quiesce, copies by TEMPLATE, side-by-side install, migrate, health check, no audit write between copy and outcome.
-* **D-176** rollback: automatic by rename before reopening; after reopening only the restore procedures; nothing removed automatically.
-* **D-177** client compatibility: Web served with the server; Desktop range enforced server-side; shared frontend messages.
+* **D-175** the apply procedure: quiesce with every runtime role `NOLOGIN`, a streamed copy of the system database and TEMPLATE copies of the company databases (grants kept), the backup inside the held run lock, side-by-side install, migrate, administrator health check, `UpdateApplied` before reopening, no audit write between copy and outcome.
+* **D-176** rollback and commit: automatic by rename before `UpdateApplied` (sessions terminated first); after it only the restore procedures; `update-commit` installs the package's trust list; nothing removed automatically.
+* **D-177** client compatibility: Web served with the server; Desktop range enforced server-side (`400 client_version_unsupported`); shared frontend messages.
 * **D-178** authorization and audit.
 
 ## Open questions for the owner (not decided here; the safe default applies until answered)
