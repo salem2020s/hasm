@@ -266,11 +266,20 @@ public static partial class SystemSchema
     public const string MigrationJournalTable = "migration_journal";
 
     /// <summary>
-    /// The explicit SECRET-STORE flag of the logical schema dictionary (Phase 4.3 slice 4, D-070): the logical table names (keys of <see cref="Map"/>) whose rows hold secrets or ephemeral security data.
-    /// Their DATA never reaches an unencrypted backup set: <c>BackupRunService.SystemDumpExclusions</c> must exclude exactly these tables (pinned by a unit test in both directions). A new secret-store table
-    /// (for example the Phase 4.1 TOTP secrets) is added HERE and to the exclusions in the same change.
+    /// The explicit SECRET-STORE flag of the logical schema dictionary (Phase 4.3 slice 4, D-070), with its PER-TABLE backup rule (slice 5, D-091 and D-120): the logical table names (keys of
+    /// <see cref="Map"/>) whose rows hold secrets or ephemeral security data. Their DATA never reaches an UNENCRYPTED backup set. In an ENCRYPTED run a table is either still excluded
+    /// (<see cref="SecretStoreBackupRule.AlwaysExcluded"/>: ephemeral, no recovery value) or included under HBE1 (<see cref="SecretStoreBackupRule.IncludedOnlyInEncryptedRuns"/>: rows that are already
+    /// ciphertext under the protected key ring and must survive a full restore). A new secret-store table is added HERE, with its rule, and labelled in <c>BackupRunService.SystemDumpExclusions</c> in the
+    /// same change (pinned by a unit test). D-120: the Phase 4.1 TOTP-secret table is <see cref="SecretStoreBackupRule.IncludedOnlyInEncryptedRuns"/>, set by whichever of 4.1 S1 and the slice 5
+    /// implementation merges second.
     /// </summary>
-    public static IReadOnlySet<string> SecretStoreTables { get; } = new HashSet<string>(StringComparer.Ordinal) { "Session.Table", "LoginThrottle.Table", "UserTotp.Table" };
+    public static IReadOnlyDictionary<string, SecretStoreBackupRule> SecretStoreTables { get; } = new Dictionary<string, SecretStoreBackupRule>(StringComparer.Ordinal)
+    {
+        ["Session.Table"] = SecretStoreBackupRule.AlwaysExcluded,
+        ["LoginThrottle.Table"] = SecretStoreBackupRule.AlwaysExcluded,
+        // Phase 4.1 S1 (D-120): the TOTP secrets are already ciphertext under the protected key ring; an ENCRYPTED backup run includes them (so a full restore keeps the enrolled users enrolled, with the key export, D-087), an unencrypted run excludes them
+        ["UserTotp.Table"] = SecretStoreBackupRule.IncludedOnlyInEncryptedRuns,
+    };
 
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
     public static IReadOnlyDictionary<string, string> Map => map.Value;
@@ -490,4 +499,13 @@ public static partial class SystemSchema
         Map.TryGetValue(logicalName, out var physical)
             ? physical
             : throw new KeyNotFoundException("Unknown logical schema name.");
+}
+
+/// <summary>The backup rule of a secret-store table (Phase 4.3 slice 5, D-091, D-120).</summary>
+public enum SecretStoreBackupRule
+{
+    /// <summary>Data excluded from every system dump, encrypted or not (ephemeral security data with no recovery value: sessions, login throttling).</summary>
+    AlwaysExcluded,
+    /// <summary>Data excluded from unencrypted DEV/TEST dumps and included, under HBE1, in encrypted runs (rows already ciphertext under the protected key ring, for example TOTP secrets).</summary>
+    IncludedOnlyInEncryptedRuns,
 }

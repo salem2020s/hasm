@@ -539,7 +539,7 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   * The dump goes into a fresh private staging folder `<destination>.staging-<32 hex>/` (owner-only 0700 on Linux, verified; on Windows it inherits the parent's ACL, so choose a destination parent only the service account can read), which is removed afterwards. Staging folders of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run (never a symbolic link), and nothing else is touched.
   * The trial attachment target must also be outside the key directory (`target_overlaps_keys`). `drop-trial-restore` waits at most 5 seconds for the registry lock and then reports `company_busy`.
   * The set (`database.dump`, `attachments/`, `manifest.json` with the locale and the company migration level) is verified before the command reports success.
-  * **Back up the key directory separately** (decision K). The set is neither encrypted nor signed yet.
+  * **Back up the key directories separately** with `backup-keys` (decision K, D-087). From slice 5 the set is encrypted and signed (see "Encrypted, signed backups" below).
 * **`trial-restore-company`:**
   * The set is restored into a NEW, unregistered database and into `<attachment-target-dir>`, which must be empty and outside the live attachment storage.
   * Then the read-only pre-cutover checks run:
@@ -574,7 +574,7 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
   * Exit codes: 0 ok, 8 partial (a company busy or failed, or key ids missing), 1 failed (the system dump failed or no set was written), 4 another run in progress, 3 configuration.
 * **The system dump is the most sensitive file of a run.** It holds password hashes, memberships and roles, shared-party personal data and the system audit chain.
   * The DATA of the session and login-throttle tables is left out, and later the TOTP secrets too: listed under "excluded" in `run.json` and the manifest. A restored installation therefore starts with no sessions.
-  * Until the owner decides backup encryption (package 4.3-2), **keep the backup root on an encrypted volume**, readable only by the service account. Back up the key directory separately (decision K).
+  * Slice 5 encrypts and signs every run (see below); an unencrypted run exists only under the DEV/TEST acknowledgement. Back up the key directories with `backup-keys`, never alongside the sets.
 * **A run is not one point in time across databases.** The system database is dumped first, then each company. Registry rows, party links, memberships and migration levels can therefore differ between them. A single-company restore compares with the live system database; a full-installation restore (not built) must reconcile.
 * **`backup-status <root>`** is read only and needs no database settings: it is meant for the monitor. It reads the newest complete run.
   * Exit 0: ok and younger than `--max-age-hours` (default 26).
@@ -612,6 +612,38 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
   * the "Measured trial restore time" printed by `trial-restore-company` for that set.
 
   RPO is at most the schedule interval plus the run duration. RTO is the measured trial-restore time plus the cutover procedure, once that exists (BLOCKED).
+
+### Encrypted, signed backups, key export and recovery test (Phase 4.3 slice 5)
+Decisions D-089..D-095 and D-116..D-118 (plus D-120 for the TOTP table); the design is in `docs/PHASE-4.3.md` slice 5.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin]     (OFFLINE workstation)
+dotnet run --project src/backend/Hasm.Admin -- backup-signing-keygen                                                              (server)
+dotnet run --project src/backend/Hasm.Admin -- backup-keys <destination-dir>                                                      (server)
+dotnet run --project src/backend/Hasm.Admin -- trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] --recovery-key <file> --signing-trust <signing-trust.json> [--passphrase-stdin]
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-test <run-dir> --recovery-key <file> --signing-trust <signing-trust.json> [--keys-export <dir>] [--passphrase-stdin]
+```
+* **Encryption is the default.** `backup-run` and `backup-company` write encrypted, signed sets when these are configured, and refuse otherwise (`backup_encryption_not_configured`, exit 3):
+  * `Hasm__Backup__RecoveryPublicKeyFile`: the recovery PUBLIC key (`rk-*.pub.pem`); the private key never reaches the server;
+  * `Hasm__Backup__SigningKeyDirectory` and `Hasm__Backup__SigningKeyId`: the server's backup signing key (`sk-*`), in its own owner-only directory.
+* **Set-up, once:**
+  1. On an OFFLINE workstation without `Hasm__Database__*` settings: `backup-recovery-keygen <out-dir>`. The passphrase (at least 20 characters, entered twice) comes from a prompt or, with `--passphrase-stdin`, from standard input; never from an argument or a variable. Put ONLY `rk-*.pub.pem` on the server. Move `copy-1` and `copy-2` (with `rk-*.sha256`) to two separate offline media; with `--separate-passphrases` each copy has its own passphrase and custodian.
+  2. On the server: `backup-signing-keygen`. It writes `sk-<id>.key.pem` (private, never exported) and `sk-<id>.pub.pem`, prints the public key's SHA-256 for the recovery kit and writes system audit event 2013. Set `Hasm__Backup__SigningKeyId` to the printed id.
+  3. `backup-keys <destination>`: see below. Then take a first `backup-run` and run `backup-recovery-test` on it: until a test passes, `backup-status` reports `recovery_untested` (exit 8) and the recovery key is NOT production-ready (D-085).
+* **What an encrypted run contains.** Only `.hbe` files (HBE1: encrypted to the recovery key, authenticated chunk by chunk), their signed manifests (`manifest.json.hbe` + `.sig`), `canary.hbe` and the readable, signed `run.status.json` (verdict, counts, times, key ids, the canary hash; no names). `pg_dump` is piped straight into the encryptor: no plaintext dump exists at any time. `backup-status` verifies `run.status.json` with the server's signing PUBLIC keys; an unsigned or altered status counts as a FAILED run (`status_unsigned`, exit 1).
+* **The system dump of an encrypted run** still leaves out the session and login-throttle data (no recovery value). Once Phase 4.1 adds the TOTP-secret table, its rows are INCLUDED in encrypted runs only (they are ciphertext under the key ring; D-120), so a full restore needs the key export.
+* **`backup-keys <destination>`** writes ONE encrypted, signed export of every key directory: the encryption master keys (`Hasm__Encryption__KeyDirectory`), the audit key ring (`Hasm__Audit__KeyDirectory`) and the backup signing PUBLIC keys. Signing PRIVATE keys are never exported; after a disaster a new signing key is generated, and old sets still verify with the public keys in the kit.
+  * The destination must be absolute and empty, and must not overlap the attachment storage, any key directory, a backup run folder or a folder holding run folders.
+  * It holds `keys.hbe`, `key-export.json` + `.sig` (the key ids) and `signing-trust.json`: the trust list of signing public keys, all `active`. Keep a copy of `signing-trust.json` with every recovery kit and mark a key `retired` (with `retiredUtc`) or `compromised` there when that happens; never trust a key carried inside a set.
+  * It writes system audit event 2012 and fails closed (the export is removed) when the event cannot be written. Run it after every key generation or rotation.
+* **Trial restore and recovery test bring the private key in.** Bring the private-key file on removable media, give its passphrase at the prompt (or `--passphrase-stdin`), and remove the file from the machine afterwards; never copy it to the server's disks (runbook, review L3). `--signing-trust <signing-trust.json>` is the kit's trust list; `--signing-public-key <sk-*.pub.pem>` trusts one key as active.
+  * Every signature and stored digest is verified BEFORE anything is decrypted; the dump is decrypted streaming into `pg_restore` and only authenticated chunks are released (D-116). A forged, unsigned, swapped or altered set is refused before anything is created (`signature_missing`, `signing_key_unknown`, `signing_key_compromised`, `backup_set_not_clean`).
+  * An UNENCRYPTED (DEV/TEST) set is restored only when this reader's own environment carries the acknowledgement (`unencrypted_set_refused` otherwise); a field inside the set never decides it.
+  * `trial-restore-company` writes system audit event 2010 (the operator, key ids, the company and a TAG of the trial database, never its name); `backup-recovery-test` writes 2011. When the event cannot be written the command reports FAILED (D-118).
+* **`backup-recovery-test <run-dir>`** verifies the signed status, the run manifest and the canary, restores the system dump and every company set of the run into NEW disposable databases (dropped afterwards; the live databases are never touched), runs the slice 3 checks, and with `--keys-export` decrypts the export and checks that it holds every attachment and audit key id the run needs (TOTP rows are never decrypted).
+  * Passed: it writes `recovery-test.json` into the run folder with the decrypted canary (single-purpose random bytes); `backup-status` accepts it only when it hashes to the signed canary hash. Exit 0, or 8 when it passed with warnings (for example `key_export_not_checked`).
+  * Failed: exit 1, no proof is written. An unencrypted run is refused (`unencrypted_run`: there is no recovery key to test).
+* **DEV/TEST only: unencrypted sets.** `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production` (exactly) permits unencrypted sets; any other value is a configuration error, and it is refused while a recovery public key is configured. Every output then shows `DEGRADED: unencrypted backups (DEV/TEST only)`, sets and runs carry the file `UNENCRYPTED-DEV-TEST-ONLY`, and `backup-status` exits 8 (`unencrypted_dev_test`). Never set it in production (D-088).
+* **Interim mode (dated limitations in RELEASE1-ACCEPTANCE G).** Until Phase 4.1 delivers the administrative-tool login (D-099) and the approval framework, these commands run under operating-system access to the service account; the audit events record the operating-system account (`os:<account>`). Trial restore and the recovery test are restore operations that will then need independent approval (D-118).
 
 ## Checks
 ```
@@ -657,3 +689,19 @@ One React + TypeScript frontend serves the Web app and the Windows Desktop app (
 System migration **0007** adds the activation epoch to role assignments and the branch permissions (run `init-system-db`; the order for an existing installation is: `init-system-db` -> `migrate-companies` -> `grant-company-runtime <id>`). A branch-scoped grant is effective only while the branch is active and its epoch equals the epoch recorded at assignment (evaluated on every request, no cache; unavailable branch data drops the grant, never widens it). `/api/v1/company/branches` serves both clients; the shared frontend screen is `apps/web/src/pages/Branches.tsx` (tests: `branches.test.tsx`, `packages/api-client`). PostgreSQL/API tests: `BranchAccessTests`, `BranchEpochTests`, `BranchApiTests`. Details and limitations: `docs/PHASE-3.1B-PROPOSAL.md` section 9.
 ## Git workflow and GitHub persistence (permanent, owner-approved)
 Branches: `main` (protected, owner-merged) and one `feature/<phase-name>` branch per approved phase; backup branches are discontinued. Logical commits per slice are pushed to the feature branch regularly and without asking (after every verified slice, plus work-in-progress commits labelled `wip(...)` to preserve substantial unfinished progress); do not wait until phase end. Never force-push, push to `main`, delete the active feature branch or merge automatically; the owner merges after reviewing GitHub Actions. After an interruption: `git status`, `git fetch`, compare with `origin/<feature>`, continue from the most recent safe commit. CI: after each push the agent monitors Actions with `gh` (`gh pr checks`, `gh run view --log-failed`), repairs failures at the root cause without weakening tests, checks or expected counts, and repeats until green; `gh pr ready` only when the phase is complete and checks pass. Pull Requests: one Draft PR to `main` is opened automatically with `gh` after the first pushed buildable checkpoint of a phase (no duplicates; the description is kept current), marked ready for review after the full regression at phase end; merging, auto-merge and bypassing Actions stay with the owner. Full rules: root `CLAUDE.md`.
+
+## Scratch files and PR-body hygiene (multi-agent)
+
+Several agents work in one environment at the same time, so temporary files must never collide and a pull-request description must never be overwritten with another task's text (owner instruction, 2026-11-21). Documentation only; this adds no protected policy.
+
+**Why (2026-11-21 incident):** a reviewer cleaning its files ran a glob (`*.md`) in the shared scratchpad and deleted 45 files of other agents. Nothing in git was lost, but unpushed drafts were. Hence: never glob-delete, and remove only your own `mktemp` directory by its exact path.
+
+1. **One own directory per task.** At the start of a task create it: `D=$(mktemp -d "${TMPDIR:-/tmp}/hasm-<agentLetter>-<task>-XXXXXX"); chmod 700 "$D"`. Every temporary file of that task (PR bodies, review text, test output, patches, TRX copies) goes inside it. Never use the shared scratchpad root or a fixed file name.
+2. **No fixed names.** Never reuse a name such as `pr-body.md`, `review.txt`, `out.log` or `pg.out` in a shared place; inside your own `$D` the names are yours alone.
+3. **Stay out of other agents' space.** Keep temporary output out of other agents' worktrees and directories. Never read, write or delete anything you did not create.
+4. **Cleanup.** Remove only the `$D` you created (`rm -rf -- "$D"`, after checking that it starts with your own `hasm-<letter>-` prefix). Never glob-delete in a shared location and never touch lock files.
+5. **Atomic writes for anything sent to GitHub.** Write to `$D/body.tmp`, then `mv "$D/body.tmp" "$D/body.md"` before using it.
+6. **Verify before any PR title or description update.** Re-read the pull request (`gh api repos/salem2020s/hasm/pulls/<n>`); check the number, that `head.ref` and `head.sha` are the pull request you intend, and that the first line of the body file matches that pull request's title or topic. Only then PATCH.
+7. **Never commit scratch files, credentials or temporary test artifacts.** Review `git status` and the staged file list before every commit.
+8. **No protected policy changes** are made through this convention.
+9. **Review records name the model family only, never a model identifier.**

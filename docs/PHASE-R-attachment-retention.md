@@ -169,3 +169,8 @@ Purged content cannot be restored by the application. The only copy is an older 
 
 * **Retention Approver administration.** No `Hasm.Admin` command grants or revokes the Retention Approver preset yet (R1 grants it only through `GrantRetentionApproverOfflineAsync`). When a command is added it must go through Phase 4.1's `role.grant.sensitive` (D-105), and the role is privileged and MFA-mandatory (D-096).
 * **Runtime role.** The three retention tables are in `CompanyRuntimePrivileges.Tables` (policy and hold: SELECT, INSERT, UPDATE; rules: SELECT, INSERT; never DELETE or TRUNCATE), exercised through the real runtime role by `AttachmentRetentionRuntimeRoleTests`.
+
+### R3 follow-ups (recorded, not part of the R3 screen)
+
+* **Hold targets.** The record and attachment ids of a record-level or attachment-level hold are typed ids; a `SearchPicker` over records and attachments is a follow-up (needs a server search for removed attachments).
+* **Months field digits.** The months input accepts Western digits only; Arabic-Indic digit entry is the same follow-up as the fiscal-year screen (one shared numeric-input decision).
