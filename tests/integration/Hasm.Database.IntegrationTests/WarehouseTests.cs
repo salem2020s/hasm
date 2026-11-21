@@ -59,7 +59,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
     public async Task A_freshly_provisioned_company_has_the_warehouse_tables_and_no_warehouse_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(29L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(31L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Warehouses().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Wh.Table));
         Assert.Equal(0L, await Count(Company, Wr.Table));

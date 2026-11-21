@@ -62,7 +62,7 @@ public class ChartMigrationTests : ChartTestBase
     public async Task A_freshly_provisioned_company_has_an_empty_chart_with_defaults_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(29L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(31L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Chart().ListAsync(Company.Id));
         Assert.Equal(ChartSettingsView.Defaults, await Chart().GetSettingsAsync(Company.Id));          // a read never creates the settings row
         Assert.Equal(0L, await Count(Company, Ac.Table));

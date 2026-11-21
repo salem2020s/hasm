@@ -254,7 +254,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await StartCompanies();
         var c = await ReadyCompany();
         Assert.True(await HasAuditTable(c));
-        Assert.Equal(29L, await JournalRows(c));
+        Assert.Equal(31L, await JournalRows(c));
         Assert.Equal(0L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
     }
 
@@ -289,7 +289,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
 
         Assert.Equal(CompanyMigrationStatus.UpToDate, second.Status);
         Assert.Empty(second.Applied);
-        Assert.Equal(29L, await JournalRows(legacy));
+        Assert.Equal(31L, await JournalRows(legacy));
         Assert.Equal(checksums, await InCompany<string>(legacy.PhysicalDatabaseName, $"SELECT string_agg(checksum, ',' ORDER BY version) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
@@ -346,7 +346,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var statuses = runs.Select(r => Assert.Single(r).Status).ToList();
         Assert.All(statuses, s => Assert.Contains(s, new[] { CompanyMigrationStatus.Migrated, CompanyMigrationStatus.UpToDate, CompanyMigrationStatus.Busy }));
         Assert.Equal(1, statuses.Count(s => s == CompanyMigrationStatus.Migrated));
-        Assert.Equal(29L, await JournalRows(legacy));
+        Assert.Equal(31L, await JournalRows(legacy));
         Assert.True(await HasAuditTable(legacy));
     }
 
@@ -369,8 +369,8 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
-        Assert.Equal(30L, await JournalRows(good));
-        Assert.Equal(29L, await JournalRows(bad));
+        Assert.Equal(31L, await JournalRows(good));
+        Assert.Equal(31L, await JournalRows(bad));
         Assert.Equal(0L, await InCompany<long>(bad.PhysicalDatabaseName, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'zz_added'"));
         Assert.Equal(ProvisioningState.Ready, (await Registry.GetAsync(bad.Id))!.State);       // never marked Failed or dropped
         Assert.Equal(1L, await Scalar<long>("SELECT count(*) FROM pg_database WHERE datname = @n", ("n", bad.PhysicalDatabaseName)));

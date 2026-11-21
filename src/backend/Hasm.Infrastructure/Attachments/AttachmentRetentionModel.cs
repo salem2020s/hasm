@@ -6,6 +6,24 @@ namespace Hasm.Infrastructure.Attachments;
 // R1 deletes NOTHING. OWNER-PENDING defaults (the legal-policy questions of section 15 of the plan): the period is counted from the removal date in whole calendar months (UTC), metadata is kept, and there is no
 // retrieval feature. Every uncertainty means "not eligible" (preserve by default).
 
+/// <summary>
+/// Business audit events of attachment retention (company stream, a NEW block 2000-2009, docs/PHASE-R-attachment-retention.md section 10). Persisted codes: never renumber. Related facts share a code with the
+/// outcome in the detail. Details carry ids, counts, kinds, versions and reason codes, never file names, paths or digests.
+/// </summary>
+public static class AttachmentRetentionAuditEvents
+{
+    public const short PolicyDrafted = 2000;
+    public const short PolicyApproved = 2001;
+    public const short PolicyRevoked = 2002;
+    public const short HoldPlaced = 2003;
+    public const short HoldReleased = 2004;
+    public const short PlanRequested = 2005;      // R2
+    public const short PlanDecided = 2006;        // R2
+    public const short PurgeRun = 2007;           // R2
+    public const short PurgeItem = 2008;          // R2
+    public const short EligibilityRefused = 2009; // R2
+}
+
 /// <summary>Life cycle of a policy version: drafted, approved by a DIFFERENT user, then revoked or superseded. Stored as a smallint.</summary>
 public enum RetentionPolicyStatus : short { Draft = 1, Approved = 2, Revoked = 3, Superseded = 4 }
 

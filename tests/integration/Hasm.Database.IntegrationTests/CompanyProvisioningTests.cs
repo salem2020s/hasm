@@ -80,7 +80,7 @@ public class CompanyProvisioningTests : PostgresTestBase
         Assert.Null(after.LastErrorCode);
         Assert.True(await DatabaseExists(c.PhysicalDatabaseName));
         Assert.Equal(c.Id, await InCompany<Guid>(c.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(29L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(31L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     // ---- repeated provisioning -----------------------------------------------------------
@@ -266,7 +266,7 @@ public class CompanyProvisioningTests : PostgresTestBase
         Assert.Equal(ProvisioningState.Ready, ready.State);
         Assert.Equal(2, ready.ProvisioningAttempts);
         Assert.Equal(c.Id, await InCompany<Guid>(c.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(29L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(31L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     // ---- consistency and safety ----------------------------------------------------------

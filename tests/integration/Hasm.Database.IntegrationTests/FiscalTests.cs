@@ -77,7 +77,7 @@ public class FiscalMigrationTests : FiscalTestBase
     public async Task A_freshly_provisioned_company_has_the_calendar_tables_and_no_data_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(29L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(31L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Calendar().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Fy.Table));
         Assert.Equal(0L, await Count(Company, Fp.Table));
