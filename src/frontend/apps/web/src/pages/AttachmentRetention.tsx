@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { useRunner } from "../ledgerCommon";
+import { useReportUnsaved } from "../unsaved";
 
 /**
  * Retention of removed attachments (Phase R, owner decision D-082): policy versions, legal holds and a READ-ONLY eligibility preview. ONE implementation for Web and Desktop.
@@ -71,6 +72,8 @@ export function AttachmentRetentionPage() {
   const [hReason, setHReason] = useState("");
   const [hRef, setHRef] = useState("");
   const holdDirty = hReason !== "" || hRef !== "" || hSubject !== "" || hAttachment !== "";
+  useReportUnsaved("ret-policy-draft", draftDirty, t("ret.tab.policy"));
+  useReportUnsaved("ret-hold-form", holdDirty, t("ret.tab.holds"));
   const placeHold = async () => {
     const s = Number(scope) as 1 | 2 | 3;
     const ok = await runner.run(() => auth.api.placeLegalHold({
@@ -109,6 +112,7 @@ export function AttachmentRetentionPage() {
         {policies.length === 0 ? <p>{t("ret.policy.empty")}</p> : (
           <div className="table-wrap">
             <table className="data-table">
+<caption className="visually-hidden">{t("ret.tab.policy")}</caption>
               <thead><tr>
                 <th scope="col">{t("ret.version")}</th><th scope="col">{t("ret.status")}</th><th scope="col">{t("ret.effective_from")}</th>
                 <th scope="col">{t("ret.rules")}</th><th scope="col">{t("ret.policy.shortens")}</th><th scope="col">{t("ret.actions")}</th>
@@ -186,6 +190,7 @@ export function AttachmentRetentionPage() {
         {holds.length === 0 ? <p>{t("ret.holds.empty")}</p> : (
           <div className="table-wrap">
             <table className="data-table">
+<caption className="visually-hidden">{t("ret.holds.title")}</caption>
               <thead><tr>
                 <th scope="col">{t("ret.hold.scope")}</th><th scope="col">{t("ret.hold.target")}</th><th scope="col">{t("ret.reason")}</th>
                 <th scope="col">{t("ret.status")}</th><th scope="col">{t("ret.actions")}</th>
@@ -198,8 +203,8 @@ export function AttachmentRetentionPage() {
                     <td>{h.reason}{h.reference ? ` (${h.reference})` : ""}</td>
                     <td>{h.isActive ? t("ret.hold.active") : t("ret.hold.released")}</td>
                     <td>
-                      {caps.hold && h.isActive && h.placedBy !== me && <button type="button" disabled={runner.busy} onClick={() => setReleasing(h)}>{t("ret.hold.release")}</button>}
-                      {caps.hold && h.isActive && h.placedBy === me && <span className="hint">{t("ret.hold.own")}</span>}
+                      {caps.approve && h.isActive && h.placedBy !== me && <button type="button" disabled={runner.busy} onClick={() => setReleasing(h)}>{t("ret.hold.release")}</button>}
+                      {caps.approve && h.isActive && h.placedBy === me && <span className="hint">{t("ret.hold.own")}</span>}
                     </td>
                   </tr>
                 ))}
@@ -243,13 +248,14 @@ export function AttachmentRetentionPage() {
   const pageEnd = offset + PAGE >= preview.total;
   const previewTab = (
     <Card title={t("ret.preview.title")} hint={t("ret.preview.hint")}>
-      <p>{t("ret.preview.total").replace("{n}", String(preview.total))}</p>
+      <p>{t("ret.preview.total", { n: preview.total })}</p>
       <ul className="change-list" data-testid="reason-counts">
         {Object.entries(preview.reasonCounts).map(([k, n]) => <li key={k}>{t(`ret.reason.${k}`)}: {n}</li>)}
       </ul>
       {preview.items.length === 0 ? <p>{t("ret.preview.empty")}</p> : (
         <div className="table-wrap">
           <table className="data-table">
+<caption className="visually-hidden">{t("ret.preview.title")}</caption>
             <thead><tr>
               <th scope="col">{t("ret.preview.kind")}</th><th scope="col">{t("ret.hold.attachment_id")}</th><th scope="col">{t("ret.preview.removed")}</th>
               <th scope="col">{t("ret.preview.eligible_at")}</th><th scope="col">{t("ret.status")}</th>
@@ -291,8 +297,8 @@ export function AttachmentRetentionPage() {
         ]}
       />
       {approving && (
-        <ConfirmDialog title={t("ret.policy.approve_title")} message={t("ret.policy.approve_message").replace("{version}", String(approving.version))}
-          confirmLabel={t("ret.policy.approve")} onCancel={closeDialogs}
+        <ConfirmDialog title={t("ret.policy.approve_title")} message={t("ret.policy.approve_message", { version: approving.version })}
+          confirmLabel={t("ret.policy.approve")} onCancel={closeDialogs} confirmDisabled={approving.shortensAnyPeriod && ack.trim() === ""}
           onConfirm={() => { const p = approving; const a = ack.trim(); closeDialogs(); void runner.run(() => auth.api.approveRetentionPolicy(p.id, p.revision, a || null), t("ret.policy.approved")); }}>
           {approving.shortensAnyPeriod && (
             <Field id="ret-ack" label={t("ret.policy.ack_label")} required>
@@ -302,7 +308,7 @@ export function AttachmentRetentionPage() {
         </ConfirmDialog>
       )}
       {revoking && (
-        <ConfirmDialog title={t("ret.policy.revoke_title")} message={t("ret.policy.revoke_message")} confirmLabel={t("ret.policy.revoke")} onCancel={closeDialogs}
+        <ConfirmDialog title={t("ret.policy.revoke_title")} message={t("ret.policy.revoke_message")} confirmLabel={t("ret.policy.revoke")} onCancel={closeDialogs} confirmDisabled={dialogReason.trim() === ""}
           onConfirm={() => { const p = revoking; const r = dialogReason.trim(); closeDialogs(); void runner.run(() => auth.api.revokeRetentionPolicy(p.id, p.revision, r), t("ret.policy.revoked")); }}>
           <Field id="ret-revoke-reason" label={t("ret.reason")} required>
             {(p) => <input {...p} value={dialogReason} maxLength={500} onChange={(e) => setDialogReason(e.target.value)} />}
@@ -310,7 +316,7 @@ export function AttachmentRetentionPage() {
         </ConfirmDialog>
       )}
       {releasing && (
-        <ConfirmDialog title={t("ret.hold.release_title")} message={t("ret.hold.release_message")} confirmLabel={t("ret.hold.release")} onCancel={closeDialogs}
+        <ConfirmDialog title={t("ret.hold.release_title")} message={t("ret.hold.release_message")} confirmLabel={t("ret.hold.release")} onCancel={closeDialogs} confirmDisabled={dialogReason.trim() === ""}
           onConfirm={() => { const h = releasing; const r = dialogReason.trim(); closeDialogs(); void runner.run(() => auth.api.releaseLegalHold(h.id, h.revision, r), t("ret.hold.released_ok")); }}>
           <Field id="ret-release-reason" label={t("ret.reason")} required>
             {(p) => <input {...p} value={dialogReason} maxLength={500} onChange={(e) => setDialogReason(e.target.value)} />}

@@ -196,6 +196,66 @@ describe("attachment retention screen", () => {
     expect(await screen.findByText(E("common.conflict"))).toBeInTheDocument();
   });
 
+  it("mirrors the server for hold release: it needs the approve permission, not the hold permission", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    // hold-only user: may place a hold, but the server refuses a release, so no button
+    render({}, caps({ hold: true, approve: false }));
+    await go();
+    await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${E("ret.tab.holds")}`) }));
+    expect(within(screen.getByTestId("hold-h1")).queryByRole("button", { name: E("ret.hold.release") })).toBeNull();
+    expect(screen.getByRole("button", { name: E("ret.hold.place") })).toBeInTheDocument();
+  });
+
+  it("shows hold release to an approver who cannot place holds", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render({}, caps({ hold: false, approve: true }));
+    await go();
+    await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${E("ret.tab.holds")}`) }));
+    expect(within(screen.getByTestId("hold-h1")).getByRole("button", { name: E("ret.hold.release") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: E("ret.hold.place") })).toBeNull();
+  });
+
+  it("keeps Confirm disabled until the required acknowledgement or reason is entered", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const client = render({ listRetentionPolicies: vi.fn().mockResolvedValue({ policies: [{ ...draft, shortensAnyPeriod: true }, approved] }) });
+    await go();
+    await userEvent.click(within(await screen.findByTestId("policy-2")).getByRole("button", { name: E("ret.policy.approve") }));
+    const confirm = () => within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.policy.approve") });
+    expect(confirm()).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(new RegExp(E("ret.policy.ack_label").slice(0, 20))), "Counsel agreed");
+    expect(confirm()).toBeEnabled();
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: E("cancel") }));
+    expect(client.approveRetentionPolicy).not.toHaveBeenCalled();
+    // revoke needs a reason
+    await userEvent.click(within(screen.getByTestId("policy-1")).getByRole("button", { name: E("ret.policy.revoke") }));
+    const revoke = () => within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.policy.revoke") });
+    expect(revoke()).toBeDisabled();
+    await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(new RegExp(`^${E("ret.reason")}`)), "x");
+    expect(revoke()).toBeEnabled();
+  });
+
+  it("keeps the release Confirm disabled until a reason is entered", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render();
+    await go();
+    await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${E("ret.tab.holds")}`) }));
+    await userEvent.click(within(screen.getByTestId("hold-h1")).getByRole("button", { name: E("ret.hold.release") }));
+    const confirm = () => within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.hold.release") });
+    expect(confirm()).toBeDisabled();
+    await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(new RegExp(`^${E("ret.reason")}`)), "Closed");
+    expect(confirm()).toBeEnabled();
+  });
+
+  it.each(["shortening_acknowledgement_required", "effective_date_passed", "concurrent_change", "attachment_not_found"])("maps the server refusal %s to its own message", async (code) => {
+    localStorage.setItem("hasm.locale", "en");
+    render({ approveRetentionPolicy: vi.fn().mockRejectedValue(apiError(409, code)) });
+    await go();
+    await userEvent.click(within(await screen.findByTestId("policy-2")).getByRole("button", { name: E("ret.policy.approve") }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.policy.approve") }));
+    expect(await screen.findByText(E(`ret.error.${code}`))).toBeInTheDocument();
+    expect(E(`ret.error.${code}`)).not.toBe(E("error.generic"));
+  });
+
   it("places a record-level hold", async () => {
     localStorage.setItem("hasm.locale", "en");
     const client = render();
