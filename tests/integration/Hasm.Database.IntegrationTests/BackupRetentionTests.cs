@@ -320,6 +320,8 @@ public class BackupRetentionTests : PostgresTestBase
             await run.OpenAsync();
             await using (var lk = new NpgsqlCommand($"SELECT pg_advisory_lock({BackupRunService.RunLockNamespace}, 0)", run)) await lk.ExecuteNonQueryAsync();
             Assert.Equal("run_in_progress", await Code());
+            // release explicitly: closing an unpooled session frees its advisory locks only when the server backend has exited, which is asynchronous
+            await using (var un = new NpgsqlCommand($"SELECT pg_advisory_unlock({BackupRunService.RunLockNamespace}, 0)", run)) await un.ExecuteNonQueryAsync();
         }
         await using (var restore = await RetentionService.AcquireRestoreLockAsync(Options, default))
             Assert.Equal("restore_in_progress", await Code());
