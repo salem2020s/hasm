@@ -119,15 +119,22 @@ public sealed class RecoveryTestService
         catch (BackupException ex) { Fail(BackupRunFiles.IsCode(ex.Code) ? "system_" + ex.Code : "system_restore_failed"); }
         catch (NpgsqlException) { Fail("system_database_error"); }
 
-        // 3. every company set of the run (trial-restore semantics: new database, checks, dropped)
+        // 3. every company set of the run (trial-restore semantics: new database, checks, dropped). Review L1 of #128: the company folders are exactly the sets the signed status names
+        var written = status.Companies.Where(c => c.Outcome is "ok" or "ok_missing_keys").Select(c => c.CompanyId.ToString("N")).ToHashSet(StringComparer.Ordinal);
+        var companiesDir = Path.Combine(run, BackupRunFiles.CompaniesFolder);
+        var folders = Directory.Exists(companiesDir) ? new DirectoryInfo(companiesDir).EnumerateFileSystemInfos().Select(e => e.Name).ToHashSet(StringComparer.Ordinal) : [];
+        if (!folders.SetEquals(written)) Fail("company_sets_mismatch");
         try
         {
             foreach (var c in status.Companies.Where(c => c.Outcome is "ok" or "ok_missing_keys"))
             {
                 var target = Path.Combine(workDirectory, c.CompanyId.ToString("N"));
+                var setDir = Path.Combine(companiesDir, c.CompanyId.ToString("N"));
+                // review H1 of #128: a recovery test restores ENCRYPTED, signed sets only; an unencrypted set inside a run is refused whatever the reader's acknowledgement
+                if (!CompanyBackupService.IsEncryptedSet(setDir)) { Fail("unencrypted_set_refused"); continue; }
                 try
                 {
-                    var r = await companies.TrialRestoreAsync(Path.Combine(run, BackupRunFiles.CompaniesFolder, c.CompanyId.ToString("N")), c.CompanyId, target, keep: false, keys, ct);
+                    var r = await companies.TrialRestoreAsync(setDir, c.CompanyId, target, keep: false, keys, allowUnencrypted: false, expectedRunId: status.RunId, ct: ct);
                     restored.Add(c.CompanyId);
                     if (r.DatabaseTag is { } tag) tags.Add(tag);
                     foreach (var f in r.Failures) Fail(f.Code, f.Count);

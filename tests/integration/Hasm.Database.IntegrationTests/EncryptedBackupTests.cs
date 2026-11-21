@@ -243,6 +243,37 @@ public class EncryptedBackupTests : PostgresTestBase
         var compromised = new RestoreKeys(priv, new SigningTrust([new TrustedSigningKey(signingId, signingPem, SigningKeyStatus.Compromised)]));
         Assert.Equal("signing_key_compromised", (await Assert.ThrowsAsync<BackupException>(() => Companies().TrialRestoreAsync(setA, a.Id, Path.Combine(work, "tc"), false, compromised))).Code);
         Assert.True(before.SetEquals(await Databases()));
+
+        // review H1 of #128: an unencrypted, unsigned version-1 set of A planted in an ENCRYPTED run is never restored by the recovery test, and the test does not pass
+        var (_, runDir) = await new BackupRunService(Options, Attachments, Encryption).RunAsync(Root, Material());
+        var recovery = new RecoveryTestService(Options, Attachments, Encryption, nameGenerator: NewTestName);
+        var aSet = Path.Combine(runDir, BackupRunFiles.CompaniesFolder, a.Id.ToString("N"));
+        var genuine = Path.Combine(work, "genuine-a");
+        Directory.Move(aSet, genuine);
+        await Companies().BackupCompanyAsync(a.Id, aSet);                                                              // version 1: plaintext dump, no signature
+        Assert.False(CompanyBackupService.IsEncryptedSet(aSet));
+        before = await Databases();
+        var planted = await recovery.RunAsync(runDir, keys, null, Path.Combine(work, "rt1"));
+        Assert.False(planted.Passed);
+        Assert.Contains(planted.Failures, f => f.Code == "unencrypted_set_refused");
+        Assert.DoesNotContain(a.Id, planted.Companies);                                                               // A was never restored
+        Assert.True(before.SetEquals(await Databases()));
+        Assert.Equal("unencrypted_set_refused", (await Assert.ThrowsAsync<BackupException>(() => Companies().TrialRestoreAsync(aSet, a.Id, Path.Combine(work, "td"), false, keys))).Code);   // the library itself refuses
+
+        // review L1 of #128: a validly signed set of ANOTHER run is refused (run_mismatch), and company folders must match the signed status
+        Directory.Delete(aSet, true);
+        var (_, otherRun) = await new BackupRunService(Options, Attachments, Encryption).RunAsync(Root, Material());
+        Directory.Move(Path.Combine(otherRun, BackupRunFiles.CompaniesFolder, a.Id.ToString("N")), aSet);
+        var older = await recovery.RunAsync(runDir, keys, null, Path.Combine(work, "rt2"));
+        Assert.False(older.Passed);
+        Assert.Contains(older.Failures, f => f.Code == "run_mismatch");
+        Directory.Delete(aSet, true);
+        Directory.Move(genuine, aSet);
+        Directory.CreateDirectory(Path.Combine(runDir, BackupRunFiles.CompaniesFolder, Guid.NewGuid().ToString("N")));
+        var extra = await recovery.RunAsync(runDir, keys, null, Path.Combine(work, "rt3"));
+        Assert.False(extra.Passed);
+        Assert.Contains(extra.Failures, f => f.Code == "company_sets_mismatch");
+        Assert.True(before.SetEquals(await Databases()));
     }
 
     [PostgresFact]
@@ -311,7 +342,8 @@ public class EncryptedBackupTests : PostgresTestBase
         Assert.DoesNotContain(Pass, test.All);
         var proof = File.ReadAllText(Path.Combine(runDir, RecoveryTestProof.FileName));
         Assert.Contains("canaryPreimage", proof);
-        Assert.Equal(1, await AuditEvents(BackupAuditEvents.RecoveryTest));
+        Assert.Equal(2, await AuditEvents(BackupAuditEvents.RecoveryTest));                                          // review L3 of #128: the refused attempt is audited too
+        Assert.Equal(1L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table} WHERE {E.EventType} = {BackupAuditEvents.RecoveryTest} AND {E.Detail} LIKE '%outcome=refused code=recovery_key_unreadable%'"));
         Assert.Equal(0L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table} WHERE {E.EventType} = {BackupAuditEvents.RecoveryTest} AND {E.Detail} LIKE '%{c.PhysicalDatabaseName}%'"));
 
         var green = await AdminTool.RunWith(Options, env, "backup-status", Root);
@@ -347,6 +379,8 @@ public class EncryptedBackupTests : PostgresTestBase
         var reader = await AdminTool.RunWith(Options, Env(), "trial-restore-company", set, c.Id.ToString(), Path.Combine(work, "t2"));
         Assert.Equal(1, reader.Exit);
         Assert.Contains("unencrypted_set_refused", reader.Err);
-        Assert.Equal(0, await AuditEvents(BackupAuditEvents.TrialRestore));
+        // review L3 of #128: the refused trial restore is audited (outcome refused and its code), nothing restored
+        Assert.Equal(1, await AuditEvents(BackupAuditEvents.TrialRestore));
+        Assert.Equal(1L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table} WHERE {E.EventType} = {BackupAuditEvents.TrialRestore} AND {E.Detail} LIKE '%outcome=refused code=unencrypted_set_refused%'"));
     }
 }

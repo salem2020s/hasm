@@ -105,7 +105,7 @@ public static class BackupRunFiles
         IsRunId(runId) && DateTime.TryParseExact(runId[..16], "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t)
             ? new DateTimeOffset(t, TimeSpan.Zero) : null;
 
-    internal static bool IsCode(string? s) => s is not null && CodePattern.IsMatch(s);
+    public static bool IsCode(string? s) => s is not null && CodePattern.IsMatch(s);
 
     /// <summary>Creates <paramref name="path"/> exclusively and owner-only via a temporary file, then renames it into place.</summary>
     internal static void WriteOwnerOnlyAtomically(string path, byte[] content)

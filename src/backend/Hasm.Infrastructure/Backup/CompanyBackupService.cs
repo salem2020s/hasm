@@ -307,20 +307,24 @@ public sealed class CompanyBackupService
     /// <remarks>
     /// Slice 5: an ENCRYPTED set (<c>manifest.json.hbe</c>) needs <paramref name="keys"/> (<c>recovery_key_required</c>): its signed manifest and every stored file are verified first, then the dump is decrypted
     /// STREAMING into <c>pg_restore</c> and the attachments into a private staging folder, releasing only authenticated chunks (D-116). A version-1 (unencrypted) set is DEV/TEST only: whether it is accepted
-    /// is decided by the CALLER from its own acknowledgement (D-095), never by a field inside the set.
+    /// is accepted only when the caller passes <paramref name="allowUnencrypted"/> from its OWN DEV/TEST acknowledgement (D-095; review H1 of #128: the library itself refuses a version-1 set
+    /// otherwise, <c>unencrypted_set_refused</c>, before anything is created), never because of a field inside the set. <paramref name="expectedRunId"/> (recovery test, review L1 of #128) binds an
+    /// encrypted set to its run: a validly signed set of another run is refused (<c>run_mismatch</c>).
     /// </remarks>
-    public async Task<TrialRestoreResult> TrialRestoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys = null, CancellationToken ct = default)
+    public async Task<TrialRestoreResult> TrialRestoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys = null, bool allowUnencrypted = false,
+        string? expectedRunId = null, CancellationToken ct = default)
     {
         // D-073: the measured restore time of this set (verification and drop included) is part of the result
         var started = clock.GetTimestamp();
-        var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, keys, ct);
+        var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, keys, allowUnencrypted, expectedRunId, ct);
         return result with { Elapsed = clock.GetElapsedTime(started) };
     }
 
     /// <summary>True when <paramref name="setDirectory"/> holds an encrypted (version 2) set.</summary>
     public static bool IsEncryptedSet(string setDirectory) => File.Exists(Path.Combine(setDirectory, SignedDocuments.ManifestFileName));
 
-    private async Task<TrialRestoreResult> TrialRestoreCoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys, CancellationToken ct)
+    private async Task<TrialRestoreResult> TrialRestoreCoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, RestoreKeys? keys, bool allowUnencrypted,
+        string? expectedRunId, CancellationToken ct)
     {
         if (!Path.IsPathFullyQualified(setDirectory) || !Path.IsPathFullyQualified(attachmentTarget)) throw new BackupException("path_not_absolute");
         if (expectedCompanyId == Guid.Empty) throw new BackupException("invalid_company");
@@ -338,9 +342,12 @@ public sealed class CompanyBackupService
         {
             if (keys is null) throw new BackupException("recovery_key_required");
             v2 = await EncryptedSets.ReadCompanySetAsync(set, expectedCompanyId, keys.Trust, keys.Recovery, ct);   // signature, structure and stored digests BEFORE anything is decrypted (H1)
+            if (expectedRunId is not null && v2.RunId != expectedRunId) throw new BackupException("run_mismatch");
         }
         else
         {
+            // review H1 of #128: an unencrypted, unsigned set only under the caller's own DEV/TEST acknowledgement, and never as part of a run (expectedRunId)
+            if (!allowUnencrypted || expectedRunId is not null) throw new BackupException("unencrypted_set_refused");
             var verification = BackupSet.Verify(set);
             if (!verification.IsClean || verification.Manifest is null) throw new BackupException("backup_set_not_clean");
             manifest = verification.Manifest;
