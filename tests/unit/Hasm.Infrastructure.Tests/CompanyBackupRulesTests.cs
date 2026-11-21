@@ -138,22 +138,38 @@ public sealed class CompanyBackupRulesTests : IDisposable
     // ---- staging sweep (L4) -----------------------------------------------------------------------
 
     [Fact]
-    public void Only_exact_stale_staging_names_of_this_destination_are_swept()
+    public void Only_exact_stale_staging_folders_of_this_destination_are_swept()
     {
         var now = DateTimeOffset.UtcNow;
-        var hex = Guid.NewGuid().ToString("N");
-        string Make(string name, TimeSpan age) { var p = P(name); File.WriteAllText(p, "x"); File.SetLastWriteTimeUtc(p, (now - age).UtcDateTime); return p; }
-        var stale = Make("set.dump-" + hex, TimeSpan.FromHours(25));
-        var young = Make("set.dump-" + Guid.NewGuid().ToString("N"), TimeSpan.FromHours(1));
-        var otherLeaf = Make("other.dump-" + Guid.NewGuid().ToString("N"), TimeSpan.FromHours(30));
-        var upper = Make("set.dump-" + Guid.NewGuid().ToString("N").ToUpperInvariant(), TimeSpan.FromHours(30));
-        var shortSuffix = Make("set.dump-abc", TimeSpan.FromHours(30));
-        var dir = P("set.dump-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir); Directory.SetLastWriteTimeUtc(dir, (now - TimeSpan.FromHours(30)).UtcDateTime);
+        string Dir(string name, TimeSpan age) { var p = P(name); Directory.CreateDirectory(p); File.WriteAllText(Path.Combine(p, "database.dump"), "x"); Directory.SetLastWriteTimeUtc(p, (now - age).UtcDateTime); return p; }
+        var stale = Dir("set.staging-" + Guid.NewGuid().ToString("N"), TimeSpan.FromHours(25));
+        var young = Dir("set.staging-" + Guid.NewGuid().ToString("N"), TimeSpan.FromHours(1));
+        var otherLeaf = Dir("other.staging-" + Guid.NewGuid().ToString("N"), TimeSpan.FromHours(30));
+        var upper = Dir("set.staging-" + Guid.NewGuid().ToString("N").ToUpperInvariant(), TimeSpan.FromHours(30));
+        var shortSuffix = Dir("set.staging-abc", TimeSpan.FromHours(30));
+        var file = P("set.staging-" + Guid.NewGuid().ToString("N")); File.WriteAllText(file, "x"); File.SetLastWriteTimeUtc(file, (now - TimeSpan.FromHours(30)).UtcDateTime);
+        string? link = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            var target = Dir("keep-me", TimeSpan.FromHours(30));
+            link = P("set.staging-" + Guid.NewGuid().ToString("N")); Directory.CreateSymbolicLink(link, target);
+        }
         Assert.Equal(1, CompanyBackupService.SweepStaging(root, "set", now));
-        Assert.False(File.Exists(stale));
-        Assert.All(new[] { young, otherLeaf, upper, shortSuffix }, p => Assert.True(File.Exists(p)));
-        Assert.True(Directory.Exists(dir));
+        Assert.False(Directory.Exists(stale));
+        Assert.All(new[] { young, otherLeaf, upper, shortSuffix }, p => Assert.True(Directory.Exists(p)));
+        Assert.True(File.Exists(file));
+        if (link is not null) { Assert.True(Directory.Exists(link)); Assert.True(File.Exists(Path.Combine(P("keep-me"), "database.dump"))); }   // a link is never followed or removed
         Assert.Equal(0, CompanyBackupService.SweepStaging(P("absent"), "set", now));
+    }
+
+    [Fact]
+    public void The_staging_folder_is_fresh_and_owner_only()
+    {
+        var path = CompanyBackupService.CreateStagingDirectory(root, "set");
+        Assert.Matches("set\\.staging-[0-9a-f]{32}$", path);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(path));
+        if (!OperatingSystem.IsWindows()) Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(path));   // review M1: 0700
+        Assert.NotEqual(path, CompanyBackupService.CreateStagingDirectory(root, "set"));
     }
 
     // ---- kept-trial file (L3) ---------------------------------------------------------------------
@@ -205,6 +221,9 @@ public sealed class CompanyBackupRulesTests : IDisposable
             var link = P("alias"); Directory.CreateSymbolicLink(link, storage);
             Assert.Equal("target_in_live_storage", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, Path.Combine(link, "t"), false))).Code);
         }
+        var keys = P("keys"); Directory.CreateDirectory(keys);
+        Assert.Equal("target_overlaps_keys", (await Assert.ThrowsAsync<BackupException>(() => Service(storage, keys).TrialRestoreAsync(set, company, Path.Combine(keys, "t"), false))).Code);   // review L1
+        Assert.Equal("target_overlaps_keys", (await Assert.ThrowsAsync<BackupException>(() => Service(storage, Path.Combine(keys, "inner")).TrialRestoreAsync(set, company, keys, false))).Code);
         var full = P("full"); Directory.CreateDirectory(full); File.WriteAllText(Path.Combine(full, "x"), "x");
         Assert.Equal("target_not_empty", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, full, false))).Code);
         Assert.Equal("backup_set_not_clean", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t"), false))).Code);   // an empty directory is no set

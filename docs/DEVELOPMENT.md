@@ -521,7 +521,8 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   * The company comes only from the registry, and only in state Ready.
   * Its provisioning lock is held for the whole backup.
   * An ICU/builtin locale is refused before the dump (`locale_unsupported`).
-  * The dump goes to a private staging file `<destination>.dump-<32 hex>`, which is removed afterwards. Staging files of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run, and nothing else is touched.
+  * The dump goes into a fresh private staging folder `<destination>.staging-<32 hex>/` (owner-only 0700 on Linux, verified; on Windows it inherits the parent's ACL, so choose a destination parent only the service account can read), which is removed afterwards. Staging folders of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run (never a symbolic link), and nothing else is touched.
+  * The trial attachment target must also be outside the key directory (`target_overlaps_keys`). `drop-trial-restore` waits at most 5 seconds for the registry lock and then reports `company_busy`.
   * The set (`database.dump`, `attachments/`, `manifest.json` with the locale and the company migration level) is verified before the command reports success.
   * **Back up the key directory separately** (decision K). The set is neither encrypted nor signed yet.
 * **`trial-restore-company`:**

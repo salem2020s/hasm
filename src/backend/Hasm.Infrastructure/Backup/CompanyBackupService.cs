@@ -21,8 +21,8 @@ namespace Hasm.Infrastructure.Backup;
 /// <summary>One finding of a backup or trial restore: a stable code and a count (never a name, a path or business data).</summary>
 public sealed record BackupFinding(string Code, int Count);
 
-/// <summary>The outcome of <see cref="CompanyBackupService.BackupCompanyAsync"/>: the manifest, the key ids the set needs that the key directory lacks (reported, never a refusal: D-061) and the stale staging files swept.</summary>
-public sealed record CompanyBackupResult(BackupManifest Manifest, IReadOnlyList<string> MissingKeyIds, int StagingFilesSwept);
+/// <summary>The outcome of <see cref="CompanyBackupService.BackupCompanyAsync"/>: the manifest, the key ids the set needs that the key directory lacks (reported, never a refusal: D-061) and the stale staging folders swept.</summary>
+public sealed record CompanyBackupResult(BackupManifest Manifest, IReadOnlyList<string> MissingKeyIds, int StagingFoldersSwept);
 
 public enum TrialRestoreVerdict { Ok, OkWithWarnings, Failed }
 
@@ -118,7 +118,9 @@ public sealed class CompanyBackupService
         }
         var level = await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) ?? throw new BackupException("migration_journal_unreadable");
 
-        var staging = Path.Combine(parent, leaf + ".dump-" + Guid.NewGuid().ToString("N"));
+        // review M1: the dump is written into a FRESH owner-only (0700) staging folder, so the full company dump is never readable by other local users during the dump, the copy or after a crash
+        var stagingDir = CreateStagingDirectory(parent, leaf);
+        var staging = Path.Combine(stagingDir, BackupSet.DatabaseFileName);
         try
         {
             var locale = await tool.DumpAsync(company.PhysicalDatabaseName, staging, ct);
@@ -136,20 +138,34 @@ public sealed class CompanyBackupService
         }
         finally
         {
-            try { if (File.Exists(staging)) File.Delete(staging); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort; the next run sweeps it */ }
+            try { if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort; the next run sweeps it */ }
         }
     }
 
-    /// <summary>Removes ONLY files named exactly <c>&lt;leaf&gt;.dump-&lt;32 lowercase hex&gt;</c> in <paramref name="parent"/> last written more than <see cref="StagingMaxAge"/> ago. Returns the number removed.</summary>
+    /// <summary>Creates <c>&lt;parent&gt;/&lt;leaf&gt;.staging-&lt;32 hex&gt;</c> owner-only on Linux (0700, verified; on Windows the folder inherits the parent's ACL: choose a private destination parent there); refuses (<c>staging_exists</c>) when it already exists.</summary>
+    internal static string CreateStagingDirectory(string parent, string leaf)
+    {
+        var path = Path.Combine(parent, leaf + ".staging-" + Guid.NewGuid().ToString("N"));
+        if (Directory.Exists(path) || File.Exists(path)) throw new BackupException("staging_exists");
+        AuditFilePermissions.CreateOwnerOnlyDirectory(path);
+        if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(path) & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
+            throw new BackupException("staging_not_private");
+        return path;
+    }
+
+    /// <summary>
+    /// Removes ONLY directories named exactly <c>&lt;leaf&gt;.staging-&lt;32 lowercase hex&gt;</c> in <paramref name="parent"/> (never a symbolic link, never a file) last written more than <see cref="StagingMaxAge"/>
+    /// ago: the private staging folders of interrupted runs. Returns the number removed.
+    /// </summary>
     internal static int SweepStaging(string parent, string leaf, DateTimeOffset now)
     {
         if (!Directory.Exists(parent)) return 0;
-        var pattern = new Regex("^" + Regex.Escape(leaf) + "\\.dump-[0-9a-f]{32}$", RegexOptions.CultureInvariant);
+        var pattern = new Regex("^" + Regex.Escape(leaf) + "\\.staging-[0-9a-f]{32}$", RegexOptions.CultureInvariant);
         var removed = 0;
-        foreach (var file in new DirectoryInfo(parent).EnumerateFiles())
+        foreach (var dir in new DirectoryInfo(parent).EnumerateDirectories())
         {
-            if (!pattern.IsMatch(file.Name) || file.LastWriteTimeUtc > now.UtcDateTime - StagingMaxAge) continue;
-            try { file.Delete(); removed++; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left for the next run */ }
+            if (!pattern.IsMatch(dir.Name) || dir.LinkTarget is not null || dir.LastWriteTimeUtc > now.UtcDateTime - StagingMaxAge) continue;
+            try { dir.Delete(true); removed++; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left for the next run */ }
         }
         return removed;
     }
@@ -253,6 +269,7 @@ public sealed class CompanyBackupService
         var root = BackupSet.RealPath(AttachmentRoot());
         var target = BackupSet.RealPath(attachmentTarget);
         if (BackupSet.IsInside(target, root) || BackupSet.IsInside(root, target)) throw new BackupException("target_in_live_storage");
+        if (encryption.KeyDirectory is { } keyDir && (BackupSet.IsInside(target, BackupSet.RealPath(keyDir)) || BackupSet.IsInside(BackupSet.RealPath(keyDir), target))) throw new BackupException("target_overlaps_keys");   // review L1
         if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()) throw new BackupException("target_not_empty");
         var set = BackupSet.RealPath(setDirectory);
         var verification = BackupSet.Verify(set);
@@ -428,7 +445,10 @@ public sealed class CompanyBackupService
         await using var sys = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await sys.OpenAsync(ct);
         await using var tx = await sys.BeginTransactionAsync(ct);
-        await using (var lk = new NpgsqlCommand($"LOCK TABLE {Co.Table} IN SHARE MODE", sys, tx)) await lk.ExecuteNonQueryAsync(ct);
+        // review L2: a registry writer holding the table is waited for at most 5 seconds, then reported as busy (never an unbounded wait)
+        await using (var lt = new NpgsqlCommand("SET LOCAL lock_timeout = '5s'", sys, tx)) await lt.ExecuteNonQueryAsync(ct);
+        try { await using var lk = new NpgsqlCommand($"LOCK TABLE {Co.Table} IN SHARE MODE", sys, tx); await lk.ExecuteNonQueryAsync(ct); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.LockNotAvailable) { throw new BackupException("company_busy"); }
         await using (var q = new NpgsqlCommand($"SELECT count(*) FROM {Co.Table} WHERE {Co.PhysicalDatabaseName} = @n", sys, tx))
         {
             q.Parameters.AddWithValue("n", kept.Database);

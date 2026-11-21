@@ -55,6 +55,18 @@ Sources: SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10; PHASE-3.12 (backup c
     * `restored_locale_mismatch`;
     * `trial_drop_failed`: the trial database could not be dropped; it is then recorded in a kept-trial file instead of being left unnamed.
   * **`PosixFactAttribute` was NOT built.** A reported skip (`Skip = "..."` on Windows) is refused by the protected `ci-guard` ("adds skipped, ignored or focused tests"). That gate is not worked around (no evasive spelling) and its tooling is not changed here. The fake-tool tests therefore keep the early return: on Windows they pass WITHOUT running, which is documented in the tests. A reported Windows skip needs an explicit ci-guard allowance, which is the owner's decision on protected tooling. Everything else of plan item 3 is built: the exec-capable folder under the test output, all tools written before any process starts, and the retry only on ETXTBSY.
+* **Review of PR #94, round 1 (Agent C, request changes; one Medium):**
+  * **M1, fixed.** The staging dump was created with the process umask (typically 0644) in an operator-chosen parent, so the full company dump was readable by other local users during the dump, the copy or after a crash. Now:
+    * the dump is written into a FRESH folder `<dest>.staging-<32 hex>/`, created owner-only (0700, verified on Linux; refused with `staging_exists` if it already exists, `staging_not_private` if group/other bits remain);
+    * the folder is removed afterwards;
+    * stale folders of exactly that pattern (never a symbolic link or a file) are swept after 24 hours, replacing the earlier file sweep;
+    * unit tests assert the 0700 mode and the sweep rules.
+    * On Windows the folder inherits the parent's ACL (recorded; the operator chooses a private destination parent).
+  * **L1, fixed:** the trial attachment target is also checked against the key directory (`target_overlaps_keys`), mirroring the backup destination check.
+  * **L2, fixed:** `drop-trial-restore` sets `lock_timeout = 5s` for the SHARE lock of the registry table and maps a timeout to `company_busy`.
+  * **L3, recorded:** the existing per-company advisory key uses the first 4 bytes of the company id, so two companies can collide. A collision only makes an administrative command report busy; it never permits concurrent work on one company.
+  * **L4, fixed:** the docs say the fake-tool tests pass without running on Windows.
+  * **Pre-existing flaky test, made robust without weakening it:** `CompanyRuntimeGrantGuardTests.A_company_being_worked_on_elsewhere_is_reported_and_not_changed` takes its lock with a short bounded retry, because the server releases the lock of the just-closed provisioning session asynchronously. Every assertion is unchanged.
   * `CompanyBackupServiceTests` runs in a non-parallel xunit collection. The trial databases that `Hasm.Admin` names opaquely would otherwise make the cluster-identity gate of a concurrently starting test refuse the cluster.
 * Local verification and CI results: see the PR description.
 
@@ -70,7 +82,7 @@ Goal: one company is backed up and trial-restored END TO END from the company re
      1. The company is read from the registry (`CompanyRegistry.GetAsync`). An unknown company is `company_not_found`; any state other than `Ready` is `company_not_ready`. The source database is ALWAYS the registry's `PhysicalDatabaseName`; no caller ever names a database.
      2. `Hasm:Attachments:StorageDirectory` must be configured, otherwise `attachment_storage_not_configured`. This fails closed and has no override: a backup run with a missing setting must never silently produce a set without the attachments (documented for operators, see "Operator documentation"). The company folder is `<root>/<company id N>`, exactly as `AttachmentFileStore` builds it; a missing folder means no attachments yet.
      3. The destination is checked before anything runs: absolute, empty or absent, and outside the attachment root and the key directory (`destination_not_empty`, `destination_overlaps_source`).
-     4. **Stale staging files are swept first.** The pattern is exactly `<destination leaf>.dump-<32 lowercase hex>` in the destination's parent directory, last written more than 24 hours ago (well above the 30-minute tool timeout). Nothing else is ever deleted, and the count is reported.
+     4. **Stale staging files are swept first** (implemented as staging FOLDERS `<leaf>.staging-<32 hex>`: see review M1 above). The pattern is exactly `<destination leaf>.dump-<32 lowercase hex>` in the destination's parent directory, last written more than 24 hours ago (well above the 30-minute tool timeout). Nothing else is ever deleted, and the count is reported.
      5. **Migration level.** The company migration level (highest version in the source's migration journal) is read with the admin account and stored in the manifest as the optional `companyMigrationVersion`. Older manifests still read: the field is null.
      6. **Dump.** `PgBackupTool.DumpAsync` writes the dump to a private staging file `<destination>.dump-<random>` (owner-only, removed on success and on failure) and captures the locale.
      7. **Restorability at backup time.** The captured locale must pass the restore rules (`PgBackupTool.EnsureRestorable`: libc provider and the character rule). Otherwise the result is `locale_unsupported` and NO set is written: an ICU/builtin company is refused up front instead of producing a set that can never be restored.
@@ -127,7 +139,7 @@ Goal: one company is backed up and trial-restored END TO END from the company re
    * 2: usage
    * 3: configuration
    * 8: completed with warnings (missing key ids, older migration level, stale key ids)
-3. **Test infrastructure:** `PosixFactAttribute` (unit tests) sets `Skip` on Windows, so the fake-tool tests are REPORTED as skipped instead of passing by an early return. All fake tools of a test class are written in the class constructor, before any process of that class starts, under the test output directory (exec-capable, unlike a possibly `noexec` temp folder). A helper retries the first `--version` run ONLY when the launch fails with `ETXTBSY` (errno 26, the race with a concurrent fork in another test); every other launch error fails at once. The `PgBackupToolProcessTests` move to it.
+3. **Test infrastructure:** (`PosixFactAttribute` was not built: see the implementation status; the fake-tool tests pass without running on Windows.) `PosixFactAttribute` (unit tests) sets `Skip` on Windows, so the fake-tool tests are REPORTED as skipped instead of passing by an early return. All fake tools of a test class are written in the class constructor, before any process of that class starts, under the test output directory (exec-capable, unlike a possibly `noexec` temp folder). A helper retries the first `--version` run ONLY when the launch fails with `ETXTBSY` (errno 26, the race with a concurrent fork in another test); every other launch error fails at once. The `PgBackupToolProcessTests` move to it.
 4. **Operator documentation** (`docs/DEVELOPMENT.md`, new "Company backup and trial restore" section):
    * the three commands and their exit codes;
    * no backup is possible without `Hasm__Attachments__StorageDirectory` (no override);
@@ -187,7 +199,7 @@ Goal: one company is backed up and trial-restored END TO END from the company re
       * `backup-company`, then `trial-restore-company` (exit 0), then `--keep` + `drop-trial-restore`;
       * usage errors exit 2; a missing storage setting exits 3;
       * stdout and stderr contain neither the admin password, any physical database name nor any tool output.
-* **Not tested (recorded):** real-tool TLS (the disposable server has no TLS); PostgreSQL 14/15 servers (CI runs 16); the blocked-drop path; the Windows process tests (reported as skipped).
+* **Not tested (recorded):** real-tool TLS (the disposable server has no TLS); PostgreSQL 14/15 servers (CI runs 16); the blocked-drop path; the Windows process tests (they pass without running on Windows).
 * **Commands before every push:**
   * `dotnet build src/backend/Hasm.slnx -c Release`;
   * `dotnet test tests/unit/Hasm.Infrastructure.Tests -c Release --no-build`;

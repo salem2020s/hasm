@@ -169,7 +169,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         Assert.Empty(r.MissingKeyIds);
         Assert.True(BackupSet.Verify(Path.Combine(work, "set")).IsClean);
         Assert.Equal(before, (await Digest(Db(c.PhysicalDatabaseName)), await Digest(Db(other.PhysicalDatabaseName)), await Digest(SystemConnection)));
-        Assert.Empty(Directory.GetFiles(work, "set.dump-*"));                                                     // the staging dump is gone
+        Assert.Empty(Directory.GetFileSystemEntries(work, "set.staging-*"));                                       // the private staging folder is gone
     }
 
     [PostgresFact]
@@ -186,13 +186,13 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var full = Path.Combine(work, "full"); Directory.CreateDirectory(full); File.WriteAllText(Path.Combine(full, "x"), "x");
         Assert.Equal("destination_not_empty", (await Assert.ThrowsAsync<BackupException>(() => Service().BackupCompanyAsync(c.Id, full))).Code);
         Assert.False(Directory.Exists(dest));
-        Assert.Empty(Directory.GetFiles(work, "*.dump-*"));
+        Assert.Empty(Directory.GetFileSystemEntries(work, "*.staging-*"));
 
-        var stale = Path.Combine(work, "set.dump-" + Guid.NewGuid().ToString("N")); File.WriteAllText(stale, "x"); File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-25));
-        var young = Path.Combine(work, "set.dump-" + Guid.NewGuid().ToString("N")); File.WriteAllText(young, "x");
+        var stale = Path.Combine(work, "set.staging-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(stale); File.WriteAllText(Path.Combine(stale, "database.dump"), "x"); Directory.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-25));
+        var young = Path.Combine(work, "set.staging-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(young);
         var r = await Service().BackupCompanyAsync(c.Id, dest);
-        Assert.Equal(1, r.StagingFilesSwept);
-        Assert.False(File.Exists(stale)); Assert.True(File.Exists(young));
+        Assert.Equal(1, r.StagingFoldersSwept);
+        Assert.False(Directory.Exists(stale)); Assert.True(Directory.Exists(young));
     }
 
     [PostgresFact]
@@ -206,7 +206,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var dest = Path.Combine(work, "set");
         Assert.Equal("locale_unsupported", (await Assert.ThrowsAsync<BackupException>(() => Service().BackupCompanyAsync(id, dest))).Code);
         Assert.False(Directory.Exists(dest));
-        Assert.Empty(Directory.GetFiles(work, "*.dump-*"));
+        Assert.Empty(Directory.GetFileSystemEntries(work, "*.staging-*"));
     }
 
     [PostgresFact]

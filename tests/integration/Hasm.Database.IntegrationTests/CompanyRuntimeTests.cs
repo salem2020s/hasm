@@ -447,7 +447,10 @@ public class CompanyRuntimeGrantGuardTests : CompanyRuntimeTestBase
         var c = await ReadyCompany();
         await using var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await holder.OpenAsync();
-        Assert.True(await CompanyProvisioner.TryLockAsync(holder, c.Id, default));
+        // the provisioning session's lock is released by the server asynchronously after its connection closed: take it with a short bounded wait (as the backup service does), then assert as before
+        var locked = false;
+        for (var attempt = 0; attempt < 10 && !(locked = await CompanyProvisioner.TryLockAsync(holder, c.Id, default)); attempt++) await Task.Delay(300);
+        Assert.True(locked);
         var result = await Provisioner().GrantAsync(c.Id);
         Assert.Equal(RuntimeGrantOutcome.InProgressElsewhere, result.Outcome);
         Assert.False(result.RoleCreated);

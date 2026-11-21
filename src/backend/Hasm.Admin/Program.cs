@@ -364,7 +364,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
             {
                 var r = await service.BackupCompanyAsync(companyId, args[2]);
                 Console.WriteLine($"Backup of company {companyId} written and verified: {r.Manifest.Attachments.Count} attachment file(s), {r.Manifest.KeyIdsRequired.Count} key id(s) needed, company migration level {r.Manifest.CompanyMigrationVersion:0000}.");
-                if (r.StagingFilesSwept > 0) Console.WriteLine($"Stale staging file(s) of earlier runs removed: {r.StagingFilesSwept}.");
+                if (r.StagingFoldersSwept > 0) Console.WriteLine($"Stale staging folder(s) of earlier runs removed: {r.StagingFoldersSwept}.");
                 Console.WriteLine("Back up the key directory SEPARATELY (decision K); the set is not encrypted or signed yet.");
                 if (r.MissingKeyIds.Count == 0) return Ok;
                 Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {r.MissingKeyIds.Count} key id(s) the set needs: {string.Join(", ", r.MissingKeyIds)}.");
