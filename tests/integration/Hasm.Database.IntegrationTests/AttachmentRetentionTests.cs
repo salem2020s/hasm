@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Attachments;
+using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Identity;
@@ -253,4 +254,58 @@ public class AttachmentRetentionDatabaseTests : InventoryTestBase
         Assert.Equal((true, false, false, true, false), (granted.View, granted.Configure, granted.Hold, granted.Approve, granted.Execute));
     }
 
+}
+
+/// <summary>The real per-company PostgreSQL role (role-capable disposable cluster only): the retention tables must be usable through the runtime role itself, not only through the owner connection the service tests use.</summary>
+public class AttachmentRetentionRuntimeRoleTests : CompanyRuntimeTestBase
+{
+    protected override bool RolesRequired => true;
+
+    private CompanyRuntimeProvisioner Provisioner() => new(Configured(useRoleAdmin: true), Registry);
+
+    private async Task<NpgsqlConnection> AsRuntime(CompanyRecord c)
+    {
+        var credential = (await new FileCompanyCredentialStore(CredentialDirectory).GetAsync(c.Id))!;
+        var cs = new NpgsqlConnectionStringBuilder(Configured().BuildCompanyRuntimeConnectionString(c.PhysicalDatabaseName, credential.Username, credential.Password)) { Pooling = false };
+        var conn = new NpgsqlConnection(cs.ConnectionString);
+        await conn.OpenAsync();
+        return conn;
+    }
+
+    private static async Task<string?> Try(NpgsqlConnection conn, string sql)
+    {
+        try { await using var cmd = new NpgsqlCommand(sql, conn); await cmd.ExecuteNonQueryAsync(); return null; }
+        catch (PostgresException ex) { return ex.SqlState; }
+    }
+
+    [PostgresRoleFact]
+    public async Task The_runtime_role_can_read_write_and_transition_the_retention_tables_but_never_delete_or_truncate_them()
+    {
+        await StartCompanies();
+        var c = await ReadyCompany();
+        await Provisioner().GrantAsync(c.Id);
+        await using var rt = await AsRuntime(c);
+        var by = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var policy = Guid.NewGuid();
+        var hold = Guid.NewGuid();
+        Assert.Empty(await CompanyRuntimePrivileges.FindViolationsAsync(rt, CompanyRuntimeRole.NameFor(c.PhysicalDatabaseName)));
+        Assert.True(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, CompanyRuntimeRole.NameFor(c.PhysicalDatabaseName)));
+
+        foreach (var table in new[] { RP.Table, RR.Table, LH.Table })
+            Assert.Null(await Try(rt, $"SELECT count(*) FROM {table}"));                                           // never 42501
+
+        Assert.Null(await Try(rt, $"INSERT INTO {RP.Table} ({RP.Id}, {RP.Version}, {RP.Status}, {RP.EffectiveFrom}, {RP.ShortensAnyPeriod}, {RP.DraftedBy}, {RP.DraftedAtUtc}, {RP.Revision}, {RP.UpdatedAtUtc}) VALUES ('{policy}', 1, 1, current_date, false, '{by}', now(), 1, now())"));
+        Assert.Null(await Try(rt, $"INSERT INTO {RR.Table} ({RR.Id}, {RR.PolicyId}, {RR.SubjectKind}, {RR.Sensitivity}, {RR.Months}, {RR.Indefinite}) VALUES ('{Guid.NewGuid()}', '{policy}', '*', 0, 84, false)"));
+        Assert.Null(await Try(rt, $"UPDATE {RP.Table} SET {RP.Status} = 2, {RP.ApprovedBy} = '{other}', {RP.ApprovedAtUtc} = now(), {RP.Revision} = {RP.Revision} + 1, {RP.UpdatedAtUtc} = now() WHERE {RP.Id} = '{policy}'"));
+        Assert.Null(await Try(rt, $"INSERT INTO {LH.Table} ({LH.Id}, {LH.Scope}, {LH.Reason}, {LH.PlacedBy}, {LH.PlacedAtUtc}, {LH.Revision}, {LH.UpdatedAtUtc}) VALUES ('{hold}', 1, 'case', '{by}', now(), 1, now())"));
+        Assert.Null(await Try(rt, $"UPDATE {LH.Table} SET {LH.ReleasedBy} = '{other}', {LH.ReleasedAtUtc} = now(), {LH.ReleaseReason} = 'done', {LH.Revision} = {LH.Revision} + 1, {LH.UpdatedAtUtc} = now() WHERE {LH.Id} = '{hold}'"));
+
+        foreach (var table in new[] { RP.Table, RR.Table, LH.Table })
+        {
+            Assert.Equal("42501", await Try(rt, $"DELETE FROM {table}"));
+            Assert.Equal("42501", await Try(rt, $"TRUNCATE {table}"));
+        }
+        Assert.Equal("42501", await Try(rt, $"UPDATE {RR.Table} SET {RR.Months} = 1"));                           // rules are written once with their version
+    }
 }

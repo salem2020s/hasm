@@ -64,4 +64,20 @@ public class AttachmentRetentionSchemaDerivationTests
         Assert.Contains($"{CompanySchema.Map["RetentionPolicy.ApprovedBy"]} <> {CompanySchema.Map["RetentionPolicy.DraftedBy"]}", sql);
         Assert.Contains($"{CompanySchema.Map["LegalHold.ReleasedBy"]} <> {CompanySchema.Map["LegalHold.PlacedBy"]}", sql);
     }
+    [Fact]
+    public void The_runtime_role_gets_exact_least_privilege_on_the_retention_tables_and_never_delete_or_truncate()
+    {
+        string[] Privileges(string table) => [.. CompanyRuntimePrivileges.Tables.Single(t => t.Table == table).Privileges.Order()];
+        Assert.Equal(["INSERT", "SELECT", "UPDATE"], Privileges(CompanySchema.RetentionPolicy.Table));
+        Assert.Equal(["INSERT", "SELECT"], Privileges(CompanySchema.RetentionRule.Table));
+        Assert.Equal(["INSERT", "SELECT", "UPDATE"], Privileges(CompanySchema.LegalHold.Table));
+        foreach (var table in new[] { CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table })
+        {
+            var all = CompanyRuntimePrivileges.Tables.Single(t => t.Table == table).Privileges;
+            Assert.DoesNotContain("DELETE", all);
+            Assert.DoesNotContain("TRUNCATE", all);
+            Assert.DoesNotContain("REFERENCES", all);
+            Assert.DoesNotContain("TRIGGER", all);
+        }
+    }
 }
