@@ -151,6 +151,17 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
         (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),
         (CompanySchema.LegalHold.Table, ["SELECT", "INSERT", "UPDATE"]),   // placed, then released once
+        // Phase 3.8D step 4 (company migration 0033, provisional): plan storage and execution, database layer. Every table is append-only (PostgreSQL refuses UPDATE, DELETE and TRUNCATE); the plan alone takes UPDATE, and its
+        // trigger lets only the status transition through. The new guards on the cost entry, cost operation and stock posting tables read these tables as the invoker, so the ordinary posting path needs SELECT on them.
+        (CompanySchema.CompensationPlan.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CompensationPlanPosition.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanApproval.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanExecution.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanExecutionJournal.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.EpochMember.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.EpochEntryLineage.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

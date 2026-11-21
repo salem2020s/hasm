@@ -217,6 +217,9 @@ public class ConfigurationSchemaContractTests
 {
     private static readonly string[] ApprovedTables =
     [
+        // Phase 3.8D step 4 (migration 0033, provisional): compensation plans, their closure, lines, history, approval and execution, and the epoch membership and lineage of the costing ledger (append-only; a plan exists only for an approved stock document, and nothing executes one yet)
+        CompanySchema.CompensationPlan.Table, CompanySchema.CompensationPlanPosition.Table, CompanySchema.CompensationPlanLine.Table, CompanySchema.CompensationPlanEvent.Table, CompanySchema.CompensationPlanApproval.Table,
+        CompanySchema.CompensationPlanExecution.Table, CompanySchema.CompensationPlanExecutionJournal.Table, CompanySchema.EpochMember.Table, CompanySchema.EpochEntryLineage.Table,
         CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table,   // Phase R slice R1 (migration 0031): retention policy versions, their rules and legal holds for removed attachments (nothing is deleted)
         CompanySchema.Identity.Table, CompanySchema.BusinessAudit.Table, CompanySchema.Profile.Table, CompanySchema.Settings.Table,
         CompanySchema.Currency.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.ConfigRevision.Table,
