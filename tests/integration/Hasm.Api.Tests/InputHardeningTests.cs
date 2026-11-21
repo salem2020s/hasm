@@ -138,7 +138,11 @@ public class InputHardeningTests(WebApplicationFactory<Program> factory) : IClas
         Assert.Equal(200, (await Run("application/json", Encoding.UTF8.GetBytes("{\"a\":"))).Status);              // malformed JSON is the binder's to reject
     }
 
-    /// <summary>A request body that counts what is read from it and, like Kestrel, refuses to read past the size limit that was set BEFORE the first read.</summary>
+    /// <summary>
+    /// Unit-level stand-ins (a counting body, a fake size-limit feature, a hand-built pipeline) that pin what the GUARD does by itself. They do NOT claim anything about the framework: the real order (the endpoint limit is applied at
+    /// endpoint selection, before the guard) and the real 413 are covered by <see cref="RealKestrelBodyLimitTests"/> on a real Kestrel host.
+    /// A request body that counts what is read from it and refuses to read past the limit that was set before the first read.
+    /// </summary>
     private sealed class LimitedBody(byte[] data, Func<long?> limit) : Stream
     {
         private int position;
@@ -197,7 +201,7 @@ public class InputHardeningTests(WebApplicationFactory<Program> factory) : IClas
     }
 
     [Fact]
-    public async Task The_guard_applies_the_endpoints_own_size_limit_before_it_reads_so_a_body_over_it_is_refused_exactly_as_without_the_guard()
+    public async Task The_guard_itself_never_reads_past_the_endpoints_limit_and_sets_it_as_defence_in_depth()
     {
         var (pipeline, reached) = GuardPipeline();
         var bytes = Encoding.UTF8.GetBytes("{\"login\":\"" + new string('a', 20_000) + "\"}");                // 20 KB against an endpoint that allows 8 KiB, with the length declared and without it

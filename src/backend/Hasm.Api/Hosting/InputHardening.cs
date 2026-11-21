@@ -10,9 +10,10 @@ namespace Hasm.Api.Hosting;
 /// Shared input rule: a text value may never contain U+0000 (NUL). PostgreSQL cannot store it (error 22021), so a NUL that reached a database call used to surface as a false "service unavailable". Every query value
 /// and every JSON string value of a request body is checked HERE, once, before any database access; a violation is the standard validation answer
 /// <c>400 { "error": "invalid_request", "fields": [ { "field": name, "code": "invalid_value" } ] }</c>.
-/// The body scan is bounded by the ENDPOINT'S OWN request-size limit (and by <see cref="MaxScannedBody"/>): the limit is applied before the first read, exactly as the endpoint would, so a body above it is refused with the
-/// same 413 as without the guard; a body declared larger than the cap is not scanned at all; an undeclared (chunked) body is read in small pooled chunks and the scan stops at the cap. The scan is a STREAM over the
-/// bytes: a body without NUL costs no allocation sized by the declared length. Non-JSON bodies (uploads) are not scanned; anything not scanned falls back to the defence in depth of <see cref="HasmExceptionMapping"/>.
+/// The body scan is bounded by the ENDPOINT'S OWN request-size limit (and by <see cref="MaxScannedBody"/>): a body declared larger than the cap is not read at all, an undeclared (chunked) body is read in small pooled chunks
+/// and the scan stops at the cap, and a body without NUL allocates nothing sized by its declared length. On today's ASP.NET Core the endpoint's own limit is already applied at endpoint selection, BEFORE this guard runs
+/// (real Kestrel answers 413 for a body over the limit, declared or chunked, with or without the guard: see RealKestrelBodyLimitTests); the guard sets the same limit itself before its first read purely as defence in depth,
+/// so it stays correct if the pipeline order or the framework's behavior ever changes. Non-JSON bodies (uploads) are not scanned; anything not scanned falls back to the defence in depth of <see cref="HasmExceptionMapping"/>.
 /// </summary>
 public static class InputHardening
 {
@@ -44,7 +45,7 @@ public static class InputHardening
         var limit = context.GetEndpoint()?.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize;
         var cap = (int)Math.Min(MaxScannedBody, limit ?? MaxScannedBody);
         if (request.ContentLength is { } declared && (declared <= 0 || declared > cap)) return null;          // empty, or larger than the cap: not scanned (the endpoint's limit judges it when it reads)
-        // The endpoint's own limit keeps applying: set it NOW, before the first read (the endpoint middleware cannot change it after the body has been read).
+        // Defence in depth: the endpoint's own limit is normally applied already (endpoint selection); setting the same value before the first read costs nothing and keeps the guard self-contained.
         var sizeLimit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
         if (limit is not null && sizeLimit is { IsReadOnly: false }) sizeLimit.MaxRequestBodySize = limit;
         request.EnableBuffering(bufferThreshold: 64 * 1024);                                                   // memory up to 64 KiB, then a temporary file; rewound below
