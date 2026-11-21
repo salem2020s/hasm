@@ -1,0 +1,15 @@
+# Independent review record
+
+* **Pull request:** #117 (test/cross-module-scenarios: cross-module accounting scenario tests)
+* **Head SHA reviewed (full 40 characters):** 1fed85c7ace6955b557a7fff8fb54a64cb6c7fcf
+* **Reviewer context:** independent reviewer subagent, a separate agent from the author (Agent F); not the author's context
+* **Scope read:** the full diff `git diff origin/main...origin/test/cross-module-scenarios` (`tests/integration/Hasm.Database.IntegrationTests/CrossModuleScenarioTests.cs`, `.github/workflows/backend.yml`)
+* **Checks run (commands and results):** as stated in the record line below
+* **Findings:**
+  * L1 (Low): the "shared party identity" is a synthetic GUID written by SQL, not a registry identity. Resolution: fixed in 4186f79aa53f2bab243bb2800dd6f2562df3e0f5. The summary, comment and test name now say "the same global party id value on both local parties (no registry identity; the registry path is covered by the party-registry suites)".
+  * L2 (Low): the reads in company A that use B's ids as filters asserted only the absence of B's ids, not empty values. Resolution: fixed in 4186f79aa53f2bab243bb2800dd6f2562df3e0f5. For `stock-balances?warehouseId=B` and `?itemId=B` the response is now asserted to be either not 200, or 200 with `totalValue` 0 and an empty `balances` list.
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the reviewer did not run PostgreSQL locally because another agent's 5433 cluster was up; hosted CI on 1fed85c covered the PostgreSQL suite. The PostgreSQL registry (1088) is reconciled with `main` at the merge push; this is not a finding.
+* **Verdict:** approve
+
+Reviewer: independent reviewer subagent (independent, separate agent); model family Claude Opus; prompt: lead's independent full-diff review of PR #117 (CrossModuleScenarioTests: API-level company isolation across read families, fiscal life cycle to year end, inventory value = GL; real business outcomes only, leak detection beyond 403, no flaky timing, nothing skipped or weakened); Head SHA reviewed 1fed85c7ace6955b557a7fff8fb54a64cb6c7fcf; executed: git fetch, git diff origin/main...origin/test/cross-module-scenarios, reads of the base fixtures and of the FiscalCalendarService/JournalService/FiscalYearClosingService codes and the session and commercial routes, hand recomputation of the valuation figures, dotnet build of Hasm.slnx and of the integration-test project in Release in a scratch export (0 errors), REST check-runs on 1fed85c (postgres-integration and backend-build-test success, always-on checks success); PostgreSQL not run locally because another agent's 5433 cluster was up; verdict approve; findings L1 (the shared global party is a synthetic GUID set by SQL, not a registry identity) fixed in 4186f79aa53f2bab243bb2800dd6f2562df3e0f5, L2 (the B-id-as-filter reads in company A assert only the absence of B's ids, not empty values) fixed in 4186f79aa53f2bab243bb2800dd6f2562df3e0f5; no Critical, High or Medium; registry 1088 to be reconciled, not a finding.
