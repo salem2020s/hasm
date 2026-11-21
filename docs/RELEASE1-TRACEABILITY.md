@@ -19,8 +19,8 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 ## Totals (derived)
 
 * Items traced: **127** = 115 SRS items (sections 2 to 19: 105 requirements; section 21: 10 acceptance scenarios) + 12 reporting requirements.
-* MERGED: **24** · PARTIAL: **37** · NOT STARTED: **58** · IN REVIEW: **0** · CONSTRAINT: **4** · NOT MANDATORY (R1): **4**.
-* Still incomplete (PARTIAL + NOT STARTED + CONSTRAINT awaiting its phase): **99**.
+* MERGED: **23** · PARTIAL: **38** · NOT STARTED: **58** · IN REVIEW: **0** · CONSTRAINT: **4** · NOT MANDATORY (R1): **4**.
+* Still incomplete (PARTIAL + NOT STARTED + CONSTRAINT awaiting its phase): **100**.
 * Phase evidence is reconciled through merged PR #46. Supplier-invoice GRNI remains PARTIAL, and the customer/supplier balance-query acceptance scenario remains PARTIAL until the corresponding subledger exists.
 
 ## Matrix
@@ -141,7 +141,7 @@ The SRS has no numbered requirement identifiers. An identifier here is **section
 | 21.7 | Scenario: a scheduled run that breaks approval/separation-of-duties rules or targets a closed period fails and the reason is kept | 3.21 | NOT STARTED | - | Scenario test |
 | 21.8 | Scenario: single-company restore without rolling back other companies or the system database; links and attachments verified | 4.3 | NOT STARTED | - | Restore drill |
 | 21.9 | Scenario: cascading menus open on hover and nothing executes before click or keyboard selection | 4.8 | MERGED | CascadingMenu tests (UI-1) | Re-verified in 4.8 and 5.3 |
-| 21.10 | Scenario: non-descriptive physical names tested on new database, schema upgrade and backup restore | 4.3 | MERGED | PhysicalNamingAcceptanceTests (PostgreSQL, CI): every identifier of the company and system schemas opaque and mapped in the live catalog; a new database, an upgrade of a populated company database from level 3 and a trial-path restore each give a catalog identical to a new database, unchanged data, an accepting schema gate and integrity rules enforced against a principal who knows every physical name | Re-run in final regression; the cutover restore path (slice 7) is checked by its own tests when built |
+| 21.10 | Scenario: non-descriptive physical names tested on new database, schema upgrade and backup restore | 4.3 | PARTIAL | PhysicalNamingAcceptanceTests (PostgreSQL, CI): every identifier of a new company and a new system database opaque and mapped in the live catalog; a company database upgraded from level 3 has a catalog identical to a new one and unchanged data; an encrypted, signed company set restored on the trial path has the source catalog and data; schema gate and integrity rules hold against a principal who knows every physical name | System-database upgrade compared with a new database; full-installation (system set) restore and the live cutover (4.3 slices 7 and 8); re-run in final regression |
 | RR-1 | Inventory movement report | 3.8E | NOT STARTED | docs/REPORTING-REQUIREMENTS.md section 3A item 1 | Whole report |
 | RR-2 | Stocktaking and valuation as of a date, informational prices separate from official book value | 3.8E | NOT STARTED | docs/REPORTING-REQUIREMENTS.md item 2 | Whole report; price definitions: default in OD-4 |
 | RR-3 | Customer account statement | 3.23 | NOT STARTED | item 3 | After 3.17 |
