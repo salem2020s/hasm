@@ -23,12 +23,47 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     /// Dumps <paramref name="sourceDatabase"/> (a company database) to <paramref name="dumpFile"/>, which must not exist. A partial file is removed on failure. Returns the encoding and locale of the source captured at dump time:
     /// the caller stores them with the backup (<see cref="BackupManifest.DatabaseLocale"/>) so a restore never depends on the source database still existing (decision D-053). A source that does not exist is <c>dump_failed</c>.
     /// </summary>
-    public async Task<DatabaseLocale> DumpAsync(string sourceDatabase, string dumpFile, CancellationToken ct = default)
+    public Task<DatabaseLocale> DumpAsync(string sourceDatabase, string dumpFile, CancellationToken ct = default)
     {
         RequireCompanyDatabase(sourceDatabase);
+        return DumpCoreAsync(sourceDatabase, dumpFile, [], ct);
+    }
+
+    /// <summary>
+    /// Dumps the configured SYSTEM database (never a caller-supplied name; slice 4, D-070) to <paramref name="dumpFile"/>, which must not exist, WITHOUT the data of <paramref name="excludeTableData"/> (physical
+    /// table names of the secret-store tables, <see cref="BackupRunService.SystemDumpExclusions"/>): their structure is kept, their rows never reach an unencrypted set.
+    /// </summary>
+    public Task<DatabaseLocale> DumpSystemAsync(string dumpFile, IReadOnlyList<string> excludeTableData, CancellationToken ct = default)
+    {
+        var name = options.SystemDatabaseName ?? throw new BackupException("database_not_configured");
+        PhysicalIdentifier.Validate(name, nameof(name));
+        var args = new List<string>();
+        foreach (var table in excludeTableData)
+        {
+            if (!PhysicalIdentifier.IsValid(table)) throw new BackupException("exclusion_invalid");
+            args.Add("--exclude-table-data=public." + table);
+        }
+        return DumpCoreAsync(name, dumpFile, args, ct);
+    }
+
+    /// <summary>
+    /// Checks that the archive's table of contents is readable (<c>pg_restore --list</c>; only the exit code is used, the output is discarded). This proves NOTHING about the data restoring: integrity is the SHA-256 in
+    /// the manifest. A failure is <c>archive_unreadable</c>.
+    /// </summary>
+    public async Task VerifyArchiveAsync(string dumpFile, CancellationToken ct = default)
+    {
+        if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
+        if (!File.Exists(dumpFile)) throw new BackupException("database_dump_missing");
+        var psi = await PrepareAsync("pg_restore", ["--list", dumpFile], ct);
+        try { await RunAsync("pg_restore", psi, ct); }
+        catch (BackupException ex) when (ex.Code == "restore_failed") { throw new BackupException("archive_unreadable"); }
+    }
+
+    private async Task<DatabaseLocale> DumpCoreAsync(string sourceDatabase, string dumpFile, IReadOnlyList<string> extra, CancellationToken ct)
+    {
         if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
         if (File.Exists(dumpFile)) throw new BackupException("dump_file_exists");
-        var psi = await PrepareAsync("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", "--file", dumpFile, "--dbname", sourceDatabase], ct);   // client version and TLS settled before any database contact
+        var psi = await PrepareAsync("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", .. extra, "--file", dumpFile, "--dbname", sourceDatabase], ct);   // client version and TLS settled before any database contact
         DatabaseLocale locale;
         await using (var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
         {
@@ -182,7 +217,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     private string ToolPath(string tool) => pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
 
     /// <summary>The major version of the tool (its <c>--version</c> output), probed once per tool and instance; 0 when it cannot be read. Thread-safe: a concurrent first probe may run twice with the same result.</summary>
-    private async Task<int> ClientMajorAsync(string tool, CancellationToken ct)
+    internal async Task<int> ClientMajorAsync(string tool, CancellationToken ct)
     {
         if (clientMajors.TryGetValue(tool, out var known)) return known;
         var psi = new ProcessStartInfo(ToolPath(tool), "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = ToolWorkingDirectory };
