@@ -657,3 +657,4 @@ Several agents work in one environment at the same time, so temporary files must
 6. **Verify before any PR title or description update.** Re-read the pull request (`gh api repos/salem2020s/hasm/pulls/<n>`); check the number, that `head.ref` and `head.sha` are the pull request you intend, and that the first line of the body file matches that pull request's title or topic. Only then PATCH.
 7. **Never commit scratch files, credentials or temporary test artifacts.** Review `git status` and the staged file list before every commit.
 8. **No protected policy changes** are made through this convention.
+9. **Review records name the model family only, never a model identifier.**
