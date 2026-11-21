@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel, NegativeException }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel, NegativeException, Hold, Execute }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -158,6 +158,9 @@ public sealed partial class PermissionCatalog
         new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
+        // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
+        // plan) is NOT in the Company Administrator preset: it belongs to the Retention Approver preset (a sensitive grant, offline through the administrative tool; separation of duties).
+        new("company.attachmentretention", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Hold, PermissionAction.Approve, PermissionAction.Execute]),
     ]);
 
     public static class Codes
@@ -295,6 +298,11 @@ public sealed partial class PermissionCatalog
         public const string AttachmentsDelete = "company.attachments.delete";
         public const string AttachmentsSensitiveView = "company.attachmentssensitive.view";
         public const string AttachmentsSensitiveUpload = "company.attachmentssensitive.upload";
+        public const string RetentionView = "company.attachmentretention.view";
+        public const string RetentionConfigure = "company.attachmentretention.configure";
+        public const string RetentionHold = "company.attachmentretention.hold";
+        public const string RetentionApprove = "company.attachmentretention.approve";
+        public const string RetentionExecute = "company.attachmentretention.execute";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
@@ -324,6 +332,7 @@ public static class PresetRoles
     public static readonly Guid JournalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000005");
     public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
     public static readonly Guid CommercialApproverId = new("5c1b0f6e-0000-4a00-8000-000000000007");
+    public static readonly Guid RetentionApproverId = new("5c1b0f6e-0000-4a00-8000-000000000008");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -331,7 +340,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -345,6 +354,7 @@ public static class PresetRoles
             [JournalApproverId] = ("journal-approver", new HashSet<string> { PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove }),
             [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
             [CommercialApproverId] = ("commercial-approver", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialApprove }),
+            [RetentionApproverId] = ("retention-approver", new HashSet<string> { PermissionCatalog.Codes.RetentionView, PermissionCatalog.Codes.RetentionApprove }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,

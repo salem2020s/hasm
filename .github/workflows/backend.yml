@@ -44,6 +44,8 @@ jobs:
         run: node tools/schema/company-0029-commercial-approval.cjs --check
       - name: Document-links schema files match the deterministic generator (Phase 3.13 S2, company migration 0030)
         run: node tools/schema/company-0030-document-links.cjs --check
+      - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
+        run: node tools/schema/company-0031-attachment-retention.cjs --check
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
@@ -137,7 +139,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1111 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1149 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -151,7 +153,7 @@ jobs:
                 "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
                 "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
                 # Phase 2.3C-2 cryptographic audit integrity
-                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 1, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 2, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
                 "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
                 "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
@@ -203,7 +205,7 @@ jobs:
                 # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
                 "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
                 # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
-                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6, "StockPostingInWorkTests": 14,
                 # Phase 3.7C reversal of executed stock documents, valuation close probe (company migration 0017, system migration 0019).
                 "StockReversalTests": 8, "StockReversalApiTests": 1, "StockReversalScenarioTests": 5,
                 # Phase 3.8A stock balances, item ledger and reconciliation (system migration 0020).
@@ -223,9 +225,9 @@ jobs:
                 # Phase 3.11 customer groups (company migration 0027): group master, one-group-per-customer assignment, customer-or-group scope, regroup concurrency, server-derived quote group; HTTP API.
                 "CustomerGroupTests": 7, "CustomerGroupApiTests": 3,
                 # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
-                "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 2,
+                "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 3,
                 # Phase 3.13 S1b commercial approval, numbering and server-produced snapshots (company migration 0029, system migration 0029).
-                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 4, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1,
+                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 4, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
@@ -234,7 +236,7 @@ jobs:
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
-                "AttachmentTests": 10, "AttachmentApiTests": 8,
+                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 3, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
@@ -243,7 +245,13 @@ jobs:
                 "CompanyBackupServiceTests": 11,
                 # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
                 "BackupRunTests": 6,
+                # Gapless numbering under failure for stock documents, stocktakes, stock adjustments and journal posting: reuse after a failure after the issue, and a number collision refused as number_already_issued (no migration).
+                "NumberingCollisionTests": 4,
                 # Release 1 acceptance C: parallel writers from one revision, exactly one wins (no migration).
                 "AccountLostUpdateTests": 1, "BranchLostUpdateTests": 1, "WarehouseLostUpdateTests": 1, "PartyLostUpdateTests": 1, "PriceListLostUpdateTests": 1, "TaxLostUpdateTests": 1,
+                # Per-endpoint 403 matrix of every mutating /api/v1/company/** route (no permission, read-only, other branch, cost center or warehouse; route-table completeness).
+                "EndpointPermissionMatrixTests": 5, "EndpointPermissionMatrixWarehouseTests": 1,
+                # Phase 4.3 slice 5: encrypted, signed backups, trial restore with the recovery key, forged-set refusal, backup-keys, the recovery test, encryption by default (no migration).
+                "EncryptedBackupTests": 6,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

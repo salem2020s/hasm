@@ -45,6 +45,47 @@ public sealed class AuditTrail
     private sealed class TouchedState { public string Xid = ""; public readonly HashSet<string> Streams = []; }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<NpgsqlTransaction, TouchedState> touched = new();
 
+    /// <summary>The PostgreSQL transaction id (xid8, never reused; assigned on first use) of the transaction <paramref name="tx"/> currently is.</summary>
+    private static async Task<string> CurrentXidAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+    {
+        await using var xid = new NpgsqlCommand("SELECT pg_current_xact_id()::text", conn, tx);
+        return (string)(await xid.ExecuteScalarAsync(ct))!;
+    }
+
+    /// <summary>
+    /// A savepoint's mark of the first-touch state: the transaction id TOGETHER with the streams touched so far. The streams count only if the recorded state belongs to THIS transaction
+    /// (a recycled transaction object may still carry the streams of an earlier transaction, which must never be restored as "touched in this transaction").
+    /// </summary>
+    internal async Task<AuditTouchedMark> MarkTouchedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct = default)
+    {
+        // NOTE: reading the id FORCES PostgreSQL to assign a transaction id now (a read-only transaction would not have one yet); acceptable because the caller is about to write.
+        var current = await CurrentXidAsync(conn, tx, ct);
+        return new AuditTouchedMark(current, touched.TryGetValue(tx, out var state) && state.Xid == current ? [.. state.Streams] : []);
+    }
+
+    /// <summary>
+    /// After a ROLLBACK TO SAVEPOINT: forgets the streams first touched after <paramref name="mark"/>. The rollback undid their events and released their advisory locks, so the next append must re-take
+    /// the lock and re-run the first-touch head and anchor checks instead of trusting a head that may since have changed. A mark whose transaction id is not the current transaction's counts as EMPTY.
+    /// </summary>
+    internal async Task RestoreTouchedAsync(NpgsqlConnection conn, NpgsqlTransaction tx, AuditTouchedMark mark, CancellationToken ct = default)
+    {
+        // Invalidate FIRST: if reading the transaction id fails, the state is already empty with no id, so any later append re-runs the full first-touch check (fail closed).
+        var state = touched.GetOrCreateValue(tx);
+        state.Streams.Clear();
+        state.Xid = "";
+        var current = await CurrentXidAsync(conn, tx, ct);
+        state.Xid = current;
+        if (mark.Xid == current) foreach (var k in mark.Streams) state.Streams.Add(k);
+    }
+
+    /// <summary>Forgets everything this trail remembers about the transaction (cannot fail): used first in a cleanup path, so that whatever else fails afterwards the next append re-runs the full first-touch check.</summary>
+    internal void InvalidateTouched(NpgsqlTransaction tx)
+    {
+        var state = touched.GetOrCreateValue(tx);
+        state.Streams.Clear();
+        state.Xid = "";
+    }
+
     public AuditTrail(Func<AuditServices> factory, TimeProvider clock, ILogger? logger = null)
     {
         services = new Lazy<AuditServices>(factory, LazyThreadSafetyMode.PublicationOnly);
@@ -219,3 +260,6 @@ public sealed class AuditTrail
             await AnchorAsync(new AuditReceipt(streamKey, head.Seq, head.Hash, head.OccurredMicros), ct);   // throws when the store is unavailable
     }
 }
+
+/// <summary>The first-touch state of one transaction at a savepoint: its PostgreSQL transaction id and the audit streams it had touched.</summary>
+internal sealed record AuditTouchedMark(string Xid, string[] Streams);

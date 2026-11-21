@@ -5,6 +5,7 @@ using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Costing;
 using Hasm.Infrastructure.Ledger;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using A = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockAdjustment;
@@ -51,7 +52,7 @@ public sealed record StockAdjustmentView(Guid Id, Guid StocktakeId, string? Stoc
 /// posting record and its accounting state. Any failure rolls everything back.</para>
 /// <para><b>Reverse</b> (the 3.7C rules, once): both costing operations are taken back, the journal entry is cancelled while unposted or reversed by a draft reversal entry once posted.</para>
 /// </summary>
-public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, InventoryCostingService costing, JournalService journal, TimeProvider clock)
+public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, InventoryCostingService costing, JournalService journal, TimeProvider clock, ILogger? logger = null)
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static StockDocumentService.Abort Conflict(string code) => new(ConfigStatus.Conflict, code);
@@ -201,7 +202,8 @@ public sealed class StockAdjustmentService(CompanyDatabaseResolver resolver, Com
                 }
                 var id = Guid.NewGuid();
                 var now = Now;
-                var number = await NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.StockAdjustment, new NumberScope(st.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, now, ct);
+                var number = await NumberingService.IssueOrRefuseAsync(() => NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.StockAdjustment, new NumberScope(st.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, now, ct),
+                    DocumentTypes.StockAdjustment, logger, () => Conflict(NumberingService.NumberAlreadyIssued));
                 await using (var ins = new NpgsqlCommand(
                     $"INSERT INTO {A.Table} ({A.Id}, {A.StocktakeId}, {A.BranchId}, {A.WarehouseId}, {A.AdjustmentDate}, {A.Number}, {A.FiscalYearId}, {A.CreatedBy}, {A.CreatedAtUtc}) VALUES (@id, @s, @b, @w, @d, @n, @y, @a, @now)", work.Connection, work.Transaction))
                 {
