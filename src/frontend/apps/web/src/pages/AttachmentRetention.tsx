@@ -108,7 +108,7 @@ export function AttachmentRetentionPage() {
       <Card title={t("ret.tab.policy")} hint={t("ret.policy.hint")}>
         {policies.length === 0 ? <p>{t("ret.policy.empty")}</p> : (
           <div className="table-wrap">
-            <table>
+            <table className="data-table">
               <thead><tr>
                 <th scope="col">{t("ret.version")}</th><th scope="col">{t("ret.status")}</th><th scope="col">{t("ret.effective_from")}</th>
                 <th scope="col">{t("ret.rules")}</th><th scope="col">{t("ret.policy.shortens")}</th><th scope="col">{t("ret.actions")}</th>
@@ -119,7 +119,7 @@ export function AttachmentRetentionPage() {
                     <td>{p.version}</td>
                     <td>{t(`ret.policy.status.${p.status}`)}</td>
                     <td>{day(p.effectiveFrom)}</td>
-                    <td><ul className="plain">{p.rules.map((r, i) => <li key={i}>{ruleSummary(r)}</li>)}</ul></td>
+                    <td><ul className="change-list">{p.rules.map((r, i) => <li key={i}>{ruleSummary(r)}</li>)}</ul></td>
                     <td>{p.shortensAnyPeriod ? "✓" : ""}</td>
                     <td>
                       {caps.approve && p.status === 1 && p.draftedBy !== me && (
@@ -147,8 +147,9 @@ export function AttachmentRetentionPage() {
               {(p) => <input {...p} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />}
             </Field>
             {rules.map((r, i) => (
-              <fieldset key={i} className="rule-row">
+              <fieldset key={i}>
                 <legend>{t("ret.rules")} {i + 1}</legend>
+                <div className="fields">
                 <Field id={`ret-kind-${i}`} label={t("ret.rule.kind")} error={f[`rules[${i}].subjectKind`]}>
                   {(p) => <select {...p} value={r.kind} onChange={(e) => setRule(i, { kind: e.target.value })}>{KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}</select>}
                 </Field>
@@ -164,7 +165,8 @@ export function AttachmentRetentionPage() {
                     {(p) => <input {...p} type="number" min={1} max={1200} value={r.months} onChange={(e) => setRule(i, { months: e.target.value })} />}
                   </Field>
                 )}
-                {rules.length > 1 && <button type="button" onClick={() => setRules((x) => x.filter((_, j) => j !== i))}>{t("ret.rule.remove")}</button>}
+                </div>
+                {rules.length > 1 && <div className="actions"><button type="button" className="ghost" onClick={() => setRules((x) => x.filter((_, j) => j !== i))}>{t("ret.rule.remove")}</button></div>}
               </fieldset>
             ))}
             <div className="actions">
@@ -183,7 +185,7 @@ export function AttachmentRetentionPage() {
         <label><input type="checkbox" checked={showReleased} onChange={(e) => { setShowReleased(e.target.checked); }} /> {t("ret.hold.show_released")}</label>
         {holds.length === 0 ? <p>{t("ret.holds.empty")}</p> : (
           <div className="table-wrap">
-            <table>
+            <table className="data-table">
               <thead><tr>
                 <th scope="col">{t("ret.hold.scope")}</th><th scope="col">{t("ret.hold.target")}</th><th scope="col">{t("ret.reason")}</th>
                 <th scope="col">{t("ret.status")}</th><th scope="col">{t("ret.actions")}</th>
@@ -242,12 +244,12 @@ export function AttachmentRetentionPage() {
   const previewTab = (
     <Card title={t("ret.preview.title")} hint={t("ret.preview.hint")}>
       <p>{t("ret.preview.total").replace("{n}", String(preview.total))}</p>
-      <ul className="plain" data-testid="reason-counts">
+      <ul className="change-list" data-testid="reason-counts">
         {Object.entries(preview.reasonCounts).map(([k, n]) => <li key={k}>{t(`ret.reason.${k}`)}: {n}</li>)}
       </ul>
       {preview.items.length === 0 ? <p>{t("ret.preview.empty")}</p> : (
         <div className="table-wrap">
-          <table>
+          <table className="data-table">
             <thead><tr>
               <th scope="col">{t("ret.preview.kind")}</th><th scope="col">{t("ret.hold.attachment_id")}</th><th scope="col">{t("ret.preview.removed")}</th>
               <th scope="col">{t("ret.preview.eligible_at")}</th><th scope="col">{t("ret.status")}</th>
@@ -277,7 +279,7 @@ export function AttachmentRetentionPage() {
     <div>
       <PageHeader title={t("ret.title")} description={t("ret.subtitle")} />
       {!caps.basisConfirmed && <Banner kind="warning" testId="basis-pending">{t("ret.basis_pending")}</Banner>}
-      {runner.error && <Banner kind="error">{runner.error}{fieldMsgs.length > 0 && <ul className="plain">{[...new Set(fieldMsgs)].map((m) => <li key={m}>{m}</li>)}</ul>}</Banner>}
+      {runner.error && <Banner kind="error">{runner.error}{fieldMsgs.length > 0 && <ul className="change-list">{[...new Set(fieldMsgs)].map((m) => <li key={m}>{m}</li>)}</ul>}</Banner>}
       {runner.conflict && <Banner kind="warning">{t("common.conflict")}</Banner>}
       {runner.notice && <Banner kind="success">{runner.notice}</Banner>}
       <Tabs
