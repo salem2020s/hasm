@@ -36,6 +36,15 @@ Applied in `docs/PHASE-3.8D-RESUME-REVIEW.md` on top of `c6dd72d` (one commit). 
 * **L6 fixed.** Section (e) item 3 and Q3 state that a FIFO revaluation as an out/in pair collapses the layers. The per-layer alternative keeps granularity but not the arrival ranks.
 * **Open for the reviewer:** confirmation of this delta.
 
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #171's delta c6dd72d..de7ea1b: M1 (F2 guard gap, N17, Q5) and L1-L6 (F3 rename, SECURITY DEFINER option, T11/N18 restore, xid8 binding, N19 audit binding, Q3 FIFO note); check that F2 and Q5 reflect that DISABLE TRIGGER is in legitimate use in system migrations"; Head SHA reviewed de7ea1bb722b3e7a3e812025d6f5a5668ae06c9b; executed: delta diff read, CREATE OR REPLACE and DISABLE/ENABLE TRIGGER counted on origin/main (company: CREATE OR REPLACE in 0009/0027/0029, no DISABLE; system: 25 migrations 0006-0030 with 30 DISABLE statements on two immutability triggers, each paired with the matching ENABLE in the same migration, 0 mismatches); verdict request changes; findings L1-L6 and the M1 catalog-test part fixed; new M1 (F2 and Q5 propose refusing DISABLE TRIGGER without stating its 25 legitimate paired uses in system migrations; MigrationScript validates every embedded migration at load, so the rule must be an allow-pattern, DISABLE only with a same-migration ENABLE of the same trigger, never a blanket refusal).
+
+**Resolution of the confirmation's new M1 (Agent P; model family Claude Opus):** fixed in `docs/PHASE-3.8D-RESUME-REVIEW.md` (F2 follow-up and Q5). Both now state the legitimate use, which I recounted on `86e3ce8` with identical results: 25 system migrations 0006-0030, 30 `DISABLE TRIGGER` statements (25 x `t_3e3d4119`/`r_2601e368`, 5 x `t_359332ac`/`r_d3408f58`), each paired with a same-migration `ENABLE`, and none in company migrations. They also state that every embedded migration is validated at every load. Q5 is redefined as an allow-pattern with three parts:
+1. `DISABLE TRIGGER` only with a same-migration `ENABLE` of the same trigger on the same table, any other refused;
+2. `CREATE OR REPLACE FUNCTION` of a function from an earlier migration refused unless it has an owner-approved allow entry, with the existing replacements in the allow set;
+3. a post-migration check that no trigger remains disabled (`pg_trigger.tgenabled`).
+
+Open for the reviewer: confirmation of this delta.
+
 ---
 
 ## Appendix: Agent G's independent X1 review (written before reading PR #171; unchanged)
