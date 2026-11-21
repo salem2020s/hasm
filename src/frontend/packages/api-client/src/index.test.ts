@@ -8,6 +8,17 @@ const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.strin
 const call = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => ({ url: fetchMock.mock.calls[n][0] as string, init: fetchMock.mock.calls[n][1] as RequestInit });
 
 describe("api client", () => {
+  it("lists party roles unchanged without a query and builds the optional search and paging parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [], can: { configure: false } })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listPartyRoles();
+    await client.listPartyRoles(1);
+    await client.listPartyRoles(undefined, { search: "a&b c", limit: 25, offset: 0 });
+    await client.listPartyRoles(2, { search: "" });
+    const B = "https://x/api/v1/company/party-roles";
+    expect([0, 1, 2, 3].map((n) => call(fetchMock, n).url)).toEqual([B, B + "?kind=1", B + "?search=a%26b+c&limit=25&offset=0", B + "?kind=2"]);
+  });
+
   it("requests the health endpoint under the base url", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ status: "healthy", service: "hasm-api", version: "1.0.0" }));
     const client = createApiClient("https://localhost:7241/", fetchMock as unknown as typeof fetch);

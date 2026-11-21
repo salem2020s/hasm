@@ -64,9 +64,29 @@ public static class PartyRoleEndpoints
         return CompanyConfigurationEndpoints.Map(await call(actor!.UserId, actor.CompanyId, expected), body, revision);
     }
 
-    private static Task<IResult> ListRoles(short? kind, HttpContext http, AccessService access, PartyRoleManagementService svc) =>
-        kind is not (null or 1 or 2) ? Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"))
-            : Read(http, access, svc, true, (u, c) => svc.ListRolesAsync(u, c, kind is null ? null : (PartyRoleKind)kind, http.RequestAborted), v => v.Select(RoleBody));
+    /// <summary>
+    /// Without <c>search</c>, <c>offset</c> or <c>limit</c> the list is exactly what it always was (all roles, no <c>total</c>). With any of them it is one bounded page
+    /// (default 50, at most 500, ordered by party code) and the response adds <c>total</c>. The permission and company scoping are the same in both forms.
+    /// </summary>
+    private static Task<IResult> ListRoles(short? kind, string? search, int? offset, int? limit, HttpContext http, AccessService access, PartyRoleManagementService svc)
+    {
+        if (kind is not (null or 1 or 2)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
+        var role = kind is null ? (PartyRoleKind?)null : (PartyRoleKind)kind;
+        if (search is null && offset is null && limit is null)
+            return Read(http, access, svc, true, (u, c) => svc.ListRolesAsync(u, c, role, http.RequestAborted), v => v.Select(RoleBody));
+        if (offset is < 0 || limit is < 1 || !PartyRoleSearch.TryCleanSearch(search, out _)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
+        return ReadPaged(http, access, svc, (u, c) => svc.SearchRolesAsync(u, c, role, search, offset, limit, http.RequestAborted));
+    }
+
+    private static async Task<IResult> ReadPaged(HttpContext http, AccessService access, PartyRoleManagementService svc, Func<Guid, Guid, Task<ConfigResult<PartyRolePage>>> call)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        var r = await call(actor!.UserId, actor.CompanyId);
+        if (!r.IsOk) return CompanyConfigurationEndpoints.Map(r, _ => new { });
+        var caps = await svc.CapabilitiesAsync(actor.UserId, actor.CompanyId, http.RequestAborted);
+        return Results.Json(new { items = r.Value!.Items.Select(RoleBody), total = r.Value.Total, can = new { configure = caps.RolesConfigure } });
+    }
     private static Task<IResult> ListReps(HttpContext http, AccessService access, PartyRoleManagementService svc) =>
         Read(http, access, svc, false, (u, c) => svc.ListRepresentativesAsync(u, c, http.RequestAborted), v => v.Select(RepBody));
 
