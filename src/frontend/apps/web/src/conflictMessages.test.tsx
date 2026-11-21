@@ -42,7 +42,6 @@ describe("catalog: every concurrency refusal is worded in both languages", () =>
 });
 
 describe.each(["ar", "en"] as const)("stale writer (%s)", (lang) => {
-  
   it("branch: translated conflict message, edit kept, latest loadable", async () => {
     localStorage.setItem("hasm.locale", lang);
     const t = L(lang, "branches");
