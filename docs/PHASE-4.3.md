@@ -1057,7 +1057,7 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
 1. **Request** (`restore-cutover-request <set-dir> <company-id> --recovery-key <file> --signing-trust <file> [--passphrase-stdin]`, by a named administrator; D-099):
    * The set is verified as in slice 5: signatures, stored digests, run id. Then it is restored into a NEW, unregistered database and a staging attachment folder ON THE SAME FILESYSTEM as live storage (the rename in step 3.7 must be atomic), using the slice 3 trial-restore path, KEPT.
    * The copy is migrated FORWARD to this installation's company level when it is older (Q5 default; a newer set is refused, as today).
-   * **Numbering pre-check (D-153):** if any numbering series of the live company was advanced after the restore point, the request is refused (Q7 default).
+   * **What-would-be-lost pre-checks (D-153; F1-F3):** the lost-tail classification, the numbering comparison (counters and issued and voided numbers) and the fiscal-state comparison of step 3.6 run here against live; any accounting loss refuses the request by default (Q7, Q9).
    * **Live chain pre-check (Q4 default):** a live business stream that does not verify refuses the request.
    * The slice 3 checks run against the LIVE system database: shared links, attachment rows against files, migration compatibility. The copy's business audit stream is verified as an authentic PREFIX of the live stream's checkpoints (D-147); a copy that is not a prefix is refused (`restore_set_not_a_prefix`).
    * **Typed acknowledgement:** the requester types the company id, the source run id (or set id) and the phrase `replace live company data`. Its SHA-256 is recorded.
@@ -1102,10 +1102,33 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
         * **Any failure refuses the cutover** (`epoch_advance_failed`, audit 2027): a cycle that fails, a state that cannot be restored exactly, and **a live epoch that cannot be read** (`live_epoch_unreadable`). A live database that cannot be read never yields "no grants to protect".
       * This fails closed: every scoped assignment recorded before the cutover becomes inert, and administrators re-grant explicitly.
       * This applies D-106's principle ("revocations after the backup point stay applied") at company scope. It is a security-preserving default, not new policy, and is listed as owner question Q8 with this default.
-   6. **Numbers issued after the backup point (D-153, review H2 of #143; owner question Q7).**
-      * The document numbering counters and issued-number records (`NumberCounter`, `NumberIssue`) roll back with the copy. Numbers issued in the lost tail would therefore be issued AGAIN, breaking "gapless, never reused".
-      * This is accounting policy, so it is the owner's decision. **Preserving default: the cutover is REFUSED** whenever any numbering series of the live company was advanced after the restore point (`numbers_issued_after_restore_point`, audit 2027). This is checked at request and again here, before the switch.
-      * The option for the owner: advance every counter past the live maximum and record the skipped range as void.
+   6. **What the restore would lose (D-153, review H2 of #143 and the accounting review F1-F4 by Agent F; owner questions Q7 and Q9).** The copy rolls back everything the live company did after the restore point. That is accounting policy, so it is the owner's decision. Until the owner decides, the preserving defaults below REFUSE the cutover whenever the restore would lose accounting history.
+      * **Quiesced comparison (F4).** The comparisons below run at request, and again at execution AFTER quiescing (registry `Restoring`, sessions terminated, `ALLOW_CONNECTIONS false`, under the company provisioning lock), and once more immediately before the switch. A number issued, or a period closed, between request and switch is caught.
+      * **Lost-tail classification (F1).**
+        * The D-147 head comparison identifies the live business-audit events after the restored head (seq_r+1..seq_old).
+        * Each event type is classified by a code-defined table as ACCOUNTING or not. Accounting types are: number issue or void; journal post, reverse or cancel; cost operations; stock posting, reversal or adjustment; negative-stock settlements; fiscal period or year state; exchange rates; approval decisions. An event type the table does not know counts as accounting (fail closed).
+        * **Default: REFUSED when the lost tail contains ANY accounting event** (`accounting_events_after_restore_point`).
+        * The request shows the approver a per-type inventory of the lost tail (counts per event type), and that inventory is part of the `restore.execute` payload hash.
+      * **Numbering (H2, F3).**
+        * The live and the copy's `NumberCounter` AND `NumberIssue` rows are compared, including the voided flags, per series key (document type, branch, fiscal year).
+        * A series key present only in live counts as advanced. A number voided in the lost tail (a cancelled approved document) would come back un-voided.
+        * **Default: REFUSED on any difference** (`numbers_issued_after_restore_point`).
+      * **Fiscal state (F2).**
+        * Every fiscal period's and year's status and revision, the year-close and carry-forward state and the pending reopen requests are compared between live and the copy. A period closed (possibly reported or filed) after the restore point would otherwise come back Open.
+        * **Default: REFUSED on any difference** (`fiscal_state_differs`; owner question Q9).
+      * **System-side references to lost company data (warning).** Party-registry identities, links and proposals (the request outbox) that refer to a local party absent from the copy are reported (`party_reference_target_missing`, count), next to `shared_links_missing_locally` (slice 3) and `scope_target_missing` (L6).
+      * **Note for operators: revision ETags and idempotency keys.**
+        * Revision counters roll back with the copy, and all sessions are terminated. A client still holding a lost-tail ETag could later match a DIFFERENT revision with the same number (an ABA risk, Low); clients must reload after a cutover.
+        * Client idempotency keys of lost-tail requests are forgotten. A retry creates the document again, which is desired, because it was lost.
+      * **Owner options (not decided here).**
+        * Q7 option "advance and void" for numbering is sound ONLY under these conditions (from Agent F's review):
+          1. ROWS, not a jump: one issued-then-voided `NumberIssue` row per skipped number, with a reserved sentinel document id (the cutover id, never a real document) and the reason "lost in restore cutover <id>". No guard is weakened.
+          2. The live maxima are taken per series key from the QUIESCED live database (F4), including keys only in live and voided numbers.
+          3. The void ranges are listed in the request and in the approval payload hash.
+          4. A post-check confirms every counter is at or above the live maximum and every skipped number exists as a void row.
+          5. An operational re-entry procedure (owner or legal): documents of the lost tail that were communicated externally are re-entered under NEW numbers, cross-referenced to the voided ones, from the pinned safety backup.
+          6. F1 and F2 still apply: voiding numbers fixes numbering only.
+        * The Q9 option for fiscal state: re-apply the live closures to the copy before the switch. Never reopen anything.
    7. **Switch (D-145), journaled step by step in the new system table `restore_cutover`:**
       * Before the termination in step 2, `ALTER DATABASE <live> WITH ALLOW_CONNECTIONS false`, so no new session can arrive between termination and rename (review L2 of #143).
       * `ALTER DATABASE <live> RENAME TO <retained, generated opaque name>`, then `ALTER DATABASE <copy> RENAME TO <live name>`. The registry row, the runtime role name and the credential stay valid because the physical name is unchanged.
@@ -1123,7 +1146,7 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
       * every attachment row checked against its file;
       * the migration level and checksums;
       * **every branch, warehouse and cost-center epoch is above its live value** (D-152): no scoped assignment made before the cutover is effective;
-      * **no numbering series is behind the live maximum** (D-153);
+      * **no numbering series is behind the live maximum, no issued or voided number differs, and the fiscal state equals live** (D-153; F2, F3);
       * **warning check (review L6 of #143):** system-side scope assignments that point at a branch, warehouse or cost center missing from the restored copy are reported (`scope_target_missing`, count). They are inert anyway.
 
       **Any failure here reverses step 7 from the journal** (the old database and folder are live again, the epoch is NOT rotated), sets the state back to Ready and writes audit 2024. The approval stays consumed (M1).
@@ -1193,7 +1216,7 @@ Today a restored company database rolls its business stream back while the exter
 | 2024 | `RestoreCutoverReversed` | cutover id, the failed step and code (automatic reversal before the epoch rotation) |
 | 2025 | `RestoreCutoverRolledBack` | cutover id, rollback approval id, new epoch |
 | 2026 | `AuditEpochStarted` | stream, epoch, parent epoch, restored head, parent verdict and failure codes (in the system stream AND as the first event of the new epoch in the business stream) |
-| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`, `restore_prefix_unprovable`, `numbers_issued_after_restore_point`, `live_chain_not_verified`, `epoch_advance_failed`, `live_epoch_unreadable`) |
+| 2027 | `RestoreCutoverRefused` | reason (`restore_cutover_unavailable`, a validation code, `unencrypted_set_refused`, `restore_set_not_a_prefix`, `restore_prefix_unprovable`, `numbers_issued_after_restore_point`, `accounting_events_after_restore_point`, `fiscal_state_differs`, `live_chain_not_verified`, `epoch_advance_failed`, `live_epoch_unreadable`) |
 | 2028 | `RestoreCutoverExpired` | request id (the prepared copy is dropped) |
 | 2029 | `RestoreCompanyEpochsAdvanced` | cutover id, and per branch, warehouse and cost center its id and epoch before and after the cycles (review M5 of #143; ids and numbers only) |
 
@@ -1224,23 +1247,30 @@ Today a restored company database rolls its business stream back while the exter
   * nothing in the user, session or credential tables changes;
   * H1: grant a branch-scoped role, deactivate the branch, cut over to a pre-deactivation set; the grant stays ineffective (and a warehouse and cost-center variant);
   * M5: the deactivate/reactivate cycles reach at least max(live, restored)+1 for each entity, restore every active flag exactly (including the active main branch), write no business-stream event (the copy's head stays seq_r) and one system event 2029; a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
-  * H2: issue a document number after the backup, request a cutover; it is refused (`numbers_issued_after_restore_point`), and the post-check fails on a forced bypass through the seam;
+  * H2/F3: issue a document number after the backup, request a cutover; it is refused (`numbers_issued_after_restore_point`), and the post-check fails on a forced bypass through the seam. Likewise for a number VOIDED after the backup, and for a series key that exists only in live;
+  * F1: post (stock posting of an already approved document) after the backup; the request is refused (`accounting_events_after_restore_point`) and shows the per-type inventory; an unknown business event type counts as accounting;
+  * F2: soft-close a period after the backup; the request is refused (`fiscal_state_differs`);
+  * F4: a number issued between request and execution is caught by the execution-time comparison after quiescing;
   * M1: an approval claimed then reversed is consumed (a retry needs a new request); a claim after expiry is refused; a claimed cutover past its expiry still finishes;
   * M4: an epoch file without its Completed row and 2026 event verifies as Failed (`epoch_unbound`);
   * L2: no session can connect to the live database between termination and rename; the retained database refuses the runtime role.
 
 ### Decisions (D-143..D-151; recorded in `docs/DECISIONS.md`, status planned)
-D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework); D-152 company-scope revocations stay applied (activation epochs advanced; Q8); D-153 numbering after the restore point (refuse by default; Q7).
+D-143 scope (single company; full-installation restore is a later slice bound by D-106/D-107/D-119); D-144 request/approve/execute and the gate; D-145 switch by database and folder rename, journaled and resumable; D-146 pre-cutover validation and the pinned encrypted safety backup; D-147 checkpoint epochs; D-148 runtime permissions, post-restore checks and automatic reversal before the epoch rotation; D-149 rollback window and rollback as an approved cutover; D-150 audit codes 2020-2029; D-151 interplay with slices 5 and 6 (encrypted sets only; `CutoverAvailable` shared with the slice 6 deletion gate; the D-118 restore operations adopt the same approval framework); D-152 company-scope revocations stay applied (activation epochs advanced; Q8); D-153 what a restore may lose (lost-tail accounting events, numbering incl. issued and voided numbers, fiscal state; refuse by default after quiescing; Q7, Q9).
 
 ### Open questions for the owner (not decided here; the safe default applies until answered)
-* **Q1. The live database is lost or unreadable**, so no pre-cutover safety backup can be taken. **Default: the cutover is refused.** A disaster variant without the safety backup (with the gap recorded) would need the owner's decision.
+* **Q1. The live database is lost or unreadable**, so no pre-cutover safety backup can be taken. **Default: the cutover is refused.** A disaster variant without the safety backup (with the gap recorded) would need the owner's decision. **Note (F5):** consequently a company whose live database is corrupt or unreadable cannot be cut over in slice 7 at all, because every what-would-be-lost check (Q4, Q7, Q9) needs a readable live database. That case needs the later full-installation path or an owner-approved procedure.
 * **Q2. How long the rollback window lasts, and what happens to the replaced database and folder after it.** **Default: a 7-day window; the replaced database and folder are never removed automatically.** Removal would need a separately approved, audited step that is not built.
 * **Q3. Who may turn cutovers on.** **Default: only an activation PR merged on the owner's explicit instruction**, after a recorded drill (as for the 4.3-ACT deletion activation).
 * **Q4. Cutover when the live audit chain does not verify** (corruption may be the very reason for the restore). **Default: REFUSED (review L4 of #143).** The option for the owner: allowed only when the approver re-types every failure code, with the failure reported forever (D-081: never concealed).
 * **Q5. A set from an older migration level.** **Default: migrated forward on the prepared copy BEFORE the switch, with the checks run after migration;** a newer set is refused.
 * **Q6. Who is notified, and how.** **Default: per D-102 (audit and in-app to every company administrator of the company, and to the identity administrators).**
-* **Q7. Numbers issued after the backup point** (review H2 of #143). **PRESERVING DEFAULT: REFUSE the cutover whenever any numbering series was advanced after the restore point.** The option for the owner: advance each counter past the live maximum and record the skipped range as void. **Note for the owner:** while Q7 refuses, ANY company that has issued a document number since its backup point cannot be cut over at all.
+* **Q7. What may a restore lose?** (review H2 of #143; accounting review F1 and F3).
+  * **PRESERVING DEFAULT: nothing of accounting.** The cutover is REFUSED whenever the lost tail contains any accounting event, or any numbering series (counter, issued or voided number) differs from live.
+  * The option for numbering: advance and void, ONLY under conditions 1-6 of step 3.6.
+  * **Note for the owner:** while Q7 refuses, ANY company that has done accounting work (for example issued a document number) since its backup point cannot be cut over at all. Its lost work must be re-entered or recovered under a separate policy.
 * **Q8. Company-scope revocations after the backup point** (review H1 of #143). **Default: every restored branch, warehouse and cost-center epoch is advanced above both the live and the restored value, so no scoped grant from before the cutover is effective** (D-106's principle at company scope). The option for the owner: a narrower re-validation that keeps grants still valid in live.
+* **Q9. Fiscal state after the backup point** (accounting review F2). **PRESERVING DEFAULT: REFUSE the cutover when any fiscal period or year state, its revision, the year-close state or a pending reopen request differs between live and the copy.** The option for the owner: re-apply the live closures to the copy before the switch; never reopen anything.
 
 ### Owner decisions this slice relies on (not re-asked)
 D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system restore here), D-085..D-088.
