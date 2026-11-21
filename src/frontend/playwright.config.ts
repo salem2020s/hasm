@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Phase 4.0 browser smoke tests. The production bundle is served by vite preview; the API address points at a closed local
 // port on purpose, so the "service unreachable" state is deterministic and no backend or database is needed.
+// parity.spec.ts runs complete flows for BOTH client transports (web cookie, desktop bearer) through a stateful in-memory mock API (e2e/mockApi.ts) installed with page.route(); it needs no backend or database.
 // Full-stack end-to-end tests (real API and PostgreSQL) are a later extension and are NOT covered here.
 export default defineConfig({
   testDir: "./e2e",
