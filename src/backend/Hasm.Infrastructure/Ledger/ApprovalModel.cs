@@ -143,8 +143,11 @@ public static partial class ApprovalValidation
         if (errors.All(e => !e.Field.StartsWith("stages["))) normalized = list;
     }
 
-    /// <summary>Full normalization of a new policy (conditions and stages included). The classic <c>requiredApprovals</c> is ignored when stages are given.</summary>
-    public static bool TryNormalizeFull(ApprovalPolicyInput? input, out NormalizedPolicy policy, out List<FieldError> errors)
+    /// <summary>
+    /// Full normalization of a new policy (conditions and stages included). The classic <c>requiredApprovals</c> is ignored when stages are given. <paramref name="isCommercialType"/> (null = journal only, exactly as before)
+    /// says whether a document type is a REGISTERED commercial document type (3.13 S5a): such a policy may carry no journal-only condition (journal type, manual rate override, soft-closed period, closing kind).
+    /// </summary>
+    public static bool TryNormalizeFull(ApprovalPolicyInput? input, out NormalizedPolicy policy, out List<FieldError> errors, Func<string, bool>? isCommercialType = null)
     {
         policy = new("", PolicySource.Any, 0, 1, null, null, null, null, null, []);
         errors = [];
@@ -152,14 +155,24 @@ public static partial class ApprovalValidation
         var d = Clean(input.DocType)?.ToLowerInvariant();
         string docType = "";
         if (d is null) errors.Add(new("docType", "required"));
-        else if (!DocTypeShape().IsMatch(d) || !DocumentTypes.UsesApprovalPolicies(d)) errors.Add(new("docType", "unknown_document_type"));
+        else if (!DocTypeShape().IsMatch(d) || !(DocumentTypes.UsesApprovalPolicies(d) || (isCommercialType?.Invoke(d) ?? false))) errors.Add(new("docType", "unknown_document_type"));
         else docType = d;
         Extras(input.JournalType, input.RateOverride, input.SoftClosed, input.Stages, out var jt, out var stages, errors);
         if (!TryParseClosingKind(input.ClosingKind, out var ck)) errors.Add(new("closingKind", "invalid_value"));
+        if (docType != "" && !DocumentTypes.UsesApprovalPolicies(docType)) JournalOnlyConditions(jt, input.RateOverride, input.SoftClosed, ck, errors);
         Common(input.Source, input.MinAmount, input.Stages is { Count: > 0 } ? 1 : input.RequiredApprovals, input.NameAr, input.NameEn, out var src, out var min, out var req, out var ar, out var en, errors);
         if (errors.Count > 0) return false;
         policy = new(docType, src, min, req, ar, en, jt, input.RateOverride, input.SoftClosed, stages, ck);
         return true;
+    }
+
+    /// <summary>A policy of a COMMERCIAL document type carries none of the journal-only conditions (they never match such a document, so accepting one would silently disable the policy).</summary>
+    public static void JournalOnlyConditions(short? journalType, bool? rateOverride, bool? softClosed, short? closingKind, List<FieldError> errors)
+    {
+        if (journalType is not null) errors.Add(new("journalType", "not_applicable"));
+        if (rateOverride is not null) errors.Add(new("rateOverride", "not_applicable"));
+        if (softClosed is not null) errors.Add(new("softClosed", "not_applicable"));
+        if (closingKind is not null) errors.Add(new("closingKind", "not_applicable"));
     }
 
     public static bool TryNormalizeDetailsFull(ApprovalPolicyDetailsInput? input, string docType, out NormalizedPolicy policy, out List<FieldError> errors)

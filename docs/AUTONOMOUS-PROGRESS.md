@@ -1,5 +1,11 @@
 # HASM — Autonomous execution progress
 
+## Sprint 3 of the cloud team: merges and handoff refresh (2026-11-21, recovered from git and GitHub REST at `main` = `70f1695`)
+
+Merged on `main` since the sprint-2 refresh (#144), each by pull request, merge commit read from `git log --first-parent origin/main` and confirmed with `gh api repos/salem2020s/hasm/pulls/<n>` (merged = true): #142 (`daebeea`), #144 (`75c871a`), #125 (`4e02d2f`), #145 (`6733f2d`), #146 (`ee09a60`), #143 (`8b9d49f`), #133 (`ff0fcca`), #148 (`09261b2`), #127 (`456eb38`), #134 (`b17cc67`), #152 (`0009bd2`), #150 (`112a153`), #154 (`24c66f2`), #136 (`70f1695`).
+
+PostgreSQL registry on `main`: 1184 (step title of `.github/workflows/backend.yml`). Migrations on `main`: company 0001-0032, system 0001-0032; system 0033 is allocated to #157 (4.1 S2). Decisions on `main` now include D-140/D-141 (#136), D-143..D-153 (#143), D-154..D-159 (#148) and D-170..D-178 (#152); D-142 is on #157; the next free ID is D-160. Merge queue (registry serial): #137 (+0), #147 (+1), #149 (+5), #151 (+3), #153 (+2), #155 (+4), #158 (+3), #157 (+27); #156 (retention activation prerequisites L1/L2/L6) is outside the queue pending an independent security review. The register in `docs/INTEGRATION-STATUS.md` now also lists T-1, the 3.14 questions Q1-Q11 and slice 7 Q1-Q9, and REL-ACC is corrected (#128 merged; the acceptance evidence #149 is not merged; release acceptance stays blocked per D-088). This entry records no result that GitHub does not show; hosted CI and the review status of each open pull request were NOT VERIFIED by this refresh and must be read from GitHub before any merge.
+
 ## Sprint 2 of the cloud team: merges and handoff refresh (2026-11-21, recovered from GitHub REST at `main` = `0aeeab7`)
 
 Merged on `main` since the sprint-1 refresh (#124), each by pull request with its merge commit from GitHub: #108 (`cb7bd12`), #117 (`b4bb408`), #121 (`453fa5b`), #122 (`7c060ee`), #130 (`c0edc8b`), #126 (`631361a`), #107 (`9d54229`), #131 (`89f8ffe`), #132 (`b65b93b`), #119 (`364a519`), #138 (`ae65f9b`), #135 (`38096b5`), #140 (`649fbc9`), #129 (`2c86052`), #139 (`67450de`), #141 (`5b9fe04`), #128 (`0aeeab7`).

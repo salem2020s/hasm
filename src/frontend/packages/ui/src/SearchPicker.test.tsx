@@ -205,4 +205,16 @@ describe("SearchPicker", () => {
     expect(screen.getByRole("searchbox")).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Item" })).toBeEnabled();
   });
+  it("renders no search box at all with hideSearch, and replaces the refine text with moreHint", async () => {
+    const load = vi.fn().mockResolvedValue({ items: rows(3), total: 900 });
+    render(
+      <I18nProvider catalog={catalog}>
+        <SearchPicker label="Item" value="" onChange={() => undefined} load={load} getId={(r: Row) => r.id} getLabel={(r: Row) => r.name} hideSearch moreHint="Use the typed id for the rest." />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText(/Showing 3 of 900\./)).toBeInTheDocument();
+    expect(screen.getByText(/Use the typed id for the rest\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Refine the search/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();                       // not even a disabled one
+  });
 });
