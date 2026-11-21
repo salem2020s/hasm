@@ -58,6 +58,14 @@ public class BackupRestoreDrillTests : PostgresTestBase
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
+    private async Task DropDatabase(string name)
+    {
+        await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand($"DROP DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(name)} WITH (FORCE)", conn);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     private async Task<bool> Exists(string name)
     {
         await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
@@ -93,13 +101,15 @@ public class BackupRestoreDrillTests : PostgresTestBase
 
         var tool = new PgBackupTool(Options);
         var dump = Path.Combine(work, "a.dump");
-        await tool.DumpAsync(a, dump);
+        var captured = await tool.DumpAsync(a, dump);
+        Assert.StartsWith(captured.Encoding + "|" + captured.Collate + "|" + captured.Ctype + "|", await Settings(a));   // the locale is captured at dump time
         var set = Path.Combine(work, "set");
-        var manifest = BackupSet.Create(company, dump, att, set, DateTimeOffset.UnixEpoch);
+        var manifest = BackupSet.Create(company, dump, att, set, DateTimeOffset.UnixEpoch, captured);
         Assert.True(BackupSet.Verify(set).IsClean);
         Assert.Equal(new[] { "k1" }, manifest.KeyIdsRequired);
+        Assert.Equal(captured, BackupSet.ReadManifest(set)!.DatabaseLocale);
 
-        await tool.RestoreIntoNewDatabaseAsync(Path.Combine(set, BackupSet.DatabaseFileName), restored, a);
+        await tool.RestoreIntoNewDatabaseAsync(Path.Combine(set, BackupSet.DatabaseFileName), restored, a, BackupSet.ReadManifest(set)!.DatabaseLocale);
         var files = BackupSet.RestoreAttachments(set, Path.Combine(work, "restored-att", company.ToString("N")), company);
 
         Assert.Equal(2, files.Files);
@@ -107,7 +117,7 @@ public class BackupRestoreDrillTests : PostgresTestBase
         Assert.Equal(digestA, await Digest(a));                                                      // the dump left the source unchanged
         Assert.Equal(digestB, await Digest(b));                                                      // another company untouched (tables, row counts and row hashes)
         Assert.Equal(digestSystem, await DigestOf(SystemConnection()));                              // the system database untouched
-        Assert.Equal(await Settings(a), await Settings(restored));                                   // encoding and libc locale of the source are kept
+        Assert.Equal(await Settings(a), await Settings(restored));                                   // encoding, libc locale and locale provider of the source are kept
         Assert.Equal(50L, await Count(restored));
     }
 
@@ -115,7 +125,7 @@ public class BackupRestoreDrillTests : PostgresTestBase
     {
         await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT pg_encoding_to_char(encoding) || '|' || datcollate || '|' || datctype FROM pg_database WHERE datname = @n", conn);
+        await using var cmd = new NpgsqlCommand("SELECT pg_encoding_to_char(d.encoding) || '|' || d.datcollate || '|' || d.datctype || '|' || coalesce(to_jsonb(d)->>'datlocprovider', '') FROM pg_database d WHERE d.datname = @n", conn);
         cmd.Parameters.AddWithValue("n", name);
         return (string)(await cmd.ExecuteScalarAsync())!;
     }
@@ -151,6 +161,22 @@ public class BackupRestoreDrillTests : PostgresTestBase
         File.WriteAllBytes(garbage, RandomNumberGenerator.GetBytes(2048));
         Assert.Equal("restore_failed", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(garbage, fresh, a))).Code);
         Assert.False(await Exists(fresh));                                                           // the half-created target was dropped
+
+        // disaster recovery: the source database no longer exists. Without a captured locale the restore is refused (never the template0 default); with the locale captured at dump time it succeeds.
+        string gone = NewTestName(), refused = NewTestName(), fromCapture = NewTestName(), icu = NewTestName();
+        await CreateDatabase(gone); await Seed(gone, "g");
+        var goneDump = Path.Combine(work, "gone.dump");
+        var goneLocale = await tool.DumpAsync(gone, goneDump);
+        var goneSettings = await Settings(gone);
+        var goneDigest = await Digest(gone);
+        await DropDatabase(gone);
+        Assert.Equal("source_locale_unknown", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(goneDump, refused, gone))).Code);
+        Assert.False(await Exists(refused));
+        await tool.RestoreIntoNewDatabaseAsync(goneDump, fromCapture, gone, goneLocale);
+        Assert.Equal(goneSettings, await Settings(fromCapture));
+        Assert.Equal(goneDigest, await Digest(fromCapture));
+        Assert.Equal("locale_unsupported", (await Assert.ThrowsAsync<BackupException>(() => tool.RestoreIntoNewDatabaseAsync(goneDump, icu, gone, goneLocale with { Provider = "i" }))).Code);
+        Assert.False(await Exists(icu));
 
         var missing = NewTestName();
         var none = Path.Combine(work, "none.dump");

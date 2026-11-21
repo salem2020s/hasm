@@ -15,18 +15,29 @@ namespace Hasm.Infrastructure.Backup;
 /// </summary>
 public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirectory = null, TimeSpan? timeout = null)
 {
-    private static readonly System.Text.RegularExpressions.Regex Safe = new("^[A-Za-z0-9_.@ -]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+    // locale names are placed inside a single-quoted literal: letters, digits and _ . @ space ( ) - only (no quote, no backslash, no control character; \z so a trailing newline is refused)
+    private static readonly System.Text.RegularExpressions.Regex Safe = new(@"\A[A-Za-z0-9_.@ ()-]+\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
     private readonly TimeSpan limit = timeout ?? TimeSpan.FromMinutes(30);
 
-    /// <summary>Dumps <paramref name="sourceDatabase"/> (a company database) to <paramref name="dumpFile"/>, which must not exist. A partial file is removed on failure.</summary>
-    public async Task DumpAsync(string sourceDatabase, string dumpFile, CancellationToken ct = default)
+    /// <summary>
+    /// Dumps <paramref name="sourceDatabase"/> (a company database) to <paramref name="dumpFile"/>, which must not exist. A partial file is removed on failure. Returns the encoding and locale of the source captured at dump time:
+    /// the caller stores them with the backup (<see cref="BackupManifest.DatabaseLocale"/>) so a restore never depends on the source database still existing (decision D-053). A source that does not exist is <c>dump_failed</c>.
+    /// </summary>
+    public async Task<DatabaseLocale> DumpAsync(string sourceDatabase, string dumpFile, CancellationToken ct = default)
     {
         RequireCompanyDatabase(sourceDatabase);
         if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
         if (File.Exists(dumpFile)) throw new BackupException("dump_file_exists");
+        var psi = await PrepareAsync("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", "--file", dumpFile, "--dbname", sourceDatabase], ct);   // client version and TLS settled before any database contact
+        DatabaseLocale locale;
+        await using (var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
+        {
+            await conn.OpenAsync(ct);
+            locale = await ReadLocaleAsync(conn, sourceDatabase, ct) ?? throw new BackupException("dump_failed");
+        }
         try
         {
-            await RunAsync("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", "--file", dumpFile, "--dbname", sourceDatabase], ct);
+            await RunAsync("pg_dump", psi, ct);
             if (!File.Exists(dumpFile) || new FileInfo(dumpFile).Length == 0) throw new BackupException("dump_failed");
         }
         catch
@@ -34,16 +45,22 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
             try { if (File.Exists(dumpFile)) File.Delete(dumpFile); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
             throw;
         }
+        return locale;
     }
 
-    /// <summary>Creates <paramref name="targetDatabase"/> and restores the dump into it. Nothing else is touched; the new database is dropped when the restore fails.</summary>
-    public async Task RestoreIntoNewDatabaseAsync(string dumpFile, string targetDatabase, string sourceDatabase, CancellationToken ct = default)
+    /// <summary>
+    /// Creates <paramref name="targetDatabase"/> and restores the dump into it. Nothing else is touched; the new database is dropped when the restore fails. <paramref name="sourceLocale"/> is the locale captured at dump time
+    /// (from the manifest); when it is absent (an older backup set) the source database is read, and when that does not exist either the restore is refused with <c>source_locale_unknown</c> before anything is created.
+    /// </summary>
+    public async Task RestoreIntoNewDatabaseAsync(string dumpFile, string targetDatabase, string sourceDatabase, DatabaseLocale? sourceLocale = null, CancellationToken ct = default)
     {
         RequireCompanyDatabase(targetDatabase);
         RequireCompanyDatabase(sourceDatabase);
         if (string.Equals(targetDatabase, sourceDatabase, StringComparison.Ordinal)) throw new BackupException("target_is_source");
         if (!Path.IsPathFullyQualified(dumpFile)) throw new BackupException("path_not_absolute");
         if (!File.Exists(dumpFile)) throw new BackupException("database_dump_missing");
+        // the client version probe and the environment (ssl_root_certificate_required) come BEFORE CREATE DATABASE, so a refusal never costs a create/drop round trip
+        var psi = await PrepareAsync("pg_restore", ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);
 
         await using (var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
         {
@@ -53,29 +70,16 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
                 exists.Parameters.AddWithValue("n", targetDatabase);
                 if ((long)(await exists.ExecuteScalarAsync(ct))! != 0) throw new BackupException("target_exists");
             }
-            // template0 (never the modifiable template1: nothing a local admin put there leaks in), with the encoding of the source database when it can be read
-            string? encoding = null, collate = null, ctype = null, provider = null;
-            // datlocprovider exists only from PostgreSQL 15: read it through to_jsonb so older servers work (absent or null means libc)
-            await using (var enc = new NpgsqlCommand("SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype, to_jsonb(d)->>'datlocprovider' FROM pg_database d WHERE d.datname = @n", conn))
-            {
-                enc.Parameters.AddWithValue("n", sourceDatabase);
-                await using var r = await enc.ExecuteReaderAsync(ct);
-                if (await r.ReadAsync(ct))
-                {
-                    encoding = r.GetString(0);
-                    collate = r.IsDBNull(1) ? null : r.GetString(1);
-                    ctype = r.IsDBNull(2) ? null : r.GetString(2);
-                    provider = r.IsDBNull(3) ? null : r.GetString(3);
-                }
-            }
-            var clause = LocaleClause(encoding, collate, ctype, provider);
+            // template0 (never the modifiable template1: nothing a local admin put there leaks in), with the encoding and libc locale captured at dump time (or, for an older set, read from the source)
+            var locale = ResolveLocale(sourceLocale, sourceLocale is null ? await ReadLocaleAsync(conn, sourceDatabase, ct) : null);
+            var clause = LocaleClause(locale, conn.PostgreSqlVersion.Major);
             await using var create = new NpgsqlCommand($"CREATE DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(targetDatabase)} TEMPLATE template0{clause}", conn);
             try { await create.ExecuteNonQueryAsync(ct); }
             catch (PostgresException ex) when (CreateFailureCode(ex.SqlState) is not null) { throw new BackupException(CreateFailureCode(ex.SqlState)!); }   // lost a creation race
         }
         try
         {
-            await RunAsync("pg_restore", ["--no-owner", "--no-privileges", "--exit-on-error", "--dbname", targetDatabase, dumpFile], ct);
+            await RunAsync("pg_restore", psi, ct);
         }
         catch (Exception ex)
         {
@@ -85,16 +89,30 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         }
     }
 
-    /// <summary>
-    /// The ENCODING / LC_COLLATE / LC_CTYPE clause that reproduces the source database on template0. A source with an ICU or builtin locale provider, a missing locale or a name with unexpected characters is refused
-    /// (<c>locale_unsupported</c>): the new database must never silently get a different collation than the source. A source that does not exist yields no clause (the restore itself then fails on the dump).
-    /// </summary>
-    internal static string LocaleClause(string? encoding, string? collate, string? ctype, string? provider)
+    /// <summary>The encoding, libc locale and locale provider of a database; null when it does not exist. <c>datlocprovider</c> exists only from PostgreSQL 15: it is read through to_jsonb so older servers work (absent means libc).</summary>
+    private static async Task<DatabaseLocale?> ReadLocaleAsync(NpgsqlConnection conn, string database, CancellationToken ct)
     {
-        if (encoding is null) return "";
-        if (provider is not (null or "c")) throw new BackupException("locale_unsupported");
-        if (collate is null || ctype is null || !Safe.IsMatch(encoding) || !Safe.IsMatch(collate) || !Safe.IsMatch(ctype)) throw new BackupException("locale_unsupported");
-        return $" ENCODING '{encoding}' LC_COLLATE '{collate}' LC_CTYPE '{ctype}'";
+        await using var cmd = new NpgsqlCommand("SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype, to_jsonb(d)->>'datlocprovider' FROM pg_database d WHERE d.datname = @n", conn);
+        cmd.Parameters.AddWithValue("n", database);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return new DatabaseLocale(r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3));
+    }
+
+    /// <summary>The locale the restore reproduces: the one captured at dump time wins; otherwise the live source; with neither the restore is refused (<c>source_locale_unknown</c>), never the template0 default.</summary>
+    internal static DatabaseLocale ResolveLocale(DatabaseLocale? captured, DatabaseLocale? live) => captured ?? live ?? throw new BackupException("source_locale_unknown");
+
+    /// <summary>
+    /// The ENCODING / LOCALE_PROVIDER / LC_COLLATE / LC_CTYPE clause that reproduces the source database on template0. A source with an ICU or builtin locale provider, a missing locale or a name with unexpected characters is
+    /// refused (<c>locale_unsupported</c>): the new database must never silently get a different collation than the source. The source is libc (provider <c>c</c>, or no provider column on PostgreSQL 14), so on a TARGET server of
+    /// major version 15 or later <c>LOCALE_PROVIDER libc</c> is pinned (template0 may be ICU or builtin there); PostgreSQL 14 has no such keyword and only libc.
+    /// </summary>
+    internal static string LocaleClause(DatabaseLocale locale, int targetServerMajor)
+    {
+        if (locale.Provider is not (null or "c")) throw new BackupException("locale_unsupported");
+        if (locale.Encoding is null || locale.Collate is null || locale.Ctype is null || !Safe.IsMatch(locale.Encoding) || !Safe.IsMatch(locale.Collate) || !Safe.IsMatch(locale.Ctype)) throw new BackupException("locale_unsupported");
+        var provider = targetServerMajor >= 15 ? " LOCALE_PROVIDER libc" : "";
+        return $" ENCODING '{locale.Encoding}'{provider} LC_COLLATE '{locale.Collate}' LC_CTYPE '{locale.Ctype}'";
     }
 
     private void RequireCompanyDatabase(string name)
@@ -122,7 +140,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     /// <summary>
     /// The ONLY environment the PostgreSQL tools get: <c>PATH</c> and <c>SystemRoot</c> (when present), the credential, the TLS settings and a connect timeout. With the environment cleared there is no HOME, so libpq cannot find
     /// <c>~/.postgresql/root.crt</c>: in verify-ca/verify-full mode the configured certificate is passed. Without one, the system trust store is named explicitly (<c>PGSSLROOTCERT=system</c>) ONLY when the tool's client
-    /// major version is at least 16 (older libpq does not know the value); for an older or unknown client the call is refused BEFORE any tool is launched (<c>ssl_root_certificate_required</c>): TLS validation is never downgraded.
+    /// major version is at least 16 (older libpq does not know the value); for an older or unknown client the call is refused (<c>ssl_root_certificate_required</c>) after the <c>--version</c> probe and before the tool connects or any database is created: TLS validation is never downgraded.
     /// </summary>
     internal static Dictionary<string, string> BuildEnvironment(HasmDatabaseOptions options, Func<string, string?> getVariable, int clientMajor)
     {
@@ -148,13 +166,18 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         return m is { Success: true } && int.TryParse(m.Groups[1].Value, out var major) ? major : 0;
     }
 
-    private readonly Dictionary<string, int> clientMajors = [];
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> clientMajors = new(StringComparer.Ordinal);
 
+    /// <summary>The working directory of every tool process: a fixed system directory (never the inherited service directory, which could hold a planted library or configuration file).</summary>
+    internal static string ToolWorkingDirectory => OperatingSystem.IsWindows() ? Environment.SystemDirectory : "/";
+
+    private string ToolPath(string tool) => pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
+
+    /// <summary>The major version of the tool (its <c>--version</c> output), probed once per tool and instance; 0 when it cannot be read. Thread-safe: a concurrent first probe may run twice with the same result.</summary>
     private async Task<int> ClientMajorAsync(string tool, CancellationToken ct)
     {
         if (clientMajors.TryGetValue(tool, out var known)) return known;
-        var exe = pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
-        var psi = new ProcessStartInfo(exe, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var psi = new ProcessStartInfo(ToolPath(tool), "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = ToolWorkingDirectory };
         psi.Environment.Clear();
         foreach (var keep in new[] { "PATH", "SystemRoot" }) if (Environment.GetEnvironmentVariable(keep) is { } value) psi.Environment[keep] = value;
         Process process;
@@ -181,13 +204,13 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         }
     }
 
-    /// <summary>The backup code of a CREATE DATABASE failure that has a meaning for the caller (a lost creation race); null for every other SQLSTATE.</summary>
-    internal static string? CreateFailureCode(string? sqlState) => sqlState == PostgresErrorCodes.DuplicateDatabase ? "target_exists" : null;
-
-    private async Task RunAsync(string tool, string[] arguments, CancellationToken ct)
+    /// <summary>
+    /// The complete start information of one tool run: connection arguments, the tool's own arguments, the fixed working directory and the cleared environment of <see cref="BuildEnvironment"/> (which needs the probed
+    /// client version). Every refusal of the configuration (<c>database_not_configured</c>, <c>ssl_root_certificate_required</c>, <c>tool_unavailable</c>) happens here, before any database contact.
+    /// </summary>
+    internal async Task<ProcessStartInfo> PrepareAsync(string tool, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        var exe = pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
-        var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var psi = new ProcessStartInfo(ToolPath(tool)) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, WorkingDirectory = ToolWorkingDirectory };
         psi.ArgumentList.Add("--host"); psi.ArgumentList.Add(options.Host ?? throw new BackupException("database_not_configured"));
         psi.ArgumentList.Add("--port"); psi.ArgumentList.Add(options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         psi.ArgumentList.Add("--username"); psi.ArgumentList.Add(options.AdminUsername ?? throw new BackupException("database_not_configured"));
@@ -195,7 +218,15 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         foreach (var a in arguments) psi.ArgumentList.Add(a);
         psi.Environment.Clear();                                   // nothing of the service environment (connection strings, secrets) reaches the tool
         foreach (var (key, value) in BuildEnvironment(options, Environment.GetEnvironmentVariable, await ClientMajorAsync(tool, ct))) psi.Environment[key] = value;
+        return psi;
+    }
 
+    /// <summary>The backup code of a CREATE DATABASE failure that has a meaning for the caller (a lost creation race); null for every other SQLSTATE.</summary>
+    internal static string? CreateFailureCode(string? sqlState) => sqlState == PostgresErrorCodes.DuplicateDatabase ? "target_exists" : null;
+
+    /// <summary>Runs a prepared tool to completion; only its exit code is reported (<c>dump_failed</c> / <c>restore_failed</c>, <c>tool_timeout</c>, <c>cancelled</c>, <c>tool_unavailable</c>).</summary>
+    internal async Task RunAsync(string tool, ProcessStartInfo psi, CancellationToken ct)
+    {
         Process process;
         try { process = Process.Start(psi) ?? throw new BackupException("tool_unavailable"); }
         catch (Exception ex) when (ex is Win32Exception or FileNotFoundException) { throw new BackupException("tool_unavailable"); }

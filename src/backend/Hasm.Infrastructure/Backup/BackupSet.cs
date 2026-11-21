@@ -22,7 +22,18 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
 /// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
-public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0);
+/// <remarks><see cref="DatabaseLocale"/> is the encoding and locale of the source database captured at dump time (decision D-053); a manifest written before it existed reads with null (the restore then needs the live source).</remarks>
+public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0, DatabaseLocale? DatabaseLocale = null);
+
+/// <summary>
+/// The encoding, libc collation/ctype and locale provider (<c>c</c> = libc, <c>i</c> = ICU, <c>b</c> = builtin; null on PostgreSQL 14, which has only libc) of a company database, captured when it is dumped, so a restore
+/// reproduces them without the source database (disaster recovery). Values are data: they are validated again before they are placed in a statement (<see cref="PgBackupTool"/>).
+/// </summary>
+public sealed record DatabaseLocale(string Encoding, string? Collate, string? Ctype, string? Provider)
+{
+    /// <summary>Structural check of a stored record (non-empty encoding, bounded lengths, a one-letter provider); the character rules are applied by the restore.</summary>
+    public bool IsWellFormed => !string.IsNullOrEmpty(Encoding) && Encoding.Length <= 64 && (Collate?.Length ?? 0) <= 256 && (Ctype?.Length ?? 0) <= 256 && (Provider is null || Provider.Length == 1);
+}
 
 /// <summary>The result of verifying a backup set against its manifest. Only generated names are listed.</summary>
 public sealed record BackupVerification(bool ManifestValid, bool DatabaseOk, IReadOnlyList<string> Missing, IReadOnlyList<string> HashMismatch, IReadOnlyList<string> Unexpected, BackupManifest? Manifest)
@@ -58,10 +69,14 @@ public static class BackupSet
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly byte[] EnvelopeMagic = [(byte)'H', (byte)'F', (byte)'E', (byte)'1'];
 
-    /// <summary>Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.</summary>
-    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc)
+    /// <summary>
+    /// Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.
+    /// <paramref name="databaseLocale"/> is what <see cref="PgBackupTool.DumpAsync"/> captured; it is stored in the manifest.
+    /// </summary>
+    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null)
     {
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
+        if (databaseLocale is { IsWellFormed: false }) throw new BackupException("invalid_database_locale");
         if (!File.Exists(databaseDumpFile)) throw new BackupException("database_dump_missing");
         if (!Path.IsPathFullyQualified(destination) || !Path.IsPathFullyQualified(attachmentCompanyDirectory)) throw new BackupException("path_not_absolute");
         var source = RealPath(attachmentCompanyDirectory);
@@ -72,7 +87,7 @@ public static class BackupSet
         if (new FileInfo(databaseDumpFile).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
 
         var destExisted = Directory.Exists(dest);
-        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc); }
+        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale); }
         catch
         {
             // never leave a partial set that could be mistaken for a backup
@@ -82,7 +97,7 @@ public static class BackupSet
         }
     }
 
-    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc)
+    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale)
     {
         AuditFilePermissions.CreateOwnerOnlyDirectory(dest);
         var attachDir = Path.Combine(dest, AttachmentFolderName);
@@ -113,7 +128,7 @@ public static class BackupSet
             }
         }
 
-        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes);
+        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes, databaseLocale);
         var temp = Path.Combine(dest, ManifestFileName + ".tmp");
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));
         File.Move(temp, Path.Combine(dest, ManifestFileName));
@@ -227,6 +242,7 @@ public static class BackupSet
         foreach (var a in m.Attachments)
             if (a is null || a.Name is null || !StorageName.IsMatch(a.Name) || !Sha256Hex.IsMatch(a.Sha256 ?? "") || a.Size < 0 || !names.Add(a.Name)) return null;
         if (m.KeyIdsRequired.Any(k => k is null || !KekRing.IsValidKeyId(k))) return null;
+        if (m.DatabaseLocale is { IsWellFormed: false }) return null;
         return m;
     }
 

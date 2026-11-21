@@ -303,6 +303,38 @@ public sealed class BackupSetTests : IDisposable
     }
 
     [Fact]
+    public void The_database_locale_captured_at_dump_time_is_carried_by_the_manifest_and_an_older_manifest_without_it_still_reads()
+    {
+        var s = Source();
+        var locale = new DatabaseLocale("UTF8", "Chinese (Simplified)_China.936", "en_US.utf8", "c");
+        var m = BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, locale);
+        Assert.Equal(locale, m.DatabaseLocale);
+        Assert.Equal(locale, BackupSet.ReadManifest(P("set"))!.DatabaseLocale);
+        Assert.True(BackupSet.Verify(P("set")).IsClean);
+
+        var path = Path.Combine(P("set"), BackupSet.ManifestFileName);
+        var json = File.ReadAllText(path);
+        var older = System.Text.RegularExpressions.Regex.Replace(json, ",\\s*\"databaseLocale\":\\s*\\{[^}]*\\}", "");
+        Assert.DoesNotContain("databaseLocale", older);
+        File.WriteAllText(path, older);
+        var read = BackupSet.ReadManifest(P("set"));
+        Assert.NotNull(read);
+        Assert.Null(read!.DatabaseLocale);                                                                // the restore then reads the live source, or refuses with source_locale_unknown
+
+        File.WriteAllText(path, json.Replace("\"encoding\": \"UTF8\"", "\"encoding\": \"\""));
+        Assert.Null(BackupSet.ReadManifest(P("set")));                                                    // a malformed stored locale invalidates the manifest
+    }
+
+    [Fact]
+    public void A_malformed_locale_is_refused_when_the_set_is_created()
+    {
+        var s = Source();
+        Assert.Equal("invalid_database_locale", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, new DatabaseLocale("", "C", "C", "c"))).Code);
+        Assert.Equal("invalid_database_locale", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, new DatabaseLocale("UTF8", "C", "C", "icu"))).Code);
+        Assert.False(Directory.Exists(P("set")));
+    }
+
+    [Fact]
     public void A_link_whose_target_passes_through_another_link_is_resolved_until_stable()
     {
         if (OperatingSystem.IsWindows()) return;

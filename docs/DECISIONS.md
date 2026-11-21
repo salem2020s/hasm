@@ -55,6 +55,7 @@
 | D-050 | Phase 3.13 Q7 | Owner, 2026-11-21: the official document number is allocated at first approval, preserved through re-approval, and a voided number is never reused. |
 | D-051 | Phase 3.13 Q8 | Owner, 2026-11-21: an approved document may be cancelled only before any stock or ledger effect, with an explicit cancel permission, a reason and an audit record. |
 | D-052 | Phase 3.13 Q15 | Owner, 2026-11-21: the direct or separate stock-effect mode is chosen per document at draft creation and frozen at approval. |
+| D-053 | Phase 4.3 restore: source database locale captured at dump time | Lead, autonomous under D-048, 2026-11-21: the encoding, LC_COLLATE, LC_CTYPE and locale provider of the source company database are captured when it is dumped and carried in the backup set manifest (optional `databaseLocale` record; older manifests stay readable). A restore uses the captured values; without them it reads the live source; with neither it is refused (`source_locale_unknown`), never created with template0 defaults. On PostgreSQL 15+ the restored database pins `LOCALE_PROVIDER libc`. Rationale: a disaster-recovery restore must not depend on the source database still existing, and the collation must never change silently. Alternatives rejected: parse the dump's TOC (tool-output parsing), refuse when the source is gone (defeats disaster recovery), silent template0 defaults. Details: `docs/PHASE-4.3.md` (round 4 of PR #78). |
 
 ## توضيحات اتساق مستمدة من القرارات المعتمدة (ليست قرارات جديدة)
 
