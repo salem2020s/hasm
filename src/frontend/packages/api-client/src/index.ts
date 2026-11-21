@@ -475,7 +475,8 @@ export interface PartyRole {
   id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
   controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
 }
-export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean } }
+export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean }; /** present only when the request used search, limit or offset */ total?: number }
+export interface PartyRoleQuery { search?: string; limit?: number; offset?: number }
 export interface PartyRoleInput { partyId?: string; role?: number; paymentMode: number; termDays?: number | null; creditLimit?: number | null; controlAccountId?: string | null; representativeId?: string | null; isActive?: boolean }
 export interface SalesRepresentative { id: string; code: string; nameAr: string; nameEn: string | null; userId: string | null; isActive: boolean; revision: number }
 export interface SalesRepresentativesResponse { items: SalesRepresentative[]; can: { configure: boolean } }
@@ -1179,7 +1180,16 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     },
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
-    listPartyRoles: (kind?: number) => get<PartyRolesResponse>(`/api/v1/company/party-roles${kind ? `?kind=${kind}` : ""}`),
+    /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500) or `offset` the server answers one page and adds `total`. */
+    listPartyRoles: (kind?: number, q?: PartyRoleQuery) => {
+      const p = new URLSearchParams();
+      if (kind) p.set("kind", String(kind));
+      if (q?.search) p.set("search", q.search);
+      if (q?.limit !== undefined) p.set("limit", String(q.limit));
+      if (q?.offset !== undefined) p.set("offset", String(q.offset));
+      const qs = p.toString();
+      return get<PartyRolesResponse>(`/api/v1/company/party-roles${qs ? "?" + qs : ""}`);
+    },
     createPartyRole: (r: PartyRoleInput) => request<PartyRole>("POST", "/api/v1/company/party-roles", { body: r }),
     updatePartyRole: (id: string, r: PartyRoleInput, revision: number) => request<PartyRole>("PUT", `/api/v1/company/party-roles/${enc(id)}`, { body: r, ifMatch: revision }),
     listSalesRepresentatives: () => get<SalesRepresentativesResponse>("/api/v1/company/sales-representatives"),
