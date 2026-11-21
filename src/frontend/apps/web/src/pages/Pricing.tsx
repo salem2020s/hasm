@@ -103,11 +103,13 @@ function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id:
     : auth.api.listPartyRoles(1, { search: search === "" ? undefined : search, limit: CUSTOMER_PICKER_LIMIT }).then((r) => ({ items: r.items, total: r.total ?? r.items.length })).catch((e) => { auth.handleError(e); throw e; }),
   [auth.api, auth.handleError, unavailable]); // eslint-disable-line react-hooks/exhaustive-deps
   const hintId = `${id}-hint`;
+  const preloaded = pickers.customers.find((c) => c.partyId === value);
+  const selectedLabel = preloaded ? codeName(preloaded.partyCode, preloaded.partyName) : undefined;   // a preselected customer outside the first search page keeps its name
   return (
     <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
       <label htmlFor={`${id}-list`}>{t("pricing.customer")}</label>
       <SearchPicker id={`${id}-list`} label={t("pricing.customer")} value={value} onChange={(v) => onChange(v)} load={load} getId={(c: PartyRole) => c.partyId} getLabel={(c: PartyRole) => codeName(c.partyCode, c.partyName)}
-        noneLabel={t("pricing.all_customers")} disabled={disabled} invalid={!!error} describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
+        noneLabel={t("pricing.all_customers")} disabled={disabled} searchDisabled={unavailable} selectedLabel={selectedLabel} invalid={!!error} describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
       <p id={hintId} className="hint">{t("pricing.customer_hint")}</p>
       {error && <p id={`${id}-error`} className="field-error">{error}</p>}
     </div>

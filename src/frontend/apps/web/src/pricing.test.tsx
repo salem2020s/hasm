@@ -242,6 +242,17 @@ describe("pricing administration screen", () => {
     const form = within(await screen.findByTestId("pricing-discount-create"));
     await pickCustomer(form);
     expect(form.getByLabelText(label("pricing.customer_group"))).toBeDisabled();
+    expect(form.getByRole("combobox", { name: label("pricing.customer") })).toBeEnabled();
+  });
+
+  it("disables the customer's search box together with its list while a customer group is chosen", async () => {
+    render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+    const panel = within(await screen.findByTestId("pricing-list-create"));
+    await userEvent.selectOptions(panel.getByLabelText(label("pricing.customer_group")), "cg1");
+    expect(panel.getByRole("combobox", { name: label("pricing.customer") })).toBeDisabled();
+    expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeDisabled();
   });
 
   it("keeps an inactive CURRENT group selectable in the membership row but never offers it for a new list, and shows an id when the names cannot be read", async () => {
@@ -515,6 +526,7 @@ describe("pricing administration screen", () => {
       const box = await panel.findByRole("combobox", { name: label("pricing.customer") });
       await waitFor(() => expect(panel.queryByText(A("picker.loading"))).not.toBeInTheDocument());
       expect(within(box).getAllByRole("option").map((o) => o.textContent)).toEqual([A("pricing.all_customers")]);
+      expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeDisabled();             // nothing can be searched without the permission
       expect(panel.queryByRole("alert")).not.toBeInTheDocument();                                            // no per-picker error: the page warning already says it
       expect(list).toHaveBeenCalledTimes(1);                                                                 // the preload only
     });
@@ -532,6 +544,31 @@ describe("pricing administration screen", () => {
       expect(await panel.findByRole("alert")).toHaveTextContent(A("picker.error"));
       await userEvent.click(panel.getByRole("button", { name: A("picker.retry") }));
       await waitFor(() => expect(panel.queryByRole("alert")).not.toBeInTheDocument());
+    });
+
+    it("sends the customer picked on the quote tab with the quote", async () => {
+      const quotePrice = vi.fn().mockResolvedValue(quote);
+      render({ quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      await userEvent.selectOptions(await pickItem(form, "pricing.kind_item"), "i1");
+      await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
+      await pickCustomer(form);
+      await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
+      await waitFor(() => expect(quotePrice).toHaveBeenCalledWith(expect.objectContaining({ itemId: "i1", customerId: "p1", currency: "JOD" })));
+    });
+
+    it("sends customerId null when the quote customer is left on all customers", async () => {
+      const quotePrice = vi.fn().mockResolvedValue(quote);
+      render({ quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      await userEvent.selectOptions(await pickItem(form, "pricing.kind_item"), "i1");
+      await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
+      await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
+      await waitFor(() => expect(quotePrice).toHaveBeenCalledWith(expect.objectContaining({ customerId: null })));
     });
   });
 });
