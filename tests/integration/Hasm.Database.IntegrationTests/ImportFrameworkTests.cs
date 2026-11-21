@@ -401,11 +401,19 @@ public class ImportServiceTests : ImportTestBase
         // C2 matrix part 2: no settings row yet, seven parallel writers with If-Match 0 used to give 503 (an unmapped unique violation on the singleton)
         await PrepareImports();
         var before = await Count(Company, Audit_.Table);
+        // deterministic (#165 G L1): every writer is held between its revision read and its write until all seven have read, so all of them race for the same first write
+        var gate = new StartBarrier(7, TimeSpan.FromSeconds(60));
+        Imports.AfterSettingsReadForTests = gate.WaitAsync;
         var first = await Task.WhenAll(Enumerable.Range(0, 7).Select(_ => Task.Run(() => Imports.PutSettingsAsync(Admin.Id, Company.Id, 0, new ImportSettingsInput(30, 14)))));
+        Assert.Equal(7, gate.Arrived);
         Assert.Single(first, r => r.IsOk);
         Assert.All(first.Where(r => !r.IsOk), r => Assert.Equal((ConfigStatus.PreconditionFailed, "revision_conflict", (long?)1), (r.Status, r.Code, r.CurrentRevision)));
         // and the same for an update at a known revision (the update applies only at the expected revision, so no write is lost)
+        gate = new StartBarrier(7, TimeSpan.FromSeconds(60));
+        Imports.AfterSettingsReadForTests = gate.WaitAsync;
         var second = await Task.WhenAll(Enumerable.Range(0, 7).Select(i => Task.Run(() => Imports.PutSettingsAsync(Admin.Id, Company.Id, 1, new ImportSettingsInput(40 + i, 14)))));
+        Assert.Equal(7, gate.Arrived);
+        Imports.AfterSettingsReadForTests = null;
         var winner = Assert.Single(second, r => r.IsOk);
         Assert.All(second.Where(r => !r.IsOk), r => Assert.Equal((ConfigStatus.PreconditionFailed, "revision_conflict", (long?)2), (r.Status, r.Code, r.CurrentRevision)));
         var now = await Imports.GetSettingsAsync(Company.Id);

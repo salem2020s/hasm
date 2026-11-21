@@ -234,6 +234,18 @@ public class ApiInputHardeningTests : JournalTestBase
         var (created, createdBody, _) = await Send(HttpMethod.Post, "/api/v1/company/parties/", admin, new StringContent("{\"code\":\"NUL1\",\"displayName\":\"a\\u0000b\",\"isActive\":true}", Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, created);
         Assert.Contains("\"field\":\"displayName\"", createdBody);
+        // the same NUL in a CHUNKED body (no declared length): the guard scans it too, so it is the same 400 and the party is not created
+        var chunkedContent = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes("{\"code\":\"NUL2\",\"displayName\":\"a\\u0000b\",\"isActive\":true}")));
+        chunkedContent.Headers.ContentType = new("application/json");
+        using (var chunkedRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/company/parties/") { Content = chunkedContent })
+        {
+            chunkedRequest.Headers.TransferEncodingChunked = true;
+            chunkedRequest.Headers.Add("X-Hasm-Request", "1");
+            chunkedRequest.Headers.Add("Cookie", $"{CookieName}={admin}");
+            using var chunkedResponse = await client.SendAsync(chunkedRequest);
+            Assert.Equal(HttpStatusCode.BadRequest, chunkedResponse.StatusCode);
+            Assert.Contains("\"field\":\"displayName\"", await chunkedResponse.Content.ReadAsStringAsync());
+        }
         var (login, loginBody, _) = await Send(HttpMethod.Post, "/api/v1/auth/login", null, new StringContent("{\"login\":\"a\\u0000b\",\"password\":\"x\"}", Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, login);
         Assert.Contains("\"field\":\"login\"", loginBody);

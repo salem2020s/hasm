@@ -165,16 +165,17 @@ public static class AuthEndpoints
         return Results.NoContent();
     }
 
-    private static IResult Status(HttpContext http)
+    private static async Task<IResult> Status(HttpContext http, IdentityStore identity)
     {
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession s) return Results.Json(new { authenticated = false });
+        var requirement = await identity.GetMfaRequirementAsync(s.UserId, http.RequestAborted);
         return Results.Json(new
         {
             authenticated = true,
             user = UserView(s.UserId.ToString(), s.Login, s.DisplayName, s.IsIdentityAdministrator),
             session = new { client = s.Client.ToString().ToLowerInvariant(), idleExpiresAtUtc = s.IdleExpiresAtUtc, absoluteExpiresAtUtc = s.AbsoluteExpiresAtUtc },
             // Phase 4.1: what the shared frontend needs to render the second-factor state (the server decides; the client only shows)
-            mfa = new { state = s.MfaState.ToString().ToLowerInvariant(), verified = s.MfaVerifiedAtUtc is not null, verifiedAtUtc = s.MfaVerifiedAtUtc },
+            mfa = new { state = s.MfaState.ToString().ToLowerInvariant(), verified = s.MfaVerifiedAtUtc is not null, verifiedAtUtc = s.MfaVerifiedAtUtc, required = requirement.Mandatory },
         });
     }
 
