@@ -405,7 +405,7 @@
     ]
   },
   "next": [
-    "Merge queue (registry serial, main = 1262): #181 (system 0034) then #185 (stacked); #182 (+8, conflicts with main); #191; #192. #188 only on the owner's explicit instruction. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
+    "Merge queue (registry serial, main = 1262): #181 (system 0034) then #185 (stacked; conflicts with main); #182 (+8; conflicts with main); #191; #192. #188 only on the owner's explicit instruction. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
     "#176 merged (2d5da1f). BINDING for the slice 8 implementation (FG's L-FG3, Low, recorded on the merged plan's review record): when a backup-retention-apply finds a matching 2015 with no 2016 and the run folder present, it closes that orphan 2015 with an audit event (2017 deletion_not_started with run id, status hash and destination id), and a closed 2015 is never a basis for resume, recovery or the 2015/2016 pair; with its test (crash before the rename, hold placed, folder removed by hand: the run must stay pending and be copied again). ALSO BINDING for slice 8 (owner, MD-Q2, D-230): deletion cannot be enabled while the backup destinations lack the required independent protection (no-second-destination case included until decided otherwise).",
     "Consolidated package (D-198..D-239): the lead assigns the unblocked slices in dependency order (list in docs/INTEGRATION-STATUS.md, 'Now unblocked'); implementation gaps first in 3.13: backend Reject rule (D-208) and duplicate-policy rule with its migration (D-209).",
     "#48: implement the approved final design (c73b643; G approve); execution stays closed until the full N1-N32 tests and review pass (D-190, D-195).",
@@ -451,7 +451,7 @@
       "pr": 185,
       "branch": "feat/mfa-policy-ui",
       "head": "f80ab8f572f19b8b18c0f3c395e09d35387dce9e",
-      "state": "E 4.1 S3b-2b company MFA policy screen; stacked on #181; not re-read"
+      "state": "E 4.1 S3b-2b company MFA policy screen; stacked on #181; not re-read; conflicts with main at this head"
     },
     {
       "pr": 182,
@@ -484,20 +484,7 @@
       "state": "P 3.8D; G approve of the final design revision at c73b643 (record on the branch); implementation authorization effective; execution closed until the full N1-N32 tests and review; not merged before the complete phase scope (D-195); X1-A takes the next free company migration number at its merge"
     }
   ],
-  "inertPullRequests": [
-    {
-      "pr": 85,
-      "branch": "feature/tooling-linux-pg-test-harness",
-      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a",
-      "state": "open; comparison with run-isolated.sh in progress (D-196); closed only if fully covered"
-    },
-    {
-      "pr": 48,
-      "branch": "feature/phase-3-8d-impact-preview",
-      "head": "ab1d106136a6f95de7416214c92c56028419d400",
-      "state": "open; design revision 3 with the owner's Q1-Q5 decisions; G request changes, P's fixes pushed, G's confirmation pending; never merged before the complete phase scope (D-195)"
-    }
-  ],
+  "inertPullRequests": [],
   "mergeSequence": [
     181,
     185,
@@ -547,6 +534,13 @@
       "head": "85526937ee631c2d8acef0fa4b22f0f767b13bd7",
       "closedAt": "2026-11-21T21:19:26Z",
       "state": "closed without merging on the owner's authorization (D-196); branch preserved"
+    },
+    {
+      "pr": 85,
+      "branch": "feature/tooling-linux-pg-test-harness",
+      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a",
+      "closedAt": "2026-11-21T22:36:36Z",
+      "state": "closed without merging by the lead, deliberately, under D-196 after #187 (b73e0c3) ported its remaining capability; branch preserved"
     }
   ],
   "decidedByConsolidatedPackage2026-11-21": {
@@ -631,5 +625,6 @@
       "191": "+2 per the lead (its description says 1262 to 1265; re-read at merge)"
     },
     "note": "queued numbers are not verified by this refresh"
-  }
+  },
+  "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging."
 }
