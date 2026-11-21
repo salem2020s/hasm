@@ -30,6 +30,14 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
         return await CoversAsync(user, company, code, view.BranchId, ct) ? ConfigResult<CommercialDocumentView>.Ok(view) : Denied<CommercialDocumentView>();
     }
 
+    /// <summary>The registered document types (names only). Allowed when the caller holds <c>view</c> or <c>create</c> on any scope, otherwise the same refusal as every other call.</summary>
+    public async Task<ConfigResult<IReadOnlyList<string>>> TypesAsync(Guid user, Guid company, CancellationToken ct = default)
+    {
+        var eff = await access.GetEffectivePermissionsAsync(user, company, ct);
+        return HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialView) || HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialCreate)
+            ? ConfigResult<IReadOnlyList<string>>.Ok(documents.RegisteredTypes) : Denied<IReadOnlyList<string>>();
+    }
+
     public async Task<ConfigResult<CommercialDocumentView>> GetAsync(Guid user, Guid company, Guid id, CancellationToken ct = default) =>
         await Authorized(user, company, id, PermissionCatalog.Codes.CommercialView, ct);
 
