@@ -171,6 +171,31 @@ public class PartyRoleApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
+    public async Task The_unit_and_group_lists_can_be_looked_up_by_ids_with_a_bound_the_paged_form_and_the_same_permission()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        string Ids(int n) => string.Join("&", Enumerable.Range(0, n).Select(_ => "ids=" + Guid.NewGuid()));
+        foreach (var (url, key) in new[] { ("/api/v1/company/inventory/units", "units"), ("/api/v1/company/inventory/groups", "groups") })
+        {
+            // an ids lookup answers the PAGED form (rows + total) even when nothing matches; the unfiltered list has no total
+            var none = await Send(HttpMethod.Get, $"{url}?{Ids(1)}", cookie: cookie);
+            Assert.Equal(HttpStatusCode.OK, none.Status);
+            Assert.Equal(0, none.Json.GetProperty(key).GetArrayLength());
+            Assert.Equal(0L, none.Json.GetProperty("total").GetInt64());
+            Assert.False((await Send(HttpMethod.Get, url, cookie: cookie)).Json.TryGetProperty("total", out _));
+            // the bound: 100 ids are fine, 101 or a malformed id are refused with the standard body
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{url}?{Ids(100)}", cookie: cookie)).Status);
+            Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{url}?{Ids(101)}", cookie: cookie)).Status);
+            Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{url}?ids=not-a-guid", cookie: cookie)).Status);
+            // the same permission as the list; no session, no answer
+            var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+            Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{url}?{Ids(1)}", cookie: await SignIn(outsider))).Status);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{url}?{Ids(1)}")).Status);
+        }
+    }
+
+    [PostgresFact]
     public async Task The_list_endpoints_answer_a_malformed_query_parameter_with_the_standard_validation_body_naming_the_parameter()
     {
         await StartApi();
@@ -182,6 +207,8 @@ public class PartyRoleApiTests : HttpApiTestBase
             ($"{Roles}?ids=not-a-guid", "ids"), ($"{Roles}?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"), ($"{Roles}?search={new string('x', 101)}", "search"),
             ("/api/v1/company/inventory/units?limit=abc", "limit"), ("/api/v1/company/inventory/units?offset=-1", "offset"), ("/api/v1/company/inventory/units?search=a%0Ab", "search"),
             ("/api/v1/company/inventory/groups?limit=0", "limit"), ("/api/v1/company/inventory/groups?offset=1.5", "offset"),
+            ("/api/v1/company/inventory/units?ids=not-a-guid", "ids"), ("/api/v1/company/inventory/groups?ids=not-a-guid", "ids"),
+            ($"/api/v1/company/inventory/units?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"), ($"/api/v1/company/inventory/groups?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"),
             ("/api/v1/company/pricing/customer-groups?limit=-2", "limit"), ("/api/v1/company/pricing/customer-groups?offset=zz", "offset"),
         };
         foreach (var (url, field) in cases)
