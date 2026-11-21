@@ -18,10 +18,11 @@ import { partyRolesAr, partyRolesEn } from "./messages.partyroles";
 import { attachmentsAr, attachmentsEn } from "./messages.attachments";
 import { impTplAr, impTplEn } from "./messages.imptpl";
 import { partyAr, partyEn } from "./messages.party";
+import { mfaAr, mfaEn } from "./messages.mfa";
 
 export const catalog: Catalog = {
-  ar: { ...baseAr },
-  en: { ...baseEn },
+  ar: { ...baseAr, ...mfaAr },
+  en: { ...baseEn, ...mfaEn },
 };
 
 // General Ledger screens (Phase 3.2B) live in their own module; merged here so the whole catalog stays one object.
