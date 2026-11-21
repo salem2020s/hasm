@@ -146,6 +146,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.CommercialDocument.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CommercialDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),   // lines are replaceable ONLY while the document is a draft (PostgreSQL trigger); every replacement is audited
         (CompanySchema.CommercialDocumentEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.DocumentLink.Table, ["SELECT", "INSERT"]),   // Phase 3.13 S2 (company 0030): links are append-only, so never UPDATE, DELETE or TRUNCATE
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
