@@ -299,7 +299,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
               <tbody>
                 {form.lines.map((l, i) => {
                   const unit = unitOptions(l.item).find((u) => u.id === l.unitId);
-                  const q = Number(l.quantity);
+                  const q = parsePositiveDecimal(l.quantity);
                   const preview = unit && Number.isFinite(q) && q > 0 ? `${trimNumber(q * unit.factor)} ${unitOptions(l.item).find((u) => u.isBase)?.code ?? ""}` : "—";
                   return (
                     <tr key={l.key} data-testid={`line-${i}`}>

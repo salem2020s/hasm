@@ -25,7 +25,7 @@ describe("shared parser", () => {
   it.each([
     ["٢٫٥", 2.5], ["١٢٣", 123], ["۱۲۳٫۵", 123.5], ["٠٫٧١", 0.71], ["2.5", 2.5], ["2,5", 2.5],
   ])("parses %s as %s", (text, n) => expect(parseDecimalInput(text)).toBe(n));
-  it.each(["٥٬٠٠٠", "5,000", "1e3", "٢ ٣", ""])("refuses the ambiguous %s", (text) => expect(parseDecimalInput(text)).toBeNaN());
+  it.each(["٥٬٠٠٠", "5,000", "1234,567", "١٢٣٤,٥٦٧", "1e3", "٢ ٣", ""])("refuses the ambiguous %s", (text) => expect(parseDecimalInput(text)).toBeNaN());
 });
 
 describe("fiscal year: Arabic-Indic start year", () => {
@@ -62,7 +62,7 @@ describe("stock document: Arabic-Indic quantity", () => {
     units: [{ id: "u-box", code: "BOX", nameAr: "علبة", nameEn: "Box", decimals: 2, factor: 12, isBase: true }] };
   const caps: StockDocumentCapabilities = { view: ["w1"], create: ["w1"], update: ["w1"], submit: ["w1"], approve: ["w1"], cancel: ["w1"], post: ["w1"], reverse: ["w1"] } as unknown as StockDocumentCapabilities;
 
-  async function type(quantity: string) {
+  async function type(quantity: string, save = true) {
     const createStockDocument = vi.fn().mockResolvedValue({ id: "d9" } as unknown as StockDocument);
     renderApp(signedIn({
       getStockDocumentCapabilities: vi.fn().mockResolvedValue(caps),
@@ -80,7 +80,7 @@ describe("stock document: Arabic-Indic quantity", () => {
     await userEvent.type(within(line).getByLabelText("ابحث عن مادة"), "app");
     await userEvent.selectOptions(await screen.findByLabelText("اختر المادة"), "i1");
     await userEvent.type(within(line).getByLabelText("الكمية"), quantity);
-    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    if (save) await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
     return createStockDocument;
   }
 
@@ -88,6 +88,11 @@ describe("stock document: Arabic-Indic quantity", () => {
     const create = await type("2.5");
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]![0].lines[0].quantity).toBe(2.5);
+  });
+
+  it.each([["٢٫٥", "30"], ["2,5", "30"], ["2.5", "30"]])("the base-quantity preview works for %s", async (typed, base) => {
+    await type(typed, false);
+    expect(screen.getByTestId("base-0")).toHaveTextContent(`${base} BOX`);
   });
 
   it("Arabic-Indic digits and decimal separator are converted like Latin digits (٢٫٥ -> 2.5)", async () => {
