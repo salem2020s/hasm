@@ -14,5 +14,17 @@ public static class BackupAuditEvents
     public const short KeysExported = 2012;
     /// <summary>A backup signing key was generated (D-092).</summary>
     public const short SigningKeyGenerated = 2013;
-    // 2014-2019 reserved for later Phase 4.3 slices (retention, cutover)
+    /// <summary>Slice 6 (D-139): a retention plan was computed (preview).</summary>
+    public const short RetentionEvaluated = 2014;
+    /// <summary>Slice 6: the deletion of a run started (written BEFORE any file is touched).</summary>
+    public const short DeletionStarted = 2015;
+    /// <summary>Slice 6: a run was deleted (tombstone written).</summary>
+    public const short Deleted = 2016;
+    /// <summary>Slice 6: a deletion was refused (gate inactive, prerequisites, brake, or a run's re-validation).</summary>
+    public const short DeletionRefused = 2017;
+    /// <summary>Slice 6: a backup legal hold was placed.</summary>
+    public const short LegalHoldPlaced = 2018;
+    /// <summary>Slice 6: reserved for the release of a backup legal hold (not available until the Phase 4.1 approval framework).</summary>
+    public const short LegalHoldReleased = 2019;
+    // 2020-2029: allocated by the lead to slice 7 (cutover)
 }
