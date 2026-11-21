@@ -31,7 +31,7 @@ public sealed class DuplicateLoginException() : Exception("The login identifier 
 /// parameterized. Uses the connection string it is given (the Backend passes the runtime, least-privilege account);
 /// connections are pooled through a lazily created data source.
 /// </summary>
-public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit) : IAsyncDisposable
+public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit) : IThrottleStore, IAsyncDisposable
 {
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
     // Arbitrary constant key for "initial administrator bootstrap" (transaction-scoped advisory lock).

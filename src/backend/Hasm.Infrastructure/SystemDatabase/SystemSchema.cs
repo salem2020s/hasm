@@ -277,12 +277,14 @@ public static partial class SystemSchema
     {
         ["Session.Table"] = SecretStoreBackupRule.AlwaysExcluded,
         ["LoginThrottle.Table"] = SecretStoreBackupRule.AlwaysExcluded,
+        // Phase 4.1 S1 (D-120): the TOTP secrets are already ciphertext under the protected key ring; an ENCRYPTED backup run includes them (so a full restore keeps the enrolled users enrolled, with the key export, D-087), an unencrypted run excludes them
+        ["UserTotp.Table"] = SecretStoreBackupRule.IncludedOnlyInEncryptedRuns,
     };
 
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 
-    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).Concat(BackupRetentionMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).Concat(MfaMap).Concat(BackupRetentionMap).ToDictionary(kv => kv.Key, kv => kv.Value));
 
     private static IReadOnlyDictionary<string, string> CoreMap { get; } = new Dictionary<string, string>
     {
