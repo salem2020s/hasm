@@ -200,6 +200,29 @@ public class DocumentLinkTests : CommercialTestBase
     }
 
     [PostgresFact]
+    public async Task Parallel_requests_with_the_same_key_and_payload_all_return_the_one_link_and_a_changed_payload_is_refused()
+    {
+        var (branch, party, approver) = await Basics();
+        var (item, unit) = await NewItemAndUnit("RP1");
+        var order = await NewApproved(branch, party, "rp-order-0001", approver, CommercialTestType.Name, (item, unit, 10m));
+        var delivery = await NewApproved(branch, party, "rp-deliv-0001", approver, CommercialTestType.Name, (item, unit, 6m));
+        // seven parallel requests with the SAME key and the SAME payload: the documented answer to every one of them is the original link (the first creates it, the others are Replayed). Before the key was re-checked after the line
+        // locks, a request that waited for the locks answered link_exists, because the pair check found the committed link of the winner (the first key check ran before any lock and could not see it).
+        var input = Link(order.Id, 1, delivery.Id, 1, 4m, "rp-link-00001");
+        var results = await Task.WhenAll(Enumerable.Range(0, 7).Select(_ => Links.CreateAsync(Admin.Id, Company.Id, input)));
+        Assert.All(results, r => Assert.True(r.IsOk, $"{r.Status} {r.Code}"));
+        var id = Assert.Single(results.Select(r => r.Value!.Id).Distinct());
+        Assert.Equal(1, results.Count(r => !r.Value!.Replayed));                                                             // exactly one created it
+        Assert.Equal(6, results.Count(r => r.Value!.Replayed));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.IdempotencyKey} = 'rp-link-00001'"));
+        Assert.Equal(4m, Assert.Single(await Links.QuantitiesAsync(Company.Id, order.Id)).Fulfilled);                          // one link of 4, never 4 x 7
+        // the same key with ANOTHER payload keeps its refusal; a later replay of the original is still the original
+        Fails(await Links.CreateAsync(Admin.Id, Company.Id, Link(order.Id, 1, delivery.Id, 1, 2m, "rp-link-00001")), ConfigStatus.Conflict, "idempotency_key_reused");
+        var again = Ok(await Links.CreateAsync(Admin.Id, Company.Id, input));
+        Assert.Equal((id, true), (again.Id, again.Replayed));
+    }
+
+    [PostgresFact]
     public async Task Concurrent_links_into_one_target_line_and_a_concurrent_cancel_never_exceed_or_orphan()
     {
         var (branch, party, approver) = await Basics();

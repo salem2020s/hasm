@@ -33,14 +33,18 @@ async function enterCompany(page: Page, name: string) {
 }
 const go = (page: Page, hash: string) => page.evaluate((h) => { window.location.hash = h; }, hash);
 const wire = (api: MockApi) => api.requests.map((r) => `${r.method} ${r.path}`);
-/** Waits until the request log has been quiet for a while: concurrent reads of a screen have all been answered, so the log can be compared. A timer on purpose (there is no "idle" event for the mock). */
-async function settled(api: MockApi, quietMs = 800) {
-  let last = -1, since = Date.now();
-  while (Date.now() - since < quietMs) {
-    await new Promise((r) => setTimeout(r, 100));
-    if (api.requests.length !== last) { last = api.requests.length; since = Date.now(); }
-  }
+/**
+ * Readiness without a timer: a screen is ready when the requests it makes are EXACTLY its documented set, all of them answered (nothing in flight). The poll returns the moment that holds, however slow the machine
+ * is, and fails with a readable diff if a request is missing or an unexpected one appears (an extra request that arrives late lands in the NEXT screen's window and fails there). Sorted, because the reads a screen
+ * starts concurrently have no defined order.
+ */
+async function reads(api: MockApi, from: number, expected: readonly string[]) {
+  await expect.poll(() => (api.inflight === 0 ? wire(api).slice(from).sort() : ["(requests still in flight)"]), { timeout: 20_000, message: "the screen's reads" }).toEqual([...expected].sort());
 }
+// What each screen of the scripted flow reads, as a contract (the same on both transports).
+const AFTER_SIGN_IN = ["GET /api/v1/access/me", "GET /api/v1/auth/status", "GET /api/v1/companies", "GET /api/v1/company/currencies", "GET /api/v1/company/entitlements", "GET /api/v1/company/history", "GET /api/v1/company/profile", "GET /api/v1/company/settings", "POST /api/v1/auth/login", "POST /api/v1/session/company"];
+const ACCOUNTS_SCREEN = ["GET /api/v1/company/accounts", "GET /api/v1/company/currencies"];
+const JOURNAL_SCREEN = ["GET /api/v1/company/accounts", "GET /api/v1/company/branches", "GET /api/v1/company/currencies", "GET /api/v1/company/journal", "GET /api/v1/company/journal/cost-centers"];
 const SEQUENTIAL = ["POST /api/v1/auth/login", "GET /api/v1/companies", "POST /api/v1/session/company", "GET /api/v1/access/me"];
 
 for (const mode of MODES) {
@@ -212,8 +216,8 @@ for (const mode of MODES) {
 }
 
 test("parity: the same scripted flow sends the same requests on both transports (sequential steps in order, concurrent reads as a multiset per screen)", async ({ browser }) => {
-  // The sign-in steps are sequential by design and must appear in exactly this order. The reads a screen starts concurrently have no defined order, so each screen's reads are compared as a sorted multiset,
-  // after the request log has been quiet (every concurrent read answered). The screens are separated by those quiet points, so the ORDER of the screens is still compared exactly. No retries.
+  // The sign-in steps are sequential by design and must appear in exactly this order. The reads a screen starts concurrently have no defined order, so each screen's reads are compared as a sorted multiset against its
+  // documented set once they are all answered (see `reads`: a condition, not a timer). The screens are separated by those points, so the ORDER of the screens is still compared exactly. No retries, no sleeps.
   const stages: Record<Mode, string[][]> = { web: [], desktop: [] };
   const sequential: Record<Mode, string[]> = { web: [], desktop: [] };
   for (const mode of MODES) {
@@ -223,17 +227,17 @@ test("parity: the same scripted flow sends the same requests on both transports 
     await toEnglish(page);
     await signIn(page);
     await enterCompany(page, "Amal Co");
-    await settled(api);
     let mark = 0;
     const take = () => { const part = wire(api).slice(mark).sort(); mark = api.requests.length; return part; };
+    await reads(api, mark, AFTER_SIGN_IN);
     stages[mode].push(take());
     await go(page, "#/company/accounts");
     await expect(page.getByRole("heading", { name: E("accounts.title"), level: 1 })).toBeVisible();
-    await settled(api);
+    await reads(api, mark, ACCOUNTS_SCREEN);
     stages[mode].push(take());
     await go(page, "#/accounting/journal");
     await expect(page.getByRole("button", { name: E("jrn.new") })).toBeVisible();
-    await settled(api);
+    await reads(api, mark, JOURNAL_SCREEN);
     stages[mode].push(take());
     sequential[mode] = wire(api).filter((r) => SEQUENTIAL.includes(r));
     await context.close();
