@@ -99,7 +99,9 @@ public class CommercialStateMachineTests : CommercialTestBase
         Assert.Equal("P0001", await Fails($"DELETE FROM {CL.Table} WHERE {CL.DocumentId} = '{submitted.Id}'"));
         Assert.Equal("P0001", await Fails($"DELETE FROM {CL.Table} WHERE {CL.DocumentId} = '{cancelled.Id}'"));
         Assert.Equal("P0001", await Fails($"INSERT INTO {CL.Table} ({CL.Id}, {CL.DocumentId}, {CL.LineNo}, {CL.ItemId}, {CL.UnitId}, {CL.Quantity}) VALUES (gen_random_uuid(), '{submitted.Id}', 2, '{item}', '{unit}', 1)"));
-        Assert.Equal("P0001", await Fails($"TRUNCATE {CL.Table}"));
+        // since S2 the line table is referenced by the link table, so a plain TRUNCATE is refused by PostgreSQL itself (0A000) before any trigger; with CASCADE the guard trigger refuses it (P0001)
+        Assert.Contains(await Fails($"TRUNCATE {CL.Table}"), new[] { "P0001", "0A000" });
+        Assert.Equal("P0001", await Fails($"TRUNCATE {CL.Table} CASCADE"));
         Assert.Equal("23514", await Fails($"UPDATE {CL.Table} SET {CL.Quantity} = 0 WHERE {CL.DocumentId} = '{draft.Id}'"));
         Assert.Equal("23505", await Fails($"INSERT INTO {CL.Table} ({CL.Id}, {CL.DocumentId}, {CL.LineNo}, {CL.ItemId}, {CL.UnitId}, {CL.Quantity}) VALUES (gen_random_uuid(), '{draft.Id}', 1, '{item}', '{unit}', 1)"));   // one line number per document
 
