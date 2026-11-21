@@ -32,7 +32,7 @@ Existing rows are `None`: the requirement (privileged, company policy) is comput
 Constraints and indexes: `PkUserTotp` (SecretId); `UqUserTotpActive` unique on (UserId) WHERE State = 1; `UqUserTotpPending` unique on (UserId) WHERE State = 0 (review M2); `CkUserTotpState` (0..2); `CkUserTotpLengths` (cipher 20, nonce 12, tag 16); `CkUserTotpConfirmed` (State = 1 or 2 with `ConfirmedAtUtc` NOT NULL for Active). A guard trigger forbids changing `UserId`, `Cipher`, `Nonce`, `Tag`, `KekId` and `SecretId` except by the rewrap procedure (a transaction-local setting the rewrap path sets, like the other guarded tables) and forbids decreasing `LastStep`; rows are never deleted by the runtime role (revocation is `State = 2`).
 The replay compare-and-set used by `MfaVerifier` is exactly `UPDATE UserTotp SET LastStep = @s WHERE SecretId = @id AND State = 1 AND (LastStep IS NULL OR LastStep < @s)` with one affected row required.
 **Privileges:** the runtime role gets SELECT, INSERT and UPDATE (no DELETE); reporting roles get nothing on this table.
-**Backup rule:** `SystemSchema.SecretStoreTables` gains `UserTotp.Table` with the per-table rule "included only in encrypted runs" (the pin of slice 4 / PR #116 becomes per-table: `Session.Table` and `LoginThrottle.Table` are "always excluded"). Until #116 lands, the pinning test of #104 requires every secret-store table to be in `SystemDumpExclusions`; S1 therefore waits for #116's per-table rule (or, if #116 lands later, temporarily lists `UserTotp.Table` as excluded and flips it to the rule when #116 merges: the choice is the lead's).
+**Backup rule (LEAD D-120, supersedes the earlier sequencing question):** S1 ships with `UserTotp.Table` in `SystemSchema.SecretStoreTables` AND in `BackupRunService.SystemDumpExclusions` (label `user_totp`), i.e. ALWAYS excluded; it does not wait for #116. The table becomes "included only in encrypted runs" (a per-table rule: `Session.Table` and `LoginThrottle.Table` stay always excluded) in the Phase 4.3 slice 5 implementation PR, the code that actually encrypts runs. Until then every system restore leaves `Enrolled` users `RecoveryRequired`, which the H1 safeguard already handles.
 
 ## 3. Throttle scope
 `LoginThrottle` scope CHECK widens from `0..1` to `0..2` (2 = `Mfa`, `ThrottleScope.Mfa`, already an enum member in this branch). Key hashes keep their domain-separated prefixes (`mfa-pair:<user>|<source>` and `mfa-user:<user>`), SHA-256, never the raw key.
@@ -48,4 +48,4 @@ Schema derivation and uniqueness tests (once names exist); constraint tests for 
 
 ## 6. Open points (for the lead, none blocks WIP)
 * The migration number (assigned at merge) and therefore the derived names.
-* Whether S1 waits for #116's per-table backup rule or ships first with `UserTotp.Table` in the exclusion list.
+* (Resolved by D-120: S1 does not wait for #116.)
