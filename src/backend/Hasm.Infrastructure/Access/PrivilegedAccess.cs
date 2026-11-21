@@ -14,6 +14,8 @@ public static class PrivilegedAccess
         "access.members", "access.roles", "access.assignments", "access.audit", "company.settings", "company.approvalpolicies",
         // review M3 of PR #133 (when in doubt, privileged): company.attachmentssensitive authorizes the encryption-key rewrap of attachments, and company.journalsoftclosed is override-like (posting into a soft-closed period)
         "company.attachmentssensitive", "company.journalsoftclosed",
+        // Phase R slice R1: retention policy, legal holds and the approval and execution of attachment deletion are destructive controls (D-096: when in doubt, privileged)
+        "company.attachmentretention",
     };
 
     /// <summary>Individual permissions that are privileged although their resource is ordinary (review M3): <c>company.imports.configure</c> authorizes the import maintenance, including the encryption-key rewrap of imported files.</summary>
