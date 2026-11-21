@@ -120,8 +120,8 @@ function UnitForm({ editor, canEdit, onClose, onSaved }: { editor: Editor; canEd
     if (isNew) {
       const code = form.code.trim().toUpperCase();
       if (!code) v.code = t("field.required"); else if (!CODE_SHAPE.test(code)) v.code = t("field.invalid_format");
-      const d = Number(form.decimals);
-      if (!Number.isInteger(d) || d < 0 || d > 6) v.decimals = t("inv.field.out_of_range");
+      // a blank or non-digit value is refused (Number("") would silently be 0)
+      if (!/^[0-6]$/.test(form.decimals.trim())) v.decimals = t("inv.field.out_of_range");
     }
     if (!form.nameAr.trim() && !form.nameEn.trim()) { v.nameAr = t("inv.name_required"); v.nameEn = t("inv.name_required"); }
     setErrors(v);

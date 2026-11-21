@@ -26,11 +26,12 @@ const go = async (hash: string) => {
   fireEvent(window, new HashChangeEvent("hashchange"));
 };
 
-/** Unstubbed methods answer with the given failure. */
+const BOOTSTRAP = new Set(["getHealth", "login", "logout", "status", "listCompanies", "selectCompany", "clearCompany", "accessMe"]);
+/** Every call except the sign-in and access bootstrap answers with the given failure, so each screen meets the refusal on its own load. */
 const failing = (status: number, code: string, permissions: string[]) => {
   const base = signedIn({}, permissions) as unknown as Record<string, unknown>;
   return new Proxy(base, {
-    get: (t, k: string) => (k in t && (t[k] as { getMockImplementation?: () => unknown })?.getMockImplementation?.() ? t[k] : vi.fn().mockRejectedValue(new ApiError(status, code, {}))),
+    get: (t, k: string) => (BOOTSTRAP.has(k) ? t[k] : vi.fn().mockRejectedValue(new ApiError(status, code, {}))),
   }) as unknown as ReturnType<typeof signedIn>;
 };
 
@@ -92,8 +93,14 @@ describe("server refusals while a screen loads (both languages)", () => {
       localStorage.setItem("hasm.locale", lang);
       renderApp(failing(403, "forbidden", everything));
       await go(`#${path}`);
-      await new Promise((r) => setTimeout(r, 30));
       const content = document.getElementById("content")!;
+      // Positive assertion on a stable loaded state: the screen shows the translated refusal (the shared one or its own wording of it).
+      // Home states its own "activity unavailable" wording; the report screens run only on demand and make no call when they open,
+      // so their stable loaded state is their own heading.
+      const own: Record<string, string> = { "/": "dash.activity_unavailable", "/accounting/reports": "rep.title", "/accounting/statements": "st.title" };
+      const refusals = (own[path] ? [own[path]] : ["error.forbidden", "rep.error.forbidden", "sm.error.forbidden"]).map((k) => catalog[lang][k]!);
+      await waitFor(() => expect(refusals.some((r) => content.textContent!.includes(r)), `${path}: ${content.textContent?.slice(0, 120)}`).toBe(true), { timeout: 3000 });
+      expect(document.querySelector("[aria-busy='true']")).toBeNull();
       expect(screen.queryByTestId("not-found")).toBeNull();
       expect(textNodes(content).filter((s) => RAW.test(s) && !s.endsWith("."))).toEqual([]);
       expect(content.textContent).not.toMatch(/forbidden|Forbidden/);

@@ -457,3 +457,17 @@ describe("Arabic-Indic digits in numeric fields", () => {
     await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
   });
 });
+
+describe("unit decimals are never defaulted", () => {
+  it("refuses a blank decimals value instead of saving it as 0", async () => {
+    const client = setup({ createInventoryUnit: vi.fn() });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(client.createInventoryUnit).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/^الخانات العشرية/)).toHaveAttribute("aria-invalid", "true");
+  });
+});
