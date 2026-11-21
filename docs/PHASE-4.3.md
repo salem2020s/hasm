@@ -251,7 +251,12 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
 
 * **Migrations: none.** Nothing is stored in any database; the run report lives in the run folder. If implementation shows a migration is needed, work stops and the lead allocates the numbers (next free: company 0030, system 0030).
 * **No API endpoint and no UI.** The shared Web/Tauri frontend is unaffected; a backup screen belongs to the later monitoring UI.
-* **What it does not meet.** This slice does NOT meet RELEASE1-ACCEPTANCE G by itself: sets stay unencrypted until package 4.3-2 is decided, nothing is deleted automatically, full-installation restore and the cutover are not built, and the restore acknowledgement remains BLOCKED (4.3-1).
+* **What it does not meet.** This slice does NOT meet RELEASE1-ACCEPTANCE G or SRS 16 by itself:
+  * sets stay unencrypted until package 4.3-2 is decided;
+  * nothing is deleted automatically;
+  * there are no multiple destinations (local and network copies, SRS 16): the run root is one local or mounted folder;
+  * full-installation restore and the cutover are not built;
+  * the restore acknowledgement remains BLOCKED (4.3-1).
 
 ### Design
 1. **`BackupRunService`** (`Hasm.Infrastructure.Backup`, over `CompanyBackupService` and `PgBackupTool`):
@@ -262,11 +267,36 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
    * **System database, `system/`.**
      * `database.dump` comes from a NEW `PgBackupTool.DumpSystemAsync`, which dumps exactly the configured system database name (never a caller-supplied name). The company paths keep refusing the system database.
      * `manifest.json` is a `SystemBackupManifest`: version, kind `system`, creation time, the dump's size and SHA-256, the captured locale, and the highest system migration version.
-     * After writing, the dump's table of contents is checked to be readable with `pg_restore --list`; only the exit code is used, the output is discarded. Restoring the system database is the later full-installation slice.
+     * After writing, the dump's table of contents is checked to be readable with `pg_restore --list`; only the exit code is used, the output is discarded. This proves ONLY that the archive's table of contents is readable, not that the data restores. Integrity against corruption is the SHA-256 in the manifest; authenticity needs package 4.3-2 item 1. Restoring the system database is the later full-installation slice.
+     * **Sensitive contents of the system dump.** It holds:
+       * password hashes of every user;
+       * session records with session-token hashes;
+       * login-throttle data (login identifiers, source addresses, failure counters);
+       * membership and role-assignment data;
+       * the shared party registry with personal and identifying data (legal names, tax and registration numbers);
+       * the system audit chain;
+       * once Phase 4.1 builds them, TOTP secrets.
+       It is the most sensitive file of a run; package 4.3-2 item 4(a) (an encrypted volume for the backup root) applies to it in particular.
+     * **TOTP secrets, fail closed.** Until package 4.3-2 item 1 is decided, `backup-run` EXCLUDES the data of the TOTP-secret table (`pg_dump --exclude-table-data`, by its opaque name) and records `excludedSecrets: ["totp"]` in the system manifest and in `run.json`.
+       * Chosen over refusing the run: a refusal would leave the installation with no backup at all once MFA exists.
+       * Consequence: after a full-installation restore, users re-enrol MFA through the Phase 4.1 recovery procedure.
+       * The table does not exist yet (only the TOTP primitive, #72). The 4.1 slice that creates it must add it to the exclusion list. A unit test pins the list against the system schema: every table whose logical name marks it as a secret store must be excluded or explicitly encrypted, otherwise the test fails.
    * **Companies, `companies/<company id N>/`.**
      * Every company in state Ready, in registry order, is backed up through `CompanyBackupService.BackupCompanyAsync` (its own lock, staging folder, checks and verification).
      * The outcome per company is `ok`, `ok_missing_keys` or `busy`, or `failed` with its code.
      * One company's failure never stops the others. Companies not in state Ready are counted as skipped.
+   * **A run is NOT one consistent point in time across databases.**
+     * Order: the system database is dumped first, then the companies one by one in registry order. Each `pg_dump` takes its own snapshot of ONE database; PostgreSQL has no snapshot shared across databases.
+     * The consistency window runs from the system dump's start to the last company dump's end. `run.json` records the start and end of each dump.
+     * In an `ok` run these can disagree:
+       * the registry (a company registered, provisioned or changed in state after the system dump);
+       * party links in the registry against `GlobalPartyId` in a company;
+       * memberships and role assignments against company-side references;
+       * migration levels;
+       * audit checkpoints against streams.
+     * This is acceptable for the single-company restore of slice 3: Scenario 21.8 never rolls the system database back, and the trial restore compares the company copy with the LIVE system database (checks a and c).
+     * **Recorded for the full-installation restore slice:** it must RECONCILE the restored system database with every restored company, reporting differences in the manner of slice 3's checks a and c (registry entries, links, memberships, migration levels), rather than assume one consistent point.
+     * **Also recorded for that slice:** restored sessions must be dropped or invalidated, for example by deleting the session rows or advancing a session epoch, so that no revoked session is revived by a restore.
    * **Run report, `run.json`.** Owner-only, written LAST (temp file then rename), so a run folder without `run.json` is an incomplete run. Contents:
      * the run id, start and finish times (UTC) and duration;
      * the system outcome and duration;
@@ -282,6 +312,7 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
    * Exit 8 when it is `partial`.
    * Exit 1 when it `failed`, when no complete run exists (`backup_missing`), or when it is too old (`backup_stale`).
    * Incomplete run folders older than 24 hours are reported as a warning (`incomplete_runs`); they are never deleted.
+   * Per company, the number of CONSECUTIVE complete runs (newest first) in which it was `busy` or `failed` is reported. Two or more is a warning (`company_missed_runs`, exit 8), so a company that is always busy at backup time does not stay unnoticed behind an otherwise `ok` verdict.
    * This exit code is the alert hook for the operating-system monitor (SRS 16).
 3. **Scheduling.** Not built into HASM. An operating-system scheduler starts `Hasm.Admin backup-run <root>` under the service account; tested examples for a systemd timer, cron and Windows Task Scheduler go into `docs/DEVELOPMENT.md`. The API never runs a privileged backup: it holds no admin credential (privilege separation).
 4. **Retention, preview only: `backup-retention-preview <root> --keep-last N [--keep-days D]`.**
@@ -302,7 +333,9 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
   * `SystemBackupManifest`: round trip and verification (missing, altered or unlisted file).
   * Status evaluation (pure, from a list of runs and the current time):
     * ok -> 0; partial -> 8; failed -> 1; none -> `backup_missing`; too old -> `backup_stale`;
-    * an incomplete newest folder is skipped in favour of the newest complete run and reported.
+    * an incomplete newest folder is skipped in favour of the newest complete run and reported;
+    * consecutive `busy`/`failed` misses per company are counted, and two or more give a warning.
+  * Secret exclusion: the TOTP exclusion list is pinned against the system schema (see the design).
   * Retention preview (pure): keep-last, keep-days and both together; the newest complete run is never selected; incomplete and unreadable runs are never selected.
   * Path rules: a root inside the attachment root or the key directory, or containing one, is refused.
   * Run folder: owner-only 0700 and refused if it exists (the slice 3 helper).
@@ -348,16 +381,21 @@ Backup sets today are verified but NOT encrypted or authenticated, and nothing i
 2. **Whether HASM may delete backups (retention of backups containing financial data).**
    * (a) Never delete automatically; operators delete by hand.
    * **(b) Recommended:** automatic deletion is allowed only for daily and weekly runs beyond a configured count (default: keep 7 daily and 4 weekly). Month-end and year-end runs are NEVER deleted automatically; they are kept until an owner-configured legal retention period has passed, and the default is "never". Every deletion is written to the run report.
+     * Proposed definitions, for the owner to confirm:
+       * a **month-end run** is the last complete run started in a calendar month (server local time);
+       * a **year-end run** is the month-end run of any month in which at least one company's fiscal year ends (from its company configuration), kept for the whole installation.
    * (c) A fixed legal period built into the product. Not recommended: legal retention of accounting records differs between jurisdictions, and HASM does not choose it.
 3. **Backup of the key directory.** Without it, encrypted attachments, and under 1(a)/(b) the backups themselves, cannot be read after a server loss.
    * (a) Stays a manual, documented operator task (decision K).
    * **(b) Recommended:** `backup-keys <destination>` exports the key directory encrypted to the same offline recovery public key as 1(d). It is written to a destination that must differ from the data run root, and the key ids are listed in the run report.
+     * 3(b) as written works only with 1(d). Under 1(a) or 1(b), the export would contain the very key that decrypts the backups, so it needs a separate protection that the owner names (a second offline key or a passphrase); without one, item 3 falls back to 3(a). Under 1(c), the same passphrase would protect both, so one secret guards everything.
 4. **Interim, until 1 is built.**
    * **(a) Recommended:** keep producing unencrypted sets, with the documentation requiring an encrypted volume or disk for the backup root.
    * (b) Refuse `backup-run` until encryption exists. Safer at rest, but no backups at all meanwhile.
 
 **Effect while the package is open:**
 * no set encryption or signature;
+* TOTP secrets (once they exist) are excluded from the system dump;
 * nothing deleted (retention is preview only);
 * no key-directory export;
 * sets remain unencrypted with the documentation requirement of item 4(a);
