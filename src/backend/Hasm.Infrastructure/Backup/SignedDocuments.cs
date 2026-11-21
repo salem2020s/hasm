@@ -30,14 +30,15 @@ public sealed record ManifestV2(int Version, string Kind, string? RunId, Guid? C
 /// </summary>
 public sealed record RunStatus(int Version, string Kind, string RunId, DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc, long DurationMs, string Verdict,
     int CompaniesOk, int CompaniesMissingKeys, int CompaniesBusy, int CompaniesFailed, int Skipped, string RecoveryKeyId, string SigningKeyId, string CanarySha256,
-    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted, IReadOnlyList<RunStatusCompany> Companies)
+    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted, IReadOnlyList<RunStatusCompany> Companies, IReadOnlyList<string>? AuditKeyIds = null)
 {
-    public const int CurrentVersion = 1;
+    /// <summary>Version 2 (slice 6, D-138) adds the key inventory: per company the attachment master-key ids its set needs, and the audit key ids of the run. Version 1 stays readable (key needs unknown).</summary>
+    public const int CurrentVersion = 2;
     public const string KindValue = "run-status";
 }
 
 /// <summary>A company of a run as the signed status names it (id and outcome only), for the missed-runs warning.</summary>
-public sealed record RunStatusCompany(Guid CompanyId, string Outcome);
+public sealed record RunStatusCompany(Guid CompanyId, string Outcome, IReadOnlyList<string>? KeyIdsRequired = null);
 
 /// <summary>Writing and reading of signed documents and encrypted manifests. Every reader verifies the signature against the operator's trust list BEFORE it parses anything (review M1, L-b).</summary>
 public static class SignedDocuments
@@ -114,10 +115,16 @@ public static class SignedDocuments
         RunStatus? s;
         try { s = JsonSerializer.Deserialize<RunStatus>(content, Json); }
         catch (JsonException) { throw new BackupException("status_invalid"); }
-        if (s is null || s.Version != RunStatus.CurrentVersion || s.Kind != RunStatus.KindValue || s.RunId != Path.GetFileName(Path.TrimEndingDirectorySeparator(runDirectory))
+        if (s is null || s.Version is not (1 or RunStatus.CurrentVersion) || s.Kind != RunStatus.KindValue || s.RunId != Path.GetFileName(Path.TrimEndingDirectorySeparator(runDirectory))
             || !BackupRunFiles.Verdicts.Contains(s.Verdict) || s.SigningKeyId != key.KeyId || !RecoveryKeys.IsKeyId(s.RecoveryKeyId) || s.CanarySha256 is not { Length: 64 }
             || s.Excluded is null || s.Warnings is null || !s.Encrypted || s.Companies is null
             || s.Companies.Any(c => c is null || c.CompanyId == Guid.Empty || !BackupRunFiles.CompanyOutcomes.Contains(c.Outcome)) || s.Warnings.Any(w => !BackupRunFiles.IsCode(w)) || s.Excluded.Any(e => !BackupRunFiles.IsCode(e)))
+            throw new BackupException("status_invalid");
+        // version 2 carries a complete key inventory (D-138); version 1 carries none
+        if (s.Version == RunStatus.CurrentVersion
+            ? s.AuditKeyIds is null || s.AuditKeyIds.Any(k => !Hasm.Infrastructure.Audit.AuditKeyRing.IsValidKeyId(k))
+              || s.Companies.Any(c => c.KeyIdsRequired is null || c.KeyIdsRequired.Any(k => !Hasm.Infrastructure.Security.KekRing.IsValidKeyId(k)))
+            : s.AuditKeyIds is not null || s.Companies.Any(c => c.KeyIdsRequired is not null))
             throw new BackupException("status_invalid");
         SigningTrust.EnsureValidAt(key, s.StartedUtc);
         return s;
