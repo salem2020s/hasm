@@ -34,6 +34,9 @@ Named and Concurrent seats (each active session counts); annual and perpetual be
 ## G. Backup, restore, update, installation (SRS 2, 16)
 Scheduled and manual backups with retention and encryption; full and single-company restore with attachments without touching other companies or the system database; measured RPO/RTO recorded; signed manual updates with rollback; clean install and upgrade on the three deployment models; TLS to API and database.
 
+Recorded limitations against G (dated; each must be closed or explicitly accepted before release):
+* 2026-11-21 (D-118, Phase 4.3 slice 5): trial restore and the backup recovery test run without independent approval until the Phase 4.1 approval framework exists. They run only through the administrative tool under operating-system access, and each writes a system-stream audit event.
+
 ## H. Security (SRS 17, 4)
 No open Critical or High finding; audit chain verifies after export; secrets never in repository, logs or support bundles; opaque physical names preserved by every migration; MFA and emergency account as specified.
 

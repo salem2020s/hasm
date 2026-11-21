@@ -412,9 +412,9 @@ Backup sets today are verified but NOT encrypted or authenticated, and nothing i
 
 The slice after this one implements whichever answer the owner gives. No migration is expected.
 
-## Slice 5: encrypted and signed backup sets, key export, DEV/TEST-only guard - PLAN (docs only; awaits independent review before any code)
+## Slice 5: encrypted and signed backup sets, key export, DEV/TEST-only guard - PLAN (docs only; revised after review round 1 of #116 by Agent G)
 Sources: owner decisions D-085 (envelope encryption to an offline recovery key pair, authenticated encryption, signed manifests, key ids, rotation, recovery test), D-087 (`backup-keys`), D-088 (unencrypted sets DEV/TEST only); SRS 16, 17; RELEASE1-ACCEPTANCE G. Risk: Critical.
-Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (allocated by the lead; autonomous under D-048).
+Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 and, after review round 1, D-116..D-119 (allocated by the lead; autonomous under D-048; D-118 and D-119 are lead decisions).
 
 ### Scope
 * Every backup artefact is encrypted to the offline recovery PUBLIC key (the private key never reaches the server) and every manifest is signed with a separate server-held signing key. This covers:
@@ -438,7 +438,10 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
    * Outputs:
      * the public key as PEM (SubjectPublicKeyInfo);
      * the private key as passphrase-encrypted PKCS#8 (PBES2: AES-256-CBC with PBKDF2-HMAC-SHA256, 600 000 iterations), written TWICE (`copy-1`, `copy-2`) for two offline media, with instructions.
-   * The passphrase comes from a prompt only, never an argument.
+   * **Passphrases (review M3).** They come from a prompt, entered twice, or for scripted use from standard input (`--passphrase-stdin`, file descriptor 0); never from an argument or an environment variable.
+     * At least 20 characters (six diceware words also qualify), plus a matching confirmation.
+     * `--separate-passphrases` encrypts copy 1 and copy 2 under different passphrases, for separate custodians.
+     * PBES2 has no MAC of its own, so the recovery kit keeps the SHA-256 of each copy (review L4).
    * The key id is `rk-` plus the first 16 hex characters of SHA-256 over the SubjectPublicKeyInfo.
    * The server is configured with the public key only: `Hasm__Backup__RecoveryPublicKeyFile`.
    * Alternatives:
@@ -457,13 +460,21 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
    * **Key derivation:** ECDH(ephemeral, recovery public) gives a shared secret. HKDF-SHA256 (salt, info `hasm-backup/v1` + purpose + file name + key id) derives a 256-bit file key and a header key.
    * **Body:** streaming AES-256-GCM in 1 MiB plaintext chunks. Each chunk nonce is the 7-byte prefix, a 4-byte big-endian chunk counter and a 1-byte last-chunk flag. The AAD is SHA-256 of the header plus the chunk index.
    * **What this detects:** reordering, truncation (the last-chunk flag is required), extension, header tampering, and moving a file to another name or purpose (bound through HKDF info and the AAD).
-   * Nothing is decrypted or returned before its chunk tag verifies. Memory stays bounded for multi-GB dumps.
+   * **Integrity is not authenticity (review H1).** ECIES to a public key and the header MAC prove that a file is intact, not who wrote it: anyone holding the public key can produce a valid HBE1 file. Authenticity comes only from the signed manifest (D-092, D-116).
+     * Each manifest entry carries the SHA-256 of the file's HBE1 header and the ordered list of the SHA-256 of every stored chunk (ciphertext and tag).
+     * **The manifest signature is verified first.** While decrypting, the header and then each stored chunk are checked against that signed list BEFORE the chunk is decrypted and released; the chunk count must match exactly. So no decrypted byte reaches `pg_restore` or attachment staging until it is authenticated.
+     * The AEAD tag, chunk index and last-chunk flag remain a second, independent layer.
+     * Memory stays bounded for multi-GB dumps. The chunk list costs about 64 bytes of manifest per MiB.
+   * **Format details (review L1):**
+     * encryption refuses beyond 2^32 - 1 chunks (`hbe_too_large`);
+     * an empty file is ONE empty final chunk;
+     * the ephemeral public key must be a P-256 point on the curve (the platform import rejects off-curve points; anything else is `hbe_malformed`).
    * Alternatives:
      * the existing attachment envelope `HFE1`: rejected; it is whole-file in memory and wrapped by a SERVER key, which contradicts D-085;
      * one key per run: rejected; any single file could not be recovered alone, and a key leak would affect the whole run.
 3. **No plaintext at rest, and what an encrypted run contains (D-091).**
    * `pg_dump` writes to stdout (custom format), which is piped through the encryptor into `database.dump.hbe`. Attachments are read and encrypted file by file. `run.json` and the system manifest are encrypted as well; the run folder keeps only a small signed `run.status.json` (verdict, counts, times, key ids; no names) for `backup-status`.
-   * Restore and the recovery test decrypt in a streaming fashion into `pg_restore` stdin. Attachments are decrypted into the private (0700) staging folder of the restore target, as today.
+   * Restore and the recovery test verify the signed manifest first, then decrypt in a streaming fashion into `pg_restore` stdin, releasing only authenticated chunks (H1). Attachments are decrypted into the private (0700) staging folder of the restore target, as today.
    * Alternative rejected: dump to a file, then encrypt. Plaintext would exist at rest, even if briefly and in a 0700 folder.
    * **Secret-store data in an ENCRYPTED run.**
      * The data of the session and login-throttle tables stays excluded: it is ephemeral and has no recovery value (slice 4).
@@ -474,9 +485,23 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
 4. **Signed manifests (D-092).**
    * The signing key is ECDSA P-256 in its own owner-only directory, `Hasm__Backup__SigningKeyDirectory`, separate from the attachment key directory and from the backup root, with an active key id `sk-...`. It is generated by `backup-signing-keygen <key-id>` on the server.
    * Every manifest (company `manifest.json`, the system manifest, `run.status.json`, the key-export manifest) gets a detached `*.sig`: base64 IEEE-P1363 signature over the exact file bytes, plus the signing key id.
+   * **What the signature covers (review M1).** Every signed document contains, and so the signature covers:
+     * its kind and the run id;
+     * the company id, where there is one;
+     * `createdUtc` and the format version;
+     * the recovery key id and the signing key id;
+     * for each file, its purpose, its name, its size, the header hash and the chunk-hash list (H1).
+   * **Refusals (review M1):**
+     * An HBE1 file whose manifest has a missing or invalid `.sig` is refused.
+     * Whether a version 1 or unencrypted set is accepted depends ONLY on the reader's own acknowledgement (D-095), never on a field inside the set.
+     * `backup-status` verifies the signature of `run.status.json`. A missing or invalid signature counts as a FAILED run (exit 1, `status_unsigned`).
    * **Trust anchor for verification:** the signing PUBLIC key (`sk-*.pub.pem`), which the operator keeps in the recovery kit (exported by `backup-keys` and printed at keygen). Verification never trusts a key carried inside the set itself.
+   * **Key status in the recovery kit (review M5).** The kit lists every signing public key with a status: `active`, `retired` or `compromised`.
+     * Verification refuses a `compromised` key (`signing_key_compromised`).
+     * A `retired` key still verifies sets signed before its retirement.
+     * The procedure is documented: mark the key compromised in every kit copy, generate a new signing key, take a new run, and treat sets signed by the compromised key after the suspected time as untrusted. Retiring a key needs independent approval (D-080(6)).
    * Manifest versions:
-     * version 2 for encrypted sets; it lists ciphertext file names, sizes and SHA-256 hashes, and the recovery and signing key ids;
+     * version 2 for encrypted sets; it lists ciphertext file names, sizes, header hashes and chunk-hash lists (H1), and the recovery and signing key ids;
      * version 1, the current format, stays readable for DEV/TEST sets only.
    * Alternatives:
      * HMAC: rejected; verification would need the secret;
@@ -492,11 +517,16 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
 * `backup-signing-keygen <key-id>` (server; owner-only; never overwrites).
 * `backup-run` and `backup-company`, unchanged arguments: encrypted and signed when the recovery public key and the signing key are configured; otherwise refused (`backup_encryption_not_configured`, exit 3), see the guard.
 * `trial-restore-company <set> <company> <target> --recovery-key <private-key-file> --signing-public-key <pem> [--keep]`.
-  * The passphrase comes from a prompt or from `HASM_RECOVERY_KEY_PASSPHRASE`; never an argument.
+  * The passphrase comes from a prompt or from standard input (review M3). `HASM_RECOVERY_KEY_PASSPHRASE` is NOT supported: environment variables leak into process listings and crash reports.
+  * **Runbook (review L3):** after a trial restore or a recovery test, remove the private-key file from the machine. Bring it on removable media and take it away again; never copy it to the server's disks.
   * The private key is loaded into memory only, and zeroed after use.
 * `backup-keys <destination>` (D-087, D-094):
-  * exports the attachment master-key directory (and, for completeness, every signing PUBLIC key) as one `HBE1`-encrypted, signed archive;
-  * the destination must not overlap the backup root, the attachment root or the key directories;
+  * exports EVERY key directory (review M4) as one `HBE1`-encrypted, signed archive:
+    * the attachment and encryption master keys (`Hasm:Encryption:KeyDirectory`);
+    * the audit key ring (`Hasm:Audit:KeyDirectory`);
+    * the backup signing keys, both private keys and status list;
+    * every signing public key;
+  * the destination must not overlap the backup root, the attachment root, or the encryption, audit or signing key directories. The same set of directories is added to the backup-root overlap checks of `backup-run` and `backup-company`.
   * the key ids are listed in the signed export manifest;
   * key recovery (decrypt the export and verify the ids) is part of the recovery test.
 * `backup-recovery-test <run-dir> --recovery-key <file> --signing-public-key <pem> [--keys-export <dir>]` (D-085):
@@ -505,12 +535,20 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
   * restores the system dump and every company set into NEW disposable databases (trial-restore semantics; dropped afterwards);
   * runs the slice 3 checks;
   * decrypts the key export, when given, and checks that it contains every key id the sets need.
-  * On success it writes a signed `recovery-test.json` (recovery key id, signing key id, run id, time, counts) into the backup root.
+  * **Proof that cannot be forged with the server's signing key (review M2).**
+    * Each run writes a random 32-byte canary encrypted to the recovery public key (`canary.hbe`). Only the canary's SHA-256 goes into the signed `run.status.json`; the plaintext is never retained.
+    * The recovery test must present the decrypted canary, whose hash must match. Only then does it write a signed `recovery-test.json` (recovery key id, signing key id, run id, time, counts, and the canary preimage hash).
+    * `backup-status` accepts a recovery test only when that canary check passed.
+    * **Residual limitation:** whoever holds BOTH the server's signing key and the recovery private key can forge the proof, but that party can read every backup anyway. The proof shows that the private key existed and decrypted this run; it does not prove who ran the test. The audit event (D-118) records the operator.
+  * **Keys checked (review M4):** the KEK ids that Phase 4.1's `user_totp` rows reference, and the audit key ids of the system and business streams.
+  * **TOTP rows are never decrypted by the recovery test (review M6).** Only their key ids are compared with the export.
   * `backup-status` reports `recovery_untested` (exit 8) while no successful recovery test exists for the active recovery key id, so the key is "not production-ready" until it succeeds (D-085).
 
 ### DEV/TEST-only guard for unencrypted sets (D-088, D-095)
 * **Default: refused.** Without a configured recovery public key AND signing key, every producing command refuses with `backup_encryption_not_configured` (exit 3): `backup-run`, `backup-company`, and `backup-keys`, which always needs the recovery key.
 * **The only way to get an unencrypted set** is an explicit acknowledgement value, `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production`. Any other value is a configuration error. It follows the disposable-cluster acknowledgement pattern of the test harness.
+* **The acknowledgement is refused while a recovery public key is configured** (`unencrypted_ack_with_recovery_key`, review L2), so a production installation that has encryption set up can never be downgraded by one variable.
+* **DEGRADED status (review L2):** while the acknowledgement is set, `backup-status` and every production-readiness or health status shows `DEGRADED: unencrypted backups (DEV/TEST only)`. This includes the API's readiness endpoint once one exists; the API exposes the flag read only and never sets it.
 * **Every unencrypted artefact is marked:**
   * `encrypted: false`, `devTestOnly: true` in `run.json` and the manifests;
   * a file `UNENCRYPTED-DEV-TEST-ONLY` in the set and run folders.
@@ -531,16 +569,26 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
   * Detection of each kind of tampering: header byte, chunk swap, truncation at a chunk boundary, removed last chunk, appended data, wrong key, file renamed or used for another purpose.
   * Key ids.
   * Encrypted-PKCS#8 round trip, and refusal of a wrong passphrase.
-  * Signature verification: tampered manifest, wrong key, unknown key id.
+  * Signature verification: tampered manifest, wrong key, unknown key id, a `compromised` key (M5), a missing `.sig` (M1).
+  * H1, release only after authentication:
+    * every header and chunk is checked against the signed list before release;
+    * a reordered, removed, truncated, extended or swapped file gives `hbe_not_authenticated`, while the format's own MAC and AEAD still catch it under a re-signed digest;
+    * no plaintext is written before the first authenticated chunk (a failing first chunk leaves the output empty).
+  * M1: `run.status.json` unsigned or invalid gives `backup-status` exit 1 (`status_unsigned`); acceptance of a version 1 or unencrypted set depends only on the reader's acknowledgement.
+  * M2: canary. The run stores only the hash; a recovery test with a wrong preimage is refused; the plaintext canary is never on disk.
+  * M3: passphrases shorter than 20 characters or mismatched are refused; separate passphrases per copy; no environment-variable passphrase.
+  * M4: the export contains the encryption, audit and signing key directories; overlap checks include the audit and signing key directories; the recovery test checks the TOTP KEK ids and the audit key ids, and never decrypts TOTP rows.
+  * L2: acknowledgement refused while a recovery key is configured; DEGRADED status.
   * Manifest v2 validation, and v1 read as DEV/TEST only.
   * Guard: refusal by default, the exact acknowledgement only, the markers, `backup-status` `unencrypted_dev_test`.
   * Pin: no repository configuration sets the acknowledgement.
   * `recovery_untested` status.
-* **PostgreSQL (new class, about 5 tests; the registry is raised at push time):**
+* **PostgreSQL (new class, about 6 tests; the registry is raised at push time and the lead is told the count):**
   * an encrypted run, with no plaintext dump at rest (the run folder holds only `.hbe`, `.sig` and the status files);
   * trial restore with the private key;
   * `backup-keys` export and recovery;
-  * `backup-recovery-test` end to end, writing `recovery-test.json` and turning `backup-status` green;
+  * `backup-recovery-test` end to end with the canary, writing `recovery-test.json` and turning `backup-status` green, and writing the system audit events (D-118);
+  * a forged set (a valid HBE1 file under a manifest signed by another key, or an unsigned one) is refused before anything reaches `pg_restore`;
   * refusal without encryption configured, and the DEV/TEST path.
 * **Existing suites:** `CompanyBackupServiceTests` and `BackupRunTests` run with the DEV/TEST acknowledgement (unencrypted, explicitly marked); their counts are unchanged.
 
@@ -549,12 +597,28 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (a
   * `backup-recovery-keygen`, `backup-signing-keygen` and `backup-keys` are privileged administrative operations.
   * Under the Phase 4.1 plan they need a named administrator login with MFA (lead decision D-099 in that plan), applied through whatever mechanism 4.1 defines for administrative commands. This slice adds no separate authentication.
   * Until 4.1 delivers that mechanism, these commands run under the existing administrative-tool model: operating-system access to the service account and its configuration. The 4.1 slice that introduces the admin-tool login must cover them.
-* **Independent approval of restores.** Restore operations need independent approval (D-080(6)).
-  * In this slice, trial restore and `backup-recovery-test` restore only into NEW disposable databases; they replace nothing and register nothing.
-  * The live restore cutover is slice 7 (D-081), and its plan applies D-080(6) and D-081 there.
-  * If the 4.1 plan classifies trial restores as restore operations needing approval too, slice 7 or the 4.1 implementation wires that approval in for them.
+* **Independent approval of restores (lead classification under D-048, fail closed; D-118, review M7).** Trial restore (`trial-restore-company`) and `backup-recovery-test` ARE restore operations under D-080(6).
+  * Once the Phase 4.1 approval framework exists, both require independent approval. Wiring them in is part of the 4.1 slice that delivers the framework, or of slice 7, whichever comes first.
+  * Until then they run only through the administrative tool under operating-system access. This is a dated limitation recorded in `docs/RELEASE1-ACCEPTANCE.md` (G: "trial restore and recovery test without independent approval until the 4.1 approval framework, recorded 2026-11-21").
+  * Either way, each run writes a SYSTEM-stream audit event: the operator (the named administrator under 4.1, the OS account until then), the recovery and signing key ids, the company ids, and a tag (SHA-256 prefix) of each target database; never a physical database name.
+  * Event codes: `BackupTrialRestore` and `BackupRecoveryTest`, plus `BackupKeysExported` for `backup-keys` and `BackupKeyGenerated` for the signing keygen. They are allocated from the system-stream range when implemented; no migration (codes are constants).
+  * The live restore cutover is slice 7 (D-081), with approval under D-080(6).
+* **Credential revocations after a system restore (lead rules under D-048, shared with #113; D-119, review M6).**
+  * After a system-database restore, logins stay BLOCKED until the procedure has re-applied every credential revocation recorded after the backup point: TOTP revocation or recovery, password change, disable. These come from the audit chain and its anchors (checkpoints).
+  * If that cannot be done completely, every restored `Enrolled` user becomes `RecoveryRequired`.
+  * A restore into a DIFFERENT installation id makes every user `RecoveryRequired`.
+  * Risk row: if the recovery private key is compromised, every user must re-enrol MFA and reset the password. Rewrapping the TOTP secrets alone does not help, because the stolen backups already hold the old ones.
+  * These rules bind the full-installation restore and slice 7, and are implemented there; this slice only records them.
 * **TOTP secrets** (D-080(2)): see "Secret-store data in an ENCRYPTED run" above.
 * **Key retirement.** Retiring a recovery or signing key is an encryption-key retirement and needs independent approval (D-080(6)). This slice only creates and rotates keys; it never retires or deletes one.
+
+### Decisions added after review round 1 (D-116..D-119)
+* **D-116, authenticity before release (H1, option a).** The signed manifest carries each file's header hash and per-chunk hash list. Decryption releases a chunk only after it matches. The header MAC is integrity only.
+  * Alternative rejected: (b) a full hash pass over a held-open, replacement-protected handle, then decryption. It needs two reads of multi-GB files and platform-specific handle protection.
+* **D-117, recovery-test proof by canary (M2).** A per-run random canary is encrypted to the recovery key; only its hash is signed; the recovery test must present the preimage. The residual limitation is stated above.
+* **D-118, trial restore and recovery test are restore operations (M7, LEAD decision, fail closed).** Independent approval once the 4.1 framework exists; until then admin tool only, recorded as a dated limitation in RELEASE1-ACCEPTANCE; system-stream audit events for both, and for `backup-keys` and the signing keygen.
+* **D-119, credential revocations after a system restore (M6, LEAD rules shared with #113).** Logins are blocked until post-backup revocations are re-applied from the audit chain and anchors, or else restored `Enrolled` users become `RecoveryRequired`. A different installation id makes every user `RecoveryRequired`. A compromised recovery private key means everyone re-enrols and resets the password.
+* The other review items amend D-089 (passphrases, M3/L4), D-090 (L1), D-092 (coverage, refusals and key status, M1/M5), D-094 (every key directory, overlap checks, TOTP KEK and audit key checks, M4) and D-095 (L2).
 
 ### Owner decisions this slice relies on (not re-asked)
 D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
