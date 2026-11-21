@@ -9,7 +9,7 @@ namespace Hasm.Api.Company;
 
 public static class CommercialSetup
 {
-    /// <summary>Production registers NO document type in slice S1a (owner decision Q1 / D-048): the registry is empty here and the test composition replaces it (the last registration wins).</summary>
+    /// <summary>Production registers NO document type in slice S1a (owner decision Q1 / D-049): the registry is empty here and the test composition replaces it (the last registration wins).</summary>
     public static IServiceCollection AddHasmCommercial(this IServiceCollection services)
     {
         services.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([]));

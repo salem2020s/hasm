@@ -7,9 +7,11 @@ using Hasm.Infrastructure.Security;
 namespace Hasm.Infrastructure.Backup;
 
 /// <summary>A refused backup-set operation. <see cref="Code"/> is a stable reason code; messages never carry paths, names or key material.</summary>
-public sealed class BackupException(string code) : Exception("The backup set operation was refused.")
+public sealed class BackupException(string code, string? cause = null) : Exception("The backup set operation was refused.")
 {
     public string Code { get; } = code;
+    /// <summary>A secondary reason code when the primary one hides an earlier failure (for example a failed cleanup after a failed restore); a code only, never tool output.</summary>
+    public string? Cause { get; } = cause;
 }
 
 /// <summary>One file of a backup set: a relative name, its size and the SHA-256 of the stored bytes (for an encrypted attachment: of the ciphertext).</summary>
@@ -20,13 +22,29 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
 /// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
-public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0);
+/// <remarks><see cref="DatabaseLocale"/> is the encoding and locale of the source database captured at dump time (decision D-053); a manifest written before it existed reads with null (the restore then needs the live source).</remarks>
+public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0, DatabaseLocale? DatabaseLocale = null);
+
+/// <summary>
+/// The encoding, libc collation/ctype and locale provider (<c>c</c> = libc, <c>i</c> = ICU, <c>b</c> = builtin; null on PostgreSQL 14, which has only libc) of a company database, captured when it is dumped, so a restore
+/// reproduces them without the source database (disaster recovery). Values are data: they are validated again before they are placed in a statement (<see cref="PgBackupTool"/>).
+/// </summary>
+public sealed record DatabaseLocale(string Encoding, string? Collate, string? Ctype, string? Provider)
+{
+    /// <summary>Structural check of a stored record (non-empty encoding, bounded lengths, a one-letter provider); the character rules are applied by the restore.</summary>
+    public bool IsWellFormed => !string.IsNullOrEmpty(Encoding) && Encoding.Length <= 64 && (Collate?.Length ?? 0) <= 256 && (Ctype?.Length ?? 0) <= 256 && (Provider is null || Provider.Length == 1);
+}
 
 /// <summary>The result of verifying a backup set against its manifest. Only generated names are listed.</summary>
 public sealed record BackupVerification(bool ManifestValid, bool DatabaseOk, IReadOnlyList<string> Missing, IReadOnlyList<string> HashMismatch, IReadOnlyList<string> Unexpected, BackupManifest? Manifest)
 {
     public bool IsClean => ManifestValid && DatabaseOk && Missing.Count == 0 && HashMismatch.Count == 0 && Unexpected.Count == 0;
+    /// <summary>Files that start with the envelope magic without being a valid envelope (counted at backup time).</summary>
+    public int NonEnvelopeFilesWithMagic => Manifest?.NonEnvelopeFilesWithMagic ?? 0;
 }
+
+/// <summary>What a restore wrote: the attachment files and how many of them only look like envelopes (they start with the envelope magic but are ordinary content: no key is needed for them).</summary>
+public sealed record RestoreResult(int Files, int NonEnvelopeFilesWithMagic);
 
 /// <summary>The outcome of comparing the key ids a backup set needs with the key ids present in a restored key directory.</summary>
 public sealed record KeyCoverage(IReadOnlyList<string> Required, IReadOnlyList<string> Missing)
@@ -41,9 +59,6 @@ public sealed record KeyCoverage(IReadOnlyList<string> Required, IReadOnlyList<s
 /// </summary>
 public static class BackupSet
 {
-    /// <summary>Test seam: runs after the set was verified and before any file is copied (to prove the staged re-hash). Null in production.</summary>
-    internal static Action<string>? BeforeStagedCopy;
-
     public const int CurrentVersion = 1;
     public const string DatabaseFileName = "database.dump";
     public const string ManifestFileName = "manifest.json";
@@ -54,10 +69,14 @@ public static class BackupSet
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly byte[] EnvelopeMagic = [(byte)'H', (byte)'F', (byte)'E', (byte)'1'];
 
-    /// <summary>Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.</summary>
-    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc)
+    /// <summary>
+    /// Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.
+    /// <paramref name="databaseLocale"/> is what <see cref="PgBackupTool.DumpAsync"/> captured; it is stored in the manifest.
+    /// </summary>
+    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null)
     {
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
+        if (databaseLocale is { IsWellFormed: false }) throw new BackupException("invalid_database_locale");
         if (!File.Exists(databaseDumpFile)) throw new BackupException("database_dump_missing");
         if (!Path.IsPathFullyQualified(destination) || !Path.IsPathFullyQualified(attachmentCompanyDirectory)) throw new BackupException("path_not_absolute");
         var source = RealPath(attachmentCompanyDirectory);
@@ -68,7 +87,7 @@ public static class BackupSet
         if (new FileInfo(databaseDumpFile).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
 
         var destExisted = Directory.Exists(dest);
-        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc); }
+        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale); }
         catch
         {
             // never leave a partial set that could be mistaken for a backup
@@ -78,7 +97,7 @@ public static class BackupSet
         }
     }
 
-    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc)
+    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale)
     {
         AuditFilePermissions.CreateOwnerOnlyDirectory(dest);
         var attachDir = Path.Combine(dest, AttachmentFolderName);
@@ -101,18 +120,15 @@ public static class BackupSet
                 var copy = Path.Combine(attachDir, name);
                 File.Copy(path, copy, false);
                 files.Add(Describe(copy, name));
-                var head = ReadHead(copy);
-                if (head.Length >= 4 && head.AsSpan(0, 4).SequenceEqual(EnvelopeMagic))
-                {
-                    // Only a structurally valid envelope names a key. A plain file that merely starts with the magic (a CSV "HFE1,...") or carries an invalid key id is
-                    // ordinary content: it is counted, never a reason to refuse the backup. (A well-formed envelope with a made-up key id still lists that id: conservative, it can only add a missing-key report.)
-                    try { keys.Add(EnvelopeEncryptor.KeyIdOf(File.ReadAllBytes(copy))); }
-                    catch (EncryptionUnavailableException) { lookalikes++; }
-                }
+                // Only a structurally valid envelope names a key. A plain file that merely starts with the magic (a CSV "HFE1,...") or carries an invalid key id is
+                // ordinary content: it is counted, never a reason to refuse the backup. (A well-formed envelope with a made-up key id still lists that id: conservative, it can only add a missing-key report.)
+                var kind = ClassifyEnvelope(copy, out var keyId);
+                if (kind == Envelope.Valid) keys.Add(keyId!);
+                else if (kind == Envelope.MagicOnly) lookalikes++;
             }
         }
 
-        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes);
+        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes, databaseLocale);
         var temp = Path.Combine(dest, ManifestFileName + ".tmp");
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));
         File.Move(temp, Path.Combine(dest, ManifestFileName));
@@ -155,7 +171,11 @@ public static class BackupSet
     /// Restores the attachment folder of the set into <paramref name="targetCompanyDirectory"/>, which must not exist or be empty (never merges, never overwrites). The set is verified first; a set that is not clean is refused
     /// and nothing is written. Files are staged in a sibling directory and moved into place, so a failure leaves the target untouched. Returns the number of files restored.
     /// </summary>
-    public static int RestoreAttachments(string setDirectory, string targetCompanyDirectory, Guid expectedCompanyId)
+    public static RestoreResult RestoreAttachments(string setDirectory, string targetCompanyDirectory, Guid expectedCompanyId) =>
+        RestoreAttachments(setDirectory, targetCompanyDirectory, expectedCompanyId, null);
+
+    /// <summary>As the public overload; <paramref name="afterVerify"/> (tests only) runs after the set was verified and before any file is copied, to prove the staged re-hash.</summary>
+    internal static RestoreResult RestoreAttachments(string setDirectory, string targetCompanyDirectory, Guid expectedCompanyId, Action<string>? afterVerify)
     {
         if (!Path.IsPathFullyQualified(targetCompanyDirectory) || !Path.IsPathFullyQualified(setDirectory)) throw new BackupException("path_not_absolute");
         if (expectedCompanyId == Guid.Empty) throw new BackupException("invalid_company");
@@ -173,7 +193,7 @@ public static class BackupSet
         AuditFilePermissions.CreateOwnerOnlyDirectory(staging);
         try
         {
-            BeforeStagedCopy?.Invoke(set);
+            afterVerify?.Invoke(set);
             foreach (var f in v.Manifest.Attachments)
             {
                 var copy = Path.Combine(staging, f.Name);
@@ -188,7 +208,7 @@ public static class BackupSet
             try { Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort; the target was never touched */ }
             throw;
         }
-        return v.Manifest.Attachments.Count;
+        return new RestoreResult(v.Manifest.Attachments.Count, v.Manifest.NonEnvelopeFilesWithMagic);
     }
 
     /// <summary>Which of the key ids the set needs are absent from <paramref name="availableKeyIds"/> (for example the ids found in the restored key directory). Retaining every key a retained attachment needs is decision K.</summary>
@@ -222,20 +242,55 @@ public static class BackupSet
         foreach (var a in m.Attachments)
             if (a is null || a.Name is null || !StorageName.IsMatch(a.Name) || !Sha256Hex.IsMatch(a.Sha256 ?? "") || a.Size < 0 || !names.Add(a.Name)) return null;
         if (m.KeyIdsRequired.Any(k => k is null || !KekRing.IsValidKeyId(k))) return null;
+        if (m.DatabaseLocale is { IsWellFormed: false }) return null;
         return m;
     }
 
-    /// <summary>The envelope header (magic, id length and key id: at most 4 + 1 + 32 bytes) is all that is needed to name the key.</summary>
-    private static byte[] ReadHead(string path)
+    private enum Envelope { None, MagicOnly, Valid }
+    private const int NonceLength = 12, DekLength = 32, TagLength = 16;
+
+    /// <summary>
+    /// Reads at most the envelope header (never the whole file) and applies the structural rules of format v1 (see <see cref="EnvelopeEncryptor"/>): magic, key id (1..32 valid characters), fixed header fields and a ciphertext length
+    /// that makes header + ciphertext + tag equal the file size exactly. The mirror of the private parser is locked by a test against a real envelope.
+    /// </summary>
+    private static Envelope ClassifyEnvelope(string path, out string? keyId)
     {
+        keyId = null;
         using var fs = File.OpenRead(path);
-        var buf = new byte[64];
-        var n = fs.Read(buf, 0, buf.Length);
-        return buf[..n];
+        var size = fs.Length;
+        var head = new byte[5 + 32 + NonceLength + DekLength + TagLength + NonceLength + 8];
+        var n = 0;
+        while (n < head.Length) { var r = fs.Read(head, n, head.Length - n); if (r == 0) break; n += r; }
+        if (n < 4 || !head.AsSpan(0, 4).SequenceEqual(EnvelopeMagic)) return Envelope.None;
+        if (n < 5) return Envelope.MagicOnly;
+        int idLen = head[4];
+        var fixedLen = NonceLength + DekLength + TagLength + NonceLength + 8;
+        if (idLen is 0 or > 32 || n < 5 + idLen + fixedLen) return Envelope.MagicOnly;
+        var id = System.Text.Encoding.ASCII.GetString(head, 5, idLen);
+        if (!KekRing.IsValidKeyId(id)) return Envelope.MagicOnly;
+        var lenOffset = 5 + idLen + NonceLength + DekLength + TagLength + NonceLength;
+        var len = System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(head.AsSpan(lenOffset, 8));
+        var headerEnd = lenOffset + 8;
+        if (len < 0 || len > size - headerEnd - TagLength || headerEnd + len + TagLength != size) return Envelope.MagicOnly;
+        keyId = id;
+        return Envelope.Valid;
     }
 
     /// <summary>The full path with EVERY existing component resolved through symbolic links (so an alias anywhere in the path cannot hide an overlap).</summary>
     private static string RealPath(string path)
+    {
+        var cur = RealPathOnce(path);
+        for (var i = 0; i < 40; i++)
+        {
+            if (cur.Length == 0) return cur;       // the file system root
+            var next = RealPathOnce(cur);          // a resolved target may itself pass through further links: repeat until stable
+            if (string.Equals(next, cur, StringComparison.Ordinal)) return cur;
+            cur = next;
+        }
+        throw new BackupException("path_too_deep");
+    }
+
+    private static string RealPathOnce(string path)
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full) ?? "";
@@ -244,8 +299,12 @@ public static class BackupSet
         {
             cur = cur + Path.DirectorySeparatorChar + part;
             FileSystemInfo info = Directory.Exists(cur) ? new DirectoryInfo(cur) : new FileInfo(cur);
-            if (info.Exists && info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
-                cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
+            try
+            {
+                if (info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
+                    cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BackupException("path_unresolvable"); }   // for example a cyclic symbolic link or an unreadable component
         }
         return cur;
     }

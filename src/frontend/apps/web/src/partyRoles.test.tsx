@@ -188,4 +188,15 @@ describe("customers and suppliers screen", () => {
     await userEvent.click(within(await screen.findByTestId("pr-role-C1-1")).getByRole("button", { name: A("pr.activate") }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("r1", expect.objectContaining({ isActive: true, termDays: 30, creditLimit: 1500, controlAccountId: "a1", representativeId: "s1" }), 4));
   });
+  it("words account refusals for party roles with the screen's own scoped keys, leaving the shared ledger wording untouched", async () => {
+    const create = vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "controlAccountId", code: "account_not_postable" }] }));
+    render({ createPartyRole: create });
+    await go("#/company/party-roles");
+    const form = within(await screen.findByTestId("pr-customer-form"));
+    await userEvent.selectOptions(form.getByLabelText(lbl("pr.party")), "p2");
+    await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
+    expect(await screen.findByText(A("field.pr.account_not_postable"))).toBeInTheDocument();
+    expect(A("field.pr.account_not_postable")).not.toBe(A("field.account_not_postable"));         // ledger and journal screens keep their own text
+    expect(A("field.account_not_postable")).toMatch(/موقوف/);
+  });
 });

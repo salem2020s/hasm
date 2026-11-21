@@ -113,6 +113,16 @@ jobs:
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
           echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
 
+      - name: PostgreSQL client tools match the server major version (restore drill)
+        run: |
+          set -euo pipefail
+          SERVER_MAJOR="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SHOW server_version_num" | cut -c1-2)"
+          for tool in pg_dump pg_restore; do
+            CLIENT_MAJOR="$("${tool}" --version | grep -oE '[0-9]+' | head -1)"
+            echo "${tool} major ${CLIENT_MAJOR}, server major ${SERVER_MAJOR}"
+            [ "${CLIENT_MAJOR}" = "${SERVER_MAJOR}" ] || { echo "::error::${tool} major version does not match the server (the restore drill needs matching tools)"; exit 1; }
+          done
+
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
 
@@ -123,7 +133,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1045 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1047 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -219,5 +229,7 @@ jobs:
                 "AttachmentTests": 10, "AttachmentApiTests": 8,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
+                # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
+                "BackupRestoreDrillTests": 2,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

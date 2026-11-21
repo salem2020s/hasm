@@ -13,13 +13,13 @@ public static class CommercialAuditEvents
 /// <summary>The commercial-status track (SRS 19.7). Approved and Rejected exist in the schema for slice S1b; the S1a guard and service never reach them.</summary>
 public enum CommercialStatus : short { Draft = 1, Submitted = 2, Approved = 3, Rejected = 4, Cancelled = 5 }
 
-/// <summary>Direct (the invoice carries the physical event) or separate (delivery/receipt documents), chosen per document at draft creation (owner decision Q15 / D-051).</summary>
+/// <summary>Direct (the invoice carries the physical event) or separate (delivery/receipt documents), chosen per document at draft creation (owner decision Q15 / D-052).</summary>
 public enum CommercialMode : short { Direct = 1, Separate = 2 }
 
 /// <summary>1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled (6-9 are reserved for S1b).</summary>
 public enum CommercialEventKind : short { Created = 1, Updated = 2, Submitted = 3, Withdrawn = 4, Cancelled = 5 }
 
-/// <summary>The registered document types. Production registers NONE in slice S1a (owner decision Q1 / D-048: only an internal test-only type, registered in the TEST composition); real types arrive with 3.15/3.16.</summary>
+/// <summary>The registered document types. Production registers NONE in slice S1a (owner decision Q1 / D-049: only an internal test-only type, registered in the TEST composition); real types arrive with 3.15/3.16.</summary>
 public interface ICommercialDocumentTypeRegistry
 {
     bool IsRegistered(string docType);

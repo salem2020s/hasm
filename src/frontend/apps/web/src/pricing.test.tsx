@@ -327,12 +327,12 @@ describe("pricing administration screen", () => {
       const mk = (id: string, code: string, name: string) => ({ ...customer, id: `r-${id}`, partyId: id, partyCode: code, partyName: name });
       render({
         listPartyRoles: vi.fn().mockResolvedValue({ items: [mk("p2", "C10", "عشرة"), mk("p1", "C2", "اثنان")], can: { configure: true } }),
-        listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, partyId: "p2" }, { ...assignment, partyId: "unknown-id-zzzz" }, { ...assignment, partyId: "p1" }], can: { configure: true } }),
+        listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, partyId: "zzzzzzzz-9" }, { ...assignment, partyId: "p2" }, { ...assignment, partyId: "aaaaaaaa-1" }, { ...assignment, partyId: "p1" }], can: { configure: true } }),
       });
       await go("#/company/pricing");
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
       const rows = within(await screen.findByTestId("pricing-assignments-table")).getAllByRole("row").slice(1);
-      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["C2 — اثنان", "C10 — عشرة", "unknown-"]);   // numeric-aware code order; ids last by their short form
+      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["C2 — \u2068اثنان\u2069", "C10 — \u2068عشرة\u2069", "aaaaaaaa", "zzzzzzzz"]);   // numeric-aware code order; ids last by their short form
     });
 
     it("accepts a negative minimum margin and explains the range and meaning (ar and en)", async () => {
@@ -345,7 +345,9 @@ describe("pricing administration screen", () => {
       await userEvent.type(margin, "-5");
       await userEvent.click(form.getByRole("button", { name: A("pricing.policy.save") }));
       await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ minMarginPercent: -5 }), 2));
-      for (const l of ["ar", "en"] as const) expect(catalog[l]["pricing.policy.min_margin_hint"]).toMatch(/-1000/);
+      expect(catalog.en["pricing.policy.min_margin_hint"]).toMatch(/-1000/);
+      expect(catalog.ar["pricing.policy.min_margin_hint"]).toContain("\u2066\u22121000\u2069");          // an isolated U+2212: never "1000-" in RTL
+      expect(catalog.ar["pricing.policy.min_margin_hint"]).not.toContain("-1000");
       expect(form.getByText(A("pricing.policy.min_margin_hint"))).toBeInTheDocument();
     });
 
@@ -356,12 +358,96 @@ describe("pricing administration screen", () => {
       expect(await screen.findByText(A("pricing.scope_combine_hint"))).toBeInTheDocument();
     });
 
-    it("has a single source for field.ambiguous_rule (the customer-group wording wins)", async () => {
-      const { readFileSync } = await import("node:fs");
-      const src = readFileSync(`${process.cwd()}/src/messages.pricing.ts`, "utf-8");
-      expect(src).not.toContain("field.ambiguous_rule");
+    it("uses the customer-group wording for field.ambiguous_rule (single source; the catalog-wide duplicate check lives in messagesUnique.test.ts)", () => {
       expect(catalog.en["field.ambiguous_rule"]).toMatch(/group rules/);
       expect(catalog.ar["field.ambiguous_rule"]).toBeTruthy();
+    });
+
+    it("sends no single-item reads when the item list itself failed (they would be refused too) and shows short ids", async () => {
+      const getItem = vi.fn();
+      render({
+        getInventoryItem: getItem,
+        listInventoryItems: vi.fn().mockRejectedValue(apiError(403, "forbidden")),
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [{ ...entry, id: "e2", itemId: "denied-item-9999" }], can: { configure: true } }),
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      expect(within(await screen.findByTestId("pricing-entries-table")).getByText("denied-i")).toBeInTheDocument();
+      expect(getItem).not.toHaveBeenCalled();
+    });
+
+    it("does not read items that are already preloaded, and reads at most 50 unknown ids per render", async () => {
+      const getItem = vi.fn().mockImplementation((id: string) => Promise.resolve({ ...apple, id, code: `X${id}` }));
+      const many = Array.from({ length: 60 }, (_, n) => ({ ...entry, id: `e${n + 10}`, itemId: `unknown-${String(n).padStart(3, "0")}` }));
+      render({
+        getInventoryItem: getItem,
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [entry, ...many], can: { configure: true } }),   // entry e1 uses the preloaded item i1
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      await screen.findByTestId("pricing-entries-table");
+      await waitFor(() => expect(getItem).toHaveBeenCalledTimes(50));
+      expect(getItem).not.toHaveBeenCalledWith("i1");                                                    // preloaded: no read
+    });
+    it("shows the name of an entry's item outside the preloaded page by one getInventoryItem call per id, and a short id when it cannot be read", async () => {
+      const far = { ...apple, id: "far-item-0000-1111", code: "FAR1", nameAr: "بعيد", nameEn: "Far" };
+      const getItem = vi.fn().mockImplementation((id: string) => id === far.id ? Promise.resolve(far) : Promise.reject(apiError(403, "forbidden")));
+      render({
+        getInventoryItem: getItem,
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [{ ...entry, id: "e2", itemId: far.id }, { ...entry, id: "e3", itemId: "denied-item-9999" }, { ...entry, id: "e4", itemId: far.id }], can: { configure: true } }),
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      const table = await screen.findByTestId("pricing-entries-table");
+      await waitFor(() => expect(within(table).getAllByText("FAR1 — \u2068بعيد\u2069")).toHaveLength(2));
+      expect(within(table).getByText("denied-i")).toBeInTheDocument();                                  // short id, never the full UUID
+      expect(getItem).toHaveBeenCalledTimes(2);                                                         // once per distinct id
+    });
+
+    it("links the item picker's field error to its list (aria-invalid, aria-describedby) through a real label", async () => {
+      const create = vi.fn().mockRejectedValue(apiError(400, "validation_failed", { fields: [{ field: "itemId", code: "item_or_group_required" }] }));
+      render({ createPriceEntry: create });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      const add = within(await screen.findByTestId("pricing-entry-create"));
+      await userEvent.selectOptions(await pickItem(add, "pricing.target"), "i1");
+      await userEvent.selectOptions(add.getByLabelText(label("pricing.unit")), "u1");
+      await userEvent.type(add.getByLabelText(label("pricing.unit_price")), "5");
+      await userEvent.click(add.getByRole("button", { name: A("pricing.add_entry") }));
+      await waitFor(() => expect(create).toHaveBeenCalled());
+      const box = await add.findByRole("combobox", { name: label("pricing.target") });
+      await waitFor(() => expect(box).toHaveAttribute("aria-invalid", "true"));
+      const errorId = box.getAttribute("aria-describedby")!;
+      expect(document.getElementById(errorId)).toHaveTextContent(A("field.item_or_group_required"));
+      expect(document.querySelector(`label[for="${box.id}"]`)).not.toBeNull();                          // a real label names the list
+    });
+
+    it("keeps the code first and unwrapped in option labels (type-ahead) and isolates only the name", async () => {
+      render();
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      const box = await pickItem(form, "pricing.kind_item");
+      const option = within(box).getByRole("option", { name: "APPLE — \u2068تفاح\u2069" });
+      expect(option).toBeInTheDocument();
+      expect(option.textContent!.startsWith("APPLE")).toBe(true);                                       // native-select type-ahead matches the start of the text
+    });
+
+    it("warns when the base currency cannot be read (non-401 failure) and not when it can or is simply unset", async () => {
+      render({ getCurrencies: vi.fn().mockRejectedValue(apiError(500, "internal")) });
+      await go("#/company/pricing");
+      expect(await screen.findByTestId("pricing-currency-unavailable")).toHaveTextContent(A("pricing.currency_unavailable"));
+    });
+
+    it("shows no currency warning when the base currency loads", async () => {
+      render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await screen.findByTestId("pricing-note");
+      expect(screen.queryByTestId("pricing-currency-unavailable")).not.toBeInTheDocument();
     });
   });
 });
