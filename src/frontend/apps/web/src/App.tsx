@@ -30,6 +30,7 @@ import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
 import { CostCentersPage } from "./pages/CostCenters";
 import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
 import { PricingPage } from "./pages/Pricing";
+import { AttachmentRetentionPage } from "./pages/AttachmentRetention";
 import { TaxesPage } from "./pages/Taxes";
 import { PartyRolesPage } from "./pages/PartyRoles";
 import { FiscalClosingPage } from "./pages/FiscalClosing";
@@ -84,6 +85,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/party-roles", anyOf: ["company.partyroles.view", "company.salesreps.view"], element: <PartyRolesPage /> },
   { path: "/company/taxes", permission: "company.tax.view", element: <TaxesPage /> },
   { path: "/company/pricing", permission: "company.pricing.view", element: <PricingPage /> },
+  { path: "/company/attachment-retention", permission: "company.attachmentretention.view", element: <AttachmentRetentionPage /> },
   { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
@@ -142,6 +144,7 @@ function Shell() {
       { id: "/company/party-roles", label: t("nav.party_roles"), permission: "company.partyroles.view|company.salesreps.view" },
       { id: "/company/taxes", label: t("nav.taxes"), permission: "company.tax.view" },
       { id: "/company/pricing", label: t("nav.pricing"), permission: "company.pricing.view" },
+      { id: "/company/attachment-retention", label: t("nav.attachment_retention"), permission: "company.attachmentretention.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
       { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
