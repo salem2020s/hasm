@@ -1,10 +1,10 @@
 import type { CustomerGroup, CustomerGroupAssignment, DiscountRule, DiscountRulesResponse, InventoryGroup, InventoryItem, InventoryUnit, PartyRole, PriceEntry, PriceList, PriceListsResponse, PricingPolicyResponse, PricingQuote } from "@hasm/api-client";
-import { Tabs, useI18n, type TabItem } from "@hasm/ui";
+import { SearchPicker, Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, errorText, Field, Loading, PageHeader } from "../components";
 import { localName, useRunner } from "../ledgerCommon";
-import { parseDecimalInput } from "../numberInput";
+import { parseDecimalInput, parseSignedDecimalInput } from "../numberInput";
 import { useReportUnsaved } from "../unsaved";
 
 /**
@@ -13,12 +13,14 @@ import { useReportUnsaved } from "../unsaved";
  * (revision fences, the policy version fence, append-only history, no deletion, ambiguity and customer-role checks); this screen only shows and submits. Nothing here ever deletes: lists, entries and rules are deactivated.
  * Customer GROUPS (migration 0027): a tab manages the group master and the one-group-per-customer assignment; a price list or discount rule is scoped to a customer OR a group (the two selects exclude each other).
  */
-interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; failed: boolean }
+interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; baseCurrency: string; failed: boolean }
 const PICKER_LIMIT = 500;
 interface Data { policy: PricingPolicyResponse; lists: PriceListsResponse; discounts: DiscountRulesResponse; pickers: Pickers }
 const pad = (n: number) => String(n).padStart(2, "0");
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };   // the local calendar day, not UTC
 const num = parseDecimalInput;
+const snum = parseSignedDecimalInput;
+const sbad = (s: string) => s.trim() !== "" && Number.isNaN(snum(s));
 const bad = (s: string) => s.trim() !== "" && Number.isNaN(num(s));
 const blank = (v: string) => (v.trim() === "" ? null : v.trim());
 
@@ -38,12 +40,14 @@ export function PricingPage() {
       // pickers need the inventory and party-role view permissions: a user without them still sees the configuration (the pickers are then empty)
       let failed = false;
       const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
-      const [units, groups, items, customers, customerGroups, assignments] = await Promise.all([
+      const [units, groups, items, customers, customerGroups, assignments, baseCurrency] = await Promise.all([
         soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
         soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items)), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
         soft(auth.api.listCustomerGroups().then((r) => r.customerGroups)), soft(auth.api.listCustomerGroupAssignments().then((r) => r.assignments)),
+        // the default currency of a new list/quote is the company base currency when the user may read it; otherwise it stays empty (never guessed). Not counted as a failed helper list: it needs its own permission.
+        auth.api.getCurrencies().then((r) => r.baseCurrency ?? "").catch((e) => { auth.handleError(e); return ""; }),
       ]);
-      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, failed } }); setLoadError(null);
+      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, baseCurrency, failed } }); setLoadError(null);
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pricing.error.")); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -93,6 +97,22 @@ function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id:
   );
 }
 
+const itemLabel = (i: InventoryItem, locale: "ar" | "en") => `${i.code} — ${localName(i, locale)}`;
+
+/** Item picker: a bounded server-side SEARCH (shared SearchPicker) instead of a silently truncated list; it says when more items match than are shown. */
+function ItemPicker({ id, label, value, onChange, error }: { id: string; label: string; value: string; onChange: (id: string, item: InventoryItem | null) => void; error?: string }) {
+  const { locale } = useI18n();
+  const auth = useAuth();
+  const load = useCallback((search: string) => auth.api.listInventoryItems({ search: search === "" ? undefined : search, limit: PICKER_LIMIT }).then((r) => ({ items: r.items, total: r.total })).catch((e) => { auth.handleError(e); throw e; }), [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
+      <span className="field-label">{label}<span aria-hidden="true" className="required"> *</span></span>
+      <SearchPicker label={label} value={value} onChange={onChange} load={load} getId={(i: InventoryItem) => i.id} getLabel={(i: InventoryItem) => itemLabel(i, locale)} />
+      {error && <p className="field-error">{error}</p>}
+    </div>
+  );
+}
+
 function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
   const { t } = useI18n();
   const auth = useAuth();
@@ -104,10 +124,10 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
   const isDirty = (Object.keys(base) as (keyof typeof base)[]).some((k) => base[k] !== form[k]);
   useReportUnsaved("pricing-policy", isDirty, t("pricing.tab.policy"));
   useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
-  const valid = Number.isInteger(num(form.priceDecimals)) && Number.isInteger(num(form.moneyDecimals)) && !bad(form.margin);
+  const valid = Number.isInteger(num(form.priceDecimals)) && Number.isInteger(num(form.moneyDecimals)) && !sbad(form.margin);
 
   async function save() {
-    await runner.run(() => auth.api.savePricingPolicy({ priceDecimals: num(form.priceDecimals), moneyDecimals: num(form.moneyDecimals), minMarginPercent: form.margin.trim() === "" ? null : num(form.margin),
+    await runner.run(() => auth.api.savePricingPolicy({ priceDecimals: num(form.priceDecimals), moneyDecimals: num(form.moneyDecimals), minMarginPercent: form.margin.trim() === "" ? null : snum(form.margin),
       marginAction: Number(form.action), listPrecedence: Number(form.list), discountPrecedence: Number(form.discount) }, p.version), t("pricing.saved"));
   }
   return (
@@ -124,7 +144,7 @@ function PolicyTab({ data, configure, reload, onDirty }: TabProps) {
           <legend>{t("pricing.policy.save")}</legend>
           <Field id="pp-price-decimals" label={t("pricing.policy.price_decimals")} error={bad(form.priceDecimals) ? t("field.invalid") : runner.fields.priceDecimals}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.priceDecimals} onChange={(e) => setForm({ ...form, priceDecimals: e.target.value })} />}</Field>
           <Field id="pp-money-decimals" label={t("pricing.policy.money_decimals")} error={bad(form.moneyDecimals) ? t("field.invalid") : runner.fields.moneyDecimals}>{(a) => <input {...a} dir="ltr" inputMode="numeric" value={form.moneyDecimals} onChange={(e) => setForm({ ...form, moneyDecimals: e.target.value })} />}</Field>
-          <Field id="pp-margin" label={t("pricing.policy.min_margin")} hint={t("pricing.policy.min_margin_hint")} error={bad(form.margin) ? t("field.invalid") : runner.fields.minMarginPercent}>{(a) => <input {...a} dir="ltr" inputMode="decimal" value={form.margin} onChange={(e) => setForm({ ...form, margin: e.target.value })} />}</Field>
+          <Field id="pp-margin" label={t("pricing.policy.min_margin")} hint={t("pricing.policy.min_margin_hint")} error={sbad(form.margin) ? t("field.invalid") : runner.fields.minMarginPercent}>{(a) => <input {...a} dir="ltr" inputMode="decimal" value={form.margin} onChange={(e) => setForm({ ...form, margin: e.target.value })} />}</Field>
           <Field id="pp-action" label={t("pricing.policy.margin_action")} error={runner.fields.marginAction}>
             {(a) => <select {...a} value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>{[1, 2, 3].map((n) => <option key={n} value={n}>{t(`pricing.margin_action.${n}`)}</option>)}</select>}
           </Field>
@@ -145,6 +165,8 @@ const asInput = (l: PriceList, isActive: boolean) => ({ nameAr: l.nameAr, nameEn
 
 /** The assignment list carries ids only (names are customer data of the party-role permission): the name is joined from the party-role list when the user may read it, otherwise the id is shown. */
 const partyLabel = (p: Pickers, id: string) => { const c = p.customers.find((x) => x.partyId === id); return c ? c.partyCode : id.slice(0, 8); };
+/** Code plus name when the party-role list provides it; ids stay short codes otherwise. */
+const partyText = (p: Pickers, id: string) => { const c = p.customers.find((x) => x.partyId === id); return c ? `${c.partyCode} — ${c.partyName}` : id.slice(0, 8); };
 const groupName = (p: Pickers, id: string | null | undefined, none: string) => (id ? p.customerGroups.find((g) => g.id === id)?.code ?? id : none);
 
 /** A customer OR a customer group (never both): choosing one disables the other; the server and PostgreSQL enforce it too. */
@@ -222,11 +244,11 @@ function GroupsTab({ data, configure, reload, onDirty }: TabProps) {
         <table className="table" data-testid="pricing-assignments-table">
           <thead><tr><th>{t("pricing.groups.party")}</th><th>{t("pricing.groups.group")}</th><th>{t("pricing.actions")}</th></tr></thead>
           <tbody>
-            {data.pickers.assignments.map((a) => {
+            {[...data.pickers.assignments].sort((x, y) => partyLabel(data.pickers, x.partyId).localeCompare(partyLabel(data.pickers, y.partyId), "en", { numeric: true }) || x.partyId.localeCompare(y.partyId)).map((a) => {
               const value = picked[a.partyId] ?? (a.customerGroupId ?? "");
               return (
                 <tr key={a.partyId} data-testid={`pricing-assignment-${partyLabel(data.pickers, a.partyId)}`}>
-                  <td><bdi dir="auto">{partyLabel(data.pickers, a.partyId)}</bdi></td>
+                  <td><bdi dir="auto">{partyText(data.pickers, a.partyId)}</bdi></td>
                   <td>{configure
                     ? <select aria-label={`${t("pricing.groups.group")} ${partyLabel(data.pickers, a.partyId)}`} value={value} disabled={runner.busy} onChange={(e) => setPicked({ ...picked, [a.partyId]: e.target.value })}>
                         <option value="">{t("pricing.groups.none")}</option>
@@ -248,7 +270,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
   const { t, locale } = useI18n();
   const auth = useAuth();
   const runner = useRunner("pricing.error.", reload);
-  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", currency: "JOD", validFrom: today(), validTo: "", customerId: "", customerGroupId: "" });
+  const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", priority: "10", currency: data.pickers.baseCurrency, validFrom: today(), validTo: "", customerId: "", customerGroupId: "" });
   const [selected, setSelected] = useState("");
   const [entries, setEntries] = useState<PriceEntry[]>([]);
   const [entry, setEntry] = useState({ kind: "item", targetId: "", unitId: "", minQuantity: "0", unitPrice: "" });
@@ -290,7 +312,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
     if (done) setRepricing(null);
   }
   const toggleEntry = (e: PriceEntry) => void entryRunner.run(() => auth.api.updatePriceEntry(e.id, { unitPrice: e.unitPrice, isActive: !e.isActive }, e.revision), t("pricing.saved"));
-  const targets = entry.kind === "item" ? data.pickers.items.map((i) => ({ id: i.id, label: `${i.code} — ${localName(i, locale)}` })) : data.pickers.groups.map((g) => ({ id: g.id, label: `${g.code} — ${localName(g, locale)}` }));
+  const targets = data.pickers.groups.map((g) => ({ id: g.id, label: `${g.code} — ${localName(g, locale)}` }));
 
   return (
     <div data-testid="pricing-tab-lists">
@@ -327,7 +349,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
           <Field id="pl-to" label={t("pricing.valid_to")} error={runner.fields.validTo}>{(a) => <input {...a} type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} />}</Field>
           <CustomerSelect id="pl-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} disabled={form.customerGroupId !== ""} />
           <CustomerGroupSelect id="pl-group" value={form.customerGroupId} onChange={(v) => setForm({ ...form, customerGroupId: v })} pickers={data.pickers} error={runner.fields.customerGroupId} disabled={form.customerId !== ""} />
-          <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || Number.isNaN(num(form.priority))} onClick={() => void create()}>{t("pricing.create_list")}</button>
+          <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || form.currency.trim().length !== 3 || Number.isNaN(num(form.priority))} onClick={() => void create()}>{t("pricing.create_list")}</button>
         </fieldset>
       )}
       <h3>{t("pricing.entries")}</h3>
@@ -360,9 +382,11 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
               <Field id="pe-kind" label={t("pricing.target_kind")}>
                 {(a) => <select {...a} value={entry.kind} onChange={(e) => setEntry({ ...entry, kind: e.target.value, targetId: "" })}><option value="item">{t("pricing.kind_item")}</option><option value="group">{t("pricing.kind_group")}</option></select>}
               </Field>
-              <Field id="pe-target" label={t("pricing.target")} required error={entryRunner.fields.itemId}>
-                {(a) => <select {...a} value={entry.targetId} onChange={(e) => setEntry({ ...entry, targetId: e.target.value })}><option value="">{t("pricing.choose")}</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>}
-              </Field>
+              {entry.kind === "item"
+                ? <ItemPicker id="pe-target" label={t("pricing.target")} value={entry.targetId} onChange={(v) => setEntry({ ...entry, targetId: v })} error={entryRunner.fields.itemId} />
+                : <Field id="pe-target" label={t("pricing.target")} required error={entryRunner.fields.itemId}>
+                    {(a) => <select {...a} value={entry.targetId} onChange={(e) => setEntry({ ...entry, targetId: e.target.value })}><option value="">{t("pricing.choose")}</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>}
+                  </Field>}
               <Field id="pe-unit" label={t("pricing.unit")} required error={entryRunner.fields.unitId}>
                 {(a) => <select {...a} value={entry.unitId} onChange={(e) => setEntry({ ...entry, unitId: e.target.value })}><option value="">{t("pricing.choose")}</option>{data.pickers.units.map((u) => <option key={u.id} value={u.id}>{u.code}</option>)}</select>}
               </Field>
@@ -395,7 +419,7 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
     if (done) setForm({ ...form, code: "", nameAr: "", nameEn: "", percent: "" });
   }
   const toggle = (d: DiscountRule) => void runner.run(() => auth.api.updateDiscountRule(d.id, { nameAr: d.nameAr, nameEn: d.nameEn, priority: d.priority, validFrom: d.validFrom, validTo: d.validTo, isActive: !d.isActive, percent: d.percent, minQuantity: d.minQuantity }, d.revision), t("pricing.saved"));
-  const targets = form.scope === "item" ? data.pickers.items.map((i) => ({ id: i.id, label: `${i.code} — ${localName(i, locale)}` })) : data.pickers.groups.map((g) => ({ id: g.id, label: `${g.code} — ${localName(g, locale)}` }));
+  const targets = data.pickers.groups.map((g) => ({ id: g.id, label: `${g.code} — ${localName(g, locale)}` }));
   return (
     <div data-testid="pricing-tab-discounts">
       <Notices runner={runner} id="pricing-discounts" />
@@ -427,13 +451,15 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
           <Field id="pd-to" label={t("pricing.valid_to")} error={runner.fields.validTo}>{(a) => <input {...a} type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} />}</Field>
           <CustomerSelect id="pd-customer" value={form.customerId} onChange={(v) => setForm({ ...form, customerId: v })} pickers={data.pickers} error={runner.fields.customerId} disabled={form.customerGroupId !== ""} />
           <CustomerGroupSelect id="pd-group" value={form.customerGroupId} onChange={(v) => setForm({ ...form, customerGroupId: v })} pickers={data.pickers} error={runner.fields.customerGroupId} disabled={form.customerId !== ""} />
-          <Field id="pd-scope" label={t("pricing.scope")} error={runner.fields.itemId}>
+          <Field id="pd-scope" label={t("pricing.scope")} hint={t("pricing.scope_combine_hint")} error={runner.fields.itemId}>
             {(a) => <select {...a} value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value, targetId: "" })}><option value="all">{t("pricing.scope_all")}</option><option value="item">{t("pricing.kind_item")}</option><option value="group">{t("pricing.kind_group")}</option></select>}
           </Field>
           {form.scope !== "all" && (
-            <Field id="pd-target" label={t("pricing.target")} required>
-              {(a) => <select {...a} value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })}><option value="">{t("pricing.choose")}</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>}
-            </Field>
+            form.scope === "item"
+              ? <ItemPicker id="pd-target" label={t("pricing.target")} value={form.targetId} onChange={(v) => setForm({ ...form, targetId: v })} />
+              : <Field id="pd-target" label={t("pricing.target")} required>
+                  {(a) => <select {...a} value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })}><option value="">{t("pricing.choose")}</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>}
+                </Field>
           )}
           <button type="button" className="primary" disabled={!form.code.trim() || !form.nameAr.trim() || !form.validFrom || Number.isNaN(num(form.percent)) || Number.isNaN(num(form.priority)) || bad(form.minQuantity) || (form.scope !== "all" && !form.targetId)} onClick={() => void create()}>{t("pricing.create_discount")}</button>
         </fieldset>
@@ -443,16 +469,17 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
 }
 
 function QuoteTab({ data, onDirty }: { data: Data; onDirty: (v: boolean) => void }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const auth = useAuth();
-  const [form, setForm] = useState({ date: today(), currency: "JOD", itemId: "", unitId: "", quantity: "1", customerId: "", unitCost: "", overridePrice: "", overrideDiscount: "", overrideReason: "" });
+  const [form, setForm] = useState({ date: today(), currency: data.pickers.baseCurrency, itemId: "", unitId: "", quantity: "1", customerId: "", unitCost: "", overridePrice: "", overrideDiscount: "", overrideReason: "" });
   const [quote, setQuote] = useState<PricingQuote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { onDirty(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps    (a preview holds no business data to lose)
-  const item = data.pickers.items.find((i) => i.id === form.itemId);
+  const [pickedItem, setPickedItem] = useState<InventoryItem | null>(null);
+  const item = pickedItem?.id === form.itemId ? pickedItem : data.pickers.items.find((i) => i.id === form.itemId);
   const wantsOverride = form.overridePrice.trim() !== "" || form.overrideDiscount.trim() !== "";
-  const valid = form.itemId && form.unitId && form.date && !Number.isNaN(num(form.quantity)) && !bad(form.unitCost) && !bad(form.overridePrice) && !bad(form.overrideDiscount) && (!wantsOverride || form.overrideReason.trim() !== "");
+  const valid = form.itemId && form.unitId && form.date && form.currency.trim().length === 3 && !Number.isNaN(num(form.quantity)) && !bad(form.unitCost) && !bad(form.overridePrice) && !bad(form.overrideDiscount) && (!wantsOverride || form.overrideReason.trim() !== "");
 
   async function run() {
     setBusy(true); setError(null);
@@ -478,9 +505,7 @@ function QuoteTab({ data, onDirty }: { data: Data; onDirty: (v: boolean) => void
         <legend>{t("pricing.quote.form")}</legend>
         <Field id="pq-date" label={t("pricing.quote.date")} required>{(a) => <input {...a} type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />}</Field>
         <Field id="pq-currency" label={t("pricing.currency")} required>{(a) => <input {...a} dir="ltr" maxLength={3} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase() })} />}</Field>
-        <Field id="pq-item" label={t("pricing.kind_item")} required>
-          {(a) => <select {...a} value={form.itemId} onChange={(e) => setForm({ ...form, itemId: e.target.value })}><option value="">{t("pricing.choose")}</option>{data.pickers.items.map((i) => <option key={i.id} value={i.id}>{i.code} — {localName(i, locale)}</option>)}</select>}
-        </Field>
+        <ItemPicker id="pq-item" label={t("pricing.kind_item")} value={form.itemId} onChange={(v, picked) => { setPickedItem(picked); setForm({ ...form, itemId: v }); }} />
         <Field id="pq-unit" label={t("pricing.unit")} required>
           {(a) => <select {...a} value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value })}><option value="">{t("pricing.choose")}</option>{data.pickers.units.map((u) => <option key={u.id} value={u.id}>{u.code}</option>)}</select>}
         </Field>
