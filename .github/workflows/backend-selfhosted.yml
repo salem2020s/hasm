@@ -106,6 +106,27 @@ jobs:
           "HASM_TEST_PG_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_admin;Password=$testPw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=127.0.0.1;Port=$port;Username=hasm_test_roleadmin;Password=$rolePw;Database=postgres;SSL Mode=Disable" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      - name: PostgreSQL client tools match the server major version (restore drill)
+        # Added per owner decision D-084: the same assertion as the hosted backend.yml step. The tests resolve pg_dump/pg_restore from PATH.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = 'C:\Program Files\PostgreSQL\18\bin'
+          $conn = $env:HASM_TEST_PG_ADMIN_CONNECTION
+          if (-not ($conn -match 'Password=([^;]+)')) { throw 'The admin test connection is not configured' }
+          $env:PGPASSWORD = $Matches[1]
+          try {
+            $num = (& "$bin\psql.exe" -h 127.0.0.1 -p $env:HASM_CI_PG_PORT -U hasm_test_admin -d postgres -X -At -c 'SHOW server_version_num' 2>&1)
+            if ($LASTEXITCODE -ne 0) { throw "psql failed: $num" }
+          } finally { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+          $serverMajor = ([string]$num).Trim().Substring(0, 2)
+          foreach ($tool in 'pg_dump', 'pg_restore') {
+            $cmd = Get-Command $tool -ErrorAction SilentlyContinue
+            if (-not $cmd) { Write-Host "::error::$tool was not found on PATH (the restore drill needs it)"; exit 1 }
+            $clientMajor = [regex]::Match((& $cmd.Source --version), '\d+').Value
+            Write-Host "$tool ($($cmd.Source)) major $clientMajor, server major $serverMajor"
+            if ($clientMajor -ne $serverMajor) { Write-Host "::error::$tool major version does not match the server (the restore drill needs matching tools)"; exit 1 }
+          }
+
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
 
