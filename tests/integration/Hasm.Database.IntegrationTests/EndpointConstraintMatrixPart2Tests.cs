@@ -145,7 +145,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     };
 
     /// <summary>The routes part 1 (<see cref="EndpointConstraintMatrixTests"/>, #155) probes: its own list, so the two classes can never disagree.</summary>
-    public static readonly IReadOnlyList<string> CoveredByPart1 = [.. EndpointConstraintMatrixTests.Probed.Keys];
+    /// <remarks>A property, not a field initializer: the two classes refer to each other's lists, and static field initializers would depend on which type initializes first.</remarks>
+    public static IReadOnlyList<string> CoveredByPart1 => [.. EndpointConstraintMatrixTests.Probed.Keys];
 
     /// <summary>Mutating company routes not probed yet, listed EXPLICITLY by family: a new route must be classified here, in <see cref="Probed"/> or in part 1.</summary>
     public static readonly IReadOnlyList<string> Pending =

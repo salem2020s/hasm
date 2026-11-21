@@ -95,7 +95,8 @@ public class EndpointConstraintMatrixTests : JournalTestBase
     /// Mutating company routes this class does NOT probe: part 2 (<see cref="EndpointConstraintMatrixPart2Tests"/>) probes them or lists them as pending there, explicitly by family, so a
     /// route the API adds must be classified in <see cref="Probed"/> or in part 2, or <see cref="Every_mutating_company_endpoint_is_probed_or_listed_as_pending"/> fails.
     /// </summary>
-    public static readonly IReadOnlyList<string> Pending = [.. EndpointConstraintMatrixPart2Tests.Probed.Keys, .. EndpointConstraintMatrixPart2Tests.Pending];
+    /// <remarks>A property, not a field initializer: the two classes refer to each other's lists, and static field initializers would depend on which type initializes first.</remarks>
+    public static IReadOnlyList<string> Pending => [.. EndpointConstraintMatrixPart2Tests.Probed.Keys, .. EndpointConstraintMatrixPart2Tests.Pending];
 
     // ------------------------------------------------------------------------------------------------------------------------------- engine
 
