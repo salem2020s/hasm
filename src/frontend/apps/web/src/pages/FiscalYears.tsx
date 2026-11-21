@@ -1,4 +1,5 @@
 import { ApiError, type FiscalPeriod, type FiscalReopenRequest, type FiscalYear, type FiscalYearsResponse } from "@hasm/api-client";
+import { parseWholeNumber } from "../numberInput";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -254,13 +255,13 @@ function YearForm({ years, today, onClose, onSaved }: { years: FiscalYear[]; tod
     e.preventDefault();
     const v: Record<string, string> = {};
     if (!name.trim()) v.name = t("field.required");
-    if (!/^\d{4}$/.test(year.trim()) || Number(year) < 1900 || Number(year) > 2200) v.startYear = t("field.invalid_format");
+    if (Number.isNaN(parseWholeNumber(year, 4, 1900, 2200))) v.startYear = t("field.invalid_format");
     setErrors(v);
     if (Object.keys(v).length > 0) { setError(t("form.fix_errors")); return; }
     setBusy(true);
     setError(null);
     try {
-      await auth.api.createFiscalYear({ name: name.trim(), startDate: `${year.trim()}-${pad(month)}-01`, periodType });
+      await auth.api.createFiscalYear({ name: name.trim(), startDate: `${parseWholeNumber(year, 4, 1900, 2200)}-${pad(month)}-01`, periodType });
       onSaved();
     } catch (err) {
       if (auth.handleError(err)) return;

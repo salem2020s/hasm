@@ -1,6 +1,7 @@
 import {
   ApiError, type StockDocType, type StockDocument, type StockPosting, type StockDocumentCapabilities, type StockDocumentInput, type StockDocumentSummary, type StockItemRef, type StockWarehouseRef,
 } from "@hasm/api-client";
+import { parsePositiveDecimal } from "../numberInput";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -198,15 +199,14 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
     form.lines.forEach((l, i) => {
       if (!l.item) v[`lines[${i}].itemId`] = t("field.required");
       if (!l.unitId) v[`lines[${i}].unitId`] = t("field.required");
-      const q = Number(l.quantity);
-      if (!l.quantity.trim() || !Number.isFinite(q) || q <= 0 || !/^\d+(\.\d{1,10})?$/.test(l.quantity.trim())) v[`lines[${i}].quantity`] = t("stock.field.invalid_quantity");
+      if (Number.isNaN(parsePositiveDecimal(l.quantity))) v[`lines[${i}].quantity`] = t("stock.field.invalid_quantity");
     });
     return v;
   }
   const tabsWithErrors = (e: Record<string, string>) => new Set(Object.keys(e).map(TAB_OF));
   const toInput = (): StockDocumentInput => ({
     docType: form.docType, sourceWarehouseId: form.source || null, targetWarehouseId: form.target || null, documentDate: form.date, reference: blankToNull(form.reference), notes: blankToNull(form.notes),
-    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: Number(l.quantity), notes: blankToNull(l.notes) })),
+    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: parsePositiveDecimal(l.quantity), notes: blankToNull(l.notes) })),
   });
 
   function showServerError(err: unknown, onPosting = false) {
@@ -299,7 +299,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
               <tbody>
                 {form.lines.map((l, i) => {
                   const unit = unitOptions(l.item).find((u) => u.id === l.unitId);
-                  const q = Number(l.quantity);
+                  const q = parsePositiveDecimal(l.quantity);
                   const preview = unit && Number.isFinite(q) && q > 0 ? `${trimNumber(q * unit.factor)} ${unitOptions(l.item).find((u) => u.isBase)?.code ?? ""}` : "—";
                   return (
                     <tr key={l.key} data-testid={`line-${i}`}>

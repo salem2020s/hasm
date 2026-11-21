@@ -51,6 +51,19 @@ public static class ListParameters
         return null;
     }
 
+    /// <summary>The parties list filter <c>withoutRole</c>: absent, <c>customer</c> or <c>supplier</c> (any case); anything else is bad. Returns the role kind (1 or 2).</summary>
+    public static string? TryParseWithoutRole(string? raw, out short? kind)
+    {
+        kind = null;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "customer": kind = 1; return null;
+            case "supplier": kind = 2; return null;
+            default: return "withoutRole";
+        }
+    }
+
     /// <summary>The party-role <c>kind</c>: absent, 1 (customer) or 2 (supplier); anything else is bad.</summary>
     public static string? TryParseKind(string? raw, out short? kind)
     {

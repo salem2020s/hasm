@@ -8,6 +8,8 @@ export interface ApiErrorDetails {
   fields?: { field: string; code: string }[];
   currentRevision?: number;
   retryAfterSeconds?: number;
+  /** Password-policy violations of a weak_password refusal: short codes only, never the password. */
+  problems?: string[];
 }
 
 /** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
@@ -691,6 +693,20 @@ export interface StockWarehouseRef { id: string; branchId: string; code: string;
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
 
+// ---- Commercial documents (Phase 3.13 S1/S6). Status: 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. Mode: 1 direct, 2 separate. Event kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled,
+// 6 approved, 7 rejected, 8 re-approval requested, 9 reopened. Prices, taxes and totals are produced by the SERVER at submit and sealed at approval; a client never sends one.
+export type CommercialStatus = 1 | 2 | 3 | 4 | 5;
+export interface CommercialLine { lineNo: number; itemId: string; unitId: string; quantity: number; warehouseId: string | null; lineNet: number | null; pricingHash: string | null }
+export interface CommercialEvent { kind: number; fromStatus: CommercialStatus | null; toStatus: CommercialStatus; revision: number; actorUserId: string; reason: string | null; atUtc: string }
+export interface CommercialDocument {
+  id: string; docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; status: CommercialStatus; note: string | null; submittedBy: string | null; lastEditedBy: string | null;
+  officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
+  revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
+}
+export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
+export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
+export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; offset?: number; limit?: number }
+
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
 export type StocktakeStatus = 1 | 2 | 3 | 4 | 5;
@@ -847,7 +863,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
     if (!response.ok) {
-      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number } = {};
+      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number; problems?: unknown } = {};
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
@@ -858,6 +874,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
+        problems: Array.isArray(payload.problems) ? payload.problems.filter((x): x is string => typeof x === "string") : undefined,
         retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
       });
     }
@@ -1040,6 +1057,26 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** Posts an approved document: moves the stock, values it and creates the draft journal entry, atomically. A receipt needs the cost amount of every line. Idempotent. */
     postStockDocument: (id: string, revision: number, lines?: StockPostLineInput[]) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/posting`, { ifMatch: revision, body: { lines: lines ?? [] } }),
     reverseStockDocument: (id: string, effectiveDate: string, reason: string) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
+    /** The registered commercial document types (names only). Empty in production until the concrete types are activated (3.15/3.16): the screen then offers no creation. */
+    listCommercialDocumentTypes: () => get<{ types: string[] }>("/api/v1/company/commercial-documents/types").then((r) => r.types),
+    listCommercialDocuments: (q: CommercialDocumentQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.status !== undefined) p.set("status", String(q.status));
+      if (q.docType) p.set("docType", q.docType);
+      if (q.branchId) p.set("branchId", q.branchId);
+      if (q.offset !== undefined) p.set("offset", String(q.offset));
+      if (q.limit !== undefined) p.set("limit", String(q.limit));
+      const qs = p.toString();
+      return get<{ documents: CommercialDocument[] }>(`/api/v1/company/commercial-documents${qs ? "?" + qs : ""}`).then((r) => r.documents);
+    },
+    getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
+    createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
+    updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
+    submitCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
+    rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
+    cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),
@@ -1075,8 +1112,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Party registry (Phase 3.9A). Changes carry the local party (or proposal) revision as If-Match; the company comes only from the session; the central queue is for identity administrators.
     getPartyCapabilities: () => get<PartyCapabilities>("/api/v1/company/parties/capabilities"),
-    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number } = {}) => {
-      const qs = [q.search ? `search=${enc(q.search)}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
+    /** `active` keeps only active (true) or inactive (false) parties; `withoutRole` keeps only parties that hold NO role of that kind yet. Both are applied by the server before paging, so `total` and the page are exact. */
+    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number; active?: boolean; withoutRole?: "customer" | "supplier" } = {}) => {
+      const qs = [q.search ? `search=${enc(q.search)}` : "", q.active !== undefined ? `active=${q.active}` : "", q.withoutRole ? `withoutRole=${q.withoutRole}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
       return get<{ parties: LocalPartySummary[]; total: number; registryUnavailable?: boolean }>(`/api/v1/company/parties${qs ? "?" + qs : ""}`);
     },
     getParty: (id: string) => get<LocalParty>(`/api/v1/company/parties/${enc(id)}`),

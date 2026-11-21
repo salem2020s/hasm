@@ -93,7 +93,7 @@ public class FiscalMigrationTests : FiscalTestBase
         await Sql("CREATE TABLE zz_existing (a int); INSERT INTO zz_existing VALUES (7)", legacy);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], outcome.Applied);
+        Assert.Equal([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(0L, await Count(legacy, Fy.Table));                          // nothing is seeded
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync()).Status);

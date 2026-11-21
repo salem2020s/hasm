@@ -41,6 +41,7 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal("\"1\"", Etag(created));
         var docId = created.Json.GetProperty("id").GetGuid();
         Assert.Equal("JOD", created.Json.GetProperty("currency").GetString());
+        Assert.Equal(Admin.Id, created.Json.GetProperty("lastEditedBy").GetGuid());                          // the read model names the last editor (the screen mirrors D-066 with it)
         Assert.False(created.Json.GetProperty("replayed").GetBoolean());
         Assert.False(created.Json.GetProperty("lines")[0].TryGetProperty("unitPrice", out _));                                // the view carries none either
         Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"(?<![0-9A-Za-z-])999(?![0-9A-Za-z-])"), created.Body);   // the client-sent price is not echoed (a random id may contain the digits, a number token may not)
@@ -96,5 +97,28 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/{otherId}/submit", null, viewerCookie, ifMatch: "\"1\"")).Status);
         var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, Base, cookie: await SignIn(outsider))).Status);
+    }
+
+    /// <summary>S6: the registered types, names only. This test runs the PRODUCTION composition (no test type registered), so the answer is the empty list the screen turns into "no document types activated".</summary>
+    [PostgresFact]
+    public async Task The_types_route_answers_the_empty_production_registry_to_a_caller_with_view_or_create_and_refuses_everyone_else()
+    {
+        await StartApi();                                                                                                 // production composition: no document type is registered
+        var path = $"{Base}/types";
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, path)).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, path, cookie: "forged")).Status);
+        Assert.Equal("company_not_selected", (await Send(HttpMethod.Get, path, cookie: await SignIn(Admin, selectCompany: false))).Error);
+        var admin = await Send(HttpMethod.Get, path, cookie: await SignIn(Admin));
+        Assert.Equal(HttpStatusCode.OK, admin.Status);
+        Assert.Equal(0, admin.Json.GetProperty("types").GetArrayLength());
+        var branch = await NewBranchId("BA");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.CommercialView], ScopeKind.Branch, branch);                // a branch grant is enough ("in any branch")
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, path, cookie: await SignIn(viewer))).Status);
+        var (creator, _) = await Member([PermissionCatalog.Codes.CommercialCreate], ScopeKind.Branch, branch);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, path, cookie: await SignIn(creator))).Status);
+        var (updater, _) = await Member([PermissionCatalog.Codes.CommercialUpdate], ScopeKind.Company, null);               // neither view nor create
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, path, cookie: await SignIn(updater))).Status);
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, path, cookie: await SignIn(outsider))).Status);
     }
 }
