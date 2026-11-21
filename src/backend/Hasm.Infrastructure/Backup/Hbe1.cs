@@ -100,6 +100,26 @@ public static partial class Hbe1
     public static async Task<Hbe1Header> ReadHeaderAsync(Stream input, CancellationToken ct = default) => (await ParseHeaderAsync(input, ct)).Header;
 
     /// <summary>
+    /// The digest of a stored HBE1 file as it is (header hash and the hash of every stored chunk), computed WITHOUT a key. Used (1) to compare a stored file with its entry in the signed manifest before
+    /// a restore, and (2) for a file that is itself authenticated by a signature over its exact bytes (an encrypted manifest, review L-b), whose digest is then derived from those bytes.
+    /// </summary>
+    public static async Task<Hbe1Digest> ComputeDigestAsync(Stream input, CancellationToken ct = default)
+    {
+        var (h, unsigned, tag, _, _, _) = await ParseHeaderAsync(input, ct);
+        var headerHash = Convert.ToHexStringLower(SHA256.HashData(Concat(unsigned, tag)));
+        var chunks = new List<string>();
+        var buffer = new byte[h.ChunkSize + TagLength];
+        while (true)
+        {
+            var n = await ReadFullAsync(input, buffer, ct);
+            if (n == 0 && chunks.Count > 0) break;
+            chunks.Add(Convert.ToHexStringLower(SHA256.HashData(buffer.AsSpan(0, n))));
+            if (n < buffer.Length) break;
+        }
+        return new Hbe1Digest(headerHash, chunks);
+    }
+
+    /// <summary>
     /// Decrypts <paramref name="input"/> into <paramref name="plaintext"/>. The header and every chunk are first checked against <paramref name="expected"/> from the SIGNED manifest
     /// (<c>hbe_not_authenticated</c>); a chunk is decrypted and released only after that check and its AEAD tag. Refused before any output: an unknown version or malformed header (<c>hbe_malformed</c>), another recovery key
     /// (<c>recovery_key_mismatch</c>), another purpose or name (<c>hbe_wrong_file</c>), a header that fails authentication (<c>hbe_authentication_failed</c>). A chunk that fails authentication, including
