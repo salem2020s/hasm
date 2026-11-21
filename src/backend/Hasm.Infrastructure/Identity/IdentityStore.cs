@@ -7,6 +7,9 @@ using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
+using RA = Hasm.Infrastructure.SystemDatabase.SystemSchema.RoleAssignment;
+using RL = Hasm.Infrastructure.SystemDatabase.SystemSchema.Role;
+using RP = Hasm.Infrastructure.SystemDatabase.SystemSchema.RolePermission;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -289,6 +292,41 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
         cmd.Parameters.AddWithValue("u", userId);
         return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : MfaState.None;
+    }
+
+    /// <summary>
+    /// The user's CENTRAL MFA requirement (Phase 4.1 section 3, D-080 (1), D-165): identity administrator, an active Company Administrator preset, or any active role holding a privileged
+    /// permission, in ANY company (never only the selected one). Read from the database on every call. A user that does not exist has no requirement (and no session).
+    /// </summary>
+    public async Task<MfaRequirement> GetMfaRequirementAsync(Guid userId, CancellationToken ct = default)
+    {
+        var reasons = MfaMandatoryReason.None;
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using (var cmd = new NpgsqlCommand($"SELECT {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @u", conn))
+        {
+            cmd.Parameters.AddWithValue("u", userId);
+            if (await cmd.ExecuteScalarAsync(ct) is true) reasons |= MfaMandatoryReason.IdentityAdministrator;
+        }
+        var roles = new Dictionary<Guid, (string? Preset, List<string> Permissions)>();
+        await using (var cmd = new NpgsqlCommand(
+            $"SELECT DISTINCT r.{RL.Id}, r.{RL.PresetKey}, p.{RP.Permission} FROM {RA.Table} a JOIN {RL.Table} r ON r.{RL.Id} = a.{RA.RoleId} AND r.{RL.IsActive} " +
+            $"LEFT JOIN {RP.Table} p ON p.{RP.RoleId} = r.{RL.Id} WHERE a.{RA.UserId} = @u AND a.{RA.RevokedAtUtc} IS NULL", conn))
+        {
+            cmd.Parameters.AddWithValue("u", userId);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var id = reader.GetGuid(0);
+                if (!roles.TryGetValue(id, out var entry)) roles[id] = entry = (reader.IsDBNull(1) ? null : reader.GetString(1), []);
+                if (!reader.IsDBNull(2)) entry.Permissions.Add(reader.GetString(2));
+            }
+        }
+        foreach (var (preset, permissions) in roles.Values)
+        {
+            if (preset == PresetRoles.CompanyAdministratorKey) reasons |= MfaMandatoryReason.CompanyAdministratorPreset;
+            if (MfaClassification.IsPrivilegedRole(preset, permissions)) reasons |= MfaMandatoryReason.PrivilegedRole;
+        }
+        return new MfaRequirement(reasons);
     }
 
     /// <summary>
