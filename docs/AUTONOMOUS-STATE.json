@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "9a16fe06b9b655dc9542cf9d603ff23b68d9d62b",
-    "note": "LEAD MODEL SWITCH CHECKPOINT. main = 9a16fe0 (merge of #172), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (WIP, no PR)."
+    "verifiedHead": "f28155e2a7c3437f4eadb5c0270fcdc469f2b917",
+    "note": "Refresh after the owner decisions of 2026-11-21. main = f28155e (merge of #186, the owner decisions D-190..D-197; before it #187 b73e0c3, the one-shot test-pg runner, and #176 2d5da1f), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (#181)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -318,67 +318,85 @@
       "phase": "4.1 S3b-1a MFA requirement model (D-164..D-166, no migration, registry 1262)",
       "mergeCommit": "9a16fe06b9b655dc9542cf9d603ff23b68d9d62b",
       "headMerged": "8523d06763f69be67fbfd5ef11554f97f4b09c78"
+    },
+    {
+      "pr": 179,
+      "phase": "LEAD MODEL SWITCH CHECKPOINT handoff refresh (docs)",
+      "mergeCommit": "9ffaa6c7c265b3b2de2c8ddf398d2a6034ffa318",
+      "headMerged": "bd70d37a1a0915f2d5f387a5d0aaff66a46f9f3f"
+    },
+    {
+      "pr": 180,
+      "phase": "picomatch state corrected to retired in the stale security docs; legacy PR audit recorded (docs)",
+      "mergeCommit": "4dd47ebe792d6cca5d6fc435b799e964265112f0",
+      "headMerged": "98a41b6c88fd4a7c366934f43e33162fbf0e8906"
+    },
+    {
+      "pr": 178,
+      "phase": "4.1 S3b-2a security settings screen with voluntary MFA enrolment (frontend only)",
+      "mergeCommit": "5d81d753343f44769c37447325ed473418b81ec5",
+      "headMerged": "652f0f3731508059f678a996b29b86af68abcffd"
+    },
+    {
+      "pr": 174,
+      "phase": "constraint matrix follow-ups (tests; registry unchanged at 1262)",
+      "mergeCommit": "89dee05c36c9eec743972a8c5f8f34dee01e98d3",
+      "headMerged": "c2648e43e681afe0de7b9c6c0a557b22b492990b"
+    },
+    {
+      "pr": 177,
+      "phase": "explicit request-size limits on every body-accepting route (registry unchanged at 1262)",
+      "mergeCommit": "b1bf424a67eacf2e7ec581b695fff4aa2517249c",
+      "headMerged": "9247d82bd8c1785008b349e1720b1d4aba028cbf"
+    },
+    {
+      "pr": 176,
+      "phase": "Phase 4.3 slice 8 plan, multiple backup destinations (docs; D-182..D-189); plan only, nothing built",
+      "mergeCommit": "2d5da1f99bbc51445d6997e079322dd35e49c41d",
+      "headMerged": "3b726ccd09caafb918d6bd43fa3dadccc52b8663"
+    },
+    {
+      "pr": 187,
+      "phase": "test-pg one-shot shared-mode runner with guaranteed teardown (ports the remaining capability of #85)",
+      "mergeCommit": "b73e0c3fb2552359b3622789afb5c0533e2fadab",
+      "headMerged": "1155d2629e08fd3a747598a56fb6c5b79af2f340"
+    },
+    {
+      "pr": 186,
+      "phase": "owner decisions of 2026-11-21 (D-190..D-197)",
+      "mergeCommit": "f28155e2a7c3437f4eadb5c0270fcdc469f2b917",
+      "headMerged": "6c851c1b0adbd2b3cb67b8ee45491dba4a395c3c"
     }
   ],
   "active": {
-    "phase": "LEAD MODEL SWITCH CHECKPOINT (2026-11-21)",
-    "state": "All agents stopped at safe checkpoints with no unpushed work (lead report); no agent job running. Open Draft PRs #174, #177, #178 approved and waiting for main merges; #176 request changes; #48 revision 3 awaiting G's review. Non-skipped check-runs of every open head were completed with success when read; exact-head verify-head NOT run by this refresh.",
+    "phase": "Owner decisions of 2026-11-21 recorded (D-190..D-197 and the consolidated package D-198..D-239); team running",
+    "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh.",
     "knownIssues": [
-      "Decisions: next free ID D-190. D-164..D-166 on main (#172); D-167..D-169 on the S3b-1b WIP branch; D-179..D-181 allocated to B (decision rows pending; code comments only on cd40c59); D-182..D-189 on #176; D-108..D-115 and D-122..D-129 allocated, not on main.",
-      "Audit: 1336/1337 on main; 1338 allocated to S3b-1b; blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
-      "4.1 S3 is NOT complete: S3a (#166) and S3b-1a (#172) merged; S3b-1b WIP; S3b-2a UI is #178.",
+      "Decisions: next free ID D-240. D-198..D-239 the owner's consolidated package of 2026-11-21 (in its own pull request, based on main after #186 merged as f28155e). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (in the pull request carrying this refresh); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
+      "Audit: 1336/1337 on main; 1338 allocated to S3b-1b (#181); blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
+      "4.1 S3 is NOT complete: S3a (#166), S3b-1a (#172) and the S3b-2a UI (#178) merged; S3b-1b is #181 and S3b-2b is #185 (stacked on #181), both open.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
-      "Flaky-test suspect: Hbe1Tests.Any_altered_byte_is_refused_by_the_signed_digest_and_also_by_the_format_itself failed once on #48's intermediate head 7203a0e; passed on retry and locally."
+      "Flaky-test suspect: Hbe1Tests.Any_altered_byte_is_refused_by_the_signed_digest_and_also_by_the_format_itself failed once on #48's intermediate head 7203a0e; passed on retry and locally. Addressed by the open #183 (not merged).",
+      "Permanent rule (D-197, docs/DEVELOPMENT.md): no GitHub closing keyword next to a PR or issue number in a PR title, PR description or commit message; grep before every push, PR update and merge."
     ]
   },
   "next": [
-    "Resume merges in order #174, #177, #178 (merge main, registry, exact-head verify-head, CI, --match-head-commit).",
-    "#176 fixes (R's M1: D-186 exit order 1 > 8 > 0; L1-L6), then R's confirmation.",
-    "G's independent review of #48 design revision 3 (delta c9b2493..9f64f57); X1-A and X2-X8 stay owner decisions.",
-    "Open the S3b-1b PR (system 0034, D-167..D-169, audit 1338, registry +9) and finish B's import key coverage (D-179..D-181, +2).",
-    "The legacy PR audit is NOT started (owner instruction).",
-    "Follow-ups in docs/INTEGRATION-STATUS.md (flaky Hbe1Tests suspect, Lows of #155, #161, #172, #173, #174, #177, #178; load test stage 2)."
+    "Merge queue (registry serial): #184 (its base #177 is merged); #181 (system 0034, +9), then #185 (stacked on #181); #182 (+2). #183 (+0) is held for its Low fixes. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
+    "#176 merged (2d5da1f). BINDING for the slice 8 implementation (FG's L-FG3, Low, recorded on the merged plan's review record): when a backup-retention-apply finds a matching 2015 with no 2016 and the run folder present, it closes that orphan 2015 with an audit event (2017 deletion_not_started with run id, status hash and destination id), and a closed 2015 is never a basis for resume, recovery or the 2015/2016 pair; with its test (crash before the rename, hold placed, folder removed by hand: the run must stay pending and be copied again). ALSO BINDING for slice 8 (owner, MD-Q2, D-230): deletion cannot be enabled while the backup destinations lack the required independent protection (no-second-destination case included until decided otherwise).",
+    "Consolidated package (D-198..D-239): the lead assigns the unblocked slices in dependency order (list in docs/INTEGRATION-STATUS.md, 'Now unblocked'); implementation gaps first in 3.13: backend Reject rule (D-208) and duplicate-policy rule with its migration (D-209).",
+    "#48: implement the approved final design (c73b643; G approve); execution stays closed until the full N1-N32 tests and review pass (D-190, D-195).",
+    "3.8D design only: the Q3 revaluation accounting contract (independent accounting review, owner approval) and the Q4 conversion design (guard untouched).",
+    "Q5 migration-guard hardening as its own security PR (D-194; protected-file review and merge gates apply).",
+    "Follow-ups in docs/INTEGRATION-STATUS.md (Lows of #155, #161, #172, #173, #174, #177, #178; load test stage 2)."
   ],
   "openDecisions": [
-    "X1-X8",
-    "OD-11",
-    "Q",
-    "S",
-    "C",
-    "3.13-Q2",
-    "3.13-Q3",
-    "3.13-Q4",
-    "3.13-Q5",
-    "3.13-Q6",
-    "3.13-Q12",
-    "3.13-Q16",
-    "3.13-Q17",
-    "3.13-Q18",
-    "R-Q1",
-    "R-Q2",
-    "R-Q3 (D-109 and D-113 owner-pending)",
-    "4.3-ACT",
-    "4.3-S6-Q1..Q7",
-    "4.3-S7-Q1..Q9",
-    "S5a-Reject",
-    "S5a-DIGIT",
-    "S5b",
-    "STOCK-PERIOD-DB (proposal recommends option b)",
-    "M2-TOTP (production-readiness blocker)",
+    "3.8D-Q3 accounting contract (policy direction approved, D-198; contract, independent review and tests outstanding; revaluation execution closed)",
+    "3.8D-Q4 guard modification (policy direction approved, D-199; dedicated independent review and protected-change approval outstanding)",
+    "4.3-ACT (confirmed CLOSED by the owner, D-227; activation PR owner-instructed)",
+    "CUTOVER-ACT (confirmed CLOSED by the owner, D-229; activation PR owner-instructed, documented recovery drill)",
+    "RESERVATIONS-SCOPE (SRS 9 lists reservations; the owner calls them a separate future feature requiring an approved stock-allocation contract: does 'future' mean after Release 1?)",
     "REL-ACC (release acceptance blocked, D-088)",
-    "CUTOVER-ACT",
-    "3.14-Q1..Q11",
-    "4.4-Q1..Q4",
-    "T-1",
-    "OD-1",
-    "OD-2",
-    "OD-12",
-    "T-2",
-    "SESSION-EXPIRY-UNSAVED",
-    "APPROVAL-POLICY-DUPLICATES",
-    "3.8D-Q1, Q2, Q3-contract, Q4, Q5 (Q3 scope answered by the owner 2026-11-21: revaluation is in 3.8D)",
-    "4.3-S8-MD-Q1..Q2",
-    "IMPORT-ORIGINALS-BACKUP-SCOPE"
+    "Merges of protected verification-file changes (S, C, the Q5 workstream: authorized as work by D-234 and D-194; each merge owner-instructed)"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -397,62 +415,79 @@
   },
   "openPullRequests": [
     {
-      "pr": 174,
-      "branch": "test/constraint-matrix-followups",
-      "head": "43153c86c5a8ddcfd89fca7d235ec8932566472c",
-      "state": "C2 matrix follow-ups; R approve (L1-L3); next: merge main, registry +0, isolated EndpointConstraintMatrix*, CI, merge"
+      "pr": 184,
+      "branch": "fix/action-route-limits",
+      "head": "b77118a62e1e46f1e71b0354a169dc3a1f0599cc",
+      "state": "A action routes limited to 16 KiB; review and CI not re-read by this refresh"
     },
     {
-      "pr": 177,
-      "branch": "fix/request-size-limits",
-      "head": "ca8cb610fb052ad93c34512976c5adec10c1955b",
-      "state": "A request-size limits; G approve (L1-L3); next: merge main (registry 1262), CI, merge"
+      "pr": 181,
+      "branch": "feature/phase-4-1-s3b-1b",
+      "head": "0ac72e65ad54303e939e0a578dd856b2dc0f6ec5",
+      "state": "D 4.1 S3b-1b company MFA policy and enforcement; system 0034, D-167..D-169; not re-read"
     },
     {
-      "pr": 178,
-      "branch": "feat/security-settings-ui",
-      "head": "7e0ccd8e9faaefd41f06d0c250e48e248a3683bf",
-      "state": "E S3b-2a security settings UI; H approve (L1-L2); next: merge main, CI, merge"
+      "pr": 185,
+      "branch": "feat/mfa-policy-ui",
+      "head": "f80ab8f572f19b8b18c0f3c395e09d35387dce9e",
+      "state": "E 4.1 S3b-2b company MFA policy screen; stacked on #181; not re-read"
     },
     {
-      "pr": 176,
-      "branch": "docs/phase-4-3-multi-destination-plan",
-      "head": "37662d9b3aae83df09b4664c8135d872a73a1e6e",
-      "state": "F2 4.3 slice 8 plan (docs); R request changes (M1, L1-L6); D-182..D-189, audit 2040-2049"
+      "pr": 182,
+      "branch": "feature/phase-4-3-import-key-coverage",
+      "head": "7be5e7a69fa7c09f6631e99a6fcfb7c8b5993097",
+      "state": "B import-file key coverage and key-retirement report; D-179..D-181; not re-read"
+    },
+    {
+      "pr": 183,
+      "branch": "test/hbe1-exhaustive-tamper",
+      "head": "77820d1e2caea8971216f74b8d1fc8b38e72590d",
+      "state": "HBE1 exhaustive tamper tests (tests only), H continued by FF; merges only when D-237 is satisfied on the exact head"
+    },
+    {
+      "pr": 188,
+      "branch": "security/migration-guard-hardening",
+      "head": "1658f0a7767ccb888488fca85b785b7d66407fca",
+      "state": "migration-guard hardening (the D-194 workstream); protected verification-file changes are never self-merged; not re-read"
+    },
+    {
+      "pr": 189,
+      "branch": "docs/owner-decisions-2026-11-21-consolidated",
+      "head": "9f12e8e390f057c34d60716bf2b7868b9a05be72",
+      "state": "FF: the owner's consolidated package D-198..D-239; FH request changes at 9f12e8e (2 Medium, 4 Low), addressed in the delta after it; confirmation pending; the head recorded here is the one read before this commit"
+    },
+    {
+      "pr": 190,
+      "branch": "tooling/test-pg-oneshot-review-lows",
+      "head": "34db413bd1a4fd0c05839a9ab9e7d2a9aafa806c",
+      "state": "review Lows of #187 (test-pg one-shot runner); not re-read"
+    },
+    {
+      "pr": 48,
+      "branch": "feature/phase-3-8d-impact-preview",
+      "head": "32543371bd12fa8999fb242018e76dc74cad5a36",
+      "state": "P 3.8D; G approve of the final design revision at c73b643 (record on the branch); implementation authorization effective; execution closed until the full N1-N32 tests and review; not merged before the complete phase scope (D-195)"
     }
   ],
   "inertPullRequests": [
     {
       "pr": 85,
       "branch": "feature/tooling-linux-pg-test-harness",
-      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a"
-    },
-    {
-      "pr": 62,
-      "branch": "integration/chain-with-security",
-      "head": "85526937ee631c2d8acef0fa4b22f0f767b13bd7"
-    },
-    {
-      "pr": 55,
-      "branch": "docs/security-consolidated-proposal",
-      "head": "23d485054cdae935a1e27c03ea4d56943a8d3cb1"
-    },
-    {
-      "pr": 51,
-      "branch": "feature/security-picomatch-retirement",
-      "head": "fe2ee06b1fabd13406428239e5462bb95384d3db"
+      "head": "8b87ea3147d7f8bcbb873c5bdac0bc616039640a",
+      "state": "open; comparison with run-isolated.sh in progress (D-196); closed only if fully covered"
     },
     {
       "pr": 48,
       "branch": "feature/phase-3-8d-impact-preview",
-      "head": "9f64f575cf0455096ac0381de2b6b65bedc4a0ef",
-      "state": "design revision 3; G review pending (c9b2493..9f64f57); never merged as is"
+      "head": "ab1d106136a6f95de7416214c92c56028419d400",
+      "state": "open; design revision 3 with the owner's Q1-Q5 decisions; G request changes, P's fixes pushed, G's confirmation pending; never merged before the complete phase scope (D-195)"
     }
   ],
   "mergeSequence": [
-    174,
-    177,
-    178
+    184,
+    181,
+    185,
+    182
   ],
   "agents": {
     "lead": "Claude Opus",
@@ -467,24 +502,101 @@
       "C",
       "F",
       "G"
-    ]
+    ],
+    "note": "Roster as of the lead-switch checkpoint. The lead model was switched afterwards and agents are moving to Claude Fable where supported (owner, 2026-11-21); the current assignment per agent is NOT VERIFIED here."
   },
   "outsideQueue": [
-    176,
-    48
+    48,
+    183,
+    188
   ],
-  "wipBranches": [
+  "wipBranches": [],
+  "closedWithoutMerging": [
     {
-      "branch": "feature/phase-4-1-s3b-1b",
-      "head": "71b15e2",
-      "owner": "D",
-      "state": "S3b-1b; system 0034, D-167..D-169, audit 1338, registry +9; no PR"
+      "pr": 51,
+      "branch": "feature/security-picomatch-retirement",
+      "head": "fe2ee06b1fabd13406428239e5462bb95384d3db",
+      "closedAt": "2026-11-21T21:19:22Z",
+      "state": "closed without merging on the owner's authorization (D-196); branch preserved"
     },
     {
-      "branch": "feature/phase-4-3-import-key-coverage",
-      "head": "cd40c59",
-      "owner": "B",
-      "state": "import-file key coverage; D-179..D-181, registry +2; unfinished; no PR"
+      "pr": 55,
+      "branch": "docs/security-consolidated-proposal",
+      "head": "23d485054cdae935a1e27c03ea4d56943a8d3cb1",
+      "closedAt": "2026-11-21T21:19:24Z",
+      "state": "closed without merging on the owner's authorization (D-196); branch preserved"
+    },
+    {
+      "pr": 62,
+      "branch": "integration/chain-with-security",
+      "head": "85526937ee631c2d8acef0fa4b22f0f767b13bd7",
+      "closedAt": "2026-11-21T21:19:26Z",
+      "state": "closed without merging on the owner's authorization (D-196); branch preserved"
     }
-  ]
+  ],
+  "decidedByConsolidatedPackage2026-11-21": {
+    "rows": "D-198..D-239 in docs/DECISIONS.md (one row per question or tight group; owner wording verbatim; class and reconciliation in each row)",
+    "resolvedRegisterItems": [
+      "OD-1 (D-217)",
+      "OD-2 (D-218)",
+      "OD-11 (D-219)",
+      "OD-12 and T-2 (D-215)",
+      "T-1 (D-216)",
+      "Q quotas and scanning (D-223; numeric defaults to be proposed in the quota slice plan)",
+      "S and C (D-234)",
+      "3.13-Q2 (D-200)",
+      "3.13-Q3 (D-201)",
+      "3.13-Q4/Q5 (D-202)",
+      "3.13-Q6 (D-203)",
+      "3.13-Q12 (D-204)",
+      "3.13-Q16 (D-205)",
+      "3.13-Q17 (D-206)",
+      "3.13-Q18 (D-207)",
+      "S5a-Reject (D-208)",
+      "APPROVAL-POLICY-DUPLICATES (D-209)",
+      "S5a-DIGIT (D-210)",
+      "3.14-Q1..Q4, Q7..Q11 (D-211)",
+      "3.14-Q5 (D-212)",
+      "3.14-Q6 (D-213, supersedes the plan default)",
+      "R-Q1 (D-221)",
+      "R-Q2, R-Q3 (D-222)",
+      "IMPORT-ORIGINALS-BACKUP-SCOPE (D-224)",
+      "4.3-S6-Q1 (D-225)",
+      "4.3-S6-Q2..Q7 (D-226)",
+      "4.3-S7-Q1, Q2, Q4..Q9 (D-228)",
+      "4.3-S7-Q3 (D-229)",
+      "4.3-S8-MD-Q1, Q2 (D-230)",
+      "4.4-Q1, Q3 (D-231)",
+      "4.4-Q2 (D-232)",
+      "4.4-Q4 (D-233)",
+      "STOCK-PERIOD-DB (D-220)",
+      "M2-TOTP (D-235)",
+      "SESSION-EXPIRY-UNSAVED (D-236)"
+    ],
+    "conditionsAndConfirmations": [
+      "3.14 posting review gate (D-214)",
+      "PR 183 condition (D-237)",
+      "PR 85 (D-238, confirms D-196)",
+      "execution rules (D-239, confirms D-048)"
+    ],
+    "conflicts": "none (class v); differences kept on the strict side are listed in docs/INTEGRATION-STATUS.md and the PR description",
+    "implementationGapsOnMain": [
+      "S5a-Reject: the server still permits reject without the stage authority (D-208)",
+      "duplicate approval policies are still accepted (D-209)",
+      "retention eligibility still on the removal date only; purge execution stays disabled (D-221)"
+    ],
+    "activationGatesClosed": [
+      "automatic backup deletion (4.3-ACT)",
+      "live restore cutover activation (CUTOVER-ACT)",
+      "revaluation execution",
+      "method-conversion guard change",
+      "replay execution until the full N1-N32 tests and review (implementation authorization effective)",
+      "financial posting for cash and bank until the accounting and security review (D-214)",
+      "production deployment, release and paid services"
+    ],
+    "note": "A decision recorded is not a feature built. NOT VERIFIED by this record: exact-head verify-head; the state of pull requests other than 186.",
+    "addedRequirements": [
+      "MD-Q2 (D-230): no deletion while the backup destinations lack the required independent protection, no-second-destination case included until decided otherwise; prerequisite of 4.3-ACT and binding for slice 8"
+    ]
+  }
 }

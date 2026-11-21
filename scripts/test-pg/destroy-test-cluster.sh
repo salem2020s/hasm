@@ -7,6 +7,7 @@ assert_safe_locations
 take_lock          # refuses while a run (or any other script) holds the cluster; the lock file is a sibling of the root and is never deleted
 [[ -f "${MARKER_FILE}" ]] || die "No disposable test cluster marker in ${TEST_ROOT}; refusing to delete anything."
 [[ -O "${TEST_ROOT}" ]] || die "${TEST_ROOT} is not owned by the current user; refusing to delete."
+neutralize_stale_pidfile   # pg_ctl below must never signal a reused PID; a live server of this cluster is left for the normal stop
 if [[ -f "${DATA_DIR}/PG_VERSION" ]] && cluster_running; then
   n="$(foreign_sessions)"
   [[ "${n}" == "0" ]] || die "${n} test session(s) are connected to the cluster (a test run outside the lock?); not deleting."

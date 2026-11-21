@@ -41,8 +41,8 @@ public static class BranchEndpoints
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/deactivate", Deactivate).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/activate", Activate);
-        g.MapPost("/{id:guid}/make-main", MakeMain);
+        g.MapPost("/{id:guid}/activate", Activate).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/make-main", MakeMain).WithMetadata(new BodyLimit());
     }
 
     private static object Body(BranchView b) => new
