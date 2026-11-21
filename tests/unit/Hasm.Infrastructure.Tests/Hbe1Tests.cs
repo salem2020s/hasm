@@ -60,7 +60,8 @@ public sealed class Hbe1Tests
         Assert.Equal(pair.KeyId, pub.KeyId);
         Assert.Equal(pair.KeyId, priv.KeyId);
         Assert.StartsWith("-----BEGIN PUBLIC KEY-----", pair.PublicKeyPem);
-        Assert.StartsWith("-----BEGIN ENCRYPTED PRIVATE KEY-----", pair.EncryptedPrivateKeyPem);
+        var pemFields = PemEncoding.Find(pair.EncryptedPrivateKeyPem);
+        Assert.Equal("ENCRYPTED PRIVATE KEY", pair.EncryptedPrivateKeyPem[pemFields.Label]);                       // PKCS#8 encrypted (PBES2) only
         Assert.DoesNotContain("BEGIN PRIVATE KEY", pair.EncryptedPrivateKeyPem);                                    // never an unencrypted private key
         Assert.Equal("recovery_key_unreadable", Assert.Throws<BackupException>(() => RecoveryPrivateKey.FromEncryptedPem(pair.EncryptedPrivateKeyPem, "wrong passphrase, long enough")).Code);
         Assert.Equal("recovery_key_unreadable", Assert.Throws<BackupException>(() => RecoveryPrivateKey.FromEncryptedPem(pair.PublicKeyPem, Pass)).Code);

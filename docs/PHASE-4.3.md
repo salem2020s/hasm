@@ -682,6 +682,24 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
   * 2014-2019: reserved for slices 6 and 7.
   * Persisted codes; never renumbered.
 * **Interim mode (G round 1, L5).** Until the Phase 4.1 administrative-tool login (D-099) exists, `backup-recovery-keygen`, `backup-signing-keygen` and `backup-keys` run under operating-system access without a named administrator with MFA. This is the second dated limitation in RELEASE1-ACCEPTANCE G (through the roadmap generator).
+* **Implementation status (code PR, branch `feature/phase-4-3-slice5-impl`).** Built as planned:
+  * `RecoveryKeys`, `RecoveryKit` and `backup-recovery-keygen` (D-089); `Hbe1` (D-090); `BackupSigningKeys`, `SigningTrust` and the detached `.sig` (D-092); `SignedDocuments` (version-2 manifests encrypted and signed over their ciphertext, the signed `run.status.json`; M1, L-b, L-d);
+  * `EncryptedSets` and the encrypted `backup-company` / `backup-run`: `pg_dump` stdout piped into HBE1, attachments encrypted file by file, no plaintext at rest (D-091), every stored file checked against its signed digest (D-116); the canary (D-117);
+  * `KeyExport` and `backup-keys` (D-087, D-094, M4, N2), `backup-signing-keygen`;
+  * the encrypted trial restore (streaming decryption into `pg_restore`, attachments into a private staging folder) and `RecoveryTestService` / `backup-recovery-test` with `recovery-test.json` and `recovery_untested` (D-085, D-117, N1);
+  * the DEV/TEST guard (D-095, L2) with the `UNENCRYPTED-DEV-TEST-ONLY` marker in unencrypted sets and runs;
+  * the system audit events 2010-2013 (`BackupAudit`; operator `os:<account>`, database TAGS only; fail closed);
+  * the per-table secret-store rule (D-120): `SystemSchema.SecretStoreTables` maps each table to `AlwaysExcluded` or `IncludedOnlyInEncryptedRuns`, `BackupRunService.SystemDumpExclusionsFor(encrypted)` applies it, and the #104 pin test checks the rule in both modes and that any TOTP table is encrypted-only. Phase 4.1 S1 has not merged, so no TOTP table exists yet: whichever merges second adds it as `IncludedOnlyInEncryptedRuns` (the pin test enforces this).
+* **Deviations from the plan text (no change of decision):**
+  * `backup-signing-keygen` takes no argument: the key id is derived (`sk-` + 16 hex of SHA-256 over the public key), like the recovery key id, so an id can never be mistyped or reused.
+  * The trust anchor of the restore commands is `--signing-trust <signing-trust.json>` (the kit's status list: `active`, `retired` with `retiredUtc`, `compromised`; M5, L-d). `--signing-public-key <pem>` remains, trusting one key as active.
+  * `recovery-test.json` is not signed: the proof is the canary PREIMAGE checked against the SIGNED status (N1); a signature by the server key would add nothing and would tie the test to the signing private key.
+  * `backup-recovery-test` refuses an unencrypted run in every case (`unencrypted_run`): it has no recovery key to prove. `trial-restore-company` accepts an unencrypted set only under the reader's acknowledgement, as planned.
+  * The backup root is an argument of `backup-run`, not a setting, so `backup-keys` refuses a destination that is, or lies inside, a run folder or a folder that holds run folders (`destination_in_backup_root`), besides the planned overlap checks.
+  * `backup-keys` also writes a READABLE copy of the trust list (`signing-trust.json`, public keys only) for the recovery kit.
+  * The TOTP KEK-id check of the recovery test (M4) has nothing to check until Phase 4.1 creates `user_totp`; the attachment and audit key ids are checked.
+* **Not built here (later slices):** writing the key export back to disk (only verified: decrypt and compare the ids) belongs to the full-installation restore and the cutover (slice 7); retention and deletion (slice 6).
+* **Tests:** unit tests for every unit above (HBE1, keys, signatures and trust, signed documents and proof, guard and pin, encrypted sets, key export, status rules); a new PostgreSQL class `EncryptedBackupTests` (6 tests): an encrypted run with no plaintext at rest, trial restore with the private key equal to the source, forged/unsigned/swapped sets refused before `pg_restore`, `backup-keys` and `backup-signing-keygen` audited and recoverable, the recovery test end to end turning `backup-status` green, and encryption by default with the DEV/TEST path. The existing suites keep their counts and run with the DEV/TEST acknowledgement.
 
 ### Owner decisions this slice relies on (not re-asked)
 D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
