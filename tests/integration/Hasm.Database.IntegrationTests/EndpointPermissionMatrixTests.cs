@@ -30,7 +30,11 @@ namespace Hasm.Database.IntegrationTests;
 /// <list type="bullet">
 /// <item>a company member without any permission is refused with 403 on every one of them;</item>
 /// <item>a member holding every read (view) permission is refused with 403 on every one of them that changes something;</item>
-/// <item>a member holding the branch-scoped permissions for branch A only is refused with 403 on the branch-scoped endpoints acting on branch B, while the same grant works on branch A;</item>
+/// <item>a member holding the branch-scoped permissions for branch A only is refused with 403 on the branch-scoped endpoints acting on branch B, while the same grant works on branch A (the branch
+/// structure operations need the company-wide structure permission and are refused on A as well);</item>
+/// <item>a member holding the journal permissions for cost center A only is refused with 403 on the journal endpoints acting on entries allocated to cost center B, while the same grant works on A;
+/// the warehouse scope is covered the same way by <see cref="EndpointPermissionMatrixWarehouseTests"/>;</item>
+/// <item>every refusal is the authorization error itself (<c>forbidden</c>), never another 403;</item>
 /// <item>no refused request writes anything (business audit, access audit and role assignments unchanged).</item>
 /// </list>
 /// A mutating company endpoint that is not listed here fails <see cref="Every_mutating_company_endpoint_is_in_the_matrix"/>, so a new endpoint cannot ship without its 403 coverage.
@@ -260,11 +264,23 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         return new ApiResponse(response.StatusCode, response.Headers, await response.Content.ReadAsStringAsync());
     }
 
-    private IReadOnlyList<string> DiscoveredMutatingRoutes() =>
-        [.. factory!.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
-            .Where(e => e.RoutePattern.RawText is { } t && t.StartsWith(Prefix, StringComparison.Ordinal))
-            .SelectMany(e => (e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? []).Where(m => m is "POST" or "PUT" or "PATCH" or "DELETE").Select(m => $"{m} {e.RoutePattern.RawText}"))
+    /// <summary>A route pattern as the matrix spells it: always with its leading slash (a pattern mapped without one is still a company route).</summary>
+    internal static string Normalise(string raw) => raw.StartsWith('/') ? raw : "/" + raw;
+
+    /// <summary>
+    /// Every company route of the running API: the mutating ones as "METHOD /pattern", and the patterns of company routes WITHOUT HTTP-method metadata (they would answer every method, so a mutating
+    /// call could hide behind them; there must be none).
+    /// </summary>
+    private (IReadOnlyList<string> Mutating, IReadOnlyList<string> MethodLess) DiscoveredRoutes()
+    {
+        var company = factory!.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText is { } t && Normalise(t).StartsWith(Prefix, StringComparison.Ordinal)).ToList();
+        IReadOnlyList<string> methodLess = [.. company.Where(e => e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods is not { Count: > 0 }).Select(e => Normalise(e.RoutePattern.RawText!)).Distinct().Order(StringComparer.Ordinal)];
+        IReadOnlyList<string> mutating = [.. company
+            .SelectMany(e => (e.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? []).Where(m => m is "POST" or "PUT" or "PATCH" or "DELETE").Select(m => $"{m} {Normalise(e.RoutePattern.RawText!)}"))
             .Distinct().Order(StringComparer.Ordinal)];
+        return (mutating, methodLess);
+    }
 
     /// <summary>What a refused request must never change: the business audit stream, the access audit and the role assignments.</summary>
     private async Task<(long Business, long Access, long Assignments)> Footprint() =>
@@ -276,9 +292,17 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         foreach (var (r, path, body) in calls)
         {
             var res = await Call(r, path, cookie, body);
-            if (res.Status != HttpStatusCode.Forbidden) failures.Add($"{r.Key} ({path}) -> {(int)res.Status} {(res.Body.Length > 160 ? res.Body[..160] : res.Body)}");
+            if (res.Status != HttpStatusCode.Forbidden || ErrorOf(res) != "forbidden")                                       // review L1: the authorization refusal itself, not another 403 (entitlement, CSRF)
+                failures.Add($"{r.Key} ({path}) -> {(int)res.Status} {(res.Body.Length > 160 ? res.Body[..160] : res.Body)}");
         }
         return failures;
+    }
+
+    /// <summary>The <c>error</c> code of a JSON error body, or null.</summary>
+    internal static string? ErrorOf(ApiResponse r)
+    {
+        try { return System.Text.Json.JsonDocument.Parse(r.Body).RootElement.TryGetProperty("error", out var e) ? e.GetString() : null; }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------- tests
@@ -287,10 +311,12 @@ public class EndpointPermissionMatrixTests : JournalTestBase
     public async Task Every_mutating_company_endpoint_is_in_the_matrix()
     {
         await StartApi(configure: b => b.ConfigureServices(RegisterServices));
-        var discovered = DiscoveredMutatingRoutes();
+        var (discovered, methodLess) = DiscoveredRoutes();
+        Assert.True(methodLess.Count == 0, "company endpoints without HTTP-method metadata (they answer every method):\n" + string.Join("\n", methodLess));
         Assert.True(discovered.Count > 150, $"the route table looks incomplete: {discovered.Count} mutating company routes");
         var listed = Matrix.Select(r => r.Key).ToList();
         Assert.Equal(listed.Count, listed.Distinct().Count());                                                       // no duplicate rows
+        Assert.All(Matrix, r => Assert.Equal(Normalise(r.Pattern), r.Pattern));                                       // every row is spelled with its leading slash
         Assert.Empty(listed.Intersect(Excluded.Keys));                                                                // a route is covered or excluded, never both
         var missing = discovered.Except(listed).Except(Excluded.Keys).ToList();
         Assert.True(missing.Count == 0, "mutating company endpoints without a row in the 403 matrix (add them to EndpointPermissionMatrixTests.Matrix):\n" + string.Join("\n", missing));
@@ -366,5 +392,49 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         Assert.True(submitted.Status == HttpStatusCode.OK, $"journal submit on branch A: {(int)submitted.Status} {submitted.Body}");
         var doc = await Send(HttpMethod.Post, $"/api/v1/company/commercial-documents/{docA}/submit", null, cookie, ifMatch: "\"1\"");
         Assert.True(doc.Status == HttpStatusCode.OK, $"commercial submit on branch A: {(int)doc.Status} {doc.Body}");
+        // review L2: the branch EDIT is the branch-scoped one: it works on branch A; deactivate, activate and make-main are STRUCTURE operations (company-wide permission), refused on A as well
+        var edited = await Send(HttpMethod.Put, $"/api/v1/company/branches/{branchA}", new { code = "MXA", nameAr = "فرع", nameEn = "Edited" }, cookie, ifMatch: "\"1\"");
+        Assert.True(edited.Status == HttpStatusCode.OK, $"branch edit on branch A: {(int)edited.Status} {edited.Body}");
+        var structure = scoped.Where(r => r.Branch == BranchTarget.BranchItself && r.Method == "POST").ToList();
+        Assert.Equal(3, structure.Count);
+        var onOwn = await NotForbidden(cookie, structure.Select(r => (r, r.Pattern.Replace("{id:guid}", branchA.ToString()), (string?)null)));
+        Assert.True(onOwn.Count == 0, "branch structure operations must need the company-wide structure permission:\n" + string.Join("\n", onOwn));
+    }
+
+    /// <summary>
+    /// Review M1: the cost-center scope. A member holding the journal permissions for cost center A only (no branch or company grant) is refused with 403 on every journal route acting on an entry
+    /// allocated to cost center B, and on creating one; nothing is written. Control: the same grant creates and submits entries allocated to A.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_member_scoped_to_another_cost_center_is_refused_403_on_the_journal_endpoints_while_the_same_grant_works_on_its_own_cost_center()
+    {
+        await Start();
+        var ccA = Ok(await Centers.CreateAsync(Admin.Id, Company.Id, new CostCenterInput("MXCA", null, "مركز", "CC A", null, false))).Id;
+        var ccB = Ok(await Centers.CreateAsync(Admin.Id, Company.Id, new CostCenterInput("MXCB", null, "مركز", "CC B", null, false))).Id;
+        JournalInput Allocated(Guid cc) => new(new DateOnly(2026, 3, 10), "matrix cc", branchA, [Dr(Cash.Id, 10m, null, branchA, (cc, 10m)), Cr(Sales.Id, 10m, null, branchA, (cc, 10m))], null);
+        var inA = Ok(await Journal.CreateDraftAsync(Admin.Id, Company.Id, Allocated(ccA), false)).Header.Id;
+        var inB = Ok(await Journal.CreateDraftAsync(Admin.Id, Company.Id, Allocated(ccB), false)).Header.Id;
+        var held = (await Rbac.GetEffectivePermissionsAsync(Admin.Id, Company.Id)).HeldPermissionCodes.ToHashSet();
+        var journalCodes = PermissionCatalog.Default.All.Where(p => p.Resource.Key == "company.journal" && held.Contains(p.Code)).Select(p => p.Code).Order().ToArray();
+        Assert.Contains(PermissionCatalog.Codes.JournalCreate, journalCodes);
+        var (user, _) = await Member(journalCodes, ScopeKind.CostCenter, ccA);
+        var cookie = await SignIn(user);
+
+        string Body(Guid cc) => $$"""{"entryDate":"2026-03-10","description":"matrix cc","branchId":"{{branchA}}","lines":[{"accountId":"{{Cash.Id}}","debit":10,"branchId":"{{branchA}}","allocations":[{"costCenterId":"{{cc}}","amount":10}]},{"accountId":"{{Sales.Id}}","credit":10,"branchId":"{{branchA}}","allocations":[{"costCenterId":"{{cc}}","amount":10}]}]}""";
+        var journalRoutes = Matrix.Where(r => r.Branch is BranchTarget.JournalEntry or BranchTarget.JournalCreate).ToList();
+        Assert.Equal(8, journalRoutes.Count);
+
+        var before = await Footprint();
+        var failures = await NotForbidden(cookie, journalRoutes.Select(r => r.Branch == BranchTarget.JournalCreate
+            ? (r, r.Pattern, (string?)Body(ccB))
+            : (r, r.Pattern.Replace("{id:guid}", inB.ToString()), r.Method == "PUT" ? Body(ccB) : null)));
+        Assert.True(failures.Count == 0, $"{failures.Count} journal endpoint(s) did not answer 403 to a member scoped to another cost center:\n" + string.Join("\n", failures));
+        Assert.Equal(before, await Footprint());
+
+        // control: the same grant works inside cost center A
+        var created = await Send(HttpMethod.Post, "/api/v1/company/journal", System.Text.Json.JsonDocument.Parse(Body(ccA)).RootElement, cookie);
+        Assert.True(created.Status == HttpStatusCode.Created, $"journal create in cost center A: {(int)created.Status} {created.Body}");
+        var submitted = await Send(HttpMethod.Post, $"/api/v1/company/journal/{inA}/submit", null, cookie, ifMatch: "\"1\"");
+        Assert.True(submitted.Status == HttpStatusCode.OK, $"journal submit in cost center A: {(int)submitted.Status} {submitted.Body}");
     }
 }
