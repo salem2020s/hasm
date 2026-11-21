@@ -2,7 +2,7 @@
 
 * **Pull request:** #84 (Pricing UI follow-ups 2)
 * **Head SHA reviewed (full 40 characters):** f53be5f541e6f63ee403f63bd943ae87b72a3c28
-* **Reviewer context:** Agent C, a separate session from the author (Agent E); model family Claude Opus (claude-opus-5-5), a DIFFERENT family from the author (claude-sonnet-5-5). Prompt: independent FULL-diff review, read-only, of the PR #80 Low fixes L1-L7 (fan-out and caching, a11y wiring, isolate characters, exact-text tests, Web/Tauri and ar/en parity, no client-only security).
+* **Reviewer context:** Agent C, a separate session from the author (Agent E); model family Claude Opus, a DIFFERENT family from the author. Prompt: independent FULL-diff review, read-only, of the PR #80 Low fixes L1-L7 (fan-out and caching, a11y wiring, isolate characters, exact-text tests, Web/Tauri and ar/en parity, no client-only security).
 * **Scope read:** `git diff origin/main...f53be5f` (4 files) plus `SearchPicker.tsx`, the auth `handleError`, `numberInput.ts` and `messages.ts` for context.
 * **Checks run (commands and results):** `npm ci --ignore-scripts` (0 vulnerabilities); typecheck exit 0; packages/ui 33/33 passed; apps/web 466/466 passed in 35 files (60 s timeout allowed for machine load, none needed); `npm run build` OK; hosted CI green on the reviewed head, including frontend-build-test, desktop-build and e2e-smoke.
 * **Findings:** no Critical, no High, no Medium; six Low, recorded as follow-ups and deliberately NOT fixed so that the approved code stays unchanged.
