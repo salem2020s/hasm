@@ -540,6 +540,62 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   The registry is locked against changes until the drop has completed. This is the only supported way to remove a kept trial database.
 * **Not available (BLOCKED, owner decision):** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch. The procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
 
+### Backup runs of the whole installation, monitoring and retention preview (Phase 4.3 slice 4)
+Decisions D-069..D-073; the design is in `docs/PHASE-4.3.md` slice 4.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-run <root>
+dotnet run --project src/backend/Hasm.Admin -- backup-status <root> [--max-age-hours N]
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> --keep-last N [--keep-days D]
+```
+* **`backup-run <root>`** writes one run into a new owner-only folder `<root>/<yyyyMMddTHHmmssZ-8hex>/`:
+  * `system/`: the system database dump and its manifest. The table of contents is checked readable; integrity comes from the SHA-256 in the manifest.
+  * `companies/<company id>/`: one verified set per Ready company, with the same checks as `backup-company`.
+  * `run.json`, written LAST: outcomes, codes, the start and end of every dump, sizes, missing key ids, the excluded data and `encrypted: false`.
+  * A folder without `run.json` is an incomplete run (interrupted). It is reported, never deleted.
+  * One company's failure never stops the others, and only one run can be in progress.
+  * The configuration is the same as `backup-company`; the attachment storage setting is required.
+  * Exit codes: 0 ok, 8 partial (a company busy or failed, or key ids missing), 1 failed (the system dump failed or no set was written), 4 another run in progress, 3 configuration.
+* **The system dump is the most sensitive file of a run.** It holds password hashes, memberships and roles, shared-party personal data and the system audit chain.
+  * The DATA of the session and login-throttle tables is left out, and later the TOTP secrets too: listed under "excluded" in `run.json` and the manifest. A restored installation therefore starts with no sessions.
+  * Until the owner decides backup encryption (package 4.3-2), **keep the backup root on an encrypted volume**, readable only by the service account. Back up the key directory separately (decision K).
+* **A run is not one point in time across databases.** The system database is dumped first, then each company. Registry rows, party links, memberships and migration levels can therefore differ between them. A single-company restore compares with the live system database; a full-installation restore (not built) must reconcile.
+* **`backup-status <root>`** is read only and needs no database settings: it is meant for the monitor. It reads the newest complete run.
+  * Exit 0: ok and younger than `--max-age-hours` (default 26).
+  * Exit 8: partial, or a company missed two or more consecutive runs (`company_missed_runs`).
+  * Exit 1: failed, no run (`backup_missing`), or too old (`backup_stale`).
+  * Incomplete runs older than 24 hours, and unreadable reports, are listed as warnings.
+* **`backup-retention-preview <root> --keep-last N [--keep-days D]`** is read only. It lists the complete runs a policy WOULD remove; a run kept by either rule is kept. The newest complete run and incomplete or unreadable runs are never listed. **Nothing is deleted**: deleting backups is an owner decision (package 4.3-2).
+* **Scheduling** uses the operating system, under the service account (HASM has no scheduler, and the API never runs a backup). Examples; replace the paths and run with the same `Hasm__*` environment as the other commands:
+  * systemd: `/etc/systemd/system/hasm-backup.service`
+    ```
+    [Service]
+    Type=oneshot
+    User=hasm
+    EnvironmentFile=/etc/hasm/admin.env
+    ExecStart=/usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups
+    ```
+    and `/etc/systemd/system/hasm-backup.timer`
+    ```
+    [Timer]
+    OnCalendar=*-*-* 02:17
+    Persistent=true
+    [Install]
+    WantedBy=timers.target
+    ```
+    then run `systemctl enable --now hasm-backup.timer`. For monitoring, a second timer runs `backup-status /srv/hasm-backups` and alerts on a non-zero exit.
+  * cron, for the service account: `17 2 * * * . /etc/hasm/admin.env && /usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups`
+  * Windows Task Scheduler:
+    ```
+    schtasks /Create /TN "HASM backup" /SC DAILY /ST 02:17 /RU "<service account>" /TR "\"C:\Program Files\dotnet\dotnet.exe\" \"C:\HASM\Admin\Hasm.Admin.dll\" backup-run D:\HasmBackups"
+    ```
+    The `Hasm__*` variables are set as machine or user environment variables of the service account.
+  * These examples are NOT exercised by an automated test. Verify them in a manual drill: run once, then check that `backup-status` exits 0.
+* **Measured RPO/RTO (no promised values, SRS 16).** Record in the drill log:
+  * the run's `durationMs` and each company's dump window from `run.json`;
+  * the "Measured trial restore time" printed by `trial-restore-company` for that set.
+
+  RPO is at most the schedule interval plus the run duration. RTO is the measured trial-restore time plus the cutover procedure, once that exists (BLOCKED).
+
 ## Checks
 ```
 dotnet test src/backend/Hasm.slnx

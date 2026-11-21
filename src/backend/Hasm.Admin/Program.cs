@@ -28,6 +28,9 @@ using Npgsql;
 //   Hasm.Admin backup-company <company-id> <destination-dir>  (Phase 4.3: database + attachment folder of ONE Ready company into a verified set; exit 8 when key ids are missing)
 //   Hasm.Admin trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]  (restores into a NEW unregistered database, runs the pre-cutover checks, drops it unless --keep; exit 0 ok, 8 warnings, 1 failed)
 //   Hasm.Admin drop-trial-restore <kept-file>  (drops ONLY the trial database a --keep run recorded in that owner-only file)
+//   Hasm.Admin backup-run <root>  (Phase 4.3 slice 4: system database + every Ready company into <root>/<run id>/, run.json last; exit 0 ok, 8 partial, 1 failed, 4 another run in progress)
+//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
+//   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
 
@@ -40,6 +43,9 @@ string? checkpointDirOverride = null;
 Guid? onlyCompany = null;
 var rotateCredential = false;
 var keepTrial = false;
+var maxAgeHours = 26;
+var keepLast = 0;
+int? keepDays = null;
 var validUsage = command switch
 {
     "init-system-db" or "register-company" => args.Length == 1,
@@ -60,11 +66,17 @@ var validUsage = command switch
     "trial-restore-company" => (args.Length == 4 || (args.Length == 5 && (keepTrial = args[4] == "--keep")))
         && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[1]) && Path.IsPathFullyQualified(args[3]),
     "drop-trial-restore" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-run" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-status" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length == 2
+        || (args.Length == 4 && args[2] == "--max-age-hours" && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out maxAgeHours) && maxAgeHours is >= 1 and <= 8760)),
+    "backup-retention-preview" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length is 4 or 6) && args[2] == "--keep-last"
+        && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out keepLast) && keepLast is >= 1 and <= 100000
+        && (args.Length == 4 || (args[4] == "--keep-days" && int.TryParse(args[5], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var kd) && kd is >= 0 and <= 100000 && (keepDays = kd) is not null)),
     _ => false,
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file>  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file> | backup-run <root> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -83,6 +95,32 @@ if (command == "audit-keygen")
     }
     catch (AuditConfigurationException ex) { Console.Error.WriteLine(ex.Message); return BadConfig; }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("The key could not be created (it may already exist; existing keys are never overwritten)."); return Failed; }
+}
+
+if (command is "backup-status" or "backup-retention-preview")
+{
+    // Read-only and without any database: usable by an operating-system monitor with no credentials at all (D-071). Nothing is written or deleted.
+    var runs = BackupRunStatus.List(args[1]);
+    var now = DateTimeOffset.UtcNow;
+    if (command == "backup-retention-preview")
+    {
+        var selected = BackupRunStatus.RetentionPreview(runs, now, keepLast, keepDays);
+        Console.WriteLine($"Retention PREVIEW (nothing is deleted; deletion is an owner decision, package 4.3-2): {runs.Count(r => r.IsComplete)} complete run(s), {selected.Count} would be removed by --keep-last {keepLast}{(keepDays is { } d ? $" --keep-days {d}" : "")}.");
+        foreach (var id in selected) Console.WriteLine($"  would remove: {id}");
+        Console.WriteLine($"Never selected: the newest complete run; incomplete run(s): {runs.Count(r => !r.IsComplete && !r.HasReportFile)}; unreadable report(s): {runs.Count(r => r.IsUnreadable)}.");
+        return Ok;
+    }
+    var status = BackupRunStatus.Evaluate(runs, now, TimeSpan.FromHours(maxAgeHours));
+    Console.WriteLine($"Backup status: {status.Code} (exit {status.ExitCode}).");
+    if (status.Latest is { } latest)
+    {
+        Console.WriteLine($"Newest complete run {latest.RunId}: {latest.Verdict}, finished {(now - latest.FinishedUtc).TotalHours:0.0} hour(s) ago, duration {latest.DurationMs / 1000.0:0.0} s; system {latest.System.Outcome}; companies: {latest.Companies.Count(c => c.Outcome == "ok")} ok, {latest.Companies.Count(c => c.Outcome == "ok_missing_keys")} missing keys, {latest.Companies.Count(c => c.Outcome == "busy")} busy, {latest.Companies.Count(c => c.Outcome == "failed")} failed, {latest.Skipped} not Ready.");
+        Console.WriteLine($"Encrypted: {(latest.Encrypted ? "yes" : "no (keep the backup root on an encrypted volume)")}; data excluded from the system dump: {string.Join(", ", latest.Excluded)}.");
+    }
+    foreach (var (company, n) in status.MissedRuns) Console.WriteLine($"  [WARNING] company_missed_runs company={company} consecutive={n}");
+    if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
+    if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns}");
+    return status.ExitCode;
 }
 
 if (command == "encryption-keygen")
@@ -260,6 +298,7 @@ try
         case "backup-company":
         case "trial-restore-company":
         case "drop-trial-restore":
+        case "backup-run":
             return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration);
         case "migrate-companies":
         {
@@ -380,8 +419,20 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 Console.WriteLine(r.KeptFile is { } kept
                     ? $"The trial database was KEPT; it is recorded in {kept} (owner-only). Remove it with: drop-trial-restore {kept}"
                     : "The trial database was dropped. Nothing was registered and no live database or folder was touched.");
+                Console.WriteLine($"Measured trial restore time: {r.Elapsed.TotalSeconds:0.0} s (record it in the drill log; see docs/DEVELOPMENT.md).");
                 Console.WriteLine("This is a trial restore: the cutover and the audited restore acknowledgement are not available (BLOCKED).");
                 return r.Verdict switch { TrialRestoreVerdict.Ok => Ok, TrialRestoreVerdict.OkWithWarnings => Warnings, _ => Failed };
+            }
+            case "backup-run":
+            {
+                var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration)).RunAsync(args[1]);
+                Console.WriteLine($"Backup run {report.RunId}: {report.Verdict.ToUpperInvariant()} in {report.DurationMs / 1000.0:0.0} s; written to {runDir} (run.json written last).");
+                Console.WriteLine($"System database: {report.System.Outcome}{(report.System.Code is { } sc ? $" ({sc})" : "")}, {report.System.DurationMs / 1000.0:0.0} s; data excluded: {string.Join(", ", report.Excluded)}.");
+                foreach (var c in report.Companies) Console.WriteLine($"  Company {c.CompanyId}: {c.Outcome}{(c.Code is { } cc ? $" ({cc})" : "")}, {c.DurationMs / 1000.0:0.0} s, {c.AttachmentFiles} attachment file(s)");
+                if (report.Skipped > 0) Console.WriteLine($"  Not Ready (skipped): {report.Skipped}");
+                if (report.MissingKeyIds.Count > 0) Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {report.MissingKeyIds.Count} key id(s) the sets need: {string.Join(", ", report.MissingKeyIds)}.");
+                Console.WriteLine("The run is NOT encrypted (owner package 4.3-2): keep the backup root on an encrypted volume; back up the key directory separately. The run is not one point in time across databases.");
+                return report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
             }
             default: // drop-trial-restore
                 await service.DropTrialRestoreAsync(args[1]);
@@ -392,7 +443,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
     catch (BackupException ex)
     {
         Console.Error.WriteLine($"{command} stopped ({ex.Code}{(ex.Cause is null ? "" : $", cause {ex.Cause}")}).");
-        return ex.Code switch { "attachment_storage_not_configured" or "database_not_configured" => BadConfig, "company_busy" => InProgress, _ => Failed };
+        return ex.Code switch { "attachment_storage_not_configured" or "database_not_configured" => BadConfig, "company_busy" or "run_in_progress" => InProgress, _ => Failed };
     }
     catch (PostgresException ex)
     {

@@ -27,7 +27,7 @@ public sealed record CompanyBackupResult(BackupManifest Manifest, IReadOnlyList<
 public enum TrialRestoreVerdict { Ok, OkWithWarnings, Failed }
 
 /// <summary>The outcome of a trial restore. <see cref="KeptFile"/> is the owner-only file that names a kept trial database (with <c>keep</c> only); the database name itself is never returned.</summary>
-public sealed record TrialRestoreResult(TrialRestoreVerdict Verdict, IReadOnlyList<BackupFinding> Failures, IReadOnlyList<BackupFinding> Warnings, int AttachmentFiles, int UnreferencedFiles, int? MigrationVersion, string? KeptFile);
+public sealed record TrialRestoreResult(TrialRestoreVerdict Verdict, IReadOnlyList<BackupFinding> Failures, IReadOnlyList<BackupFinding> Warnings, int AttachmentFiles, int UnreferencedFiles, int? MigrationVersion, string? KeptFile, TimeSpan Elapsed = default);
 
 /// <summary>
 /// Phase 4.3 slice 3 (decisions D-058..D-062): backup of ONE registered company (its database from the registry, its attachment folder, its locale and migration level) into a verified set, and a TRIAL restore of
@@ -146,11 +146,17 @@ public sealed class CompanyBackupService
     internal static string CreateStagingDirectory(string parent, string leaf)
     {
         var path = Path.Combine(parent, leaf + ".staging-" + Guid.NewGuid().ToString("N"));
-        if (Directory.Exists(path) || File.Exists(path)) throw new BackupException("staging_exists");
+        CreatePrivateDirectory(path, "staging_exists", "staging_not_private");
+        return path;
+    }
+
+    /// <summary>Creates a NEW owner-only directory (Linux 0700, verified); <paramref name="existsCode"/> when it already exists, <paramref name="notPrivateCode"/> when group or other bits remain (Linux).</summary>
+    internal static void CreatePrivateDirectory(string path, string existsCode, string notPrivateCode)
+    {
+        if (Directory.Exists(path) || File.Exists(path)) throw new BackupException(existsCode);
         AuditFilePermissions.CreateOwnerOnlyDirectory(path);
         if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(path) & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
-            throw new BackupException("staging_not_private");
-        return path;
+            throw new BackupException(notPrivateCode);
     }
 
     /// <summary>
@@ -263,6 +269,14 @@ public sealed class CompanyBackupService
     /// <paramref name="keep"/>: then an owner-only file next to the set records it (<see cref="DropTrialRestoreAsync"/> removes it later). Refusals before anything is created throw <see cref="BackupException"/>.
     /// </summary>
     public async Task<TrialRestoreResult> TrialRestoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, CancellationToken ct = default)
+    {
+        // D-073: the measured restore time of this set (verification and drop included) is part of the result
+        var started = clock.GetTimestamp();
+        var result = await TrialRestoreCoreAsync(setDirectory, expectedCompanyId, attachmentTarget, keep, ct);
+        return result with { Elapsed = clock.GetElapsedTime(started) };
+    }
+
+    private async Task<TrialRestoreResult> TrialRestoreCoreAsync(string setDirectory, Guid expectedCompanyId, string attachmentTarget, bool keep, CancellationToken ct)
     {
         if (!Path.IsPathFullyQualified(setDirectory) || !Path.IsPathFullyQualified(attachmentTarget)) throw new BackupException("path_not_absolute");
         if (expectedCompanyId == Guid.Empty) throw new BackupException("invalid_company");
