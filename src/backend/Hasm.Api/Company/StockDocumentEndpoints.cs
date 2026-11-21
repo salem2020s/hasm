@@ -38,11 +38,11 @@ public static class StockDocumentEndpoints
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/submit", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.SubmitAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/withdraw", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.WithdrawAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/approve", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.ApproveAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/reject", (Guid id, NoteBody? body, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.RejectAsync(u, c, id, rev, body?.Note, h.RequestAborted))).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/cancel", (Guid id, ReasonBody? body, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.CancelAsync(u, c, id, rev, body?.Reason, h.RequestAborted))).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/submit", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.SubmitAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/withdraw", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.WithdrawAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/approve", (Guid id, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.ApproveAsync(u, c, id, rev, h.RequestAborted))).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/reject", (Guid id, NoteBody? body, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.RejectAsync(u, c, id, rev, body?.Note, h.RequestAborted))).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/cancel", (Guid id, ReasonBody? body, HttpContext h, AccessService a, StockDocumentManagementService s) => Act(id, h, a, (u, c, rev) => s.CancelAsync(u, c, id, rev, body?.Reason, h.RequestAborted))).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
     private static object Body(StockDocumentView d) => new

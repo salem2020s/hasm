@@ -4,7 +4,7 @@ namespace Hasm.Api.Tests;
 /// The request-size limit of a route is enforced by the REAL Kestrel server, not only declared as metadata: the real application is hosted on a loopback Kestrel port (the shared <see cref="RealKestrelHost"/>; the
 /// in-memory test server does not enforce the limit), the session authentication is replaced by a handler that admits every request with a pass-through session (so the request reaches the endpoint, where the limit is
 /// applied after authorization), and a raw HTTP request one byte over the limit of a newly limited route is answered 413, while a body exactly at the limit is not.
-/// <c>POST /stock-documents/{id}/reject</c> had no limit metadata (the 30 MB default applied) and now carries the 512 KiB limit of its class.
+/// <c>POST /stock-documents/{id}/reject</c> had no limit metadata (the 30 MB default applied), then the 512 KiB limit of its class, and now carries the 16 KiB limit of action routes.
 /// </summary>
 public sealed class RequestSizeLimitKestrelTests : IDisposable
 {
@@ -12,7 +12,7 @@ public sealed class RequestSizeLimitKestrelTests : IDisposable
 
     public void Dispose() => server.Dispose();
 
-    private const int Limit = 512 * 1024;     // the limit of StockDocumentEndpoints, now also on the action routes
+    private const int Limit = 16 * 1024;     // the limit of every action route (RequestLimits.Action)
     private static string Reject => $"/api/v1/company/stock-documents/{Guid.NewGuid()}/reject";
 
     /// <summary>A JSON body of exactly <paramref name="bytes"/> bytes.</summary>

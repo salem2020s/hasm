@@ -55,6 +55,29 @@ public class RequestSizeLimitTests(WebApplicationFactory<Program> factory) : ICl
         Assert.True(missing.Count == 0, $"{missing.Count} body-accepting routes fall back to the 30 MB default (add .WithMetadata(new BodyLimit()) with the limit of their category):\n" + string.Join("\n", missing));
     }
 
+    /// <summary>The largest request body an ACTION route may be given: a state transition carries at most a short reason or note (G review L1 of #177). Import actions keep the smaller limit of their class.</summary>
+    private const long ActionLimit = 16 * 1024;
+    private const long ImportActionLimit = 4 * 1024;
+
+    /// <summary>Routes that are neither uploads nor imports of content: the import upload and the attachment upload read their documented file limits.</summary>
+    private static bool IsContentUpload(string method, string pattern) =>
+        method == "POST" && (pattern is "/api/v1/company/imports/" or "/api/v1/company/attachments/");
+
+    /// <summary>
+    /// An ACTION route is a POST that binds no request body (a state transition, a maintenance run) or whose last segment is a reject or cancel verb (the reason or note is the only body). Such a route has no use for a large
+    /// body, so its limit is at most <see cref="ActionLimit"/> (<see cref="ImportActionLimit"/> under the imports), and a new action route cannot be given a class-wide limit meant for documents.
+    /// </summary>
+    [Fact]
+    public void Action_routes_carry_a_small_limit_so_a_state_transition_cannot_be_given_a_document_sized_body()
+    {
+        var actions = BodyRoutes().Where(r => r.Method == "POST" && !IsContentUpload(r.Method, r.Pattern)
+            && (r.Endpoint.Metadata.GetMetadata<IAcceptsMetadata>() is null || r.Pattern.EndsWith("/reject") || r.Pattern.EndsWith("/cancel"))).ToList();
+        Assert.True(actions.Count > 50, $"Only {actions.Count} action routes found; the rule is not applied to the real set.");
+        var tooLarge = actions.Where(r => Limit(r.Endpoint) is { } l && l > (r.Pattern.StartsWith("/api/v1/company/imports") ? ImportActionLimit : ActionLimit))
+            .Select(r => $"{r.Method} {r.Pattern} = {Limit(r.Endpoint)}").ToList();
+        Assert.True(tooLarge.Count == 0, $"{tooLarge.Count} action routes with a limit above {ActionLimit} bytes ({ImportActionLimit} under the imports):\n" + string.Join("\n", tooLarge));
+    }
+
     [Fact]
     public void No_limit_is_larger_than_the_documented_maximum_of_the_categories()
     {
