@@ -112,7 +112,7 @@ public sealed class BackupSetTests : IDisposable
         BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
 
         var target = P("restored", "company");
-        Assert.Equal(2, BackupSet.RestoreAttachments(set, target, company));
+        Assert.Equal(new RestoreResult(2, 0), BackupSet.RestoreAttachments(set, target, company));
         foreach (var f in new[] { s.Plain, s.Sensitive })
             Assert.Equal(File.ReadAllBytes(Path.Combine(s.Source, f)), File.ReadAllBytes(Path.Combine(target, f)));
         Assert.Equal(before, Snapshot(P("att")));                                                   // sources and other companies unchanged
@@ -246,9 +246,8 @@ public sealed class BackupSetTests : IDisposable
         var set = P("set");
         var m = BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
         var target = P("toctou", "c");
-        BackupSet.BeforeStagedCopy = d => File.AppendAllText(Path.Combine(d, "attachments", m.Attachments[0].Name), "x");
-        try { Assert.Equal("staged_file_changed", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, company)).Code); }
-        finally { BackupSet.BeforeStagedCopy = null; }
+        Assert.Equal("staged_file_changed", Assert.Throws<BackupException>(() => BackupSet.RestoreAttachments(set, target, company,
+            d => File.AppendAllText(Path.Combine(d, "attachments", m.Attachments[0].Name), "x"))).Code);
         Assert.False(Directory.Exists(target));
         Assert.Empty(Directory.GetDirectories(P("toctou")));
     }
@@ -266,6 +265,96 @@ public sealed class BackupSetTests : IDisposable
         var srcAlias = P("alias-of-att");
         Directory.CreateSymbolicLink(srcAlias, P("att"));
         Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(srcAlias, company.ToString("N"), "x", "y"), DateTimeOffset.UnixEpoch)).Code);
+    }
+
+    [Fact]
+    public void A_well_formed_envelope_with_a_made_up_key_id_is_listed_conservatively_and_the_counters_are_surfaced_by_verify_and_restore()
+    {
+        var s = Source();
+        // structurally valid envelope (header, 8-byte big-endian ciphertext length, ciphertext, tag) naming a key that does not exist
+        var id = "fake-key"u8.ToArray();
+        var cipher = new byte[20];
+        var body = new List<byte>(); body.AddRange("HFE1"u8.ToArray()); body.Add((byte)id.Length); body.AddRange(id);
+        body.AddRange(new byte[12 + 32 + 16 + 12]); body.AddRange(new byte[] { 0, 0, 0, 0, 0, 0, 0, (byte)cipher.Length }); body.AddRange(cipher); body.AddRange(new byte[16]);
+        File.WriteAllBytes(Path.Combine(s.Source, Name()), body.ToArray());
+        File.WriteAllBytes(Path.Combine(s.Source, Name()), "HFE1,a,b\n"u8.ToArray());
+        var set = P("set");
+        var m = BackupSet.Create(company, s.Dump, s.Source, set, DateTimeOffset.UnixEpoch);
+        Assert.Equal(new[] { "fake-key", "k1" }, m.KeyIdsRequired);                                          // conservative: can only add a missing-key report
+        Assert.False(BackupSet.CheckKeys(m, new[] { "k1" }).IsComplete);
+        Assert.Equal(1, BackupSet.Verify(set).NonEnvelopeFilesWithMagic);
+        Assert.Equal(new RestoreResult(4, 1), BackupSet.RestoreAttachments(set, P("r", "c"), company));
+    }
+
+    [Fact]
+    public void The_header_only_classification_agrees_with_the_real_envelope_parser_for_real_envelopes_and_a_manifest_without_the_counter_still_reads()
+    {
+        var s = Source();
+        var m = BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch);
+        Assert.Equal(new[] { EnvelopeEncryptor.KeyIdOf(File.ReadAllBytes(Path.Combine(s.Source, s.Sensitive))) }, m.KeyIdsRequired);
+        var path = Path.Combine(P("set"), BackupSet.ManifestFileName);
+        var json = File.ReadAllText(path);
+        var stripped = System.Text.RegularExpressions.Regex.Replace(json, ",\\s*\"nonEnvelopeFilesWithMagic\":\\s*\\d+", "");
+        Assert.DoesNotContain("nonEnvelopeFilesWithMagic", stripped);
+        File.WriteAllText(path, stripped);
+        var read = BackupSet.ReadManifest(P("set"));
+        Assert.NotNull(read);
+        Assert.Equal(0, read!.NonEnvelopeFilesWithMagic);
+    }
+
+    [Fact]
+    public void The_database_locale_captured_at_dump_time_is_carried_by_the_manifest_and_an_older_manifest_without_it_still_reads()
+    {
+        var s = Source();
+        var locale = new DatabaseLocale("UTF8", "Chinese (Simplified)_China.936", "en_US.utf8", "c");
+        var m = BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, locale);
+        Assert.Equal(locale, m.DatabaseLocale);
+        Assert.Equal(locale, BackupSet.ReadManifest(P("set"))!.DatabaseLocale);
+        Assert.True(BackupSet.Verify(P("set")).IsClean);
+
+        var path = Path.Combine(P("set"), BackupSet.ManifestFileName);
+        var json = File.ReadAllText(path);
+        var older = System.Text.RegularExpressions.Regex.Replace(json, ",\\s*\"databaseLocale\":\\s*\\{[^}]*\\}", "");
+        Assert.DoesNotContain("databaseLocale", older);
+        File.WriteAllText(path, older);
+        var read = BackupSet.ReadManifest(P("set"));
+        Assert.NotNull(read);
+        Assert.Null(read!.DatabaseLocale);                                                                // the restore then reads the live source, or refuses with source_locale_unknown
+
+        File.WriteAllText(path, json.Replace("\"encoding\": \"UTF8\"", "\"encoding\": \"\""));
+        Assert.Null(BackupSet.ReadManifest(P("set")));                                                    // a malformed stored locale invalidates the manifest
+    }
+
+    [Fact]
+    public void A_malformed_locale_is_refused_when_the_set_is_created()
+    {
+        var s = Source();
+        Assert.Equal("invalid_database_locale", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, new DatabaseLocale("", "C", "C", "c"))).Code);
+        Assert.Equal("invalid_database_locale", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, new DatabaseLocale("UTF8", "C", "C", "icu"))).Code);
+        Assert.False(Directory.Exists(P("set")));
+    }
+
+    [Fact]
+    public void A_link_whose_target_passes_through_another_link_is_resolved_until_stable()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var s = Source();
+        var link1 = P("link1");                                                                           // link1 -> att
+        Directory.CreateSymbolicLink(link1, P("att"));
+        var link2 = P("link2");                                                                           // link2 -> link1/<company>  (target passes through link1)
+        Directory.CreateSymbolicLink(link2, Path.Combine(link1, company.ToString("N")));
+        Assert.Equal("destination_overlaps_source", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(link2, "inside"), DateTimeOffset.UnixEpoch)).Code);
+    }
+
+    [Fact]
+    public void A_cyclic_symbolic_link_is_a_backup_refusal_not_an_unhandled_io_error()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var s = Source();
+        var a = P("cycle-a"); var b = P("cycle-b");
+        Directory.CreateSymbolicLink(a, b);
+        Directory.CreateSymbolicLink(b, a);
+        Assert.Equal("path_unresolvable", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, Path.Combine(a, "inside"), DateTimeOffset.UnixEpoch)).Code);
     }
 
     private static string[] Snapshot(string dir) =>
