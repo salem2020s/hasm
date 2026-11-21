@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Hasm.Infrastructure.Audit;
@@ -20,6 +22,10 @@ public static class AuthDefaults
     /// <summary>Required on every state-changing API request (CSRF defence: forces a CORS preflight cross-origin).</summary>
     public const string RequestHeader = "X-Hasm-Request";
     public const string AdministratorPolicy = "IdentityAdministrator";
+    /// <summary>Phase 4.1 S3a (D-160): the session carries a second-factor proof (pass-through for users without MFA, D-161).</summary>
+    public const string MfaVerifiedPolicy = "MfaVerified";
+    /// <summary>Phase 4.1 S3a (D-160): the proof is within the freshness window (pass-through for users without MFA, D-161).</summary>
+    public const string MfaFreshPolicy = "MfaFresh";
     public const string AdministratorClaim = "hasm:identity_admin";
     public const string SessionIdClaim = "hasm:session";
     public const string SessionItemKey = "hasm.session";
@@ -98,8 +104,16 @@ public static class AuthenticationSetup
         services.AddHostedService<IdentityHousekeepingService>();
 
         services.AddAuthentication(AuthDefaults.Scheme).AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(AuthDefaults.Scheme, null);
-        services.AddAuthorizationBuilder().AddPolicy(AuthDefaults.AdministratorPolicy, p =>
-            p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"));
+        services.AddSingleton<IAuthorizationHandler, MfaVerifiedHandler>();
+        services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
+        services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
+        services.AddAuthorizationBuilder()
+            .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
+            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()))
+            .AddPolicy(AuthDefaults.MfaFreshPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()));
         return services;
     }
 

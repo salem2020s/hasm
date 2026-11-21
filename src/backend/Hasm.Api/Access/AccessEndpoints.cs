@@ -53,7 +53,7 @@ public static class AccessEndpoints
         api.MapPost("/session/company", SelectCompany).WithMetadata(new BodyLimit());
         api.MapDelete("/session/company", ClearCompany);
 
-        var access = api.MapGroup("/access");
+        var access = api.MapGroup("/access").RequireAuthorization(AuthDefaults.MfaVerifiedPolicy);
         access.MapGet("/me", Me);
         access.MapGet("/permissions", PermissionCatalogView);
         access.MapGet("/roles", ListRoles);
@@ -64,7 +64,7 @@ public static class AccessEndpoints
         access.MapPost("/members", GrantMembership).WithMetadata(new BodyLimit());
         access.MapDelete("/members/{userId:guid}", RevokeMembership);
         access.MapGet("/assignments", ListAssignments);
-        access.MapPost("/assignments", AssignRole).WithMetadata(new BodyLimit());
+        access.MapPost("/assignments", AssignRole).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
         access.MapDelete("/assignments/{id:guid}", RevokeAssignment);
         access.MapGet("/audit", ListAudit);
     }
