@@ -64,7 +64,7 @@ public sealed class CompanyMigrator(HasmDatabaseOptions options, CompanyRegistry
 
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
-        if (!await CompanyProvisioner.TryLockAsync(lockConn, listed.Id, ct))
+        if (!await CompanyProvisioner.AcquireLockAsync(lockConn, listed.Id, ct))
             return new CompanyMigrationOutcome(listed.Id, CompanyMigrationStatus.Busy, [], null);
         if (BeforeMigrate is not null) await BeforeMigrate(listed.Id, ct);
 
@@ -135,7 +135,7 @@ public sealed class CompanyRuntimeProvisioner(HasmDatabaseOptions options, Compa
 
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
-        if (!await CompanyProvisioner.TryLockAsync(lockConn, companyId, ct))
+        if (!await CompanyProvisioner.AcquireLockAsync(lockConn, companyId, ct))
             return new RuntimeGrantResult(companyId, RuntimeGrantOutcome.InProgressElsewhere, false, false, store.Exists(companyId), false);
 
         var company = await registry.GetAsync(companyId, ct) ?? throw new CompanyNotFoundException(companyId);

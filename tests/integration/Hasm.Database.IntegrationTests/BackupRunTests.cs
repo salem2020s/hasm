@@ -149,9 +149,7 @@ public class BackupRunTests : PostgresTestBase
         await using (var holder = new NpgsqlConnection(SystemConnection))
         {
             await holder.OpenAsync();
-            var locked = false;
-            for (var i = 0; i < 10 && !(locked = await CompanyProvisioner.TryLockAsync(holder, a.Id, default)); i++) await Task.Delay(300);
-            Assert.True(locked);
+            Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, a.Id, default));                    // the shared bounded wait (a just-closed provisioning session releases asynchronously)
             var (report, _) = await Service().RunAsync(Root);
             Assert.Equal("partial", report.Verdict);
             Assert.Equal(("busy", "company_busy"), report.Companies.Single(c => c.CompanyId == a.Id) is var x ? (x.Outcome, x.Code) : default);
