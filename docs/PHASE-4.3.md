@@ -1040,6 +1040,7 @@ D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 
   * **L2 (open):** audit 2016 is not resumable. A crash after the folder is gone and before 2016 leaves 2015 without its 2016. The next execution must detect a tombstone without a completion record and write the missing 2016.
   * **L3 (fixed now):** an interrupted deletion is resumed only when the engine's own tombstone (written after audit 2015) exists; otherwise the folder is left for the operator (`resume_unverified`, audit 2017).
   * **L4 (fixed now):** a refusal for a missing runtime prerequisite (encryption, configuration, restore safeguards) writes audit 2017 too.
+* **Review L5 of #134 (fixed):** a LegalHold table that is missing in a company whose migration journal already reaches the migration that creates it (dropped or renamed) is `hold_check_failed`, never "no hold"; that migration's version is derived from the embedded company scripts.
 * **Tests:**
   * unit tests: `RetentionClassifierTests`, `RetentionExecutorTests`, `BackupRetentionSchemaDerivationTests`, and the strengthened TOTP pin;
   * PostgreSQL class `BackupRetentionTests` (5): the preview per company calendar and time zone, holds and guards, inactive deletion, the engine through the seam with a remaining run that still recovers, and the locks.
