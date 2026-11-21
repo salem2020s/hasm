@@ -242,7 +242,46 @@ Goal: one company is backed up and trial-restored END TO END from the company re
     * migrating the trial copy automatically (a write the trial restore must not make);
     * ignoring checksums (a set from a diverged build would pass).
 
-## Slice 4: backup runs, monitoring and measured durations - PLAN (docs only; awaits independent review before any code)
+## Slice 4: backup runs, monitoring and measured durations (plan approved in PR #100; implemented on `feature/phase-4-3-slice4-impl`)
+
+### Implementation status (code PR)
+* **Built as planned:**
+  * `BackupRunService` with `BackupRunFiles`, `SystemBackupSet` and `BackupRunStatus` (`src/backend/Hasm.Infrastructure/Backup/BackupRun.cs`);
+  * `PgBackupTool.DumpSystemAsync` (excluded table data) and `PgBackupTool.VerifyArchiveAsync` (`pg_restore --list`, exit code only);
+  * the explicit secret-store flag `SystemSchema.SecretStoreTables` (session, login throttle), pinned to `BackupRunService.SystemDumpExclusions` in both directions by a unit test;
+  * `Hasm.Admin backup-run`, `backup-status` and `backup-retention-preview`;
+  * the trial-restore elapsed time (`TrialRestoreResult.Elapsed`, printed);
+  * the operator section in `docs/DEVELOPMENT.md` (commands, the sensitive system dump, consistency, scheduling examples for systemd, cron and Windows, and the drill-log formulas);
+  * D-069..D-073 marked implemented.
+* **Nothing reserved by owner package 4.3-2 is built:** no encryption, no signature, no deletion, no key export. No migration, API endpoint or UI.
+* **Details fixed by the implementation (no change of decision):**
+  * `backup-status` and `backup-retention-preview` are evaluated before any database configuration is read, so a monitor needs no credentials.
+  * Unreadable reports are counted as a warning (`unreadable_reports`) and are never used or selected.
+  * In the retention preview, a run kept by either rule (`--keep-last`, `--keep-days`) is kept.
+  * Additional codes:
+    * `archive_unreadable`, `run_exists` and `run_not_private`;
+    * `database_error`, `io_error` and `unexpected_error`: a company's or the system's failure is recorded by a code only and never stops the run.
+    * `keep_last_invalid` and `keep_days_invalid`.
+  * A refused second run (`run_in_progress`) writes nothing.
+  * **`totp` is NOT in the excluded list yet** because no TOTP-secret table exists. The Phase 4.1 slice that creates it must add it to `SystemSchema.SecretStoreTables` and to `BackupRunService.SystemDumpExclusions` in the same change; the pinning test enforces that the two agree.
+* **Review of PR #104 (Agent C on 5fbc221: approve, Lows only), dispositions:**
+  * **L1, fixed:** the cron example exports the environment (`set -a; . admin.env; set +a`).
+  * **L2, fixed (lead decision under D-048):** an unreadable `run.json` makes `backup-status` exit 8 (`unreadable_reports`) instead of passing behind an older `ok` run. Monitoring stays fail-closed; covered by a unit test.
+  * **L3, fixed:**
+    * `SessionKeepAlive` runs a `SELECT 1` every 30 seconds on the idle run-lock connection.
+    * A failed no-op marks the run `partial` with the warning `run_lock_lost`, carried in an optional `warnings` field of `run.json` that older reports read without.
+    * The documentation requires `idle_session_timeout` of the admin role to be 0, or above 60 seconds; this also covers the per-company locks held during long company dumps.
+    * Unit tests cover the lost session and an immediate stop.
+  * **L4, recorded as known limitations:**
+    * Two runs started in the same second sort by their random suffix rather than by time. This is practically excluded: one run at a time, and a run takes longer than a second.
+    * A `run.json` whose finish time lies in the future (clock skew or a manipulated report) is never reported stale until that time passes. Keep the server clock synchronised (NTP); a future check is a follow-up for the monitoring UI slice.
+  * **L5, fixed:** this status states why `totp` is not yet excluded (above).
+* **Review of PR #104, confirmation (Agent C on f087cef: approve), new Lows, both fixed:**
+  * **L6:** the keep-alive is stopped, then the run lock is checked SYNCHRONOUSLY in `pg_locks` (this session, the run namespace, granted) before the verdict, so a loss in the last interval is never reported ok. Any failure counts as `run_lock_lost`.
+  * **L7:** every exception in the keep-alive loop marks it failed, and its disposal never throws.
+* Local verification and CI results: see the PR description.
+
+### Plan (as approved)
 Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the result, real restore tests, RPO/RTO measured rather than promised), SRS 14.4 (database and attachment folders backed up together), RELEASE1-ACCEPTANCE G. Risk: Critical (ROADMAP 4.3).
 
 **Goal.** Back up the WHOLE installation in one unattended, schedulable run: the system database plus every Ready company (slice 3 sets). The run writes a machine-readable report. A status command lets an operating-system scheduler or monitor raise an alert. Durations are measured and recorded. Retention is evaluated as a preview only.
@@ -626,9 +665,9 @@ D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
-* Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling, monitoring and measured durations: slice 4 (planned). Set encryption and retention: owner package 4.3-2.
+* Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling (by the operating system), monitoring and measured durations: slice 4 (implemented). Set encryption and retention: owner package 4.3-2.
 
 ## BLOCKED / owner decisions
 * Audited restore acknowledgement and a new checkpoint epoch after a company restore (`docs/DEVELOPMENT.md`, restore limitations): policy needs an owner decision.
 * Retention/purge of removed attachments (decision R).
-* Set encryption and authentication, automatic deletion of backups (retention), and the key-directory export: OWNER package 4.3-2 (slice 4 plan). Scheduling, monitoring and measured durations: planned in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
+* Set encryption and authentication, automatic deletion of backups (retention), and the key-directory export: OWNER package 4.3-2 (slice 4 plan). Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
