@@ -1194,7 +1194,12 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
+    /**
+     * An EMPTY `ids` array means "no parties named", so it returns an empty page WITHOUT a request (the server treats an absent `ids` as the unfiltered list, and that must never be reached by accident:
+     * the synthetic page has `total: 0` and `can.configure: false`, which lookup callers do not use). The server semantics are unchanged.
+     */
     listPartyRoles: (kind?: number, q?: PartyRoleQuery) => {
+      if (q?.ids !== undefined && q.ids.length === 0) return Promise.resolve<PartyRolesResponse>({ items: [], can: { configure: false }, total: 0 });
       const p = new URLSearchParams();
       if (kind) p.set("kind", String(kind));
       if (q?.search) p.set("search", q.search);

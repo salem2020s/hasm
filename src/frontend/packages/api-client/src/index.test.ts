@@ -23,8 +23,19 @@ describe("api client", () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [], can: { configure: false }, total: 0 })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
     await client.listPartyRoles(1, { ids: ["p1", "p 2"] });
-    await client.listPartyRoles(undefined, { ids: [] });
-    expect([0, 1].map((n) => call(fetchMock, n).url)).toEqual(["https://x/api/v1/company/party-roles?kind=1&ids=p1&ids=p+2", "https://x/api/v1/company/party-roles"]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/party-roles?kind=1&ids=p1&ids=p+2");
+  });
+
+  it("answers an empty party-id lookup with an empty page and NO request, so it can never fall back to the unfiltered list", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [{ id: "everything" }], can: { configure: true } })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const empty = await client.listPartyRoles(1, { ids: [] });
+    expect(empty).toEqual({ items: [], can: { configure: false }, total: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await client.listPartyRoles(1, { search: "a" });                                   // other forms still call the server
+    await client.listPartyRoles(undefined, {});                                        // ids absent is the unfiltered list
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect([0, 1].map((n) => call(fetchMock, n).url)).toEqual(["https://x/api/v1/company/party-roles?kind=1&search=a", "https://x/api/v1/company/party-roles"]);
   });
 
   it("lists units, item groups and customer groups unchanged without a query and with the optional search and paging", async () => {
