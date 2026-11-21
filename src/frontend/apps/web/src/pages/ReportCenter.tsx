@@ -39,7 +39,7 @@ export function ReportCenterPage() {
             <Card key={r.id} title={locale === "en" ? r.titleEn : r.titleAr}>
               <div data-testid={`rc-${r.id}`}>
                 <p className="hint">{t("rc.formats")}: {r.formats.map((f) => f.toUpperCase()).join(" · ")} — {r.canExport ? t("rc.can_export") : t("rc.cannot_export")}</p>
-                <p className="hint">{t("rc.parameters")}: {r.parameters.map((p) => (locale === "en" ? p.titleEn : p.titleAr) ?? p.name).join("، ")}</p>
+                <p className="hint">{t("rc.parameters")}: {r.parameters.map((p) => (locale === "en" ? p.titleEn : p.titleAr) ?? p.name).join(t("list.separator"))}</p>
                 <p className="hint">{[r.supportsComparison ? t("rc.comparison") : null, r.supportsGrouping ? t("rc.grouping") : null].filter(Boolean).join(" · ")}</p>
                 <button type="button" className="primary" onClick={() => navigate(SCREEN[r.id] ?? "/accounting/reports")}>{t("rc.open")}</button>
               </div>
