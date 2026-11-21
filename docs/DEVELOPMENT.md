@@ -539,7 +539,7 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   * The dump goes into a fresh private staging folder `<destination>.staging-<32 hex>/` (owner-only 0700 on Linux, verified; on Windows it inherits the parent's ACL, so choose a destination parent only the service account can read), which is removed afterwards. Staging folders of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run (never a symbolic link), and nothing else is touched.
   * The trial attachment target must also be outside the key directory (`target_overlaps_keys`). `drop-trial-restore` waits at most 5 seconds for the registry lock and then reports `company_busy`.
   * The set (`database.dump`, `attachments/`, `manifest.json` with the locale and the company migration level) is verified before the command reports success.
-  * **Back up the key directory separately** (decision K). The set is neither encrypted nor signed yet.
+  * **Back up the key directories separately** with `backup-keys` (decision K, D-087). From slice 5 the set is encrypted and signed (see "Encrypted, signed backups" below).
 * **`trial-restore-company`:**
   * The set is restored into a NEW, unregistered database and into `<attachment-target-dir>`, which must be empty and outside the live attachment storage.
   * Then the read-only pre-cutover checks run:
@@ -574,7 +574,7 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
   * Exit codes: 0 ok, 8 partial (a company busy or failed, or key ids missing), 1 failed (the system dump failed or no set was written), 4 another run in progress, 3 configuration.
 * **The system dump is the most sensitive file of a run.** It holds password hashes, memberships and roles, shared-party personal data and the system audit chain.
   * The DATA of the session and login-throttle tables is left out, and later the TOTP secrets too: listed under "excluded" in `run.json` and the manifest. A restored installation therefore starts with no sessions.
-  * Until the owner decides backup encryption (package 4.3-2), **keep the backup root on an encrypted volume**, readable only by the service account. Back up the key directory separately (decision K).
+  * Slice 5 encrypts and signs every run (see below); an unencrypted run exists only under the DEV/TEST acknowledgement. Back up the key directories with `backup-keys`, never alongside the sets.
 * **A run is not one point in time across databases.** The system database is dumped first, then each company. Registry rows, party links, memberships and migration levels can therefore differ between them. A single-company restore compares with the live system database; a full-installation restore (not built) must reconcile.
 * **`backup-status <root>`** is read only and needs no database settings: it is meant for the monitor. It reads the newest complete run.
   * Exit 0: ok and younger than `--max-age-hours` (default 26).
@@ -612,6 +612,38 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
   * the "Measured trial restore time" printed by `trial-restore-company` for that set.
 
   RPO is at most the schedule interval plus the run duration. RTO is the measured trial-restore time plus the cutover procedure, once that exists (BLOCKED).
+
+### Encrypted, signed backups, key export and recovery test (Phase 4.3 slice 5)
+Decisions D-089..D-095 and D-116..D-118 (plus D-120 for the TOTP table); the design is in `docs/PHASE-4.3.md` slice 5.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin]     (OFFLINE workstation)
+dotnet run --project src/backend/Hasm.Admin -- backup-signing-keygen                                                              (server)
+dotnet run --project src/backend/Hasm.Admin -- backup-keys <destination-dir>                                                      (server)
+dotnet run --project src/backend/Hasm.Admin -- trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] --recovery-key <file> --signing-trust <signing-trust.json> [--passphrase-stdin]
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-test <run-dir> --recovery-key <file> --signing-trust <signing-trust.json> [--keys-export <dir>] [--passphrase-stdin]
+```
+* **Encryption is the default.** `backup-run` and `backup-company` write encrypted, signed sets when these are configured, and refuse otherwise (`backup_encryption_not_configured`, exit 3):
+  * `Hasm__Backup__RecoveryPublicKeyFile`: the recovery PUBLIC key (`rk-*.pub.pem`); the private key never reaches the server;
+  * `Hasm__Backup__SigningKeyDirectory` and `Hasm__Backup__SigningKeyId`: the server's backup signing key (`sk-*`), in its own owner-only directory.
+* **Set-up, once:**
+  1. On an OFFLINE workstation without `Hasm__Database__*` settings: `backup-recovery-keygen <out-dir>`. The passphrase (at least 20 characters, entered twice) comes from a prompt or, with `--passphrase-stdin`, from standard input; never from an argument or a variable. Put ONLY `rk-*.pub.pem` on the server. Move `copy-1` and `copy-2` (with `rk-*.sha256`) to two separate offline media; with `--separate-passphrases` each copy has its own passphrase and custodian.
+  2. On the server: `backup-signing-keygen`. It writes `sk-<id>.key.pem` (private, never exported) and `sk-<id>.pub.pem`, prints the public key's SHA-256 for the recovery kit and writes system audit event 2013. Set `Hasm__Backup__SigningKeyId` to the printed id.
+  3. `backup-keys <destination>`: see below. Then take a first `backup-run` and run `backup-recovery-test` on it: until a test passes, `backup-status` reports `recovery_untested` (exit 8) and the recovery key is NOT production-ready (D-085).
+* **What an encrypted run contains.** Only `.hbe` files (HBE1: encrypted to the recovery key, authenticated chunk by chunk), their signed manifests (`manifest.json.hbe` + `.sig`), `canary.hbe` and the readable, signed `run.status.json` (verdict, counts, times, key ids, the canary hash; no names). `pg_dump` is piped straight into the encryptor: no plaintext dump exists at any time. `backup-status` verifies `run.status.json` with the server's signing PUBLIC keys; an unsigned or altered status counts as a FAILED run (`status_unsigned`, exit 1).
+* **The system dump of an encrypted run** still leaves out the session and login-throttle data (no recovery value). Once Phase 4.1 adds the TOTP-secret table, its rows are INCLUDED in encrypted runs only (they are ciphertext under the key ring; D-120), so a full restore needs the key export.
+* **`backup-keys <destination>`** writes ONE encrypted, signed export of every key directory: the encryption master keys (`Hasm__Encryption__KeyDirectory`), the audit key ring (`Hasm__Audit__KeyDirectory`) and the backup signing PUBLIC keys. Signing PRIVATE keys are never exported; after a disaster a new signing key is generated, and old sets still verify with the public keys in the kit.
+  * The destination must be absolute and empty, and must not overlap the attachment storage, any key directory, a backup run folder or a folder holding run folders.
+  * It holds `keys.hbe`, `key-export.json` + `.sig` (the key ids) and `signing-trust.json`: the trust list of signing public keys, all `active`. Keep a copy of `signing-trust.json` with every recovery kit and mark a key `retired` (with `retiredUtc`) or `compromised` there when that happens; never trust a key carried inside a set.
+  * It writes system audit event 2012 and fails closed (the export is removed) when the event cannot be written. Run it after every key generation or rotation.
+* **Trial restore and recovery test bring the private key in.** Bring the private-key file on removable media, give its passphrase at the prompt (or `--passphrase-stdin`), and remove the file from the machine afterwards; never copy it to the server's disks (runbook, review L3). `--signing-trust <signing-trust.json>` is the kit's trust list; `--signing-public-key <sk-*.pub.pem>` trusts one key as active.
+  * Every signature and stored digest is verified BEFORE anything is decrypted; the dump is decrypted streaming into `pg_restore` and only authenticated chunks are released (D-116). A forged, unsigned, swapped or altered set is refused before anything is created (`signature_missing`, `signing_key_unknown`, `signing_key_compromised`, `backup_set_not_clean`).
+  * An UNENCRYPTED (DEV/TEST) set is restored only when this reader's own environment carries the acknowledgement (`unencrypted_set_refused` otherwise); a field inside the set never decides it.
+  * `trial-restore-company` writes system audit event 2010 (the operator, key ids, the company and a TAG of the trial database, never its name); `backup-recovery-test` writes 2011. When the event cannot be written the command reports FAILED (D-118).
+* **`backup-recovery-test <run-dir>`** verifies the signed status, the run manifest and the canary, restores the system dump and every company set of the run into NEW disposable databases (dropped afterwards; the live databases are never touched), runs the slice 3 checks, and with `--keys-export` decrypts the export and checks that it holds every attachment and audit key id the run needs (TOTP rows are never decrypted).
+  * Passed: it writes `recovery-test.json` into the run folder with the decrypted canary (single-purpose random bytes); `backup-status` accepts it only when it hashes to the signed canary hash. Exit 0, or 8 when it passed with warnings (for example `key_export_not_checked`).
+  * Failed: exit 1, no proof is written. An unencrypted run is refused (`unencrypted_run`: there is no recovery key to test).
+* **DEV/TEST only: unencrypted sets.** `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production` (exactly) permits unencrypted sets; any other value is a configuration error, and it is refused while a recovery public key is configured. Every output then shows `DEGRADED: unencrypted backups (DEV/TEST only)`, sets and runs carry the file `UNENCRYPTED-DEV-TEST-ONLY`, and `backup-status` exits 8 (`unencrypted_dev_test`). Never set it in production (D-088).
+* **Interim mode (dated limitations in RELEASE1-ACCEPTANCE G).** Until Phase 4.1 delivers the administrative-tool login (D-099) and the approval framework, these commands run under operating-system access to the service account; the audit events record the operating-system account (`os:<account>`). Trial restore and the recovery test are restore operations that will then need independent approval (D-118).
 
 ## Checks
 ```

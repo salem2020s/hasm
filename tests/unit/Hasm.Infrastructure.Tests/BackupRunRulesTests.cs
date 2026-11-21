@@ -27,7 +27,10 @@ public sealed class BackupRunRulesTests : IDisposable
     private static RunCompany C(Guid id, string outcome) => new(id, outcome, outcome is "busy" ? "company_busy" : outcome is "failed" ? "company_database_missing" : null, T0, T0, 1, 10, 0, 0);
 
     private static string Id(DateTimeOffset t) => BackupRunFiles.NewRunId(t);
-    private static RunEntry Entry(BackupRunReport r) => new(r.RunId, r, true, r.FinishedUtc);
+    // status and retention rules are exercised on ENCRYPTED runs of a recovery-tested key (slice 5); an unencrypted run always gives unencrypted_dev_test (D-095) and an untested key recovery_untested
+    // (D-085), asserted separately
+    private const string Rk = "rk-0123456789abcdef";
+    private static RunEntry Entry(BackupRunReport r, string recoveryKey = Rk, bool tested = true) => new(r.RunId, r with { Encrypted = true }, true, r.FinishedUtc, recoveryKey, tested);
 
     // ---- run id ----------------------------------------------------------------------------------
 
@@ -175,8 +178,17 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal((8, "backup_partial"), Code(BackupRunStatus.Evaluate([Entry(Report(Id(T0), "partial"))], now, max)));
         Assert.Equal((1, "backup_failed"), Code(BackupRunStatus.Evaluate([Entry(Report(Id(T0), "failed"))], now, max)));
         Assert.Equal((1, "backup_missing"), Code(BackupRunStatus.Evaluate([], now, max)));
+        Assert.Equal((8, "unencrypted_dev_test"), Code(BackupRunStatus.Evaluate([new RunEntry(ok.RunId, ok, true, ok.FinishedUtc)], now, max)));   // D-095: never green
+        Assert.Equal((1, "status_unsigned"), Code(BackupRunStatus.Evaluate([new RunEntry(ok.RunId, ok with { Verdict = "failed", Encrypted = true, Warnings = ["status_unsigned"] }, true, ok.FinishedUtc)], now, max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], T0.AddHours(27), max)));
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate([Entry(ok)], now, TimeSpan.FromHours(1))));
+
+        // D-085, D-117: the newest run's recovery key must have passed a recovery test on SOME run encrypted to it; a tested OTHER key does not count
+        var older = Report(Id(T0.AddHours(-5)));
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false)], now, max)));
+        Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false), Entry(older)], now, max)));
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, "rk-fedcba9876543210", tested: false), Entry(older)], now, max)));   // a rotated key is not production-ready yet
+        Assert.Equal((8, "recovery_untested"), Code(BackupRunStatus.Evaluate([Entry(ok, tested: false), new RunEntry(older.RunId, null, false, T0, Rk, true)], now, max)));   // only complete runs count
 
         // an incomplete newer folder (no run.json) is skipped; reported once older than 24 hours; an unreadable report is counted, never used
         var incomplete = new RunEntry(Id(T0.AddHours(1)), null, false, T0.AddHours(1));
@@ -185,7 +197,7 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal((8, "unreadable_reports"), Code(s));                                                             // review L2: an unreadable report never passes silently
         Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate([incomplete, Entry(ok)], now, max)));                  // a young incomplete folder alone does not warn
         Assert.Equal((1, "backup_failed"), Code(BackupRunStatus.Evaluate([unreadable, Entry(Report(Id(T0), "failed"))], now, max)));   // a failure still wins
-        Assert.Same(ok, s.Latest);
+        Assert.Equal(ok.RunId, s.Latest!.RunId);
         Assert.Equal(0, s.IncompleteRuns);                                                                            // younger than 24 hours
         Assert.Equal(1, s.UnreadableRuns);
         Assert.Equal(1, BackupRunStatus.Evaluate([incomplete, Entry(ok)], T0.AddHours(26), TimeSpan.FromDays(2)).IncompleteRuns);
@@ -239,13 +251,29 @@ public sealed class BackupRunRulesTests : IDisposable
     [Fact]
     public void The_system_dump_exclusions_equal_the_secret_store_flag_in_both_directions()
     {
-        var excluded = BackupRunService.SystemDumpExclusions.Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
-        Assert.True(excluded.SetEquals(SystemSchema.SecretStoreTables), "every secret-store table must be excluded from the system dump, and only those");
-        Assert.All(excluded, t => Assert.True(SystemSchema.Map.ContainsKey(t), t));
+        // D-070 and D-120 (replaces the set-equality pin of #104): every flagged table is labelled once, and only flagged tables are
+        var labelled = BackupRunService.SystemDumpExclusions.Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
+        Assert.True(labelled.SetEquals(SystemSchema.SecretStoreTables.Keys), "every secret-store table must carry a label and a rule, and only those");
+        Assert.All(labelled, t => Assert.True(SystemSchema.Map.ContainsKey(t), t));
         Assert.Equal(BackupRunService.SystemDumpExclusions.Count, BackupRunService.SystemDumpExclusions.Select(e => e.Label).Distinct().Count());
         Assert.All(BackupRunService.SystemDumpExclusions, e => Assert.Matches("^[a-z0-9_]{1,64}$", e.Label));
-        Assert.Contains("Session.Table", SystemSchema.SecretStoreTables);
-        Assert.Contains("LoginThrottle.Table", SystemSchema.SecretStoreTables);
+
+        // an UNENCRYPTED (DEV/TEST) dump excludes the data of every secret-store table
+        Assert.True(BackupRunService.SystemDumpExclusionsFor(encrypted: false).Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal).SetEquals(SystemSchema.SecretStoreTables.Keys));
+        // an ENCRYPTED dump excludes exactly the always-excluded ones and includes the encrypted-only ones under HBE1
+        var encryptedExcluded = BackupRunService.SystemDumpExclusionsFor(encrypted: true).Select(e => e.LogicalTable).ToHashSet(StringComparer.Ordinal);
+        foreach (var (table, rule) in SystemSchema.SecretStoreTables)
+            Assert.Equal(rule == SecretStoreBackupRule.AlwaysExcluded, encryptedExcluded.Contains(table));
+
+        // pinned rules: sessions and login throttling are ephemeral and always excluded
+        Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["Session.Table"]);
+        Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["LoginThrottle.Table"]);
+        // D-120: a TOTP-secret table (Phase 4.1), once it exists in the dictionary, is a secret-store table included ONLY in encrypted runs
+        foreach (var totp in SystemSchema.Map.Keys.Where(k => k.Contains("Totp", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".Table", StringComparison.Ordinal)))
+        {
+            Assert.True(SystemSchema.SecretStoreTables.TryGetValue(totp, out var rule), totp + " must be flagged as a secret-store table");
+            Assert.Equal(SecretStoreBackupRule.IncludedOnlyInEncryptedRuns, rule);
+        }
     }
 
     // ---- path rules ------------------------------------------------------------------------------

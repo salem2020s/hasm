@@ -226,6 +226,24 @@ public sealed class CompanyBackupRulesTests : IDisposable
         Assert.Equal("target_overlaps_keys", (await Assert.ThrowsAsync<BackupException>(() => Service(storage, Path.Combine(keys, "inner")).TrialRestoreAsync(set, company, keys, false))).Code);
         var full = P("full"); Directory.CreateDirectory(full); File.WriteAllText(Path.Combine(full, "x"), "x");
         Assert.Equal("target_not_empty", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, full, false))).Code);
-        Assert.Equal("backup_set_not_clean", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t"), false))).Code);   // an empty directory is no set
+        Assert.Equal("backup_set_not_clean", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t"), false, allowUnencrypted: true))).Code);   // an empty directory is no set
+    }
+
+    [Fact]
+    public async Task The_library_refuses_an_unencrypted_set_without_the_callers_acknowledgement_and_always_inside_a_run()
+    {
+        // review H1 of #128: the refusal is in CompanyBackupService itself (not only in Hasm.Admin), before any database contact or pg_restore
+        var storage = P("storage"); Directory.CreateDirectory(storage);
+        var company = Guid.NewGuid();
+        var set = P("v1set"); Directory.CreateDirectory(set);
+        File.WriteAllText(Path.Combine(set, BackupSet.ManifestFileName), "{}");                                       // a version-1 layout: no manifest.json.hbe
+        Assert.False(CompanyBackupService.IsEncryptedSet(set));
+        Assert.Equal("unencrypted_set_refused", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t1"), false))).Code);
+        Assert.Equal("unencrypted_set_refused", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t2"), false, keys: null, allowUnencrypted: false))).Code);
+        // inside a run (the recovery test passes the run id) an unencrypted set is refused even with the acknowledgement
+        Assert.Equal("unencrypted_set_refused", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t3"), false, null, allowUnencrypted: true, expectedRunId: "20261121T020000Z-0011aabb"))).Code);
+        // with the acknowledgement and outside a run it proceeds to the slice 3 verification (this layout is not a valid set)
+        Assert.Equal("backup_set_not_clean", (await Assert.ThrowsAsync<BackupException>(() => Service(storage).TrialRestoreAsync(set, company, P("t4"), false, allowUnencrypted: true))).Code);
+        Assert.False(Directory.Exists(P("t1")) || Directory.Exists(P("t2")) || Directory.Exists(P("t3")));
     }
 }
