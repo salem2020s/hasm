@@ -19,8 +19,8 @@ public class AttachmentRetentionTests
     private static AttachmentRetentionFacts Removed(DateTimeOffset at, string kind = "local_party", bool sensitive = false, string? keyId = null, bool purged = false, Guid? id = null, Guid? subject = null) =>
         new(id ?? Guid.NewGuid(), kind, subject ?? Guid.NewGuid(), sensitive, true, at, keyId, purged);
 
-    private static EligibilityResult Check(AttachmentRetentionFacts a, IReadOnlyList<RetentionPolicyVersionView> policies, IReadOnlyList<LegalHoldView>? holds = null, bool busy = false, DateTimeOffset? now = null) =>
-        AttachmentRetentionEligibility.Evaluate(a, policies, holds ?? [], new RetentionEnvironment(busy), now ?? Now);
+    private static EligibilityResult Check(AttachmentRetentionFacts a, IReadOnlyList<RetentionPolicyVersionView> policies, IReadOnlyList<LegalHoldView>? holds = null, bool busy = false, DateTimeOffset? now = null, bool basis = true) =>
+        AttachmentRetentionEligibility.Evaluate(a, policies, holds ?? [], new RetentionEnvironment(busy, basis), now ?? Now);   // basis = true simulates a future owner answer; the services pass RetentionBasis.OwnerConfirmed
 
     private static LegalHoldView Hold(LegalHoldScope scope, string? kind = null, Guid? subject = null, Guid? attachment = null, bool released = false) =>
         new(Guid.NewGuid(), scope, kind, subject, attachment, "case", null, Author, Now.AddDays(-10), released ? Approver : null, released ? Now.AddDays(-1) : null, released ? "done" : null, 1);
@@ -98,14 +98,15 @@ public class AttachmentRetentionTests
     }
 
     [Fact]
-    public void A_later_longer_policy_extends_the_period_and_a_removal_before_any_policy_follows_the_current_one()
+    public void A_later_longer_policy_extends_the_period_and_a_removal_before_any_policy_stays_indefinite()
     {
         var short1 = Policy(1, [Months("*", 12)], ended: new DateTimeOffset(2029, 1, 1, 0, 0, 0, TimeSpan.Zero), status: RetentionPolicyStatus.Superseded);
         var long2 = Policy(2, [Months("*", 60)], effective: new DateOnly(2029, 1, 1), approved: new DateTimeOffset(2028, 12, 31, 0, 0, 0, TimeSpan.Zero));
         Assert.Equal(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero), Check(Removed(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)), [short1, long2]).EligibleAtUtc);   // 60 months (the longer) from 2025-01-01, not 12
-        // removed in 2010, before version 1 existed: no earlier commitment, the current period applies
+        // removed in 2010, before version 1 existed: no period was ever committed to, so it is Indefinite (preserve): adopting a policy later never makes it eligible
         var early = Check(Removed(new DateTimeOffset(2010, 1, 1, 0, 0, 0, TimeSpan.Zero)), [short1, long2]);
-        Assert.Equal("eligible", early.Code);
+        Assert.Equal("indefinite", early.Code);
+        Assert.Equal("indefinite", Check(Removed(new DateTimeOffset(2019, 6, 1, 0, 0, 0, TimeSpan.Zero)), [Policy(1, [Months("*", 1)])]).Code);   // removed before the policy took effect (2020-01-01)
         // a version that was indefinite at removal keeps the attachment preserved even under a later finite one
         var forever = Policy(1, [Forever("*")], ended: new DateTimeOffset(2029, 1, 1, 0, 0, 0, TimeSpan.Zero), status: RetentionPolicyStatus.Superseded);
         Assert.Equal("indefinite", Check(Removed(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)), [forever, long2]).Code);
@@ -170,7 +171,7 @@ public class AttachmentRetentionTests
         Assert.Equal("eligible", Check(Removed(Now.AddYears(-5), sensitive: true, keyId: "k1"), [policy]).Code);
         Assert.Equal("company_busy", Check(Removed(Now.AddYears(-5)), [policy], busy: true).Code);
         Assert.Equal("check_failed", AttachmentRetentionEligibility.Evaluate(Removed(Now.AddYears(-5)), null!, [], new RetentionEnvironment(false), Now).Code);   // an exception is never "eligible"
-        Assert.All(new[] { "eligible", "not_removed", "already_purged", "no_valid_policy", "indefinite", "not_yet_eligible", "legal_hold", "key_state_unknown", "company_busy", "check_failed" }, c => Assert.Matches("^[a-z_]+$", c));
+        Assert.All(new[] { "eligible", "not_removed", "already_purged", "no_valid_policy", "indefinite", "not_yet_eligible", "legal_hold", "key_state_unknown", "company_busy", "retention_basis_pending", "check_failed" }, c => Assert.Matches("^[a-z_]+$", c));
     }
 
     [Fact]
@@ -180,6 +181,26 @@ public class AttachmentRetentionTests
         var v2 = Policy(2, [Months("*", 120)], effective: new DateOnly(2029, 1, 1), approved: new DateTimeOffset(2028, 12, 31, 0, 0, 0, TimeSpan.Zero));
         Assert.Equal(2, Check(Removed(Now.AddYears(-30)), [v1, v2]).PolicyVersion);
         Assert.Equal(2, Check(Removed(Now.AddYears(-30)), [v2, v1]).PolicyVersion);                   // the order of the input does not matter
+    }
+
+    // ---- D-109 (the retention basis) is owner-pending: nothing is eligible
+
+    [Fact]
+    public void While_the_retention_basis_is_owner_pending_no_item_is_ever_eligible_whatever_the_dates_say()
+    {
+        Assert.False(RetentionBasis.OwnerConfirmed);                                               // the switch that only a recorded owner answer turns on
+        var policy = Policy(1, [Months("*", 1)]);
+        var old = Removed(Now.AddYears(-5));
+        var pending = Check(old, [policy], basis: false);
+        Assert.Equal("retention_basis_pending", pending.Code);
+        Assert.False(pending.IsEligible);
+        Assert.NotNull(pending.EligibleAtUtc);                                                       // the date is still shown for information
+        Assert.Equal("eligible", Check(old, [policy], basis: true).Code);                            // only the (future) owner answer changes it
+        Assert.Equal("retention_basis_pending", AttachmentRetentionEligibility.Evaluate(old, [policy], [], new RetentionEnvironment(false), Now).Code);   // the default environment is "pending"
+        // the other refusals still come first
+        Assert.Equal("not_yet_eligible", Check(Removed(Now.AddDays(-3)), [policy], basis: false).Code);
+        Assert.Equal("legal_hold", Check(old, [policy], [Hold(LegalHoldScope.Company)], basis: false).Code);
+        Assert.Equal("indefinite", Check(old, [Policy(1, [Forever("*")])], basis: false).Code);
     }
 
     // ---- validation of a draft

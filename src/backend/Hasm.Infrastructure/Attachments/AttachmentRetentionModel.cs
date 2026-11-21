@@ -36,8 +36,17 @@ public sealed record LegalHoldInput(LegalHoldScope? Scope, string? SubjectKind, 
 /// <summary>The facts about one attachment the eligibility check needs (nothing about names or paths).</summary>
 public sealed record AttachmentRetentionFacts(Guid Id, string SubjectKind, Guid SubjectId, bool IsSensitive, bool IsRemoved, DateTimeOffset? RemovedAtUtc, string? KeyId, bool AlreadyPurged);
 
-/// <summary>Facts about the environment at the moment of the check.</summary>
-public sealed record RetentionEnvironment(bool CompanyBusy);
+/// <summary>
+/// Facts about the environment at the moment of the check. <see cref="BasisConfirmed"/> is false while the owner has not answered D-109 (the retention basis, OWNER-PENDING): then NO item is eligible
+/// (<see cref="EligibilityReason.RetentionBasisPending"/>), whatever the dates say. The services pass <see cref="RetentionBasis.OwnerConfirmed"/>.
+/// </summary>
+public sealed record RetentionEnvironment(bool CompanyBusy, bool BasisConfirmed = false);
+
+/// <summary>The one switch that stays OFF until the owner answers D-109 (docs/PHASE-R-attachment-retention.md section 4). Nothing can be purged while it is false; only a recorded owner decision changes it (a code change reviewed with that decision).</summary>
+public static class RetentionBasis
+{
+    public const bool OwnerConfirmed = false;
+}
 
 /// <summary>The one reason code the eligibility check answers with (never only a boolean).</summary>
 public enum EligibilityReason
@@ -51,6 +60,7 @@ public enum EligibilityReason
     LegalHold,
     KeyStateUnknown,
     CompanyBusy,
+    RetentionBasisPending,
     CheckFailed,
 }
 
@@ -70,6 +80,7 @@ public sealed record EligibilityResult(EligibilityReason Reason, DateTimeOffset?
         EligibilityReason.LegalHold => "legal_hold",
         EligibilityReason.KeyStateUnknown => "key_state_unknown",
         EligibilityReason.CompanyBusy => "company_busy",
+        EligibilityReason.RetentionBasisPending => "retention_basis_pending",
         _ => "check_failed",
     };
 }
@@ -152,7 +163,7 @@ public static class RetentionRules
 /// <summary>
 /// The pure eligibility check (docs/PHASE-R-attachment-retention.md section 5). Used when a plan is built, when it is approved and per item right before deletion (R2); R1 only previews.
 /// ALL of these must hold for <see cref="EligibilityReason.Eligible"/>: removed; not already purged; a valid policy history; a finite applicable period; the period (the longer of the one in force at removal
-/// and the one in force now) has elapsed; no active hold covers it; the key situation is known; the company is not busy. Any exception is <see cref="EligibilityReason.CheckFailed"/>.
+/// and the one in force now) has elapsed; no active hold covers it; the key situation is known; the company is not busy; the owner has confirmed the retention basis (D-109, owner-pending). Any exception is <see cref="EligibilityReason.CheckFailed"/>.
 /// </summary>
 public static class AttachmentRetentionEligibility
 {
@@ -167,8 +178,9 @@ public static class AttachmentRetentionEligibility
             var removedAt = a.RemovedAtUtc.Value;
             var atRemoval = policies.Where(p => RetentionRules.InForceAt(p, removedAt)).OrderByDescending(p => p.Version).FirstOrDefault();
             var nowPeriod = RetentionRules.PeriodMonths(RetentionRules.Match(current.Rules, a.SubjectKind, a.IsSensitive));
-            // no silent retroactive shortening: the longer of the period in force at removal (if any version was) and the current one; indefinite is the longest
-            var period = atRemoval is null ? nowPeriod : RetentionRules.Max(RetentionRules.PeriodMonths(RetentionRules.Match(atRemoval.Rules, a.SubjectKind, a.IsSensitive)), nowPeriod);
+            // an attachment removed BEFORE any policy existed is Indefinite (no period was ever committed to; the default is preservation). Otherwise no silent retroactive shortening:
+            // the longer of the period in force at removal and the current one; indefinite is the longest
+            var period = atRemoval is null ? null : RetentionRules.Max(RetentionRules.PeriodMonths(RetentionRules.Match(atRemoval.Rules, a.SubjectKind, a.IsSensitive)), nowPeriod);
             if (period is null) return new(EligibilityReason.Indefinite, null, null, current.Version);
             var eligibleAt = removedAt.AddMonths(period.Value);
             if (now < eligibleAt) return new(EligibilityReason.NotYetEligible, eligibleAt, null, current.Version);
@@ -176,6 +188,7 @@ public static class AttachmentRetentionEligibility
             if (hold is not null) return new(EligibilityReason.LegalHold, eligibleAt, hold.Id, current.Version);
             if (a.IsSensitive && string.IsNullOrEmpty(a.KeyId)) return new(EligibilityReason.KeyStateUnknown, eligibleAt, null, current.Version);
             if (env.CompanyBusy) return new(EligibilityReason.CompanyBusy, eligibleAt, null, current.Version);
+            if (!env.BasisConfirmed) return new(EligibilityReason.RetentionBasisPending, eligibleAt, null, current.Version);   // D-109 owner-pending: never eligible
             return new(EligibilityReason.Eligible, eligibleAt, null, current.Version);
         }
         catch (Exception)
