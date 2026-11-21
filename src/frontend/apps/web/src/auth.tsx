@@ -215,6 +215,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     try {
       if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
+    setCompanyId(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
     await loadCompanies();
     setPhase("needCompany");
   }, [api, companyId, enterCompany, handleError, loadCompanies]);

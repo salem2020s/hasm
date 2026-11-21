@@ -1,9 +1,11 @@
 import { ApiError } from "@hasm/api-client";
-import { screen, waitFor, within } from "@testing-library/react";
+import { I18nProvider } from "@hasm/ui";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { catalog } from "./messages";
-import { ALL_PERMISSIONS, USER, apiError, renderApp, signedIn } from "./test-utils";
+import { AuthProvider, useAuth } from "./auth";
+import { ALL_PERMISSIONS, USER, apiError, fakeClient, renderApp, signedIn } from "./test-utils";
 
 /**
  * The user's own security settings (Phase 4.1 S3b-2a), shared by Web and Desktop: the two-step verification state and the VOLUNTARY enrolment (password, secret shown once as text, code, a new session). The server decides every
@@ -44,7 +46,20 @@ describe("security settings screen", () => {
     expect(screen.getByTestId("sec-state-chip")).toHaveTextContent(A("sec.mfa.state.none"));
     expect(screen.getByTestId("nav-security")).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("sec-enrol-begin")).toBeInTheDocument();
-    expect(screen.queryByTestId("sec-required")).toBeNull();                                          // the server does not report `required` yet: nothing is invented
+    expect(screen.queryByTestId("sec-required")).toBeNull();                                          // a server that does not report `required`: nothing is invented
+  });
+
+  it.each([[true, "sec.mfa.required_yes"], [false, "sec.mfa.required_no"]])("shows the server's mfa.required=%s for a user without two-step verification", async (required, key) => {
+    setup({}, status({ ...NONE, required }));
+    await openSecurity();
+    expect(screen.getByTestId("sec-required")).toHaveTextContent(A(key));
+    expect(screen.getByTestId("sec-enrol-begin")).toBeInTheDocument();
+  });
+
+  it("an enrolled user whose server reports required=false is shown as not required", async () => {
+    setup({}, status({ ...ENROLLED, required: false }));
+    await openSecurity();
+    expect(screen.getByTestId("sec-required")).toHaveTextContent(A("sec.mfa.required_no"));
   });
 
   it("an enrolled user sees the state, the last verification and whether it is required, with no enrolment form", async () => {
@@ -218,6 +233,21 @@ describe("security settings screen", () => {
   });
 });
 
+describe("a throttled confirmation", () => {
+  it("drops the secret from the page after a 429 and shows the throttle message with the password step again", async () => {
+    const client = setup({ confirmEnrolment: vi.fn().mockRejectedValue(new ApiError(429, "too_many_attempts")) });
+    await openSecurity();
+    await beginWith();
+    expect(await screen.findByTestId("mfa-secret")).toHaveTextContent(SECRET.secret);
+    await userEvent.type(await screen.findByLabelText(new RegExp(A("mfa.code"))), "123456{Enter}");
+    await waitFor(() => expect(client.confirmEnrolment).toHaveBeenCalled());
+    expect(await screen.findByTestId("sec-error")).toHaveTextContent(A("mfa.throttled"));
+    expect(screen.queryByTestId("mfa-secret")).toBeNull();
+    expect(document.body.textContent).not.toContain(SECRET.secret);
+    expect(screen.getByTestId("sec-enrol-begin")).toBeInTheDocument();
+  });
+});
+
 describe("the new session after a voluntary enrolment", () => {
   it("falls back to company selection when the company cannot be selected again on the new session", async () => {
     const statusMock = vi.fn().mockResolvedValueOnce(status(NONE)).mockResolvedValueOnce(status(NONE)).mockResolvedValue(status(ENROLLED));
@@ -227,5 +257,30 @@ describe("the new session after a voluntary enrolment", () => {
     await userEvent.type(await screen.findByLabelText(new RegExp(A("mfa.code"))), "123456{Enter}");
     await waitFor(() => expect(client.confirmEnrolment).toHaveBeenCalled());
     expect(await screen.findByRole("heading", { name: A("companies.title") })).toBeInTheDocument();      // never a half signed-in screen
+  });
+
+  it("the fallback to company selection clears the previous company's id, permissions, branch permissions and role grants (as changing company does)", async () => {
+    const seen: Array<{ id: string | null; can: boolean; any: boolean; branch: boolean; role: boolean }> = [];
+    let adopt: (u: typeof USER) => Promise<void> = async () => {};
+    function Probe() {
+      const a = useAuth();
+      adopt = a.adoptEnrolledSession;
+      seen.push({ id: a.companyId, can: a.can("company.profile.view"), any: a.canAny("company.profile.view"), branch: a.canOnBranch("company.profile.view", "b1"), role: a.hasRole("r") });
+      return <span data-testid="phase">{a.phase}</span>;
+    }
+    const client = fakeClient({
+      status: vi.fn().mockResolvedValue({ authenticated: true, user: USER }),
+      accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants: [
+        { roleId: "r", scope: "company", scopeId: null, permissions: ["company.profile.view"] },
+        { roleId: "r2", scope: "branch", scopeId: "b1", permissions: ["company.profile.view"] },
+      ] }),
+      selectCompany: vi.fn().mockRejectedValue(new ApiError(503, "company_unavailable")),
+    });
+    render(<I18nProvider catalog={catalog}><AuthProvider api={client}><Probe /></AuthProvider></I18nProvider>);
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("ready"));
+    expect(seen.at(-1)).toEqual({ id: "c1", can: true, any: true, branch: true, role: true });
+    await act(async () => { await adopt(USER); });
+    await waitFor(() => expect(screen.getByTestId("phase")).toHaveTextContent("needCompany"));
+    expect(seen.at(-1)).toEqual({ id: null, can: false, any: false, branch: false, role: false });
   });
 });

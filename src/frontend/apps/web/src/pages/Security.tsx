@@ -79,7 +79,7 @@ function VoluntaryEnrolment({ onDone }: { onDone: () => Promise<void> }) {
 
   /** A 401 here is one refusal for every cause (wrong password or code, or no session): ask the server whether the session is still alive before blaming the input. */
   const refused = useCallback(async (e: unknown, wrong: string) => {
-    if (e instanceof ApiError && e.status === 429) { setError(t("mfa.throttled")); return; }
+    if (e instanceof ApiError && e.status === 429) { setSecret(null); setCode(""); setError(t("mfa.throttled")); return; }   // throttled: the secret is not kept on the page; the user starts again later
     if (e instanceof ApiError && e.status === 401) {
       try { if (!(await auth.api.status()).authenticated) { auth.handleError(new ApiError(401, "unauthenticated")); return; } } catch { /* fall through to the message */ }
       setError(wrong);
