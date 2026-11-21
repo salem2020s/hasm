@@ -324,15 +324,15 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
   * the PostgreSQL suite in CI, or locally only through the harness lock (status first; own cluster; destroyed afterwards).
 
 ### Decisions under D-048 (recorded in docs/DECISIONS.md, status planned)
-* **D-068: scheduling by the operating system.** Decision: a backup run is an administrative command started by the operating-system scheduler; the API never runs privileged backups. Alternatives rejected:
+* **D-069: scheduling by the operating system.** Decision: a backup run is an administrative command started by the operating-system scheduler; the API never runs privileged backups. Alternatives rejected:
   * a scheduler inside the API (needs the admin credential in the API process, against privilege separation);
   * a new resident service (new deployment surface and update path, a product decision for the 4.4/4.5 installers).
-* **D-069: run layout, report and isolation.** Decision: a per-run owner-only folder; the system database dump included; one set per Ready company; `run.json` written last; one company's failure never stops the others; one run at a time. Alternatives rejected:
+* **D-070: run layout, report and isolation.** Decision: a per-run owner-only folder; the system database dump included; one set per Ready company; `run.json` written last; one company's failure never stops the others; one run at a time. Alternatives rejected:
   * a report in the system database (a migration, and it would be lost exactly when that database is the problem);
   * stopping at the first failed company (other companies would lose their backup).
-* **D-070: monitoring through `backup-status` exit codes** with a configurable maximum age (default 26 hours). Alternative rejected: e-mail or other push alerts from HASM (needs mail configuration and secrets; deferred to the monitoring UI slice).
-* **D-071: retention is previewed, never applied, until owner package 4.3-2 is decided.** Hard rules in the preview: the newest complete run is always kept; incomplete or unreadable runs are never selected. Alternative rejected: deleting by a default policy (deleting backups of financial data is an owner decision).
-* **D-072: RPO/RTO are measured, not promised.** Durations are recorded per run and per trial restore, and the formulas are documented. Alternative rejected: a promised fixed value (SRS 16 forbids it without measurement).
+* **D-071: monitoring through `backup-status` exit codes** with a configurable maximum age (default 26 hours). Alternative rejected: e-mail or other push alerts from HASM (needs mail configuration and secrets; deferred to the monitoring UI slice).
+* **D-072: retention is previewed, never applied, until owner package 4.3-2 is decided.** Hard rules in the preview: the newest complete run is always kept; incomplete or unreadable runs are never selected. Alternative rejected: deleting by a default policy (deleting backups of financial data is an owner decision).
+* **D-073: RPO/RTO are measured, not promised.** Durations are recorded per run and per trial restore, and the formulas are documented. Alternative rejected: a promised fixed value (SRS 16 forbids it without measurement).
 
 ### OWNER DECISION PACKAGE 4.3-2 (one consolidated recommendation; recorded once in the INTEGRATION-STATUS register; fail-closed while open)
 Backup sets today are verified but NOT encrypted or authenticated, and nothing is deleted automatically. The four items below decide key custody and the retention of financial data, so they need the owner. **Recommended answer: accept options 1(d), 2(b), 3(b) and 4(a) together.**
