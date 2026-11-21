@@ -25,8 +25,8 @@ export interface AuthValue {
   can(permission: string): boolean;
   /** True when ANY grant (company-wide or for a single branch) holds the permission. Only for showing a screen; the server decides per branch. */
   canAny(permission: string): boolean;
-  /** True when the user holds this ROLE through a company-wide grant or, when a branch is given, through a grant for THAT branch (read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server). Without a branch any grant counts. */
-  hasRole(roleId: string, branchId?: string | null): boolean;
+  /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
+  hasRole(roleId: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -177,7 +177,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
-    hasRole: (r, branchId) => roleGrants.some((g) => g.roleId === r && (branchId === undefined || g.scope === "company" || (g.scope === "branch" && !!branchId && g.scopeId === branchId))),
+    hasRole: (r) => roleGrants.some((g) => g.roleId === r),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
   }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, roleGrants, locale]);
 
