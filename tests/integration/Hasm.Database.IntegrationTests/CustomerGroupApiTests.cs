@@ -14,6 +14,52 @@ public class CustomerGroupApiTests : HttpApiTestBase
     private const string Base = "/api/v1/company/pricing";
 
     [PostgresFact]
+    public async Task The_customer_group_list_filters_by_active_with_a_total_that_matches_and_refuses_a_malformed_value()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        string? bId = null;
+        foreach (var code in new[] { "a", "b", "c" })
+        {
+            var created = await Send(HttpMethod.Post, $"{Base}/customer-groups", new { code, nameAr = "مجموعة " + code, nameEn = "Group " + code }, cookie);
+            Assert.Equal(HttpStatusCode.OK, created.Status);
+            if (code == "b") bId = created.Json.GetProperty("id").GetGuid().ToString();
+        }
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/customer-groups/{bId}", new { nameAr = "مجموعة b", nameEn = "Group b", isActive = false }, cookie, ifMatch: "\"1\"")).Status);
+        string[] Codes(ApiResponse r) => [.. r.Json.GetProperty("customerGroups").EnumerateArray().Select(g => g.GetProperty("code").GetString()!)];
+
+        var onlyActive = await Send(HttpMethod.Get, $"{Base}/customer-groups?active=true", cookie: cookie);
+        Assert.Equal(["A", "C"], Codes(onlyActive));
+        Assert.Equal(2L, onlyActive.Json.GetProperty("total").GetInt64());               // the total counts the filtered rows
+        var onlyInactive = await Send(HttpMethod.Get, $"{Base}/customer-groups?active=FALSE", cookie: cookie);
+        Assert.Equal(["B"], Codes(onlyInactive));
+        Assert.Equal(1L, onlyInactive.Json.GetProperty("total").GetInt64());
+        var page = await Send(HttpMethod.Get, $"{Base}/customer-groups?active=true&limit=1&offset=1", cookie: cookie);
+        Assert.Equal(["C"], Codes(page));
+        Assert.Equal(2L, page.Json.GetProperty("total").GetInt64());
+        // without the parameter nothing changes: all rows, and no total unless another paging parameter is used
+        var all = await Send(HttpMethod.Get, $"{Base}/customer-groups", cookie: cookie);
+        Assert.Equal(["A", "B", "C"], Codes(all));
+        Assert.False(all.Json.TryGetProperty("total", out _));
+        Assert.Equal(3L, (await Send(HttpMethod.Get, $"{Base}/customer-groups?limit=10", cookie: cookie)).Json.GetProperty("total").GetInt64());
+        // a malformed value is the standard validation body naming the parameter
+        foreach (var bad in new[] { "active=maybe", "active=1", "active=yes" })
+        {
+            var r = await Send(HttpMethod.Get, $"{Base}/customer-groups?{bad}", cookie: cookie);
+            Assert.Equal(HttpStatusCode.BadRequest, r.Status);
+            Assert.Equal("invalid_request", r.Error);
+            var named = Assert.Single(r.Json.GetProperty("fields").EnumerateArray());
+            Assert.Equal(("active", "invalid_value"), (named.GetProperty("field").GetString(), named.GetProperty("code").GetString()));
+        }
+        // the permission is unchanged
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PricingView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Base}/customer-groups?active=true", cookie: await SignIn(viewer))).Status);
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Base}/customer-groups?active=true", cookie: await SignIn(outsider))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Base}/customer-groups?active=true")).Status);
+    }
+
+    [PostgresFact]
     public async Task The_customer_group_list_is_unchanged_without_parameters_and_pages_and_searches_with_them_under_the_pricing_view_permission()
     {
         await StartApi();

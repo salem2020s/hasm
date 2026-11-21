@@ -484,13 +484,15 @@ export interface PartyRolesResponse {
 }
 /** The optional search and paging of the master-data lists: all absent = the unchanged, unpaged list. */
 export interface ListQuery { search?: string; limit?: number; offset?: number }
+export interface CustomerGroupQuery extends ListQuery { active?: boolean }
 /** `ids` are PARTY ids (at most 100 per request): only those parties' roles come back, up to 500 rows unless `limit` is smaller. */
 export interface PartyRoleQuery extends ListQuery { ids?: string[] }
-function listQueryString(q?: ListQuery): string {
+function listQueryString(q?: ListQuery, extra?: Record<string, string>): string {
   const p = new URLSearchParams();
   if (q?.search) p.set("search", q.search);
   if (q?.limit !== undefined) p.set("limit", String(q.limit));
   if (q?.offset !== undefined) p.set("offset", String(q.offset));
+  for (const [k, v] of Object.entries(extra ?? {})) p.set(k, v);
   const qs = p.toString();
   return qs ? "?" + qs : "";
 }
@@ -1250,7 +1252,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     createDiscountRule: (d: DiscountRuleInput) => request<DiscountRule>("POST", "/api/v1/company/pricing/discounts", { body: d }),
     updateDiscountRule: (id: string, d: DiscountRuleInput, revision: number) => request<DiscountRule>("PUT", `/api/v1/company/pricing/discounts/${enc(id)}`, { body: d, ifMatch: revision }),
     /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
-    listCustomerGroups: (q?: ListQuery) => get<CustomerGroupsResponse>(`/api/v1/company/pricing/customer-groups${listQueryString(q)}`),
+    /** `active: true` keeps only active groups (false only inactive ones); the server counts the filter in `total`, so the picker never filters on the client. Other parameters as in `listInventoryUnits`. */
+    listCustomerGroups: (q?: CustomerGroupQuery) => get<CustomerGroupsResponse>(`/api/v1/company/pricing/customer-groups${listQueryString(q, q?.active === undefined ? undefined : { active: String(q.active) })}`),
     createCustomerGroup: (g: CustomerGroupInput) => request<CustomerGroup>("POST", "/api/v1/company/pricing/customer-groups", { body: g }),
     updateCustomerGroup: (id: string, g: CustomerGroupInput, revision: number) => request<CustomerGroup>("PUT", `/api/v1/company/pricing/customer-groups/${enc(id)}`, { body: g, ifMatch: revision }),
     listCustomerGroupAssignments: () => get<CustomerGroupAssignmentsResponse>("/api/v1/company/pricing/customer-assignments"),
