@@ -1,0 +1,11 @@
+# Independent review record - PR #82 (CLAUDE.md standing autonomous decision-making authorization)
+
+* **Pull request:** #82
+* **Head SHA reviewed (full 40 characters):** 61397e0439781ee6eb150dec5944a5634bd6a6d3
+* **Reviewer context:** Agent D, a separate session from the author (the lead); model claude-sonnet-5-5, the same family as the author, so independence is limited to context. Prompt: "independent FULL-diff review, read-only, report to the lead only, of #81 and #82: faithfulness to the owner's authorization, weakening of existing rules, contradiction with the 2026-11-20 principles and the merge policy, DECISIONS.md consistency". The reviewer saw the owner's message only as quoted by the lead.
+* **Scope read:** git diff origin/main...origin/policy/standing-autonomy-claude-md (CLAUDE.md only) against CLAUDE.md on main and docs/PHASE-3.13.md; the review was of the first push of the branch, and the wording fixes below were made after it.
+* **Checks run (commands and results):** text reading only; nothing was executed.
+* **Findings:** no Critical or High. Medium M1: the new section contradicted "Source of Truth" (do not invent accounting rules, workflows or architecture decisions) and the existing accounting escalation list: FIXED by the "Precedence (stricter wins)" bullet (this section narrows the rule to routine technical, architectural and workflow choices; accounting rules and workflows with accounting effect are never assumed; the stricter escalation list applies). Low L3 (two registers named): FIXED (autonomous decisions in docs/DECISIONS.md, escalations and answers in the INTEGRATION-STATUS register). Low L4 (glosses beyond the owner's wording): the "approved-phase design choices" gloss was REMOVED. Low L5 (D-048 exists only on #81): #81 merges first. Dispositions were verified by the lead against the diff and the fix was not re-reviewed in full.
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the owner's original message (seen only as quoted); hosted CI at review time. This record does not authorize merging: CLAUDE.md is on the never-self-merged list, so the PR needs the owner's explicit merge instruction in the conversation.
+* **Verdict:** approve
