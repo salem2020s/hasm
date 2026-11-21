@@ -30,6 +30,15 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
         return await CoversAsync(user, company, code, view.BranchId, ct) ? ConfigResult<CommercialDocumentView>.Ok(view) : Denied<CommercialDocumentView>();
     }
 
+    /// <summary>The approval plan of the document's current revision and the decisions cast on it (view permission on the document's branch).</summary>
+    public async Task<ConfigResult<CommercialApprovalProgress>> ApprovalProgressAsync(Guid user, Guid company, Guid id, CancellationToken ct = default)
+    {
+        var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialView, ct);
+        if (!a.IsOk) return ConfigResult<CommercialApprovalProgress>.Fail(a.Status, a.Code!);
+        var progress = await documents.ApprovalProgressAsync(company, id, ct);
+        return progress is null ? ConfigResult<CommercialApprovalProgress>.Fail(ConfigStatus.NotFound, "commercial_document_not_found") : ConfigResult<CommercialApprovalProgress>.Ok(progress);
+    }
+
     public async Task<ConfigResult<CommercialDocumentView>> GetAsync(Guid user, Guid company, Guid id, CancellationToken ct = default) =>
         await Authorized(user, company, id, PermissionCatalog.Codes.CommercialView, ct);
 
@@ -87,7 +96,10 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     public async Task<ConfigResult<CommercialDocumentView>> ApproveAsync(Guid user, Guid company, Guid id, long? revision, CancellationToken ct = default)
     {
         var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialApprove, ct);
-        return a.IsOk ? await documents.ApproveAsync(user, company, id, revision, ct) : a;
+        if (!a.IsOk) return a;
+        // a policy stage bound to a role takes decisions only from holders of that role: the roles are read from the authorization store on this very call (S5a)
+        var roles = (await access.GetEffectivePermissionsAsync(user, company, ct)).Grants.Select(g => g.RoleId).ToHashSet();
+        return await documents.ApproveAsync(user, company, id, revision, ct, roles);
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
