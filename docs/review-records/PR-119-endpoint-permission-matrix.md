@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #119 (per-endpoint 403 matrix of every mutating company endpoint; test-only)
-* **Head SHA reviewed (full 40 characters):** 39341f8722ee048474d56e7fc386571358c36ede
+* **Head SHA reviewed (full 40 characters):** fc6cf5c841a8bae625b6400179bc792ea8e449b2 (round 1 reviewed 39341f8722ee048474d56e7fc386571358c36ede; delta confirmations at a789498ec7c399723c770f5e85ada67a77776a84 and fc6cf5c841a8bae625b6400179bc792ea8e449b2)
 * **Reviewer context:** Agent H, a separate agent; the author is Agent C. Not the author's own context.
 * **Scope read:** the full diff of the PR against `origin/main` (`git diff origin/main...head`): the test file and the registry change.
 * **Checks run (commands and results):** read of the full test file and the registry change; check of the quote endpoint's documented permission; hosted check-runs on 39341f8 (all success, including postgres-integration). PostgreSQL was not run locally by the reviewer (the cluster was in use by another holder), so the mutation checks were reasoned and not executed.
@@ -16,6 +16,10 @@
 
 Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's independent full-diff review of #119 (route-derived matrix and completeness failure on a new mutating endpoint; no permission, read-only and other-branch 403 per endpoint; no real authorization bug hidden by an exemption; no flakiness or weakening); Head SHA reviewed 39341f8722ee048474d56e7fc386571358c36ede; executed: git diff origin/main...head, read of the full test file and the registry change, check of the quote endpoint's documented permission, hosted check-runs (all success including postgres-integration); PostgreSQL not run locally (cluster in use by another holder), so mutation checks were reasoned and not executed; verdict approve; findings 0 Critical/High, 1 Medium (warehouse and cost-centre scope not covered), 3 Low.
 
+Agent H confirms the delta 39341f8722ee048474d56e7fc386571358c36ede..a789498ec7c399723c770f5e85ada67a77776a84 (merge 85fb318, fixes 0eb3e48, record a789498): L1, L2 and L3 fixed, M1 fixed for cost-centre and warehouse scope with controls that show the refusals come from scope; one optional Low (controls on W1 for approve, reject, cancel, negative-exception approvals and the stocktake adjustment route); hosted CI on a789498 green, PostgreSQL not run by me; verdict approve.
+
+Agent H confirms the delta a789498ec7c399723c770f5e85ada67a77776a84..fc6cf5c841a8bae625b6400179bc792ea8e449b2 (14 lines in EndpointPermissionMatrixWarehouseTests.cs): the W1 control for approve, reject, cancel, negative-exception approvals, stocktake adjustment, update, submit, withdraw and generate-sheet is sound and closes the optional Low; no findings; hosted CI on fc6cf5c and a PostgreSQL run were not verified by me; verdict approve.
+
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** the fixes in 0eb3e488e9f0cfa98127d68272f8ac17b42a2c96 (after the reviewed head) await H's delta confirmation. The author ran them through the harness on the disposable 5433 cluster: `EndpointPermissionMatrixTests` and `EndpointPermissionMatrixWarehouseTests`, 6/6 passed, 0 skipped.
+* **NOT VERIFIED:** none open for the reviewer's scope: H confirmed both deltas by reading them (PostgreSQL not run by H). The author ran the matrix classes through the harness on the disposable 5433 cluster: 6/6 at 0eb3e48 and the warehouse class 1/1 at fc6cf5c, 0 skipped.
 * **Verdict:** approve
