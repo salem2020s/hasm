@@ -16,7 +16,7 @@ public static class LedgerSetup
         services.AddSingleton(sp => new ExchangeRateManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ExchangeRateService>()));
         services.AddSingleton(sp => new CostCenterService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new CostCenterManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CostCenterService>()));
-        services.AddSingleton(sp => new ApprovalPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new ApprovalPolicyService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Hasm.Infrastructure.Commercial.ICommercialDocumentTypeRegistry>()));   // the registered commercial types may carry policies (3.13 S5a); none in production
         services.AddSingleton(sp => new ApprovalPolicyManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ApprovalPolicyService>()));
         services.AddSingleton(sp => new JournalService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Hasm.Numbering")));
         services.AddSingleton(sp => new JournalManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<JournalService>()));
