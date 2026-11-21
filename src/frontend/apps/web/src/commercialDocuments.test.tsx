@@ -355,15 +355,37 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("سجّلت قرارك على هذه النسخة");
   });
 
-  it("hides Approve from a user who does not hold the role of the open stage, and when every stage is complete", async () => {
+  it("hides Approve and Reject, with the reason, from a user who does not hold the role of the open stage", async () => {
     await openSubmitted({ plan: [stage(1, 1, 0, "some-other-role")], decisions: [] });
     expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.queryByTestId("reject")).toBeNull();                                                       // Reject follows the same eligibility as Approve (H review L2)
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
-    document.body.innerHTML = "";
-    window.location.hash = "";
+  });
+
+  it("hides Approve and Reject when every stage of the plan is complete", async () => {
     await openSubmitted({ plan: [stage(1, 1, 1)], decisions: [decision(1, "approver1", 1)] });
     expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.queryByTestId("reject")).toBeNull();
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("اكتملت كل مراحل الاعتماد");
+  });
+
+  it("counts a role only when the grant is company-wide or for the branch of the document (H review L3)", async () => {
+    const grants = [
+      { roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS },
+      { roleId: "r", scope: "branch", scopeId: "other-branch", permissions: PERMS },                          // the stage role, but for ANOTHER branch than the document's b1
+    ];
+    await openSubmitted({ plan: [stage(1, 1, 0, "r")], decisions: [] }, { accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
+  });
+
+  it("offers Approve when the stage role is held through a grant for the branch of the document", async () => {
+    const grants = [
+      { roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS },
+      { roleId: "r", scope: "branch", scopeId: "b1", permissions: PERMS },
+    ];
+    await openSubmitted({ plan: [stage(1, 1, 0, "r")], decisions: [] }, { accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    expect(screen.getByTestId("approve")).toBeEnabled();
   });
 
   it("says a decision was recorded when the document stays submitted, reloads the progress, and says approved when it completes", async () => {
