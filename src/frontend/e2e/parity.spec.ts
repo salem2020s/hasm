@@ -33,6 +33,15 @@ async function enterCompany(page: Page, name: string) {
 }
 const go = (page: Page, hash: string) => page.evaluate((h) => { window.location.hash = h; }, hash);
 const wire = (api: MockApi) => api.requests.map((r) => `${r.method} ${r.path}`);
+/** Waits until the request log has been quiet for a while: concurrent reads of a screen have all been answered, so the log can be compared. A timer on purpose (there is no "idle" event for the mock). */
+async function settled(api: MockApi, quietMs = 800) {
+  let last = -1, since = Date.now();
+  while (Date.now() - since < quietMs) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (api.requests.length !== last) { last = api.requests.length; since = Date.now(); }
+  }
+}
+const SEQUENTIAL = ["POST /api/v1/auth/login", "GET /api/v1/companies", "POST /api/v1/session/company", "GET /api/v1/access/me"];
 
 for (const mode of MODES) {
   test.describe(`${mode} client`, () => {
@@ -84,6 +93,9 @@ for (const mode of MODES) {
       for (const r of api.requests.filter((x) => x.method !== "GET")) expect(r.csrfHeader, `${r.method} ${r.path}`).toBe(true);
       expect(api.requests.find((r) => r.path === "/api/v1/auth/login")!.credentialsPath).toBe("none");        // the login itself carries no credential
       if (mode === "desktop") expect(api.requests.some((r) => r.cookie)).toBe(false);                         // no cookie is ever sent by the desktop client
+      const cookies = await page.context().cookies();
+      if (mode === "web") expect(cookies.map((c) => c.name)).toEqual(["hasm_session"]);                     // the web session lives in the cookie jar ...
+      else expect(cookies).toEqual([]);                                                                       // ... and the desktop client leaves no cookie at all
       expect(api.unhandled).toEqual([]);                                                                      // no flow depends on an endpoint the mock does not implement
     });
 
@@ -162,6 +174,29 @@ for (const mode of MODES) {
       expect(api.created.journal).toHaveLength(1);                                                            // nothing was lost or duplicated
     });
 
+    test("logout: returns to sign-in with the notice, clears the web cookie, forgets the desktop token, and the next call carries no credential", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      if (mode === "web") expect((await page.context().cookies()).map((c) => c.name)).toEqual(["hasm_session"]);
+      await page.getByRole("button", { name: E("nav.logout") }).click();
+      await expect(page.getByTestId("notice-logged-out")).toBeVisible();
+      await expect(page.getByRole("button", { name: E("login.submit") })).toBeVisible();
+      const logout = api.requests.find((r) => r.path === "/api/v1/auth/logout")!;
+      expect([logout.method, logout.csrfHeader, logout.credentialsPath]).toEqual(["POST", true, mode === "web" ? "cookie" : "bearer"]);   // the logout itself is authenticated and carries the anti-CSRF header
+      expect(api.signedIn).toBe(false);
+      if (mode === "web") expect(await page.context().cookies()).toEqual([]);                                 // the cookie was cleared
+      const after = api.requests.length;
+      await page.getByLabel(E("login.user")).fill("amal");
+      await page.getByLabel(E("login.password")).fill(PASSWORD);
+      await page.getByRole("button", { name: E("login.submit") }).click();
+      await expect(page.getByRole("heading", { name: E("companies.title") })).toBeVisible();
+      const next = api.requests.slice(after).find((r) => r.path === "/api/v1/auth/login")!;
+      expect(next.credentialsPath).toBe("none");                                                              // the next sign-in starts from nothing: no cookie, no bearer
+      expect(api.requests.slice(after).filter((r) => r.path !== "/api/v1/auth/login").every((r) => r.credentialsPath !== "none" || r.path === "/api/v1/auth/status")).toBe(true);
+    });
+
     test("reload: the web session survives (cookie), the desktop session asks for the password again (token kept in memory only)", async ({ page }) => {
       await start(page, mode);
       await toEnglish(page);
@@ -171,12 +206,16 @@ for (const mode of MODES) {
       if (mode === "web") await expect(page.getByTestId("company-name")).toContainText("Amal Co");
       else await expect(page.getByRole("button", { name: E("login.submit") })).toBeVisible();
       expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toMatch(/tok-/);   // a token is never written to browser storage
+      expect(await page.evaluate(async () => ((await indexedDB.databases?.()) ?? []).length)).toBe(0);                  // nor to IndexedDB
     });
   });
 }
 
-test("parity: the same scripted flow sends the same requests in the same order on both transports", async ({ browser }) => {
-  const sequences: Record<Mode, string[]> = { web: [], desktop: [] };
+test("parity: the same scripted flow sends the same requests on both transports (sequential steps in order, concurrent reads as a multiset per screen)", async ({ browser }) => {
+  // The sign-in steps are sequential by design and must appear in exactly this order. The reads a screen starts concurrently have no defined order, so each screen's reads are compared as a sorted multiset,
+  // after the request log has been quiet (every concurrent read answered). The screens are separated by those quiet points, so the ORDER of the screens is still compared exactly. No retries.
+  const stages: Record<Mode, string[][]> = { web: [], desktop: [] };
+  const sequential: Record<Mode, string[]> = { web: [], desktop: [] };
   for (const mode of MODES) {
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -184,13 +223,23 @@ test("parity: the same scripted flow sends the same requests in the same order o
     await toEnglish(page);
     await signIn(page);
     await enterCompany(page, "Amal Co");
+    await settled(api);
+    let mark = 0;
+    const take = () => { const part = wire(api).slice(mark).sort(); mark = api.requests.length; return part; };
+    stages[mode].push(take());
     await go(page, "#/company/accounts");
     await expect(page.getByRole("heading", { name: E("accounts.title"), level: 1 })).toBeVisible();
+    await settled(api);
+    stages[mode].push(take());
     await go(page, "#/accounting/journal");
     await expect(page.getByRole("button", { name: E("jrn.new") })).toBeVisible();
-    sequences[mode] = wire(api);
+    await settled(api);
+    stages[mode].push(take());
+    sequential[mode] = wire(api).filter((r) => SEQUENTIAL.includes(r));
     await context.close();
   }
-  expect(sequences.desktop).toEqual(sequences.web);
-  expect(sequences.web.length).toBeGreaterThan(5);
+  expect(sequential.web).toEqual(SEQUENTIAL);                                                                 // the sign-in sequence, exactly and in order
+  expect(sequential.desktop).toEqual(SEQUENTIAL);
+  expect(stages.desktop).toEqual(stages.web);                                                                 // every screen read the same endpoints on both transports
+  expect(stages.web.flat().length).toBeGreaterThan(5);
 });

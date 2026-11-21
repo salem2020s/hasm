@@ -65,11 +65,13 @@ describe.each(KINDS)("%s transport", (kind) => {
     await client.login("l", "p");
     await client.downloadAttachment("a1");
     await client.uploadAttachment("local_party", "p1", new Blob(["x"]), "f.pdf", false);
+    await client.uploadImport("inventory-units", new Blob(["code,name\nA,B\n"]), "units.csv");
+    expect(sent.some((r) => r.url.includes("/api/v1/company/imports?"))).toBe(true);                    // the import upload really went through this check
     for (const r of sent.slice(1)) {
       expect(r.credentials, r.url).toBe(kind === "web" ? "include" : "omit");
       expect(r.authorization, r.url).toBe(kind === "web" ? undefined : "Bearer opaque-token");
     }
-    expect(sent.at(-1)!.headers["X-Hasm-Request"]).toBe("1");                                         // the upload is a state change: the anti-CSRF header is required
+    for (const r of sent.slice(1).filter((x) => x.method === "POST")) expect(r.headers["X-Hasm-Request"], r.url).toBe("1");   // an upload is a state change: the anti-CSRF header is required
   });
 });
 

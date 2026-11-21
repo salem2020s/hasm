@@ -68,6 +68,7 @@ export class MockApi {
     // ---- anonymous endpoints
     if (path === "/api/v1/health") return this.json(route, 200, { status: "healthy", service: "hasm-api", version: "e2e" });
     if (path === "/api/v1/auth/login" && method === "POST") {
+      if (headers["x-hasm-request"] !== "1") return this.json(route, 403, { error: "csrf" });                    // the anti-CSRF header is required on login too
       const body = JSON.parse(request.postData() ?? "{}") as { login?: string; password?: string; client?: string };
       if (body.client !== this.mode) return this.json(route, 400, { error: "invalid_request" });                 // the client announces its transport
       if (body.login !== USER.login || body.password !== PASSWORD) return this.json(route, 401, { error: "invalid_credentials" });
@@ -80,7 +81,10 @@ export class MockApi {
     const foreign = this.mode === "web" ? bearerValue : cookieValue;
     const authenticated = this.token !== null && presented === this.token && foreign === null;
     if (path === "/api/v1/auth/status") return this.json(route, 200, authenticated ? { authenticated: true, user: USER } : { authenticated: false });
-    if (path === "/api/v1/auth/logout" && method === "POST") { this.expire(); return route.fulfill({ status: 204, headers: this.cors(this.mode === "web" ? { "set-cookie": "hasm_session=; Path=/; Max-Age=0" } : {}) }); }
+    if (path === "/api/v1/auth/logout" && method === "POST") {
+      if (headers["x-hasm-request"] !== "1") return this.json(route, 403, { error: "csrf" });
+      this.expire(); return route.fulfill({ status: 204, headers: this.cors(this.mode === "web" ? { "set-cookie": "hasm_session=; Path=/; Max-Age=0" } : {}) });
+    }
 
     // ---- everything else needs the session (and the anti-CSRF header on state changes)
     if (!authenticated) return this.json(route, 401, { error: "unauthenticated" });
