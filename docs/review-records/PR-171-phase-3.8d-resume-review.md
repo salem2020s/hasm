@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #171 (docs/PHASE-3.8D-RESUME-REVIEW.md: Phase 3.8D resume review of PR #48, X1-X8 revalidation and the additive X1-A replacement; author Agent P; docs only, inert)
-* **Head SHA reviewed (full 40 characters):** d3720017729bb5bd5f07ba7f8f32e487003c4adc
+* **Head SHA reviewed (full 40 characters):** 871339bed4aad124cfa7583e10e448a99486aa96 (final confirmation of the delta de7ea1b..871339b; earlier rounds: the full review at d3720017729bb5bd5f07ba7f8f32e487003c4adc and the delta confirmation c6dd72d..de7ea1b)
 * **Reviewer context:** Agent G, an independent security/audit reviewer and a separate agent (not the author, Agent P); model family Claude Opus; prompt: "adversarial review of Draft PR #171 (head d372001, base 86e3ce8): factual claims (migration, trigger and CHECK names and lines, #48 ahead/behind), X1-A against Agent G's threat model (F2 guard gap, SECURITY DEFINER hardening, restore/COPY, same-transaction detection robustness), the X2-X8 revalidation including the X3/X7 additions, the revaluation scope gap (C-D4 vs ROADMAP/SRS 9, D-045, k_0b3e9de8), whether Q1-Q4 are necessary and complete; list what the doc lacks from Agent G's X1 report". Independence note: Agent G wrote its own X1 review (appended below) BEFORE reading this document; this review compares the two after the fact.
 * **Scope read:** the full diff `git diff origin/main...d372001` (one new file, 211 lines); verified against `86e3ce8` and #48 at `1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb`: company migrations 0014, 0020, 0022, `MigrationScript.cs`, `InventoryCostingService.cs`, `InventoryCostingTests.cs`, `StockAdjustmentTests.cs`, `docs/ROADMAP.md`, `docs/SRS.md` section 9, `docs/INTEGRATION-STATUS.md`, #48's `DECISIONS.md` (D-044/D-045), `PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` and `PHASE-3.8D-TRANSITION-MATRIX-DECISIONS.md`.
 * **Checks run (commands and results):**
@@ -20,7 +20,7 @@
 * **Agreement and differences with Agent G's independent X1 report (appendix):** X1-A equals Agent G's option (a) in substance (no relaxation of `f_589a0a19`, no CHECK replacement, kinds 1-3 typed by a side table after 0020 DB-1, a new entry-level guard closing F1, a same-transaction plan execution, Open periods only, X5/X6 as database rules). The document's rejection of A3 (supersession) is stronger than Agent G's "safe for the schema" verdict on option (b), correctly: a position update without an entry is refused by the sequence rule (0014 line 78). X2-X8: correct and conservative; the X3 addition (approver never creator, last editor or submitter, in service and PostgreSQL) and the X7 gap (a plan-bound document must be refused by normal posting) are valid and should stay. Q1-Q4 are necessary; with M1 added, they are complete (OD-12 and STOCK-PERIOD-DB are correctly not re-asked).
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** nothing was executed on PostgreSQL (docs-only PR; F1 follows from the trigger and CHECK text); hosted CI on d372001 was not checked by the reviewer; the company owner role's superuser status was not checked.
-* **Verdict:** request changes
+* **Verdict:** approve
 
 Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "adversarial review of Draft PR #171 (head d372001, base 86e3ce8): factual claims, X1-A against Agent G's threat model, X2-X8 revalidation, revaluation scope gap, Q1-Q4; list what the doc lacks from Agent G's X1 report"; Head SHA reviewed d3720017729bb5bd5f07ba7f8f32e487003c4adc; executed: full diff read, every cited migration, trigger, CHECK, test and register line verified on 86e3ce8 and 1e8f477, #48 distance and registry counts recomputed; verdict request changes; findings M1 (migration-guard gap: CREATE OR REPLACE and DISABLE TRIGGER undetected, relevant to Q1 and Q4), L1 (F2 naming clash), L2 (SECURITY DEFINER hardening missing), L3 (restore/COPY missing), L4 (prefer a trigger-assigned xid8 over the xmin binding), L5 (audit binding and before/after catalog test missing), L6 (FIFO revaluation as out/in pair loses layer structure).
 
@@ -44,6 +44,8 @@ Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate a
 3. a post-migration check that no trigger remains disabled (`pg_trigger.tgenabled`).
 
 Open for the reviewer: confirmation of this delta.
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #171's delta de7ea1b..871339b: F2 and Q5 state the 25 system migrations / 30 paired DISABLE TRIGGER uses and define Q5 as an allow-pattern (DISABLE only with a same-migration ENABLE of the same trigger; CREATE OR REPLACE of an earlier migration's function only with an owner-approved allow entry, existing replacements allowlisted; post-migration tgenabled check)"; Head SHA reviewed 871339bed4aad124cfa7583e10e448a99486aa96; executed: delta diff read, the counts re-verified on origin/main (25 system migrations 0006-0030, 30 DISABLE statements on t_3e3d4119/r_2601e368 x25 and t_359332ac/r_d3408f58 x5, every one paired with the same-migration ENABLE; 0 in company migrations; CREATE OR REPLACE in company 0009/0027/0029 only); verdict approve; findings M1 of the delta confirmation fixed; every earlier finding (M1, L1-L6) fixed; no open findings.
 
 ---
 
