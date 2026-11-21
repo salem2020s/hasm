@@ -349,7 +349,7 @@ public sealed class RetentionService
     }
 
     /// <summary>True when the system stream already holds a 2016 for <paramref name="runId"/> (review L2 of #134: a recovered completion writes its 2016 exactly once).</summary>
-    private async Task<bool> DeletedRecordedAsync(string runId, CancellationToken ct)
+    internal async Task<bool> DeletedRecordedAsync(string runId, CancellationToken ct)
     {
         if (!BackupRunFiles.IsRunId(runId)) throw new BackupException("invalid_run_id");
         await using var conn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
@@ -399,13 +399,17 @@ public sealed class RestoreLockHolder : IAsyncDisposable
 
     internal RestoreLockHolder(NpgsqlConnection conn) => this.conn = conn;
 
+    /// <summary>Test hook only: runs on the holder's own session after the explicit unlock and before the session is closed, so a test can assert that no advisory lock remains on it.</summary>
+    internal Func<NpgsqlConnection, Task>? BeforeCloseForTests { get; set; }
+
     public async ValueTask DisposeAsync()
     {
         if (disposed) return;
         disposed = true;
         try { await using var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", conn); await unlock.ExecuteNonQueryAsync(CancellationToken.None); }
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { /* a broken session ends its locks with the backend anyway */ }
-        await conn.DisposeAsync();
+        try { if (BeforeCloseForTests is { } hook) await hook(conn); }
+        finally { await conn.DisposeAsync(); }
     }
 }
 
@@ -416,7 +420,7 @@ public sealed class RestoreLockHolder : IAsyncDisposable
 internal static class RetentionExecutor
 {
     internal sealed record Context(string Root, RetentionOptions Options, DateTimeOffset Now, string BackupStatusCode, Func<CancellationToken, Task<RetentionInputs>> Read,
-        Func<short, string, CancellationToken, Task> Audit, string Operator, Func<string, CancellationToken, Task<bool>>? DeletedRecorded = null);
+        Func<short, string, CancellationToken, Task> Audit, string Operator, Func<string, CancellationToken, Task<bool>> DeletedRecorded);
 
     private sealed record Tombstone(int Version, string RunId, DateTimeOffset DeletedUtc, string StatusSha256);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -448,8 +452,9 @@ internal static class RetentionExecutor
         {
             if (Directory.Exists(Path.Combine(ctx.Root, runId)) || inputs.DeletingFolders.Any(f => f.StartsWith(runId + ".deleting-", StringComparison.Ordinal)))
                 continue;                                                                                      // not deleted yet: the run or its resume handles it
-            if (ctx.DeletedRecorded is null || !await ctx.DeletedRecorded(runId, ct))
-                await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={runId} resumed=yes recovered=audit", ct);
+            // the folder is absent: the engine removed it before a crash, or something outside the engine did; the event says which facts are known (review L-d of #156)
+            if (!await ctx.DeletedRecorded(runId, ct))
+                await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={runId} resumed=yes recovered=audit folder=absent", ct);
             WriteCompleted(ctx.Root, runId);
             resumed++;
         }

@@ -42,7 +42,8 @@ public sealed class RetentionExecutorTests : IDisposable
         new(root, options ?? Opt(), now ?? T(26, 0), status,
             _ => Task.FromResult(read?.Invoke() ?? new RetentionInputs([.. runs.Where(r => Directory.Exists(Path.Combine(root, r.RunId)))], [Company()], [], [],
                 [.. Directory.EnumerateDirectories(root).Select(Path.GetFileName).Where(n => n!.Contains(".deleting-")).Select(n => n!)])),
-            (code, detail, _) => { audit.Add((code, detail)); return Task.CompletedTask; }, "os:test");
+            (code, detail, _) => { audit.Add((code, detail)); return Task.CompletedTask; }, "os:test",
+            (id, _) => Task.FromResult(audit.Any(a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($" run={id} ", StringComparison.Ordinal))));
 
     // ---- the gate (D-137 layers 1 and 3; review M1) ----------------------------------------------
 
@@ -269,7 +270,7 @@ public sealed class RetentionExecutorTests : IDisposable
         audit.Clear();
         var recovered = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
         Assert.Equal(1, recovered.Resumed);
-        Assert.Single(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} ") && a.Detail.Contains("recovered=audit"));
+        Assert.Single(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} ") && a.Detail.EndsWith("recovered=audit folder=absent", StringComparison.Ordinal));
         Assert.DoesNotContain(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={notYet} "));
         Assert.True(File.Exists(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker)));
         Assert.Equal([notYet], RetentionExecutor.IncompleteTombstones(root));
