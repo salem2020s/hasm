@@ -1,6 +1,6 @@
 # Phase 3.8D plan storage, approval and atomic execution (design proposal, revision 3)
 
-Status: **design revision 3; nothing is implemented.** The owner decided Q1-Q5 on 2026-11-21 (section 9).
+Status: **design revision 3. Implementation step 4 (the database layer and its tests) is in progress; see section 12. No executor, endpoint or UI exists, and execution stays disabled.** The owner decided Q1-Q5 on 2026-11-21 (section 9). Reviewer G confirmed the final design revision at `c73b643` (`review-records/PR-48-plan-execution-design-rev3.md`), which made the Q1 implementation authorization effective.
 * **Q1 (X1-A) and Q2 (X2-X8):** APPROVED by the owner 2026-11-21 with mandatory safeguards; implementation authorization effective after independent confirmation of the final design revision. Authorization becomes effective only after Agent G, or another qualified independent reviewer, confirms this final design revision with no unresolved Critical, High or Medium finding.
 * **Before execution is enabled:** the full PostgreSQL safety, concurrency, rollback, audit, restore and migration tests are required, including the revised N1-N29 matrix (section 8).
 * **Deviations:** any material deviation from X1-A needs new owner authorization.
@@ -92,6 +92,7 @@ One new **company** migration and one **system** access migration. Both are forw
 * **`CompensationPlan`**: id, item, warehouse roots, the proposed event's stock document id and revision, the proposed event payload (canonical JSON), the fingerprints (plan, comparison, evidence, periods, position totals/layer hash, valuation policy, accounting version), status (1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale), revision, creator, approver and timestamps. A trigger makes the payload and fingerprints immutable; status moves only along allowed transitions; nothing is ever deleted. **SoD, X3 [A-Q2]:** a trigger refuses an approval when the approver is the creator, the last editor or the submitter of the plan, or the creator, last editor or submitter of the event's stock document. This is the D-066/D-158 pattern, enforced in both the service and PostgreSQL. The approval is bound to the plan revision and fingerprints. **Closure binding at the plan (G's M3 at `ab1d106`):**
   * the plan row has `created_xact xid8`, assigned by a BEFORE INSERT trigger (`pg_current_xact_id()`, never client-supplied);
   * it also has an immutable `closure_hash`: SHA-256 over the canonical, sorted list of (item, warehouse) pairs of its closure, which is part of the plan fingerprint;
+  * **byte-exact form (G's L1), computed ONLY in PostgreSQL:** each pair is the lowercase hyphenated text of the item uuid, a colon and the lowercase hyphenated text of the warehouse uuid; the pairs are sorted by (item, warehouse) in uuid order, not by a collation; they are joined by one newline (no trailing newline); the text is encoded in UTF-8; the hash is the lowercase hex SHA-256. The application never supplies the value: the plan's trigger assigns it in the creating transaction and re-assigns it as each closure row is written, so it is frozen when that transaction commits. Because it is known only after the closure rows are written, it is carried as its own member of the fingerprint set (the approval copies it together with the other fingerprints and must match all of them);
   * the status trigger, on the transition to `approved` (and again on `executed`), recomputes the hash from the `CompensationPlanPosition` rows and refuses on any difference, so the approval re-checks the closure.
 * **`CompensationPlanPosition`** (rev-3 review M1): the plan's **closure**, i.e. every (item, warehouse) position the replay may touch: the item and warehouse roots plus every downstream position reached through transfers. Written with the plan, immutable, covered by the plan fingerprint, with `UNIQUE (plan, item, warehouse)`. **Insert-only within the plan's creating transaction (G's M3 at `ab1d106`; both protections are adopted):**
   1. a BEFORE INSERT trigger accepts a closure row only while its plan is in status `proposed` AND the plan's `created_xact = pg_current_xact_id()`. A row added after approval, or in any later transaction (even while the plan is still proposed), is refused; UPDATE, DELETE and TRUNCATE are refused as before (N5);
@@ -173,7 +174,7 @@ An append-only epoch table read through ONE mandatory read function, with no bac
 
 ## 4. Approval [A-Q2]
 
-* **Creation:** a user with the new plan permission creates the plan. The event's stock document must already exist and be **approved through the normal document approval** before the plan can be approved (X7).
+* **Creation:** a user with the new plan permission creates the plan. **The plan row, all of its closure rows (`CompensationPlanPosition`) and its lines are written in ONE transaction** (G's L2): the insert-only rule of 3.1 refuses a closure row in any later transaction, and a plan whose closure does not contain its root position fails at commit. The event's stock document must already exist and be **approved through the normal document approval** before the plan can be approved (X7).
 * **Approval:** a DIFFERENT user with the new approve permission approves it. That user is never the creator, last editor or submitter of the plan or of the event document (X3 addition). The approver sees the exact lines, fingerprints and evidence summary.
 * **Execution:** the executor differs from the creator; the approver may execute (X3).
 * **Staleness:** approval re-runs the planner under the APPROVER's permissions. Approvals are unique per (plan, revision, fingerprints). Any change makes the plan `stale` and requires a new plan and approval. Rejection and cancellation are events.
@@ -326,3 +327,28 @@ Revaluation stays within the Phase 3.8D scope. It needs a separate accounting co
 7. **Reconciliation:** with journals and valuation (cost ledger vs general ledger, close probe), per period.
 8. **Periods and dates:** Open periods only; Final Closed is never touched.
 9. **Same database protections as epochs:** no existing safeguard changed; the before/after catalog test.
+
+## 12. Implementation plan of step 4: the database layer (no executor)
+
+Scope: one forward-only, additive company migration, its logical dictionary, the runtime grants and the N1-N32 tests. **No service, endpoint or UI that executes a plan is written; the planner stays read-only; the application barrier `backdated_not_supported` stays active.**
+
+**Provisional migration number.** The company migration takes the next free number on the branch after merging `main` (0033 today). #48 will not merge soon, so the number is re-assigned at merge time: the number is one constant in the generator (`tools/schema/company-0033-plan-execution.cjs`), and a renumbering is a regeneration plus the pinned migration lists.
+
+**The system access migration (X4) is NOT part of this slice.** Section 3 requires both migrations to contain no `DISABLE TRIGGER`, but a preset role and its permissions can only be added with the paired `DISABLE`/`ENABLE` of the preset immutability triggers that every earlier system access migration uses (system 0004 `r_d3408f58`, `r_2601e368`). This conflict is reported to the coordinator and is not decided here. The permission codes also belong with the endpoints that use them (steps 5 and 7). Nothing in the company migration depends on them: the database rules compare user ids.
+
+**Objects of the company migration, by design section:**
+
+| Object | Design | Notes |
+|---|---|---|
+| `CompensationPlan` (table, status trigger, deferred commit check, one live plan per document) | 3.1, 4 | payload and fingerprints immutable; trigger-assigned `created_xact` and `closure_hash`; transitions 1→2/4/5/6 and 2→3/5/6; approval re-checks SoD, fingerprints, closure hash and the event document (approved, same revision); `executed` needs an execution of this transaction |
+| `CompensationPlanPosition` (closure) | 3.1, G's M3/L1/L2 | insert only while the plan is proposed and in its creating transaction; append-only; each insert refreshes the plan's hash through the plan trigger |
+| `CompensationPlanLine`, `CompensationPlanEvent` | 3.1 | lines follow the same insert-only rule; events are append-only |
+| `CompensationPlanApproval` | 3.1, 4 (X3) | unique per (plan, revision); fingerprints equal the plan's; approver independent of the plan's creator and of the event document's creator, editors and submitter; committed only together with the status change |
+| `CompensationPlanExecution`, `CompensationPlanExecutionJournal` | 3.1, 3.4 | `UNIQUE (plan)`, `UNIQUE (audit_event_id)`, trigger-assigned `created_xact`; executor is not the creator; X5 at execution |
+| `EpochMember`, `EpochEntryLineage` | 3.2 | member trigger (execution of this transaction, approved plan, operation without entries, not kind 4, original in the closure, no epoch on an epoch); lineage trigger |
+| entry guard on the cost entry table | 3.3(1), (2), (2a), (3) | new function and trigger; position `FOR UPDATE`, period `FOR SHARE`; no GUC |
+| operation guard on the cost operation table | 3.3(4), X6 | refuses a kind-4 reversal of an epoch member or of an operation with stornoed entries |
+| posting guard on the stock posting table | section 4 (X7) | **an addition to the list of section 3, marked for the reviewer:** the database also refuses a posting of a plan-bound document outside that plan's execution, so N13 has a database rule; it is additive and changes no existing object |
+| deferred checks on the execution and on the member | 3.4 | executed plan in this transaction, closure hash, members, pairing, lineage, the event's posting, the audit event (type, subject, target) |
+
+**Tests (all as the real runtime role on the isolated cluster, each N in the test name):** `PlanExecutionGuardTests` (N1, N4, N6, N7, N12, N16, N22, N23), `PlanExecutionPlanTests` (N3, N5, N24, N32), `PlanExecutionEpochTests` (N2, N8, N9, N10, N11, N13, N14, N15, N19, N20, N21, N26, N27, N29, N30, N31), `PlanExecutionConcurrencyTests` (N28), `PlanExecutionCatalogTests` (N17, N18), and N25 as the pinned absence of the optional definer of 3.6. Where a case needs the executor to be complete (N13, N14, N15, N21, N23, N27, N29), the test proves the database rule now and states what the executor-level variant adds.
