@@ -34,7 +34,7 @@ const TEMPLATE = `-- Migration 0028: commercial document skeleton (Phase 3.13 sl
 --   * the status guard allows ONLY draft -> submitted, submitted -> draft (withdraw), and draft/submitted -> cancelled (S1a). Approval, rejection and the cancellation of an approved document are NOT in this guard:
 --     a direct statement attempting them is refused. Slice S1b adds them through a new migration that replaces this guard. A cancelled document is final;
 --   * a submitted or cancelled document is not edited (a status change edits nothing else); the lines are editable (insert, update, delete) ONLY while the document is a draft;
---   * the events are append-only, one per revision; one idempotency key per (document type, creator).
+--   * the events are append-only, one per revision, and each must carry the CURRENT revision and status of its document (events are written after the document change in the same transaction); one idempotency key per (document type, creator).
 
 CREATE TABLE {{CommercialDocument}} (
     {{CommercialDocument.Id}} uuid NOT NULL,
@@ -118,7 +118,7 @@ CREATE FUNCTION {{CommercialDocumentLine.FnGuard}}() RETURNS trigger LANGUAGE pl
 DECLARE doc uuid; st smallint;
 BEGIN
     IF TG_OP = 'DELETE' THEN doc := OLD.{{CommercialDocumentLine.DocumentId}}; ELSE doc := NEW.{{CommercialDocumentLine.DocumentId}}; END IF;
-    SELECT d.{{CommercialDocument.Status}} INTO st FROM {{CommercialDocument}} d WHERE d.{{CommercialDocument.Id}} = doc;
+    SELECT d.{{CommercialDocument.Status}} INTO st FROM {{CommercialDocument}} d WHERE d.{{CommercialDocument.Id}} = doc FOR SHARE;   -- a share lock conflicts with a concurrent status UPDATE (FOR NO KEY UPDATE): a line write can never commit beside a submit or cancel
     IF st IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'the lines of a commercial document are editable only while it is a draft'; END IF;
     IF TG_OP = 'UPDATE' AND NEW.{{CommercialDocumentLine.DocumentId}} IS DISTINCT FROM OLD.{{CommercialDocumentLine.DocumentId}} THEN RAISE EXCEPTION 'a line never moves to another document'; END IF;
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
@@ -152,7 +152,13 @@ CREATE UNIQUE INDEX {{CommercialDocumentEvent.UqRevision}} ON {{CommercialDocume
 
 CREATE FUNCTION {{CommercialDocumentEvent.FnGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
+    IF TG_OP = 'INSERT' THEN
+        -- an event describes what ALREADY happened to its document in this transaction: its revision and resulting status must be the document's current ones (no forged or future event)
+        IF NOT EXISTS (SELECT 1 FROM {{CommercialDocument}} d WHERE d.{{CommercialDocument.Id}} = NEW.{{CommercialDocumentEvent.DocumentId}} AND d.{{CommercialDocument.Revision}} = NEW.{{CommercialDocumentEvent.Revision}} AND d.{{CommercialDocument.Status}} = NEW.{{CommercialDocumentEvent.ToStatus}}) THEN
+            RAISE EXCEPTION 'a commercial document event must carry the current revision and status of its document';
+        END IF;
+        RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'commercial document events are append-only';
 END;
 $$;

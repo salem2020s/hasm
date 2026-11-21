@@ -53,7 +53,11 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
             if (!await CoversAsync(user, company, PermissionCatalog.Codes.CommercialCreate, branch, ct)) return Denied<CommercialDocumentView>();
         }
         else if (!HoldsAnywhere(await access.GetEffectivePermissionsAsync(user, company, ct), PermissionCatalog.Codes.CommercialCreate)) return Denied<CommercialDocumentView>();
-        return await documents.CreateAsync(user, company, input, ct);   // a missing branch is then a validation error for a caller who may create somewhere
+        var created = await documents.CreateAsync(user, company, input, ct);   // a missing branch is then a validation error for a caller who may create somewhere
+        // a REPLAY returns the current state of the document: a caller who may create but not view it receives only the identifiers (never the party, note, lines or history)
+        if (created.IsOk && created.Value!.Replayed && !await CoversAsync(user, company, PermissionCatalog.Codes.CommercialView, created.Value.BranchId, ct))
+            return ConfigResult<CommercialDocumentView>.Ok(created.Value with { PartyId = Guid.Empty, Currency = "", Note = null, SubmittedBy = null, Lines = [], Events = [] });
+        return created;
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> UpdateAsync(Guid user, Guid company, Guid id, long? revision, CommercialDocumentInput? input, CancellationToken ct = default)

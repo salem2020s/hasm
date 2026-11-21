@@ -8,7 +8,7 @@
 --   * the status guard allows ONLY draft -> submitted, submitted -> draft (withdraw), and draft/submitted -> cancelled (S1a). Approval, rejection and the cancellation of an approved document are NOT in this guard:
 --     a direct statement attempting them is refused. Slice S1b adds them through a new migration that replaces this guard. A cancelled document is final;
 --   * a submitted or cancelled document is not edited (a status change edits nothing else); the lines are editable (insert, update, delete) ONLY while the document is a draft;
---   * the events are append-only, one per revision; one idempotency key per (document type, creator).
+--   * the events are append-only, one per revision, and each must carry the CURRENT revision and status of its document (events are written after the document change in the same transaction); one idempotency key per (document type, creator).
 
 CREATE TABLE t_04d17dc0 (
     c_cceb8d4c uuid NOT NULL,
@@ -92,7 +92,7 @@ CREATE FUNCTION f_46efd57c() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE doc uuid; st smallint;
 BEGIN
     IF TG_OP = 'DELETE' THEN doc := OLD.c_84431fb3; ELSE doc := NEW.c_84431fb3; END IF;
-    SELECT d.c_8cb62046 INTO st FROM t_04d17dc0 d WHERE d.c_cceb8d4c = doc;
+    SELECT d.c_8cb62046 INTO st FROM t_04d17dc0 d WHERE d.c_cceb8d4c = doc FOR SHARE;   -- a share lock conflicts with a concurrent status UPDATE (FOR NO KEY UPDATE): a line write can never commit beside a submit or cancel
     IF st IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'the lines of a commercial document are editable only while it is a draft'; END IF;
     IF TG_OP = 'UPDATE' AND NEW.c_84431fb3 IS DISTINCT FROM OLD.c_84431fb3 THEN RAISE EXCEPTION 'a line never moves to another document'; END IF;
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
@@ -126,7 +126,13 @@ CREATE UNIQUE INDEX k_b806d405 ON t_9ff18b1b (c_20dec8a8, c_dc2643b7);
 
 CREATE FUNCTION f_7d3cbe20() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
+    IF TG_OP = 'INSERT' THEN
+        -- an event describes what ALREADY happened to its document in this transaction: its revision and resulting status must be the document's current ones (no forged or future event)
+        IF NOT EXISTS (SELECT 1 FROM t_04d17dc0 d WHERE d.c_cceb8d4c = NEW.c_20dec8a8 AND d.c_d2cb57e3 = NEW.c_dc2643b7 AND d.c_8cb62046 = NEW.c_166ae51d) THEN
+            RAISE EXCEPTION 'a commercial document event must carry the current revision and status of its document';
+        END IF;
+        RETURN NEW;
+    END IF;
     RAISE EXCEPTION 'commercial document events are append-only';
 END;
 $$;

@@ -32,7 +32,7 @@ public class CommercialIdempotencyTests : CommercialTestBase
         Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "idem-key-0002") with { DocType = "sales_invoice" }), "docType", "document_type_not_registered");   // production registers no type (Q1)
         Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, Guid.NewGuid(), item, unit, "idem-key-0003")), "partyId", "party_role_required");
         Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(Guid.NewGuid(), party, item, unit, "idem-key-0004")), "branchId", "branch_not_found");
-        Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, Guid.NewGuid(), unit, "idem-key-0005")), "reference", "reference_not_found");
+        Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, Guid.NewGuid(), unit, "idem-key-0005")), "lines", "item_not_found");
         Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "idem-key-0006") with { Mode = 3 }), "mode", "invalid_value");
         Invalid(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "idem-key-0007") with { Mode = null }), "mode", "required");
         Assert.Equal(2L, await DocCount());                                                                                     // refused creates leave nothing

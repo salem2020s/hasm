@@ -1,5 +1,6 @@
 using Hasm.Infrastructure.Commercial;
 using Hasm.Infrastructure.CompanyConfiguration;
+using Npgsql;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentEvent;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
@@ -107,6 +108,40 @@ public class CommercialStateMachineTests : CommercialTestBase
         Assert.Equal("P0001", await Fails($"UPDATE {CE.Table} SET {CE.Reason} = 'x'"));
         Assert.Equal("P0001", await Fails($"DELETE FROM {CE.Table}"));
         Assert.Equal("P0001", await Fails($"TRUNCATE {CE.Table}"));
+        string RawEvent(Guid doc, int toStatus, long revision) => $"INSERT INTO {CE.Table} ({CE.Id}, {CE.DocumentId}, {CE.Kind}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.AtUtc}) VALUES (gen_random_uuid(), '{doc}', 2, {toStatus}, {revision}, '{Admin.Id}', now())";
+        Assert.Equal("P0001", await Fails(RawEvent(draft.Id, 3, 1)));                                                      // a forged "approved" event is refused: it must carry the document's CURRENT status
+        Assert.Equal("P0001", await Fails(RawEvent(draft.Id, 1, 2)));                                                      // so is an event pre-inserted for a future revision
+        Assert.Equal("P0001", await Fails(RawEvent(Guid.NewGuid(), 1, 1)));                                                // and one for no document at all
         Assert.Equal("23505", await Fails($"INSERT INTO {CE.Table} ({CE.Id}, {CE.DocumentId}, {CE.Kind}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.AtUtc}) VALUES (gen_random_uuid(), '{draft.Id}', 2, 1, 1, '{Admin.Id}', now())"));
+    }
+
+    [PostgresFact]
+    public async Task A_line_write_can_never_commit_beside_a_concurrent_submit()
+    {
+        await Prepare();
+        var branch = await NewBranchId("BA"); var party = await NewCustomerId("C1"); var (item, unit) = await NewItemAndUnit("SM3");
+        var draft = await NewDraft(branch, party, item, unit, "key-race-0001");
+        var connectionString = Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName);
+        await using var submitter = new NpgsqlConnection(connectionString); await submitter.OpenAsync();
+        await using var writer = new NpgsqlConnection(connectionString); await writer.OpenAsync();
+        await using var tx1 = await submitter.BeginTransactionAsync();
+        await using (var up = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 2, {CD.SubmittedBy} = '{Admin.Id}', {CD.Revision} = {CD.Revision} + 1 WHERE {CD.Id} = '{draft.Id}'", submitter, tx1)) await up.ExecuteNonQueryAsync();   // the submit is in flight, not yet committed
+        var write = Task.Run(async () =>
+        {
+            try
+            {
+                await using var tx2 = await writer.BeginTransactionAsync();
+                await using var ins = new NpgsqlCommand($"INSERT INTO {CL.Table} ({CL.Id}, {CL.DocumentId}, {CL.LineNo}, {CL.ItemId}, {CL.UnitId}, {CL.Quantity}) VALUES (gen_random_uuid(), '{draft.Id}', 2, '{item}', '{unit}', 1)", writer, tx2);
+                await ins.ExecuteNonQueryAsync();
+                await tx2.CommitAsync();
+                return (string?)null;
+            }
+            catch (PostgresException ex) { return ex.SqlState; }
+        });
+        await Task.Delay(1500);
+        Assert.False(write.IsCompleted, "the line write must wait for the in-flight status change (it reads the status with a share lock)");
+        await tx1.CommitAsync();
+        Assert.Equal("P0001", await write);                                                                                 // after the submit committed, the draft rule refuses the line
+        Assert.Single((await Docs.GetAsync(Company.Id, draft.Id))!.Lines);                                                  // no line committed beside the submit
     }
 }

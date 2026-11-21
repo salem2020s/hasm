@@ -30,6 +30,10 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     }
     /// <summary>A replayed create writes nothing (so it carries no audit event): the transaction is rolled back by this exception and the original is returned.</summary>
     private sealed class Replay(Guid id) : Exception("replay") { public Guid Id { get; } = id; }
+    /// <summary>Names the offending reference by its constraint (the line index is not known at that point, so a line reference is reported on "lines").</summary>
+    private static FieldError FkField(string? constraint) =>
+        constraint == CL.FkItem ? new("lines", "item_not_found") : constraint == CL.FkUnit ? new("lines", "unit_not_found") : constraint == CL.FkWarehouse ? new("lines", "warehouse_not_found")
+        : constraint == CD.FkBranch ? new("branchId", "branch_not_found") : constraint == CD.FkParty ? new("partyId", "party_not_found") : new("reference", "reference_not_found");
     private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, code, [new FieldError(field, code)]);
 
     [GeneratedRegex("^[a-z][a-z0-9_]{1,39}$")] private static partial Regex DocTypePattern();
@@ -45,7 +49,8 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
         catch (Abort a) { return a.To<T>(); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == CD.UqIdempotency) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "idempotency_race"); }   // a concurrent create with the same key won
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Invalid([new FieldError("reference", "reference_not_found")]); }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // any other unique index (line number, event revision): a racing writer won, nothing was written
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Invalid([FkField(ex.ConstraintName)]); }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent change: nothing was written
     }
 
