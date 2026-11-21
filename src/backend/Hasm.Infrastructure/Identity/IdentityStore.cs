@@ -5,6 +5,7 @@ using Npgsql;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
+using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -240,15 +241,19 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
 
     // ---- Sessions ----
 
-    public async Task CreateSessionAsync(Guid sessionId, Guid userId, byte[] tokenHash, SessionClient client, DateTimeOffset idleExpires, DateTimeOffset absoluteExpires, CancellationToken ct = default)
+    public async Task CreateSessionAsync(Guid sessionId, Guid userId, byte[] tokenHash, SessionClient client, DateTimeOffset idleExpires, DateTimeOffset absoluteExpires, DateTimeOffset? mfaVerifiedAt = null, CancellationToken ct = default)
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         var now = clock.GetUtcNow();
+        // a session created after the second factor records it: auth_methods 3 (password + totp) with the verification time; otherwise the column defaults (1, password only)
+        var mfaColumns = mfaVerifiedAt is null ? "" : $",{SM.AuthMethods},{SM.VerifiedAtUtc}";
+        var mfaValues = mfaVerifiedAt is null ? "" : ",3,@mv";
         await using (var cmd = new NpgsqlCommand(
-            $"INSERT INTO {S.Table} ({S.Id},{S.UserId},{S.TokenHash},{S.CreatedAtUtc},{S.LastSeenAtUtc},{S.IdleExpiresAtUtc},{S.AbsoluteExpiresAtUtc},{S.ClientKind}) " +
-            "VALUES (@id,@u,@t,@n,@n,@i,@a,@c)", conn, tx))
+            $"INSERT INTO {S.Table} ({S.Id},{S.UserId},{S.TokenHash},{S.CreatedAtUtc},{S.LastSeenAtUtc},{S.IdleExpiresAtUtc},{S.AbsoluteExpiresAtUtc},{S.ClientKind}{mfaColumns}) " +
+            $"VALUES (@id,@u,@t,@n,@n,@i,@a,@c{mfaValues})", conn, tx))
         {
+            if (mfaVerifiedAt is { } mv) cmd.Parameters.AddWithValue("mv", mv);
             cmd.Parameters.AddWithValue("id", sessionId);
             cmd.Parameters.AddWithValue("u", userId);
             cmd.Parameters.AddWithValue("t", tokenHash);

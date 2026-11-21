@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http.Metadata;
 namespace Hasm.Api.Auth;
 
 public sealed record LoginRequest(string? Login, string? Password, string? Client);
+public sealed record MfaVerifyRequest(string? Challenge, string? Code, string? Client);
 public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
 public sealed record CreateUserRequest(string? Login, string? DisplayName, string? Password, bool IsIdentityAdministrator);
 public sealed record SetStateRequest(string? State);
@@ -18,6 +19,7 @@ public static class AuthEndpoints
     {
         var auth = app.MapGroup("/api/v1/auth");
         auth.MapPost("/login", Login).WithMetadata(new BodyLimit());
+        auth.MapPost("/mfa/verify", MfaVerify).WithMetadata(new BodyLimit());
         auth.MapPost("/logout", Logout);
         auth.MapGet("/status", Status);
         auth.MapPost("/change-password", ChangePassword).RequireAuthorization().WithMetadata(new BodyLimit());
@@ -32,23 +34,27 @@ public static class AuthEndpoints
     private static object UserView(string id, string login, string displayName, bool admin) =>
         new { id, login, displayName, isIdentityAdministrator = admin };
 
-    private static async Task<IResult> Login(LoginRequest? body, HttpContext http, AuthService auth)
+    private static SessionClient? ParseClient(string? client) => (client ?? "web").ToLowerInvariant() switch
     {
-        if (body is null || string.IsNullOrEmpty(body.Login) || string.IsNullOrEmpty(body.Password)) return Error(400, "invalid_request");
-        var client = (body.Client ?? "web").ToLowerInvariant() switch
-        {
-            "web" => (SessionClient?)SessionClient.Web,
-            "desktop" => SessionClient.Desktop,
-            _ => null,
-        };
-        if (client is null) return Error(400, "invalid_request");
+        "web" => SessionClient.Web,
+        "desktop" => SessionClient.Desktop,
+        _ => null,
+    };
 
-        var outcome = await auth.LoginAsync(body.Login, body.Password, client.Value, http.ClientSource(), http.RequestAborted);
+    /// <summary>The same answers for the password step and the second step; the shared frontend reads <c>status</c> (absent on a completed login).</summary>
+    private static IResult LoginResult(LoginOutcome outcome, SessionClient client, HttpContext http)
+    {
         switch (outcome)
         {
             case LoginOutcome.Throttled t:
                 http.Response.Headers.RetryAfter = ((int)Math.Ceiling(t.RetryAfter.TotalSeconds)).ToString();
                 return Error(429, "too_many_attempts");
+            case LoginOutcome.MfaRequired m:
+                return Results.Json(new { status = "mfa_required", challenge = m.Challenge, challengeExpiresAtUtc = m.ChallengeExpiresAtUtc });
+            case LoginOutcome.MfaEnrolmentRequired e:
+                return Results.Json(new { status = "mfa_enrolment_required", challenge = e.Challenge, challengeExpiresAtUtc = e.ChallengeExpiresAtUtc });
+            case LoginOutcome.MfaRecoveryRequired:
+                return Results.Json(new { status = "mfa_recovery_required" });
             case LoginOutcome.Success s:
                 if (client == SessionClient.Web)
                 {
@@ -68,6 +74,21 @@ public static class AuthEndpoints
             default:
                 return Error(401, "invalid_credentials");
         }
+    }
+
+    private static async Task<IResult> Login(LoginRequest? body, HttpContext http, AuthService auth)
+    {
+        if (body is null || string.IsNullOrEmpty(body.Login) || string.IsNullOrEmpty(body.Password)) return Error(400, "invalid_request");
+        if (ParseClient(body.Client) is not { } client) return Error(400, "invalid_request");
+        return LoginResult(await auth.LoginAsync(body.Login, body.Password, client, http.ClientSource(), http.RequestAborted), client, http);
+    }
+
+    /// <summary>Completes a login that needs the second factor. Identical failure for every refusal; the client and the source must match those the challenge was issued for.</summary>
+    private static async Task<IResult> MfaVerify(MfaVerifyRequest? body, HttpContext http, AuthService auth)
+    {
+        if (body is null || string.IsNullOrEmpty(body.Challenge) || string.IsNullOrEmpty(body.Code)) return Error(400, "invalid_request");
+        if (ParseClient(body.Client) is not { } client) return Error(400, "invalid_request");
+        return LoginResult(await auth.CompleteMfaLoginAsync(body.Challenge, body.Code, client, http.ClientSource(), http.RequestAborted), client, http);
     }
 
     private static async Task<IResult> Logout(HttpContext http, AuthService auth)

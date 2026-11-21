@@ -8,7 +8,16 @@ public abstract record LoginOutcome
     public sealed record InvalidCredentials : LoginOutcome;
     public sealed record Throttled(TimeSpan RetryAfter) : LoginOutcome;
     public sealed record Success(string Token, UserRecord User, Guid SessionId, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc) : LoginOutcome;
+    /// <summary>Phase 4.1: the password was right and a second factor is required. NO session exists; the challenge (single use, bound to client and source, five minutes) completes the login.</summary>
+    public sealed record MfaRequired(string Challenge, DateTimeOffset ChallengeExpiresAtUtc) : LoginOutcome;
+    /// <summary>Phase 4.1: the password was right and the user must enrol an authenticator first. NO session exists; the challenge only admits the enrolment steps.</summary>
+    public sealed record MfaEnrolmentRequired(string Challenge, DateTimeOffset ChallengeExpiresAtUtc) : LoginOutcome;
+    /// <summary>Phase 4.1: the password was right but the user has no usable authenticator (for example after a restore). NO session and NO challenge: only recovery or DR leads back.</summary>
+    public sealed record MfaRecoveryRequired : LoginOutcome;
 }
+
+/// <summary>The second-factor services the login uses. When absent (no encryption key ring configured, or a test that does not use MFA) the login behaves exactly as before and issues sessions after the password.</summary>
+public sealed record MfaLoginServices(MfaChallengeStore Challenges, MfaVerifier Verifier, MfaStore State);
 
 public sealed record AuthenticatedSession(
     Guid SessionId, Guid UserId, string Login, string DisplayName, bool IsIdentityAdministrator,
@@ -24,7 +33,7 @@ public sealed record ChangePasswordResult(ChangePasswordStatus Status, IReadOnly
 /// Local authentication: login, session validation, logout, password change and administrative user creation.
 /// Log messages carry outcome codes and user ids only, never passwords, tokens, hashes or login strings of unknown accounts.
 /// </summary>
-public sealed class AuthService(IdentityStore store, PasswordService passwords, AuthOptions options, ILogger<AuthService>? logger = null)
+public sealed class AuthService(IdentityStore store, PasswordService passwords, AuthOptions options, ILogger<AuthService>? logger = null, MfaLoginServices? mfa = null)
 {
     private const int MaxPasswordInput = 1024;
     private static readonly TimeSpan TouchInterval = TimeSpan.FromMinutes(1);
@@ -86,13 +95,72 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         // who owns one valid account cannot launder failures against others, and a distributed guess cannot reset itself.
         await store.ResetThrottleAsync(ThrottleScope.Login, pairKey, ct);
 
+        // Phase 4.1: the password step alone never yields a session for a user who needs the second factor.
+        if (mfa is not null)
+        {
+            switch (await mfa.State.GetStateAsync(user.Id, ct))
+            {
+                case MfaState.Enrolled:
+                    {
+                        var c = await mfa.Challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, client, source, ct);
+                        logger?.LogInformation("auth.login outcome=mfa_required user={UserId} client={Client}", user.Id, client);
+                        return new LoginOutcome.MfaRequired(c.Token, c.ExpiresAtUtc);
+                    }
+                case MfaState.EnrolmentRequired:
+                    {
+                        var c = await mfa.Challenges.IssueAsync(user.Id, MfaChallengePurpose.Enrol, client, source, ct);
+                        logger?.LogInformation("auth.login outcome=mfa_enrolment_required user={UserId} client={Client}", user.Id, client);
+                        return new LoginOutcome.MfaEnrolmentRequired(c.Token, c.ExpiresAtUtc);
+                    }
+                case MfaState.RecoveryRequired:
+                    logger?.LogWarning("auth.login outcome=mfa_recovery_required user={UserId}", user.Id);
+                    return new LoginOutcome.MfaRecoveryRequired();
+            }
+        }
+        return await CreateSessionAsync(user, client, mfaVerifiedAt: null, ct);
+    }
+
+    private async Task<LoginOutcome.Success> CreateSessionAsync(UserRecord user, SessionClient client, DateTimeOffset? mfaVerifiedAt, CancellationToken ct)
+    {
+        var now = store.UtcNow;
         var token = SessionToken.Generate();
         var sessionId = Guid.NewGuid();
         var absolute = now + options.SessionAbsolute;
         var idle = Min(now + options.SessionIdle, absolute);
-        await store.CreateSessionAsync(sessionId, user.Id, SessionToken.Hash(token), client, idle, absolute, ct);
-        logger?.LogInformation("auth.login outcome=success user={UserId} session={SessionId} client={Client}", user.Id, sessionId, client);
+        await store.CreateSessionAsync(sessionId, user.Id, SessionToken.Hash(token), client, idle, absolute, mfaVerifiedAt, ct);
+        logger?.LogInformation("auth.login outcome=success user={UserId} session={SessionId} client={Client} mfa={Mfa}", user.Id, sessionId, client, mfaVerifiedAt is not null);
         return new LoginOutcome.Success(token, user, sessionId, idle, absolute);
+    }
+
+    /// <summary>
+    /// Completes a login that needs the second factor (Phase 4.1 section 5): one verification attempt of the challenge (every binding and the attempt budget checked atomically), then the code through the single
+    /// <see cref="MfaVerifier"/> (window 1, replay compare-and-set, failure throttle), then the single-use consumption of the challenge, and only then the session, recorded as password+totp. Every refusal is the same
+    /// <see cref="LoginOutcome.InvalidCredentials"/> (no oracle); a throttled user gets <see cref="LoginOutcome.Throttled"/>. With no MFA services configured nothing can complete.
+    /// </summary>
+    public async Task<LoginOutcome> CompleteMfaLoginAsync(string? challengeToken, string? code, SessionClient client, string? sourceAddress, CancellationToken ct = default)
+    {
+        if (mfa is null) return new LoginOutcome.InvalidCredentials();
+        var attempt = await mfa.Challenges.TryBeginAttemptAsync(challengeToken, MfaChallengePurpose.Login, client, sourceAddress, ct);
+        if (attempt is null) return new LoginOutcome.InvalidCredentials();
+        var result = await mfa.Verifier.VerifyAsync(attempt.UserId, code, sourceAddress, ct);
+        switch (result)
+        {
+            case MfaResult.Throttled t:
+                logger?.LogWarning("auth.mfa outcome=throttled user={UserId}", attempt.UserId);
+                return new LoginOutcome.Throttled(t.RetryAfter);
+            case MfaResult.Verified:
+                break;
+            case MfaResult.Invalid inv:
+                logger?.LogWarning("auth.mfa outcome=failed user={UserId} lockout={Lockout}", attempt.UserId, inv.UserLockoutReached);
+                return new LoginOutcome.InvalidCredentials();
+            default:
+                logger?.LogError("auth.mfa outcome=unavailable user={UserId}", attempt.UserId);   // a missing key fails closed: no session, no downgrade
+                return new LoginOutcome.InvalidCredentials();
+        }
+        if (!await mfa.Challenges.ConsumeAsync(attempt.Id, ct)) return new LoginOutcome.InvalidCredentials();      // a concurrent completion won
+        var user = await store.FindUserByIdAsync(attempt.UserId, ct);
+        if (user is null || user.State != UserState.Active) return new LoginOutcome.InvalidCredentials();
+        return await CreateSessionAsync(user, client, store.UtcNow, ct);
     }
 
     /// <summary>Validates a presented token; null when malformed, unknown, revoked, expired or the user is not Active.</summary>

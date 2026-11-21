@@ -22,6 +22,7 @@ public class EndpointAuthorizationInventoryTests(WebApplicationFactory<Program> 
     {
         ["GET /api/v1/health"] = "Program.cs: liveness probe returning only status, service name and version",
         ["POST /api/v1/auth/login"] = "AuthEndpoints: credentials are the authentication; throttled and body-limited",
+        ["POST /api/v1/auth/mfa/verify"] = "AuthEndpoints: a single-use challenge (issued only after the password step, bound to client and source, expiring) plus the TOTP code are the authentication; throttled, budgeted and body-limited",
         ["POST /api/v1/auth/logout"] = "AuthEndpoints: ends the caller's own session; harmless without one",
         ["GET /api/v1/auth/status"] = "AuthEndpoints: reports authenticated=false to anonymous callers (tested without a database)",
     };

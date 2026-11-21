@@ -73,6 +73,7 @@ public class AuthWithoutDatabaseTests(WebApplicationFactory<Program> factory) : 
 
     [Theory]
     [InlineData("/api/v1/auth/login")]
+    [InlineData("/api/v1/auth/mfa/verify")]
     [InlineData("/api/v1/auth/logout")]
     [InlineData("/api/v1/admin/users")]
     public async Task State_changing_requests_need_the_custom_header(string path)
