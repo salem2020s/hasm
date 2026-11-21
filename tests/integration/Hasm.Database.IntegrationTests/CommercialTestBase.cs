@@ -20,6 +20,8 @@ public abstract class CommercialTestBase : InventoryTestBase
 {
     protected CommercialDocumentService Docs = null!;
     protected CommercialDocumentManagementService DocMgmt = null!;
+    protected DocumentLinkService Links = null!;
+    protected DocumentLinkManagementService LinkMgmt = null!;
     protected PartyRoleService Roles = null!;
     protected CompanyInventoryService CInv = null!;
     protected PricingConfigService Pricing = null!;
@@ -29,7 +31,12 @@ public abstract class CommercialTestBase : InventoryTestBase
     /// <summary>Per item: the general price list and its entry created by <see cref="NewItemAndUnit"/> (price 10, JOD, valid from 2026-01-01).</summary>
     protected readonly Dictionary<Guid, (Guid List, Guid Entry)> Prices = [];
 
-    protected static void RegisterTestType(IServiceCollection s) => s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));
+    /// <summary>The test composition: the internal test type and a second one (<see cref="CommercialTestType.Other"/>), and the link pairs the S2 tests exercise (only the test type may be linked to itself; the second type has no pair).</summary>
+    protected static ICommercialDocumentTypeRegistry TestRegistry() => new CommercialDocumentTypeRegistry([CommercialTestType.Name, CommercialTestType.Other],
+        [(CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Fulfils), (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Invoices),
+         (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Returns), (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Amends)]);
+
+    protected static void RegisterTestType(IServiceCollection s) => s.AddSingleton(TestRegistry());
 
     /// <summary>The standard composition: pricing and tax services, a fiscal year 2026, the base currency JOD with a USD rate, and a saved tax policy (a document is refused without one).</summary>
     protected async Task Prepare()
@@ -46,8 +53,10 @@ public abstract class CommercialTestBase : InventoryTestBase
         Pricing = new PricingConfigService(Resolver, tx, Clock);
         Tax = new TaxConfigService(Resolver, tx, Clock);
         Rates = new ExchangeRateService(Resolver, tx, Clock);
-        Docs = new CommercialDocumentService(Resolver, tx, Clock, new CommercialDocumentTypeRegistry([CommercialTestType.Name]), Pricing, Tax);
+        Docs = new CommercialDocumentService(Resolver, tx, Clock, TestRegistry(), Pricing, Tax);
         DocMgmt = new CommercialDocumentManagementService(Rbac, Docs);
+        Links = new DocumentLinkService(Resolver, tx, Clock, TestRegistry());
+        LinkMgmt = new DocumentLinkManagementService(Rbac, Links, Docs);
         Roles = new PartyRoleService(Resolver, tx, Clock);
         Ok(await Svc.PutSettingsAsync(Admin.Id, Company.Id, 0, new SettingsInput("en", "yyyy-MM-dd", "latin", "UTC")));
         var calendar = new FiscalCalendarService(Resolver, tx, new PeriodCloseGuard(), new FinancialHistoryGuard(), Clock);
@@ -108,6 +117,15 @@ public abstract class CommercialTestBase : InventoryTestBase
 
     protected async Task<CommercialDocumentView> NewDraft(Guid branch, Guid party, Guid item, Guid unit, string key, decimal qty = 2m) =>
         Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, key, qty)));
+
+    /// <summary>A draft with the given lines (item, unit, quantity) taken through submit and approval by an independent approver (the Commercial Approver preset).</summary>
+    protected async Task<CommercialDocumentView> NewApproved(Guid branch, Guid party, string key, Guid approver, string docType = CommercialTestType.Name, params (Guid Item, Guid Unit, decimal Qty)[] lines)
+    {
+        var input = new CommercialDocumentInput(docType, branch, party, "jod", Day, 1, null, key, [.. lines.Select(l => new CommercialLineInput(l.Item, l.Unit, l.Qty, null))]);
+        var d = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, input));
+        var s = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, d.Id, d.Revision));
+        return Ok(await Docs.ApproveAsync(approver, Company.Id, s.Id, s.Revision));
+    }
 
     protected Task<long> DocCount() => Sql<long>($"SELECT count(*) FROM {CD.Table}");
 }
