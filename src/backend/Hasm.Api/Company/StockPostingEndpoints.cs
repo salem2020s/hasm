@@ -46,7 +46,7 @@ public static class StockPostingEndpoints
         var g = app.MapGroup("/api/v1/company/stock-documents/{id:guid}/posting").RequireAuthorization();
         g.MapGet("", Get);
         g.MapPost("", Post).WithMetadata(new BodyLimit());
-        app.MapPost("/api/v1/company/stock-documents/{id:guid}/reversal", Reverse).RequireAuthorization().WithMetadata(new BodyLimit());
+        app.MapPost("/api/v1/company/stock-documents/{id:guid}/reversal", Reverse).RequireAuthorization().WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
     private static async Task<IResult> Get(Guid id, HttpContext http, AccessService access, StockPostingManagementService svc)
