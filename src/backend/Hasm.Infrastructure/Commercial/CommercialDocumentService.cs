@@ -484,6 +484,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
                 upd.Parameters.AddWithValue("now", Now);
                 await upd.ExecuteNonQueryAsync(ct);
             }
+            await BindPlanAsync(work, cur.Id, cur.DocType, cur.Revision + 1, ct);   // the plan this revision is submitted under is a floor (D-140): the policy is read from the SEALED total just written
             await AppendEventAsync(work, cur.Id, CommercialEventKind.Submitted, CommercialStatus.Draft, CommercialStatus.Submitted, cur.Revision + 1, actor, null, CommercialAuditEvents.Submitted, $"commercial document submitted r{cur.Revision + 1} gross={quote.TotalGross.ToString(CultureInfo.InvariantCulture)}", ct);
         }, ct);
 
@@ -500,7 +501,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     /// lie in an OPEN fiscal period; the document is priced and taxed AGAIN by the server and must produce exactly the fingerprint recorded at submit (otherwise <c>pricing_changed</c> and nothing changes); the official number is
     /// issued at the FIRST approval (kept through re-approval, D-050); the quote is sealed. Approval creates no stock movement and no ledger entry (later slices).
     /// </summary>
-    public Task<ConfigResult<CommercialDocumentView>> ApproveAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
+    public Task<ConfigResult<CommercialDocumentView>> ApproveAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default, IReadOnlySet<Guid>? approverRoles = null) =>
         Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
         {
             if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
@@ -511,6 +512,19 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             if (!check.Allowed) throw new Abort(ConfigStatus.Conflict, check.Reason!);
             var quote = await QuoteDocumentAsync(work, cur, ct);
             if (quote.Fingerprint != cur.Fingerprint) throw new Abort(ConfigStatus.Conflict, "pricing_changed");   // the server prices the document again: any difference since the submit is refused
+            // approval POLICY (S5a, D-140/D-141): when a policy governs the sealed total the plan has ordered stages and this call is ONE decision for the first open stage; the document becomes approved only when the
+            // plan of this revision is satisfied. With no matching policy the plan is empty and the single independent approval above stays as it was (S1b).
+            var plan = await PlanAsync(work.Connection, work.Transaction, cur.Id, cur.DocType, cur.Revision, ct);
+            if (plan.Count > 0)
+            {
+                var open = plan.FirstOrDefault(p => p.Approved < p.Required) ?? throw new Abort(ConfigStatus.Conflict, "approval_stage_complete");
+                if (open.RoleId is { } stageRole && (approverRoles is null || !approverRoles.Contains(stageRole))) throw new Abort(ConfigStatus.Forbidden, "approver_role_required");   // the roles come from the authorization store on this very call
+                var decision = await DocumentApprovals.RecordAsync(work, new ApprovalDecisionRequest(cur.DocType, cur.Id, cur.Revision, actor, cur.CreatedBy, cur.SubmittedBy, true, null, open.Stage), Now, ct);
+                if (decision.Status == ApprovalRecordStatus.SeparationOfDuties) throw new Abort(ConfigStatus.Conflict, "approver_not_independent");
+                if (decision.Status == ApprovalRecordStatus.AlreadyDecided) throw new Abort(ConfigStatus.Conflict, "already_decided");
+                plan = await PlanAsync(work.Connection, work.Transaction, cur.Id, cur.DocType, cur.Revision, ct);
+                if (plan.Any(p => p.Approved < p.Required)) return;   // a later stage (or approver) is still needed: the document stays submitted and its revision does not move
+            }
             string number = cur.OfficialNumber!; Guid? yearId = null;
             if (cur.OfficialNumber is null)
             {

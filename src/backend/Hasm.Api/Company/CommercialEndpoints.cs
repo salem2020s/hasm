@@ -40,6 +40,7 @@ public static class CommercialEndpoints
         g.MapPost("/", Create).WithMetadata(new BodyLimit());
         g.MapGet("/types", Types);   // S6: the registered document types, names only (empty in production until 3.15/3.16)
         g.MapGet("/{id:guid}", Get);
+        g.MapGet("/{id:guid}/approvals", Approvals);   // S5a: the approval plan of the current revision and its decisions
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/submit", Submit);
         g.MapPost("/{id:guid}/withdraw", Withdraw);
@@ -80,6 +81,9 @@ public static class CommercialEndpoints
         return Run(http, access, false, (u, c, _) => svc.ListPageAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0, party, ccy, cleaned), http.RequestAborted),
             v => new { documents = v.Items.Select(Body), total = v.Total }, null);
     }
+    private static Task<IResult> Approvals(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.ApprovalProgressAsync(u, c, id, http.RequestAborted),
+            v => new { plan = v.Plan.Select(p => new { stage = p.Stage, required = p.Required, approved = p.Approved, roleId = p.RoleId }), decisions = v.Decisions.Select(d => new { id = d.Id, revision = d.DocumentRevision, approver = d.Approver, stage = d.Stage, decidedAtUtc = d.DecidedAtUtc }) }, null);
     private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }) }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>

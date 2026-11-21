@@ -1,4 +1,4 @@
-import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
+import { ApiError, type Branch, type CommercialDocument, type CommercialApprovals, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
 import { SearchPicker, Tabs, useI18n, type PickerPage, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -162,6 +162,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [key] = useState(newKey);   // one idempotency key per new-draft editor: a retry of the same save never creates a second document
   const [partyNames, setPartyNames] = useState<Map<string, string>>(new Map());
+  const [actionNotice, setActionNotice] = useState<string | null>(null);   // what the last workflow action did, shown beside the document (the list shows it too)
+  const [approvals, setApprovals] = useState<CommercialApprovals | null>(null);   // the plan of the current revision and its decisions (a submitted document only)
 
   const load = useCallback(async () => {
     if (editor.mode !== "edit") return;
@@ -178,6 +180,9 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
         lines: d.lines.map((l) => ({ key: ++rowKey, item: items.get(l.itemId) ?? { id: l.itemId, code: shortId(l.itemId), nameAr: null, nameEn: null, units: [{ id: l.unitId, code: shortId(l.unitId) }], defaultUnitId: l.unitId }, unitId: l.unitId, quantity: String(l.quantity) })),
       };
       setPartyNames(new Map([[party.id, party.name]]));
+      let progress: CommercialApprovals | null = null;
+      if (d.status === 2) { try { progress = await auth.api.getCommercialApprovals(d.id); } catch (e) { if (auth.handleError(e)) return; } }   // a refusal only hides the progress; the actions stay server-authorized
+      setApprovals(progress);
       setDoc(d); setForm(f); setBase(snapshot(f)); setErrors({}); setConflict(false); setLoading(false);
     } catch (e) { if (!auth.handleError(e)) { setError(errorText(t, e, "commdoc.error.")); setLoading(false); } }
   }, [auth.api, auth.handleError, editor, t]);
@@ -188,6 +193,15 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   const status = (doc?.status ?? 1) as CommercialStatus;
   const canEdit = isNew ? can("company.commercialdocs.create") : (status === 1 || status === 3 || status === 4) && can("company.commercialdocs.update");
   // D-066: the approver is never the creator, the last editor or the submitter (the server enforces it; the screen mirrors it to explain the disabled buttons)
+  // who may decide NOW (the screen mirrors what it can know; the server stays authoritative for the stage, the role and the independence rule)
+  const plan = approvals?.plan ?? [];
+  const openStage = plan.find((p) => p.approved < p.required);
+  const decidedByMe = !!approvals && approvals.decisions.some((d) => d.approver === auth.user?.id);
+  const stageRoleMissing = !!openStage?.roleId && !auth.hasRole(openStage.roleId);
+  const planComplete = plan.length > 0 && !openStage;
+  const notEligible: "decided" | "role" | "complete" | null = decidedByMe ? "decided" : planComplete ? "complete" : stageRoleMissing ? "role" : null;
+  // Approve and Reject are scoped to the DOCUMENT'S branch on the server (a company-wide grant, or a grant for that very branch): a grant for another branch must not show them.
+  const canDecide = !!doc && auth.canOnBranch("company.commercialdocs.approve", doc.branchId);
   const mine = !!doc && [doc.createdBy, doc.lastEditedBy, doc.submittedBy].some((u) => u !== null && u === auth.user?.id);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const activeBranches = branches.filter((b) => b.isActive || b.id === form.branchId);
@@ -240,9 +254,9 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
     } catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
-  async function act(run: () => Promise<unknown>, message: string) {
-    setBusy(true); setError(null); setConflict(false); setDialog(null); setConfirmSubmit(false);
-    try { await run(); onChanged(message); await load(); setReason(""); } catch (err) { showServerError(err); } finally { setBusy(false); }
+  async function act(run: () => Promise<unknown>, message: string | ((result: unknown) => string)) {
+    setBusy(true); setError(null); setConflict(false); setDialog(null); setConfirmSubmit(false); setActionNotice(null);
+    try { const result = await run(); const text = typeof message === "function" ? message(result) : message; onChanged(text); setActionNotice(text); await load(); setReason(""); } catch (err) { showServerError(err); } finally { setBusy(false); }
   }
 
   if (loading) return <Loading />;
@@ -335,12 +349,15 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
     ...(doc ? [{
       id: "history", label: t("commdoc.tab.history"),
       content: (
+        <div>
+        {doc.status === 2 && approvals && <ApprovalPanel approvals={approvals} myId={auth.user?.id} />}
         <div className="table-wrap">
           <table className="data-table" data-testid="history">
             <caption className="visually-hidden">{t("commdoc.tab.history")}</caption>
             <thead><tr><th scope="col">{t("commdoc.event")}</th><th scope="col">{t("commdoc.event_status")}</th><th scope="col">{t("commdoc.event_at")}</th><th scope="col">{t("commdoc.event_actor")}</th><th scope="col">{t("commdoc.event_reason")}</th></tr></thead>
             <tbody>{doc.events.map((e, i) => <tr key={`${e.revision}-${e.kind}-${i}`}><td>{t(`commdoc.event.${e.kind}`)}</td><td>{t(`commdoc.status.${e.toStatus}`)}</td><td><bdi dir="ltr">{e.atUtc.slice(0, 19).replace("T", " ")}</bdi></td><td><bdi dir="ltr">{shortId(e.actorUserId)}</bdi></td><td><bdi>{e.reason ?? ""}</bdi></td></tr>)}</tbody>
           </table>
+        </div>
         </div>
       ),
     } as TabItem] : []),
@@ -357,6 +374,7 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
       {!canEdit && !isNew && <Banner kind="info" testId="form-read-only">{t("commdoc.read_only_doc")}</Banner>}
       {conflict && <Banner kind="error" testId="form-conflict">{t("commdoc.error.revision_conflict")} <button type="button" onClick={() => void load()}>{t("form.reload_latest")}</button></Banner>}
       {error && <Banner kind="error" testId="form-error">{error}</Banner>}
+      {actionNotice && !error && <Banner kind="success" testId="action-notice">{actionNotice}</Banner>}
       <form onSubmit={save} noValidate>
         <Tabs label={t("commdoc.tabs_label")} tabs={tabs} value={activeTab} onChange={setTab} testId="commercial-tabs" />
         <div className="actions" data-testid="commercial-actions">
@@ -364,11 +382,13 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
           {canEdit && <button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("inv.save")}</button>}
           {doc && status === 1 && can("company.commercialdocs.submit") && <button type="button" disabled={busy || dirty} title={dirty ? t("commdoc.save_first") : undefined} onClick={() => setConfirmSubmit(true)}>{t("commdoc.submit")}</button>}
           {doc && status === 2 && can("company.commercialdocs.submit") && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawCommercialDocument(doc.id, rev), t("commdoc.withdrawn"))}>{t("commdoc.withdraw")}</button>}
-          {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined} onClick={() => void act(() => auth.api.approveCommercialDocument(doc.id, rev), t("commdoc.approved"))}>{t("commdoc.approve")}</button>}
-          {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
+          {doc && status === 2 && canDecide && !notEligible && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined}
+            onClick={() => void act(() => auth.api.approveCommercialDocument(doc.id, rev), (r) => ((r as CommercialDocument).status === 3 ? t("commdoc.approved") : t("commdoc.decision_recorded")))}>{t("commdoc.approve")}</button>}
+          {doc && status === 2 && canDecide && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
           {doc && status !== 5 && can("company.commercialdocs.cancel") && <button type="button" className="danger" data-testid="cancel-document" disabled={busy} onClick={() => { setReason(""); setReasonError(null); setDialog("cancel"); }}>{t("commdoc.cancel_document")}</button>}
         </div>
-        {doc && status === 2 && mine && can("company.commercialdocs.approve") && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
+        {doc && status === 2 && mine && canDecide && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
+        {doc && status === 2 && !mine && canDecide && notEligible && <p className="hint" data-testid="approve-not-eligible">{t(`commdoc.approval.not_eligible.${notEligible}`)}</p>}
       </form>
       {confirmSubmit && doc && <ConfirmDialog title={t("commdoc.submit")} message={t("commdoc.submit_message")} confirmLabel={t("form.confirm")} onCancel={() => setConfirmSubmit(false)} onConfirm={() => void act(() => auth.api.submitCommercialDocument(doc.id, rev), t("commdoc.submitted"))} />}
       {dialog && doc && (
@@ -457,6 +477,45 @@ function ItemPicker({ id, item, disabled, error, onPick }: { id: string; item: I
       )}
       {disabled && error && <p className="field-error">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * The approval progress of a SUBMITTED document (S5a): the stages of the plan in order with the decisions counted per stage, the current stage, and the decisions cast so far (who and when). An empty plan says that no
+ * policy matches and the single independent approval applies. Read-only: the server decides every stage, role and independence rule.
+ */
+function ApprovalPanel({ approvals, myId }: { approvals: CommercialApprovals; myId: string | undefined }) {
+  const { t } = useI18n();
+  const open = approvals.plan.find((p) => p.approved < p.required);
+  return (
+    <Card title={t("commdoc.approval.title")} hint={approvals.plan.length === 0 ? undefined : t("commdoc.approval.hint")}>
+      {approvals.plan.length === 0 ? <p data-testid="approval-no-plan">{t("commdoc.approval.no_plan")}</p> : (
+        <div className="table-wrap">
+          <table className="data-table" data-testid="approval-plan">
+            <caption className="visually-hidden">{t("commdoc.approval.title")}</caption>
+            <thead><tr><th scope="col">{t("commdoc.approval.stage")}</th><th scope="col">{t("commdoc.approval.role")}</th><th scope="col">{t("commdoc.approval.progress")}</th><th scope="col">{t("commdoc.approval.state")}</th></tr></thead>
+            <tbody>
+              {approvals.plan.map((p) => (
+                <tr key={p.stage} data-testid={`stage-${p.stage}`} aria-current={open?.stage === p.stage ? "step" : undefined}>
+                  <td>{p.stage}</td><td>{p.roleId ? <bdi dir="ltr">{p.roleId.slice(0, 8)}</bdi> : t("commdoc.approval.any_role")}</td>
+                  <td className="num"><bdi dir="ltr">{p.approved} / {p.required}</bdi></td>
+                  <td><span className={`chip ${p.approved >= p.required ? "chip-ok" : open?.stage === p.stage ? "" : "chip-off"}`}>{p.approved >= p.required ? t("commdoc.approval.done") : open?.stage === p.stage ? t("commdoc.approval.current") : t("commdoc.approval.waiting")}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {approvals.decisions.length > 0 && (
+        <div className="table-wrap">
+          <table className="data-table" data-testid="approval-decisions">
+            <caption className="visually-hidden">{t("commdoc.approval.decisions")}</caption>
+            <thead><tr><th scope="col">{t("commdoc.approval.stage")}</th><th scope="col">{t("commdoc.approval.by")}</th><th scope="col">{t("commdoc.event_at")}</th></tr></thead>
+            <tbody>{approvals.decisions.map((d) => <tr key={d.id}><td>{d.stage}</td><td><bdi dir="ltr">{d.approver === myId ? t("commdoc.approval.you") : d.approver.slice(0, 8)}</bdi></td><td><bdi dir="ltr">{d.decidedAtUtc.slice(0, 19).replace("T", " ")}</bdi></td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

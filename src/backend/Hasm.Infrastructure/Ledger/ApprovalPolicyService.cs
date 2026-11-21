@@ -23,7 +23,7 @@ namespace Hasm.Infrastructure.Ledger;
 /// Approval-policy configuration (Phase 3.2B, slice S4). <b>No authorization here by design:</b> <see cref="ApprovalPolicyManagementService"/> wraps it.
 /// Policies are audited, revisioned and never deleted; PostgreSQL enforces their shape and the evaluation function used by the posting engine.
 /// </summary>
-public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
+public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, Hasm.Infrastructure.Commercial.ICommercialDocumentTypeRegistry? commercialTypes = null)
 {
     internal const int LockKey1 = 0x48434150;   // "HCAP": advisory-lock namespace of approval-policy changes
     internal const int LockKey2 = 1;
@@ -88,7 +88,7 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
 
     public async Task<ConfigResult<ApprovalPolicyView>> CreateAsync(Guid actor, Guid companyId, ApprovalPolicyInput? input, CancellationToken ct = default)
     {
-        if (!ApprovalValidation.TryNormalizeFull(input, out var np, out var errors)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
+        if (!ApprovalValidation.TryNormalizeFull(input, out var np, out var errors, commercialTypes is null ? null : commercialTypes.IsRegistered)) return ConfigResult<ApprovalPolicyView>.Invalid(errors);
         var (docType, source, min, required, nameAr, nameEn) = (np.DocType, np.Source, np.MinAmount, np.Required, np.NameAr, np.NameEn);
         return await MutateAsync(companyId, async work =>
         {
@@ -115,6 +115,12 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
         {
             await LockAsync(work, ct);
             var cur = await RequireAsync(work, id, expectedRevision.Value, ct);
+            if (!DocumentTypes.UsesApprovalPolicies(cur.DocType))   // a policy of a commercial document type never carries a journal-only condition (3.13 S5a); the journal path is unchanged
+            {
+                var notApplicable = new List<FieldError>();
+                ApprovalValidation.JournalOnlyConditions(np.JournalType, np.RateOverride, np.SoftClosed, np.ClosingKind, notApplicable);
+                if (notApplicable.Count > 0) throw new Abort(ConfigStatus.Invalid, "validation_failed", fields: notApplicable);
+            }
             var curStages = cur.Stages ?? [];
             var sameStages = curStages.Count == np.Stages.Count && curStages.Zip(np.Stages).All(z => z.First.Required == z.Second.Required && z.First.RoleId == z.Second.RoleId);
             var sameRequired = np.Stages.Count > 0 || cur.IsStaged ? sameStages : cur.RequiredApprovals == required;
