@@ -12,7 +12,7 @@ namespace Hasm.Infrastructure.CompanyDatabase;
 /// A company database cannot be used right now. The message and <see cref="Code"/> are safe to log and to show: they never contain
 /// a database name, role name, host, credential, connection string or SQL. Callers map it to a generic 503.
 /// </summary>
-public sealed class CompanyDatabaseException(string code) : Exception("The company database is not available.")
+public sealed class CompanyDatabaseException(string code, Exception? inner = null) : Exception("The company database is not available.", inner)
 {
     public const string NotFound = "company_not_found";
     public const string NotReady = "company_not_ready";
