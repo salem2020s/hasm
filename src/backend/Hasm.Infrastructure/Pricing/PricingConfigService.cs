@@ -432,10 +432,22 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
     public async Task<ConfigResult<PricingSnapshot>> QuoteAsync(Guid companyId, PricingRequest? request, PriceOverride? over, CancellationToken ct = default)
     {
         if (request is null) return ConfigResult<PricingSnapshot>.Invalid([new FieldError("request", "required")]);
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
+        var quote = await QuoteInWorkAsync(conn, tx, request, over, ct);
+        await tx.CommitAsync(ct);
+        return quote;
+    }
+
+    /// <summary>
+    /// The same pricing inside a CALLER's transaction (a commercial document is priced, re-priced and sealed in ONE transaction). Reads only; the item group and the customer group are derived from stored data,
+    /// never from the request. A refusal of the engine or an unknown item is returned as an Invalid result with its stable code.
+    /// </summary>
+    internal async Task<ConfigResult<PricingSnapshot>> QuoteInWorkAsync(NpgsqlConnection conn, NpgsqlTransaction tx, PricingRequest? request, PriceOverride? over, CancellationToken ct)
+    {
+        if (request is null) return ConfigResult<PricingSnapshot>.Invalid([new FieldError("request", "required")]);
         try
         {
-            await using var conn = await resolver.OpenAsync(companyId, ct);
-            await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
             var policy = (await LoadPolicy(conn, tx, ct))?.Policy ?? DefaultPolicy;
             var lists = (await LoadLists(conn, tx, null, false, ct)).Where(l => l.IsActive).ToList();
             var ids = lists.Select(l => l.Id).ToHashSet();
@@ -460,7 +472,6 @@ public sealed partial class PricingConfigService(CompanyDatabaseResolver resolve
                 Guid? assignedGroup = assigned is null or DBNull ? null : (Guid)assigned;
                 customerGroup = assignedGroup;
             }
-            await tx.CommitAsync(ct);
             request = request with { ItemGroupId = itemGroup, CustomerGroupId = customerGroup };
             var resolved = PricingEngine.Resolve(request,
                 [.. lists.Select(l => new PriceListRecord(l.Id, l.Code, l.Priority, l.Currency, l.ValidFrom, l.ValidTo, l.IsActive, l.CustomerId, l.CustomerGroupId))],

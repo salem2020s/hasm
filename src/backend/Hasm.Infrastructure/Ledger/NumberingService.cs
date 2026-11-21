@@ -149,9 +149,10 @@ public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAu
     /// Issues the next official number for a document inside the CALLER's transaction. The scope decides the counter: a per-branch rule needs a branch,
     /// a per-fiscal-year rule needs a fiscal year; a scope the rule does not use is ignored (the all-zero uuid stands for "none").
     /// </summary>
-    public static async Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
+    public static async Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct, bool typeRegisteredByCaller = false)
     {
-        if (!DocumentTypes.IsKnown(docType)) throw new ArgumentException("unknown document type", nameof(docType));
+        // the caller may vouch for a type of its own registry (commercial documents: the internal test type is registered only in the test composition, D-049); every other caller needs the built-in registry
+        if (!typeRegisteredByCaller && !DocumentTypes.IsKnown(docType)) throw new ArgumentException("unknown document type", nameof(docType));
         var rule = await ReadAsync(conn, tx, docType, false, ct);
         if (rule.PerBranch && (scope.BranchId is null || string.IsNullOrWhiteSpace(scope.BranchCode))) throw new InvalidOperationException("a branch is required to number this document");
         if (rule.PerFiscalYear && (scope.FiscalYearId is null || string.IsNullOrWhiteSpace(scope.FiscalYearLabel))) throw new InvalidOperationException("a fiscal year is required to number this document");

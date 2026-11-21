@@ -23,7 +23,7 @@ public class CommercialIsolationTests : CommercialTestBase
         var b = await ReadyCompany();
         var resolverB = SinglePrincipalResolver(b);
         var txB = new CompanyAuditedTransactions(resolverB, Audit, Clock);
-        var docsB = new CommercialDocumentService(resolverB, txB, Clock, new CommercialDocumentTypeRegistry([CommercialTestType.Name]));
+        var docsB = new CommercialDocumentService(resolverB, txB, Clock, new CommercialDocumentTypeRegistry([CommercialTestType.Name]), new Hasm.Infrastructure.Pricing.PricingConfigService(resolverB, txB, Clock), new Hasm.Infrastructure.Taxes.TaxConfigService(resolverB, txB, Clock));
         var invB = new CompanyInventoryService(resolverB, txB, Clock);
         var rolesB = new PartyRoleService(resolverB, txB, Clock);
         var global = Guid.NewGuid();
