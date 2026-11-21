@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #48 (Phase 3.8D) - plan-execution design revision 3 (`docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md`, delta c9b2493..9f64f57; author Agent P; DESIGN ONLY, nothing implemented)
-* **Head SHA reviewed (full 40 characters):** 9f64f575cf0455096ac0381de2b6b65bedc4a0ef
+* **Head SHA reviewed (full 40 characters):** ab1d106136a6f95de7416214c92c56028419d400 (final-revision confirmation of the delta 6b64eb3..ab1d106; the first review of revision 3 was at 9f64f575cf0455096ac0381de2b6b65bedc4a0ef)
 * **Reviewer context:** Agent G, an independent security/audit reviewer and a separate agent (not the author, Agent P); model family Claude Opus; prompt: "independent design review of #48's plan-execution design revision 3 under the owner's binding constraints (X1-A additive only, all safeguards byte-identical, no protected DB change before approval, X1-A and X2-X8 pending, revaluation in scope under a separate contract that never collapses FIFO layers, Q4 unimplemented, Q5 separate): fidelity to the merged resume review and to Agent G's X1 review, the T9/N9 savepoint correction, the four questions of section 10, the entry guard's FOR UPDATE lock order, the X5/X6 triggers, N1-N25 completeness, section 11 layer preservation"
 * **Scope read:** `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` at 9f64f57 (281 lines, revision 3), the revision-3 note in `docs/review-records/PR-48-plan-execution-design.md`, the merged `docs/PHASE-3.8D-RESUME-REVIEW.md`; verified against code on the branch: `InventoryCostingService.cs` (the single entry insert site, line 262; `LockPositionsAsync` lines 195-237 with (warehouse, item) order; `ReverseAsync` line 482), `StockPosting.cs` lines 154-171 (`PostInWorkAsync` savepoint), company migrations 0002 (business audit table `t_2db8cf1f`), 0014, 0020, 0022.
 * **Checks run (commands and results):**
@@ -56,3 +56,38 @@ Applied in `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` on top of `6b64eb3` (one c
   * Q5: a separate security workstream, referenced only.
   * Statuses now read: "APPROVED by the owner 2026-11-21 with mandatory safeguards; implementation authorization effective after independent confirmation of the final design revision".
 * **Open for the reviewer:** confirmation of the final revision (no unresolved Critical, High or Medium). This is the condition that makes implementation authorization effective.
+
+
+## Final-revision confirmation (Agent G; model family Claude Opus) - the owner's gate for Q1 implementation authorization
+
+Delta reviewed: 6b64eb3..ab1d106 = a8b9d52 (fixes for M1, M2, L1-L5), 9ef3148 (merge of main 9ffaa6c), ab1d106 (owner decisions Q1-Q5 recorded, test renumbering). Checks:
+* **Nothing is implemented.** a8b9d52 and ab1d106 change only `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` and this record. In the merge 9ef3148 only three files differ from both parents: `.github/workflows/backend.yml` (registry title 1495 vs 1262 resolved to 1502, the sum of main and #48's own read-only tests), `docs/DECISIONS.md` and `CompanyRuntime.cs` (main's lines plus #48's existing lines); no migration, executor or financial execution path.
+* **M1 fixed** (3.1 `CompensationPlanPosition`, 3.2, 3.3(2) and 3.3(2a), N26): every entry of an epoch member must lie on a closure position, a storno must reverse an entry of the same position, and the member trigger checks the original operation's stornoed entries. **But see M3:** the closure table is not yet protected against rows ADDED after approval.
+* **M2 fixed** (3.3(4), section 6, N27): reversal refused for any epoch member (storno, event, rebook) or any operation with stornoed entries, in the database and the service.
+* **L1-L5 fixed** (N30 kind-4 member refusal; period `FOR SHARE`; `UNIQUE (audit_event_id)` with type and subject; N29 two-way equal-date chain; section 11 reworded).
+* **Period `FOR SHARE` and deadlock:** period closing (`FiscalCalendarService`) takes the fiscal-calendar advisory lock (HFCA) and then the period row `FOR UPDATE`; it locks no cost position. The executor takes positions, then the period `FOR SHARE` (only for epoch-member entries; ordinary postings unchanged). No cycle exists: one waits for the other, as N28 states.
+* **Q2 (X2-X8):** reflected accurately in section 9 (Open periods only; SoD including the event document; dedicated permissions and an Inventory Cost Approver role without widening; X5; X6 including original, event and rebook; X7 plan-bound documents; X8 with the OD-12/T-2 reconciliation left to the docs agent, not decided here).
+* **Q3 / section 11:** lists the REQUIRED contents of the revaluation contract and two explicit options, neither of which collapses layers; option (i)'s limits (revaluation date on successor layers; identity, rank and engine-visible date only through lineage) are stated; no contract is written.
+* **Q4:** the method-immutability guard stays untouched. **Q5:** referenced as a separate workstream; the design complies by construction (N17).
+
+**Per-safeguard assessment (owner's mandatory safeguards for X1-A):**
+
+| # | Safeguard | Met by | Assessment |
+|---|---|---|---|
+| 1 | Preserve all existing CHECKs, triggers and immutability | 3.7, N17 (byte-identical catalog, no trigger disabled) | met |
+| 2 | Never relax or replace an existing safeguard | section 3 (no `CREATE OR REPLACE` of an existing function, no `DISABLE TRIGGER`, no ALTER of a constraint), N17 | met |
+| 3 | Entry-level guard refusing unauthorized back-dated movements | 3.3(1), N1, N22, N16, N23 | met |
+| 4 | Replay only for an operation bound, in the same DB transaction, to the single execution of an approved plan | 3.1 (`xid8` `created_xact`, `UNIQUE (plan)`), 3.2, 3.3(1) (approved plan, fingerprints), N2, N4, N8, N21, N24 | met |
+| 5 | Every replayed operation and entry bound to the plan's APPROVED closure | 3.1, 3.2, 3.3(2), 3.3(2a), N26 | **not yet met: M3** (the approved closure can be widened by inserting closure rows after approval) |
+| 6 | SoD and Open fiscal periods enforced | 3.1 SoD trigger, 3.3(3) Open period with `FOR SHARE`, section 4, N3, N10, N28 | met |
+| 7 | No unauthorized reversals of original, event, storno and rebook operations | 3.3(4), section 6, `k_c8fdc6c0`, N14, N27 | met |
+| 8 | Transactional consistency and an auditable execution record | section 5 (one transaction), 3.4 deferred checks, audit binding with `UNIQUE (audit_event_id)`, type and subject, N19, N31 | met |
+| 9 | Never a client-controlled session flag or a general back-dating bypass | 3.3 (table rows only, never a GUC), N12 | met |
+| 10 | Historical accounting records and traceability preserved | sections 2, 3.2 (lineage), 3.7; originals never updated (no reversed-by mark); hash-identical originals test | met |
+
+**Findings of this confirmation:** 0 Critical, 0 High, 1 Medium, 0 Low.
+* **M3 (Medium, to P): the closure table is not protected against rows added after approval.** 3.1 says `CompensationPlanPosition` is "written with the plan, immutable, and covered by the plan fingerprint", and N5 refuses UPDATE, DELETE and TRUNCATE on the new tables. But nothing refuses an INSERT of a NEW closure row after the plan was approved, and the plan's stored fingerprint is not recomputed by PostgreSQL, so the entry guard (3.3(2a)) and the member trigger (3.2) would accept entries on the added position. That defeats safeguard 5 ("the plan's APPROVED closure") for exactly the threat M1 addressed (an executor bug or a forged row inside the executing transaction). Required: a BEFORE INSERT trigger on `CompensationPlanPosition` that accepts a row only while its plan is in status `proposed` and only in the transaction that created the plan (or, equivalently, a closure hash stored in the plan's immutable fingerprint and verified by the entry guard and the member trigger); an approval re-checks the closure against the fingerprint; and a new test (N32: a closure row inserted after approval, and one inserted in a later transaction, are refused, and an entry on such a position is refused).
+
+* **Verdict of this confirmation:** request changes (one Medium remains). The owner's condition for implementation authorization ("no unresolved Critical, High or Medium findings") is therefore NOT yet satisfied; it will be once M3 is fixed and confirmed.
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "final-revision confirmation of #48's plan-execution design revision 3 (delta 6b64eb3..ab1d106) as the owner's gate for Q1 implementation authorization: M1, M2 and L1-L5 fixes, each of the ten mandatory safeguards, closure immutability, period FOR SHARE deadlock analysis, Q2-Q5 reflected, nothing implemented"; Head SHA reviewed ab1d106136a6f95de7416214c92c56028419d400; executed: delta diff read, merge 9ef3148 checked file by file against both parents (only backend.yml, DECISIONS.md and CompanyRuntime.cs resolved; no implementation), period-closing locks read in FiscalCalendarService (advisory HFCA lock then period FOR UPDATE, no cost-position lock: no cycle with positions then period FOR SHARE), per-safeguard table; verdict request changes; findings M1, M2 and L1-L5 fixed; new M3 (closure rows can be inserted after approval and the stored fingerprint is not re-verified by the database: safeguard 5 not yet met).
