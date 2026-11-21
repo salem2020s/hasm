@@ -30,7 +30,8 @@ describe("api client", () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [{ id: "everything" }], can: { configure: true } })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
     const empty = await client.listPartyRoles(1, { ids: [] });
-    expect(empty).toEqual({ items: [], can: { configure: false }, total: 0 });
+    expect(empty).toEqual({ items: [], total: 0 });
+    expect(empty.can).toBeUndefined();                                               // no request, so no permission is known and none is invented
     expect(fetchMock).not.toHaveBeenCalled();
     await client.listPartyRoles(1, { search: "a" });                                   // other forms still call the server
     await client.listPartyRoles(undefined, {});                                        // ids absent is the unfiltered list

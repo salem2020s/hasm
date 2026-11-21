@@ -171,7 +171,7 @@ public class PartyRoleApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
-    public async Task The_list_endpoints_answer_a_malformed_query_parameter_with_the_standard_body_naming_the_parameter()
+    public async Task The_list_endpoints_answer_a_malformed_query_parameter_with_the_standard_validation_body_naming_the_parameter()
     {
         await StartApi();
         var cookie = await SignIn(Admin);
@@ -188,8 +188,9 @@ public class PartyRoleApiTests : HttpApiTestBase
         {
             var r = await Send(HttpMethod.Get, url, cookie: cookie);
             Assert.True(r.Status == HttpStatusCode.BadRequest, $"{url} -> {(int)r.Status}");
-            Assert.Equal("invalid_request", r.Error);                                       // the standard body, not the framework's bare 400
-            Assert.Equal(field, r.Json.GetProperty("field").GetString());
+            Assert.Equal("invalid_request", r.Error);                                       // the standard validation body, not the framework's bare 400
+            var named = Assert.Single(r.Json.GetProperty("fields").EnumerateArray());
+            Assert.Equal((field, "invalid_value"), (named.GetProperty("field").GetString(), named.GetProperty("code").GetString()));
         }
         // valid and absent values still work, an empty offset or limit counts as absent, and an unauthenticated caller still gets 401 before any parameter is looked at
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Roles}?limit=&offset=", cookie: cookie)).Status);

@@ -79,7 +79,7 @@ function RoleTab({ kind, resp, parties, accounts, reps, reload, onDirty }: RoleT
   const runner = useRunner("pr.error.", reload, "pr");
   const [editing, setEditing] = useState<PartyRole | null>(null);
   const [form, setForm] = useState(emptyForm);
-  const configure = resp.can.configure;
+  const configure = resp.can?.configure ?? false;   // `can` comes from the unfiltered list; absent means no permission is known, so nothing is offered (fails closed)
   const wantedType = kind === 1 ? "asset" : "liability";
   const candidates = accounts.filter((a) => a.type === wantedType && !a.isGroup && a.postable && (a.isActive || a.id === form.account));   // an already-chosen account stays shown even if later deactivated, so editing never silently drops it
   const used = new Set(resp.items.map((r) => r.partyId));
@@ -163,7 +163,7 @@ function RepsTab({ resp, reload, onDirty }: { resp: SalesRepresentativesResponse
   const auth = useAuth();
   const runner = useRunner("pr.error.", reload, "pr");
   const [form, setForm] = useState({ code: "", nameAr: "", nameEn: "", userId: "" });
-  const configure = resp.can.configure;
+  const configure = resp.can?.configure ?? false;   // `can` comes from the unfiltered list; absent means no permission is known, so nothing is offered (fails closed)
   const isDirty = Object.values(form).some((v) => v !== "");
   useReportUnsaved("pr-reps", isDirty, t("pr.tab.reps"));
   useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps

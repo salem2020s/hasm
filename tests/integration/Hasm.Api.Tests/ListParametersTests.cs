@@ -76,7 +76,7 @@ public class ListParametersTests
     }
 
     [Fact]
-    public async Task The_refusal_is_a_400_with_the_standard_error_code_and_the_field_name()
+    public async Task The_refusal_is_a_400_in_the_standard_validation_shape_naming_the_field()
     {
         var context = new DefaultHttpContext { RequestServices = new ServiceCollection().AddLogging().BuildServiceProvider() };
         var body = new MemoryStream();
@@ -86,6 +86,9 @@ public class ListParametersTests
         body.Position = 0;
         var json = JsonDocument.Parse(body).RootElement;
         Assert.Equal("invalid_request", json.GetProperty("error").GetString());
-        Assert.Equal("limit", json.GetProperty("field").GetString());
+        var field = Assert.Single(json.GetProperty("fields").EnumerateArray());                  // the same shape as every other validation error
+        Assert.Equal("limit", field.GetProperty("field").GetString());
+        Assert.Equal("invalid_value", field.GetProperty("code").GetString());
+        Assert.False(json.TryGetProperty("field", out _));
     }
 }

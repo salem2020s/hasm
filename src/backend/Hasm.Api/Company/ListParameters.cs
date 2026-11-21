@@ -4,7 +4,7 @@ namespace Hasm.Api.Company;
 
 /// <summary>
 /// The optional <c>search</c>, <c>offset</c>, <c>limit</c> (and, for party roles, <c>kind</c> and <c>ids</c>) query parameters of the master-data list endpoints, bound as STRINGS and validated here, so a
-/// non-numeric or malformed value answers the standard <c>invalid_request</c> body with the name of the offending parameter instead of the framework's bare 400. Only these list endpoints use it;
+/// non-numeric or malformed value answers the standard <c>invalid_request</c> validation body naming the offending parameter instead of the framework's bare 400. Only these list endpoints use it;
 /// the error shape of every other endpoint is unchanged. An empty <c>offset</c> or <c>limit</c> counts as absent, exactly as the typed binding did.
 /// </summary>
 public static class ListParameters
@@ -15,8 +15,11 @@ public static class ListParameters
         public bool Requested => ListPaging.IsRequested(Search, Offset, Limit);
     }
 
-    /// <summary>The standard refusal: 400 <c>{ "error": "invalid_request", "field": name }</c>.</summary>
-    public static IResult Invalid(string field) => Results.Json(new { error = "invalid_request", field }, statusCode: StatusCodes.Status400BadRequest);
+    /// <summary>
+    /// The standard validation refusal, the same shape as every other validation error (so the client's field-error handling works): 400
+    /// <c>{ "error": "invalid_request", "fields": [ { "field": name, "code": "invalid_value" } ] }</c>.
+    /// </summary>
+    public static IResult Invalid(string field) => Results.Json(new { error = "invalid_request", fields = new[] { new { field, code = "invalid_value" } } }, statusCode: StatusCodes.Status400BadRequest);
 
     private static bool TryInt(string? raw, out int? value)
     {
