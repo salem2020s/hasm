@@ -6,6 +6,8 @@ namespace Hasm.Api.Auth;
 
 public sealed record LoginRequest(string? Login, string? Password, string? Client);
 public sealed record MfaVerifyRequest(string? Challenge, string? Code, string? Client);
+public sealed record MfaEnrolBeginRequest(string? Challenge, string? EnrolmentCode, string? Password, string? Client);
+public sealed record MfaEnrolConfirmRequest(string? Challenge, string? Code, string? Client);
 public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);
 public sealed record CreateUserRequest(string? Login, string? DisplayName, string? Password, bool IsIdentityAdministrator);
 public sealed record SetStateRequest(string? State);
@@ -20,6 +22,8 @@ public static class AuthEndpoints
         var auth = app.MapGroup("/api/v1/auth");
         auth.MapPost("/login", Login).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/verify", MfaVerify).WithMetadata(new BodyLimit());
+        auth.MapPost("/mfa/enrol/begin", MfaEnrolBegin).WithMetadata(new BodyLimit());
+        auth.MapPost("/mfa/enrol/confirm", MfaEnrolConfirm).WithMetadata(new BodyLimit());
         auth.MapPost("/logout", Logout);
         auth.MapGet("/status", Status);
         auth.MapPost("/change-password", ChangePassword).RequireAuthorization().WithMetadata(new BodyLimit());
@@ -91,6 +95,46 @@ public static class AuthEndpoints
         return LoginResult(await auth.CompleteMfaLoginAsync(body.Challenge, body.Code, client, http.ClientSource(), http.RequestAborted), client, http);
     }
 
+    private static IResult EnrolResult(MfaEnrolOutcome outcome, SessionClient client, HttpContext http)
+    {
+        switch (outcome)
+        {
+            case MfaEnrolOutcome.Started s:
+                return Results.Json(new { otpauthUri = s.OtpauthUri, secret = s.SecretBase32 });                  // shown once; never returned again
+            case MfaEnrolOutcome.Confirmed { NewSession: { } session }:
+                return LoginResult(session, client, http);                                                          // a challenge-mode enrolment ends in a session, exactly like a login
+            case MfaEnrolOutcome.Confirmed:
+                return Results.Json(new { mfa = "enrolled" });
+            case MfaEnrolOutcome.Throttled t:
+                http.Response.Headers.RetryAfter = ((int)Math.Ceiling(t.RetryAfter.TotalSeconds)).ToString();
+                return Error(429, "too_many_attempts");
+            default:
+                return Error(401, "invalid_credentials");                                                           // one refusal for every cause
+        }
+    }
+
+    /// <summary>
+    /// Begins an enrolment. With a <c>challenge</c> (issued after the password step to a user who must enrol) the one-time enrolment code is required; without one the caller must have a session and re-confirm the password (D-142).
+    /// The route is anonymous because the challenge, not a cookie, is the credential of the first mode; the second mode refuses callers without a live session.
+    /// </summary>
+    private static async Task<IResult> MfaEnrolBegin(MfaEnrolBeginRequest? body, HttpContext http, AuthService auth)
+    {
+        if (body is null || ParseClient(body.Client) is not { } client) return Error(400, "invalid_request");
+        if (!string.IsNullOrEmpty(body.Challenge))
+            return EnrolResult(await auth.BeginEnrolmentWithChallengeAsync(body.Challenge, body.EnrolmentCode, client, http.ClientSource(), http.RequestAborted), client, http);
+        if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return Error(401, "invalid_credentials");
+        return EnrolResult(await auth.BeginEnrolmentWithSessionAsync(session, body.Password, http.ClientSource(), http.RequestAborted), client, http);
+    }
+
+    private static async Task<IResult> MfaEnrolConfirm(MfaEnrolConfirmRequest? body, HttpContext http, AuthService auth)
+    {
+        if (body is null || string.IsNullOrEmpty(body.Code) || ParseClient(body.Client) is not { } client) return Error(400, "invalid_request");
+        if (!string.IsNullOrEmpty(body.Challenge))
+            return EnrolResult(await auth.ConfirmEnrolmentWithChallengeAsync(body.Challenge, body.Code, client, http.ClientSource(), http.RequestAborted), client, http);
+        if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return Error(401, "invalid_credentials");
+        return EnrolResult(await auth.ConfirmEnrolmentWithSessionAsync(session, body.Code, http.ClientSource(), http.RequestAborted), client, http);
+    }
+
     private static async Task<IResult> Logout(HttpContext http, AuthService auth)
     {
         // Authentication middleware has already validated the token and stored the session.
@@ -108,6 +152,8 @@ public static class AuthEndpoints
             authenticated = true,
             user = UserView(s.UserId.ToString(), s.Login, s.DisplayName, s.IsIdentityAdministrator),
             session = new { client = s.Client.ToString().ToLowerInvariant(), idleExpiresAtUtc = s.IdleExpiresAtUtc, absoluteExpiresAtUtc = s.AbsoluteExpiresAtUtc },
+            // Phase 4.1: what the shared frontend needs to render the second-factor state (the server decides; the client only shows)
+            mfa = new { state = s.MfaState.ToString().ToLowerInvariant(), verified = s.MfaVerifiedAtUtc is not null, verifiedAtUtc = s.MfaVerifiedAtUtc },
         });
     }
 
