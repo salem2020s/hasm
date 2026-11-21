@@ -1,0 +1,31 @@
+# Independent review record
+
+* **Pull request:** #179
+* **Head SHA reviewed (full 40 characters):** ee00cf5356d7371b667c8332ccaa7951b91df0fb
+* **Reviewer context:** Agent R (independent docs reviewer, separate agent; not the author, who is Agent F2); model family Claude Opus. Prompt summary: "independent review of Draft PR #179 (LEAD MODEL SWITCH CHECKPOINT handoff refresh; docs only; head ee00cf5, base main 9a16fe0): verify every factual claim against git and REST: merges #169-#175 and #172, registry 1262, migrations, decision and audit allocations, open-PR heads (#174, #176, #177, #178, #48) and WIP branch heads; the owner register: 3.8D Q1-Q5 recorded PENDING, nothing marked decided, no production-ready claim, and the owner's 3.8D constraints stated faithfully (no X1-A, migration or execution path before owner authorization; revaluation in scope with a separate contract and no FIFO layer collapse; Q4 unimplemented; Q5 separate with protected authorization; legacy PR audit not started); severity scale Critical, High, Medium, Low; time-boxed". Own mktemp worktree on the detached head; REST only.
+* **Scope read:** the full `git diff origin/main...ee00cf5` (3 files: `docs/INTEGRATION-STATUS.md`, `docs/AUTONOMOUS-PROGRESS.md`, `docs/AUTONOMOUS-STATE.json`; the branch merged main `9a16fe0` in `5d76ed9`, merge base = main). Cross-read: `docs/PHASE-3.8D-RESUME-REVIEW.md` (section (f), Q1-Q5) and `docs/DECISIONS.md` on main; `backend.yml` at each merge; the WIP branches and #48.
+* **Checks run (commands and results):**
+  * **Merges:** `git log --first-parent 69c2916..origin/main` gives #169 `86e3ce8`, #170 `db85ae8`, #173 `41489c2`, #171 `785181b`, #175 `81f2f8d`, #172 `9a16fe0`, in the listed order. REST shows merged = true, with merge and head SHAs equal to the JSON `mergedRecently` (6/6).
+  * **Registry and migrations:** the step title is 1255 at the first five merges and 1262 at `9a16fe0`; the summed `EXPECTED` block also gives 1262. Migrations on main: company 32, system 33.
+  * **Decisions and audit codes:** DECISIONS.md on main has D-164..D-166 and no duplicated ID; next free D-190 holds. 1336/1337 are on main (`MfaStore.cs`).
+  * **Open PRs:** REST open PRs are #174 `43153c8`, #176 `37662d9`, #177 `ca8cb61`, #178 `7e0ccd8`, #48 `9f64f57`, the long-lived drafts and #179 itself, all Drafts; this matches the markdown and the JSON. The non-skipped check-runs of each head (REST) are all completed/success (7, 5, 7, 10 and 7 runs).
+  * **WIP branches:** `feature/phase-4-1-s3b-1b` = `71b15e2`, which carries system `0034_company_mfa_policy.sql`, D-167..D-169 and `PolicyChanged = 1338`; its registry is 1271 on base `8523d06` at 1262 (+9). `feature/phase-4-3-import-key-coverage` = `cd40c59`, registry 1257 on base 1255 (+2); D-179..D-181 appear only in code comments there (see L4). #48 `9f64f57` has registry 1495.
+  * **Register:** 3.8D-Q1..Q5, MD-Q1/Q2 and IMPORT-ORIGINALS-BACKUP-SCOPE are added as OPEN, and the JSON is valid and consistent. No production-ready claim; REL-ACC and M2-TOTP stay blocked; "legacy PR audit NOT started (owner instruction)" is recorded.
+  * main's `check-review-record.js` on this record: OK.
+* **Findings:** 0 Critical, 0 High, 1 Medium (M1), 4 Low (L1-L4):
+  * **Medium M1 (3.8D owner constraints).** The owner's 3.8D constraints are not recorded faithfully or in one place. The 3.8D-Q1..Q5 register row restates the resume review's open questions only. It does not record the owner's instruction:
+    * no X1-A, no 3.8D migration and no execution path before explicit owner authorization;
+    * revaluation stays IN 3.8D scope under its own reviewed accounting contract that never collapses FIFO layers;
+    * Q4 stays unimplemented;
+    * Q5 is a separate workstream needing protected-file authorization;
+    * the legacy PR audit is not started.
+
+    These appear only partly and without attribution in the #48 row of the checkpoint table ("nothing implemented", "revaluation stays in 3.8D scope ... (Q3)"). The Q3 status also contradicts itself: the table states revaluation is in scope, while the register still asks "is revaluation part of 3.8D". A new lead cannot tell whether that is an owner statement or an agent assumption, which is the distinction CLAUDE.md requires ("record such a decision ONCE in the owner-decision register"). Fix: add the owner instruction, dated 2026-11-21 and attributed to the owner, to the 3.8D register row, state the prohibition on any X1-A, migration or execution path explicitly, and mark which part of Q3 the owner answered (scope) and which stays pending (the contract itself).
+  * **Low L1 (INTEGRATION-STATUS long-lived drafts line, unchanged context):** it still says "#48 (`1e8f477`, BLOCKED on X1-X8)", while the checkpoint table and the JSON give head `9f64f57`.
+  * **Low L2 (the "4.1-S3" paragraph, unchanged context):** it still lists "the requirement model" as S3b work, but S3b-1a (#172) merged it; the JSON's knownIssues line is current.
+  * **Low L3 ("Kept review worktrees"):** machine-local /tmp paths go stale; `/tmp/hasm-R-HMEREW` and `/tmp/hasm-R-O0Ulg7` are already removed (lead instruction). Drop the line or mark it as transient.
+  * **Low L4 (D-179..D-181 "on B's WIP branch `cd40c59`"):** at `cd40c59` these IDs appear in code comments only; `docs/DECISIONS.md` on that branch has no D-179..D-181 rows (its docs are listed as unfinished). Say "referenced in code; decision rows pending".
+  * No Critical or High finding.
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the owner's exact 3.8D wording (taken from the lead's prompt; no in-repo owner record exists to compare against, which is M1); D's 203/203 regression and the review approvals named for #174/#177/#178 beyond their pushed records; the Hbe1Tests flaky report; exact-head `verify-head.js` for any open PR.
+* **Verdict:** request changes
