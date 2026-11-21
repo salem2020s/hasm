@@ -32,7 +32,32 @@ Sources: SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10; PHASE-3.12 (backup c
 * `PgBackupTool` validates NAMES only. The orchestrating slice must tie `sourceDatabase` to a real database of the company registry and the dump to the manifest's company before calling it.
 * A blocked drop of a failed restore target (the `restore_failed_cleanup_failed` path) is not exercised by a test (no robust way to block a drop on the shared disposable server).
 
-## Slice 3: orchestration - PLAN (revised after review round 1; not implemented; awaits confirmation before any code)
+## Slice 3: orchestration (plan approved in PR #91; implemented on `feature/phase-4-3-orchestration-impl`)
+
+### Implementation status (code PR)
+* **Built as planned:**
+  * `CompanyBackupService` (`BackupCompanyAsync`, `TrialRestoreAsync`, `DropTrialRestoreAsync`);
+  * the three `Hasm.Admin` commands;
+  * `PosixFactAttribute` and `FakeTools` (unit tests);
+  * the optional manifest field `companyMigrationVersion`;
+  * the operator section "Company backup and trial restore" in `docs/DEVELOPMENT.md`.
+* **Review round 2 Lows, implemented:**
+  * **R2-L1:** `drop-trial-restore` locks the registry table in SHARE mode from the registry check until the DROP has completed.
+  * **R2-L2:** the company's provisioning advisory lock is held for the whole backup (`company_busy`, exit code 4, when it is taken), and the migration level is re-read after the dump; a change is `migration_level_changed`.
+  * **R2-L3:** registry links whose local party is absent, or has no global id, in the restored copy are a warning, `shared_links_missing_locally`.
+* **Deviations from the plan text (no change of decision):**
+  * Check (a) reads this company's links with one read-only query on the registry tables instead of `PartyRegistryStore.GetLinkedIdentitiesAsync`. The store needs an audit trail to construct, and the query also yields the reverse direction required by R2-L3.
+  * PostgreSQL test 7 creates the link inconsistencies before the backup instead of after it. This is equivalent for the check, which compares the restored copy with the registry at restore time.
+  * Additional codes:
+    * `target_not_empty`: checked before the restore;
+    * `company_busy`;
+    * `migration_level_changed`;
+    * `restored_locale_mismatch`;
+    * `trial_drop_failed`: the trial database could not be dropped; it is then recorded in a kept-trial file instead of being left unnamed.
+  * `CompanyBackupServiceTests` runs in a non-parallel xunit collection. The trial databases that `Hasm.Admin` names opaquely would otherwise make the cluster-identity gate of a concurrently starting test refuse the cluster.
+* Local verification and CI results: see the PR description.
+
+### Plan (as approved)
 Goal: one company is backed up and trial-restored END TO END from the company registry, through administrative commands, using the slice 1 set and the slice 2 tool. The trial restore includes the read-only checks SRS 16.2 / Scenario 21.8 require: shared party links, attachment rows against files, and migration compatibility. Risk: Critical (ROADMAP 4.3).
 * **Migrations: none.** The registry and `Hasm_System` are only read, and nothing is added to any schema. If implementation shows a migration is needed, work stops and the lead allocates it.
 * **No API endpoint and no UI in this slice.** The shared Web/Tauri frontend is unaffected; a backup screen belongs to the monitoring/scheduling slice.

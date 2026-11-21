@@ -496,6 +496,49 @@ React + TypeScript; one build serves the web app and the Tauri window (hash rout
 6. **No per-user language field on the server**; the preference is a local setting.
 7. **CI** has not run on GitHub for this phase (see CI below); the CREATEROLE-dependent role suites (`CompanyRuntimeIsolationTests`, `CompanyAdminToolRoleTests`) were executed in Phase 3.1A-1 on an isolated, role-capable PostgreSQL instance; in Phase 3.1A-2 they were skipped locally (no CREATEROLE environment) and have not yet been verified on GitHub CI.
 
+## Company backup and trial restore (Phase 4.3)
+These administrative commands back up ONE company and trial-restore it. Decisions D-053 and D-058..D-062 apply; the design is in `docs/PHASE-4.3.md`.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-company <company-id> <destination-dir>
+dotnet run --project src/backend/Hasm.Admin -- trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]
+dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
+```
+* **Configuration.** As for every command, configuration comes only from the environment:
+  * the admin database account;
+  * `Hasm__Attachments__StorageDirectory`, which is **required: without it no backup is possible, and there is no override.** A run with a missing setting must never produce a set without the attachments;
+  * `Hasm__Encryption__KeyDirectory`, for key coverage and for decrypting sensitive attachments during the trial restore.
+
+  `pg_dump`/`pg_restore` are taken from `PATH` (the same major version as the server). Every path argument must be absolute.
+* **Output.** Stable codes, counts, the company id and the files given by or created for the operator. A physical database name, a password or tool output is never printed.
+* **Exit codes:**
+  * 0: ok;
+  * 1: refused or failed (the code is printed);
+  * 2: usage;
+  * 3: configuration (for example `attachment_storage_not_configured`);
+  * 4: the company is busy (provisioning, migration or runtime grant holding its lock);
+  * 8: completed with warnings (missing key ids, an older migration level, a stale row key id, a registry link missing locally).
+* **`backup-company`:**
+  * The company comes only from the registry, and only in state Ready.
+  * Its provisioning lock is held for the whole backup.
+  * An ICU/builtin locale is refused before the dump (`locale_unsupported`).
+  * The dump goes to a private staging file `<destination>.dump-<32 hex>`, which is removed afterwards. Staging files of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run, and nothing else is touched.
+  * The set (`database.dump`, `attachments/`, `manifest.json` with the locale and the company migration level) is verified before the command reports success.
+  * **Back up the key directory separately** (decision K). The set is neither encrypted nor signed yet.
+* **`trial-restore-company`:**
+  * The set is restored into a NEW, unregistered database and into `<attachment-target-dir>`, which must be empty and outside the live attachment storage.
+  * Then the read-only pre-cutover checks run:
+    * the locale and the company migration journal (level and checksums);
+    * every linked local party must resolve in `Hasm_System`;
+    * every attachment row must have its file, with a matching hash, and must be decryptable when its key is present.
+  * A set from a newer installation is refused before anything is created (`set_newer_than_installation`).
+  * The database is dropped afterwards. With `--keep` it stays, and an owner-only file `<set-dir>.trial-<random>.json` records it. Nothing is registered, granted or cut over.
+* **`drop-trial-restore <kept-file>`** drops only a database that:
+  * the file names;
+  * is not a registered company, system, maintenance or built-in database;
+  * carries the file's token in its comment.
+  The registry is locked against changes until the drop has completed. This is the only supported way to remove a kept trial database.
+* **Not available (BLOCKED, owner decision):** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch. The procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
+
 ## Checks
 ```
 dotnet test src/backend/Hasm.slnx

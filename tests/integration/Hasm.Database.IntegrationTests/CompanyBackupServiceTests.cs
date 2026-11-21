@@ -20,8 +20,11 @@ namespace Hasm.Database.IntegrationTests;
 /// <summary>
 /// Phase 4.3 slice 3 on the disposable PostgreSQL server (D-058..D-062): registry-bound backup of one company, trial restore into a NEW unregistered database with the read-only pre-cutover checks of
 /// SRS 16.2 / Scenario 21.8 (shared links, attachment rows against files, migration compatibility), kept trial databases and the real Hasm.Admin commands. Every database is created with the disposable
-/// prefix (injected name generator) except the trial databases of the Hasm.Admin test, which that test drops itself. Needs pg_dump/pg_restore of the server's major version on PATH.
+/// prefix (injected name generator) except the trial databases of the Hasm.Admin test (the production generator names them opaquely), which that test drops itself. The class runs in a
+/// NON-PARALLEL collection, after every other test class: while such a database exists, the cluster-identity gate of a concurrently starting test would rightly refuse the cluster.
+/// Needs pg_dump/pg_restore of the server's major version on PATH.
 /// </summary>
+[Collection(CompanyBackupSerialCollection.Name)]
 public class CompanyBackupServiceTests : PostgresTestBase
 {
     private readonly string work = Path.Combine(Path.GetTempPath(), "hasm-cbs-" + Guid.NewGuid().ToString("N"));
@@ -426,4 +429,11 @@ public class CompanyBackupServiceTests : PostgresTestBase
             if (keptDatabase is not null) await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE IF EXISTS {keptDatabase} WITH (FORCE)");
         }
     }
+}
+
+/// <summary>Runs <see cref="CompanyBackupServiceTests"/> alone (no other test class in parallel); see its summary.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class CompanyBackupSerialCollection
+{
+    public const string Name = "company-backup-serial";
 }
