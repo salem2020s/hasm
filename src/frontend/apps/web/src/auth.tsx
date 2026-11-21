@@ -25,6 +25,11 @@ export interface AuthValue {
   can(permission: string): boolean;
   /** True when ANY grant (company-wide or for a single branch) holds the permission. Only for showing a screen; the server decides per branch. */
   canAny(permission: string): boolean;
+  /**
+   * The permission for ONE branch, like the server's decision for a branch-scoped resource: a company-wide grant covers every branch, a grant for a single branch covers only that branch. A grant for ANOTHER branch
+   * does not count. For hiding or disabling a control on a branch-scoped document; the server still decides.
+   */
+  canOnBranch(permission: string, branchId: string): boolean;
   /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
   hasRole(roleId: string): boolean;
   companyName: string | null;
@@ -56,6 +61,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<ReadonlySet<string>>(new Set());
   const [anyPermissions, setAnyPermissions] = useState<ReadonlySet<string>>(new Set());
+  const [branchPermissions, setBranchPermissions] = useState<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
   const [roleGrants, setRoleGrants] = useState<readonly { roleId: string; scope: string; scopeId: string | null }[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
   const mounted = useRef(true);
@@ -67,6 +73,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
+    setBranchPermissions(new Map());
     setNotice(why);
     setPhase("anonymous");
   }, []);
@@ -89,6 +96,9 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
     setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
+    const perBranch = new Map<string, Set<string>>();
+    for (const g of me.grants) if (g.scope === "branch" && g.scopeId) { const set = perBranch.get(g.scopeId) ?? new Set<string>(); g.permissions.forEach((p) => set.add(p)); perBranch.set(g.scopeId, set); }
+    setBranchPermissions(perBranch);
     setRoleGrants(me.grants.map((g) => ({ roleId: g.roleId, scope: g.scope, scopeId: g.scopeId })));
     setPhase("ready");
   }, [api]);
@@ -165,6 +175,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
+    setBranchPermissions(new Map());
     try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
     setPhase("needCompany");
   }, [api, handleError, loadCompanies]);
@@ -177,9 +188,10 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
+    canOnBranch: (p, branchId) => permissions.has(p) || (branchPermissions.get(branchId)?.has(p) ?? false),
     hasRole: (r) => roleGrants.some((g) => g.roleId === r),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
-  }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, roleGrants, locale]);
+  }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

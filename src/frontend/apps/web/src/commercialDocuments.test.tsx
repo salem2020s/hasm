@@ -379,6 +379,57 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
   });
 
+  describe("Approve and Reject follow the approve permission for the DOCUMENT'S branch, like the server (C4 of PR #137)", () => {
+    const NO_APPROVE = PERMS.filter((p) => p !== "company.commercialdocs.approve");
+    const withGrants = (grants: unknown[]) => ({ accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    const open = (grants: unknown[]) => openSubmitted({ plan: [], decisions: [] }, withGrants(grants));      // the document is in branch "b1"
+
+    it("a grant of approve for ANOTHER branch hides Approve and Reject (and their notes): the server would refuse both", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "other-branch", permissions: ["company.commercialdocs.approve"] },
+      ]);
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+      expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+      expect(screen.queryByTestId("self-approval-note")).toBeNull();
+    });
+
+    it("a grant of approve for the document's own branch shows both, enabled", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.approve"] },
+      ]);
+      expect(screen.getByTestId("approve")).toBeEnabled();
+      expect(screen.getByTestId("reject")).toBeEnabled();
+    });
+
+    it("a company-wide grant covers every branch (the document's branch included)", async () => {
+      await open([{ roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS }]);
+      expect(screen.getByTestId("approve")).toBeEnabled();
+      expect(screen.getByTestId("reject")).toBeEnabled();
+    });
+
+    it("another branch's approve grant does not turn into approval through a different permission, and a branch grant of something else gives nothing", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "other", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.submit"] },    // this branch, but not the approve permission
+      ]);
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+    });
+
+    it("the grants of the previous session do not survive a sign-out (the next user starts with none)", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.approve"] },
+      ]);
+      expect(screen.getByTestId("approve")).toBeEnabled();
+      await userEvent.click(screen.getByRole("button", { name: "تسجيل الخروج" }));
+      expect(await screen.findByRole("button", { name: "دخول" })).toBeInTheDocument();
+    });
+  });
+
   it("says a decision was recorded when the document stays submitted, reloads the progress, and says approved when it completes", async () => {
     const approve = vi.fn().mockResolvedValueOnce(submittedDoc()).mockResolvedValueOnce(approved());
     const progress = vi.fn().mockResolvedValueOnce({ plan: [stage(1, 1, 0), stage(2, 1, 0)], decisions: [] }).mockResolvedValueOnce({ plan: [stage(1, 1, 1), stage(2, 1, 0)], decisions: [decision(1, "u1", 1)] });
