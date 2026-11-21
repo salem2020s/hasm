@@ -6,6 +6,9 @@ using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
+using Hasm.Infrastructure.Ledger;
+using Hasm.Infrastructure.Pricing;
+using Hasm.Infrastructure.Taxes;
 using Npgsql;
 using NpgsqlTypes;
 using BR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
@@ -13,6 +16,11 @@ using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentEvent;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
 using PR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.PartyRole;
+using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
+using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
+using FY = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalYear;
+using CDA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentApproval;
+using CDS = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentSnapshot;
 
 namespace Hasm.Infrastructure.Commercial;
 
@@ -22,7 +30,7 @@ namespace Hasm.Infrastructure.Commercial;
 /// Nothing is ever removed (a draft's lines are replaced only while it is a draft, by PostgreSQL's guard). Creation is idempotent per (document type, creator, key); a key reused with another payload is refused.
 /// S1a carries no price, tax, cost, approval, numbering, stock or ledger effect (docs/PHASE-3.13.md).
 /// </summary>
-public sealed partial class CommercialDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ICommercialDocumentTypeRegistry types)
+public sealed partial class CommercialDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ICommercialDocumentTypeRegistry types, PricingConfigService pricing, TaxConfigService taxes)
 {
     private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
@@ -56,10 +64,12 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
 
     // ================================================================================================================ reading
 
-    private const string DocCols = $"{CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.SubmittedBy}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}";
+    private const string DocCols = $"{CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.SubmittedBy}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}, {CDA.OfficialNumber}, {CDA.ApprovedBy}, {CDA.ApprovedAtUtc}, {CDA.SealedAtUtc}, {CDA.ExchangeRate}, {CDA.TotalNet}, {CDA.TotalTax}, {CDA.TotalGross}, {CDA.LastEditedBy}, {CDA.Fingerprint}, {CDA.FiscalYearId}";
 
     private static CommercialDocumentView ReadHeader(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetGuid(2), r.GetGuid(3), r.GetString(4).Trim(), r.GetFieldValue<DateOnly>(5), (CommercialMode)r.GetInt16(6), (CommercialStatus)r.GetInt16(7),
-        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetGuid(9), r.GetInt64(10), r.GetGuid(11), r.GetFieldValue<DateTimeOffset>(12), r.GetFieldValue<DateTimeOffset>(13), [], []);
+        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetGuid(9), r.GetInt64(10), r.GetGuid(11), r.GetFieldValue<DateTimeOffset>(12), r.GetFieldValue<DateTimeOffset>(13), [], [], false,
+        r.IsDBNull(14) ? null : r.GetString(14), r.IsDBNull(15) ? null : r.GetGuid(15), r.IsDBNull(16) ? null : r.GetFieldValue<DateTimeOffset>(16), r.IsDBNull(17) ? null : r.GetFieldValue<DateTimeOffset>(17),
+        r.IsDBNull(18) ? null : r.GetDecimal(18), r.IsDBNull(19) ? null : r.GetDecimal(19), r.IsDBNull(20) ? null : r.GetDecimal(20), r.IsDBNull(21) ? null : r.GetDecimal(21), r.IsDBNull(22) ? null : r.GetGuid(22), r.IsDBNull(23) ? null : r.GetString(23).Trim(), r.IsDBNull(24) ? null : r.GetGuid(24));
 
     private static async Task<CommercialDocumentView?> LoadAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, bool withChildren, CancellationToken ct)
     {
@@ -72,11 +82,11 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         }
         if (head is null || !withChildren) return head;
         var lines = new List<CommercialLineView>();
-        await using (var q = new NpgsqlCommand($"SELECT {CL.LineNo}, {CL.ItemId}, {CL.UnitId}, {CL.Quantity}, {CL.WarehouseId} FROM {CL.Table} WHERE {CL.DocumentId} = @id ORDER BY {CL.LineNo}", conn, tx))
+        await using (var q = new NpgsqlCommand($"SELECT {CL.LineNo}, {CL.ItemId}, {CL.UnitId}, {CL.Quantity}, {CL.WarehouseId}, {CDS.LineNet}, {CDS.PricingHash} FROM {CL.Table} WHERE {CL.DocumentId} = @id ORDER BY {CL.LineNo}", conn, tx))
         {
             q.Parameters.AddWithValue("id", id);
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) lines.Add(new CommercialLineView(r.GetInt32(0), r.GetGuid(1), r.GetGuid(2), r.GetDecimal(3), r.IsDBNull(4) ? null : r.GetGuid(4)));
+            while (await r.ReadAsync(ct)) lines.Add(new CommercialLineView(r.GetInt32(0), r.GetGuid(1), r.GetGuid(2), r.GetDecimal(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.IsDBNull(5) ? null : r.GetDecimal(5), r.IsDBNull(6) ? null : r.GetString(6).Trim()));
         }
         var events = new List<CommercialEventView>();
         await using (var q = new NpgsqlCommand($"SELECT {CE.Kind}, {CE.FromStatus}, {CE.ToStatus}, {CE.Revision}, {CE.ActorUserId}, {CE.Reason}, {CE.AtUtc} FROM {CE.Table} WHERE {CE.DocumentId} = @id ORDER BY {CE.Revision}", conn, tx))
@@ -213,8 +223,8 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             if (existing is { } e) throw ReplayOrRefuse(e, hash);
             await RequireBranchAndParty(work, input.BranchId!.Value, input.PartyId!.Value, ct);
             var now = Now;
-            await using (var ins = new NpgsqlCommand($"INSERT INTO {CD.Table} ({CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.IdempotencyKey}, {CD.PayloadHash}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}) " +
-                "VALUES (@id, @dt, @br, @p, @cur, @d, @m, 1, @note, @key, @h, 1, @by, @now, @now)", work.Connection, work.Transaction))
+            await using (var ins = new NpgsqlCommand($"INSERT INTO {CD.Table} ({CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.IdempotencyKey}, {CD.PayloadHash}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}, {CDA.LastEditedBy}) " +
+                "VALUES (@id, @dt, @br, @p, @cur, @d, @m, 1, @note, @key, @h, 1, @by, @now, @now, @by)", work.Connection, work.Transaction))
             {
                 ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("dt", docType); ins.Parameters.AddWithValue("br", input.BranchId!.Value); ins.Parameters.AddWithValue("p", input.PartyId!.Value);
                 ins.Parameters.AddWithValue("cur", currency); ins.Parameters.Add(new NpgsqlParameter("d", NpgsqlDbType.Date) { Value = input.DocumentDate!.Value }); ins.Parameters.AddWithValue("m", (short)input.Mode!.Value);
@@ -268,7 +278,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         if (expectedRevision is null) return ConfigResult<CommercialDocumentView>.Fail(ConfigStatus.PreconditionRequired, "precondition_required");
         var r = await Mutate(companyId, async work =>
         {
-            var cur = await LoadAsync(work.Connection, work.Transaction, id, true, false, ct) ?? throw new Abort(ConfigStatus.NotFound, "commercial_document_not_found");
+            var cur = await LoadAsync(work.Connection, work.Transaction, id, true, true, ct) ?? throw new Abort(ConfigStatus.NotFound, "commercial_document_not_found");
             if (cur.Revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", null, cur.Revision);
             await change(work, cur);
             return true;
@@ -283,7 +293,39 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         await upd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>Replaces the editable fields and the whole line set of a DRAFT (revision-fenced). The type, branch and key never change. Material edits of an approved document are slice S1b.</summary>
+    /// <summary>
+    /// Moves the document back to DRAFT (withdrawal, re-approval after a material edit, reopening of a rejected document): the submitter, approval, seal, fingerprint, snapshots, rate and totals are cleared and the
+    /// line snapshots with them (a draft carries none); the OFFICIAL NUMBER and its fiscal year stay (D-050). One revision, one event.
+    /// </summary>
+    private async Task ToDraftAsync(CompanyAuditedWork work, CommercialDocumentView cur, CommercialEventKind kind, short auditType, Guid actor, string? reason, string detail, CancellationToken ct)
+    {
+        await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 1, {CD.SubmittedBy} = NULL, {CDA.ApprovedBy} = NULL, {CDA.ApprovedAtUtc} = NULL, {CDA.SealedAtUtc} = NULL, {CDA.Fingerprint} = NULL, {CDA.TaxSnapshot} = NULL, {CDA.TaxHash} = NULL, " +
+            $"{CDA.ExchangeRate} = NULL, {CDA.ExchangeRateRef} = NULL, {CDA.TotalNet} = NULL, {CDA.TotalTax} = NULL, {CDA.TotalGross} = NULL, {CDA.LastEditedBy} = @by, {CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+        {
+            upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("by", actor); upd.Parameters.AddWithValue("now", Now);
+            await upd.ExecuteNonQueryAsync(ct);
+        }
+        await using (var lines = new NpgsqlCommand($"UPDATE {CL.Table} SET {CDS.PricingSnapshot} = NULL, {CDS.PricingHash} = NULL, {CDS.LineNet} = NULL WHERE {CL.DocumentId} = @id", work.Connection, work.Transaction))
+        {
+            lines.Parameters.AddWithValue("id", cur.Id);
+            await lines.ExecuteNonQueryAsync(ct);   // allowed: the document is a draft again
+        }
+        await AppendEventAsync(work, cur.Id, kind, cur.Status, CommercialStatus.Draft, cur.Revision + 1, actor, reason, auditType, detail, ct);
+    }
+
+    private static bool SameLines(IReadOnlyList<CommercialLineView> current, IReadOnlyList<CommercialLineInput> input)
+    {
+        if (current.Count != input.Count) return false;
+        for (var n = 0; n < current.Count; n++)
+            if (current[n].ItemId != input[n].ItemId || current[n].UnitId != input[n].UnitId || current[n].Quantity != input[n].Quantity || current[n].WarehouseId != input[n].WarehouseId) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Edits a document. A DRAFT is replaced as a whole (revision-fenced); a REJECTED document is reopened to draft first (event 9); an APPROVED document with no effect changes only its NOTE in place, while any MATERIAL
+    /// change (party, currency, date, any line item, unit, quantity or warehouse) sends it back to draft through re-approval (event 8): its approval, seal and snapshots are dropped, its official number is KEPT (D-050).
+    /// The mode is frozen once the document is numbered (D-052). The type, branch and key never change. A submitted or cancelled document is not edited.
+    /// </summary>
     public Task<ConfigResult<CommercialDocumentView>> UpdateAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CommercialDocumentInput? input, CancellationToken ct = default)
     {
         if (input is null) return Task.FromResult(ConfigResult<CommercialDocumentView>.Invalid([new FieldError("input", "required")]));
@@ -291,52 +333,221 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         if (errors.Count > 0) return Task.FromResult(ConfigResult<CommercialDocumentView>.Invalid(errors));
         return Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
         {
-            if (cur.Status != CommercialStatus.Draft) throw new Abort(ConfigStatus.Conflict, "document_not_draft");
+            if (cur.Status is CommercialStatus.Submitted or CommercialStatus.Cancelled) throw new Abort(ConfigStatus.Conflict, "document_not_draft");
             if (input.DocType is { } t && !string.Equals(t.Trim(), cur.DocType, StringComparison.Ordinal)) throw Invalid("docType", "doc_type_immutable");
             if (input.BranchId is { } b && b != cur.BranchId) throw Invalid("branchId", "branch_immutable");
+            if (cur.OfficialNumber is not null && (CommercialMode)input.Mode!.Value != cur.Mode) throw Invalid("mode", "mode_frozen");   // frozen at the first approval
             await RequireBranchAndParty(work, cur.BranchId, input.PartyId!.Value, ct);
-            await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.PartyId} = @p, {CD.Currency} = @cur, {CD.DocumentDate} = @d, {CD.Mode} = @m, {CD.Note} = @note, {CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+            if (!await DateInNumberYearAsync(work, cur.FiscalYearId, input.DocumentDate!.Value, ct)) throw Invalid("documentDate", "date_outside_number_year");   // D-068: a numbered document keeps its date inside the fiscal year of its number
+            var working = cur;
+            if (cur.Status == CommercialStatus.Approved)
             {
-                upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("p", input.PartyId!.Value); upd.Parameters.AddWithValue("cur", currency);
+                var material = input.PartyId != cur.PartyId || currency != cur.Currency || input.DocumentDate != cur.DocumentDate || !SameLines(cur.Lines, lines);
+                if (!material)
+                {
+                    // a non-material edit of an approved document: only the note, in place (the guard allows nothing else)
+                    await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Note} = @note, {CDA.LastEditedBy} = @by, {CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+                    {
+                        upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("by", actor); upd.Parameters.AddWithValue("now", Now);
+                        upd.Parameters.Add(new NpgsqlParameter("note", NpgsqlDbType.Varchar) { Value = (object?)note ?? DBNull.Value });
+                        await upd.ExecuteNonQueryAsync(ct);
+                    }
+                    await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Approved, CommercialStatus.Approved, cur.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"approved commercial document note updated r{cur.Revision + 1}", ct);
+                    return;
+                }
+                await ToDraftAsync(work, cur, CommercialEventKind.ReapprovalRequested, CommercialAuditEvents.ReapprovalRequested, actor, null, $"material edit of approved commercial document: re-approval required, number {cur.OfficialNumber} kept", ct);
+                working = cur with { Status = CommercialStatus.Draft, Revision = cur.Revision + 1 };
+            }
+            else if (cur.Status == CommercialStatus.Rejected)
+            {
+                await ToDraftAsync(work, cur, CommercialEventKind.Reopened, CommercialAuditEvents.Reopened, actor, null, "rejected commercial document reopened as a draft", ct);
+                working = cur with { Status = CommercialStatus.Draft, Revision = cur.Revision + 1 };
+            }
+            await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.PartyId} = @p, {CD.Currency} = @cur, {CD.DocumentDate} = @d, {CD.Mode} = @m, {CD.Note} = @note, {CDA.LastEditedBy} = @by, {CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+            {
+                upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("p", input.PartyId!.Value); upd.Parameters.AddWithValue("cur", currency); upd.Parameters.AddWithValue("by", actor);
                 upd.Parameters.Add(new NpgsqlParameter("d", NpgsqlDbType.Date) { Value = input.DocumentDate!.Value }); upd.Parameters.AddWithValue("m", (short)input.Mode!.Value);
                 upd.Parameters.Add(new NpgsqlParameter("note", NpgsqlDbType.Varchar) { Value = (object?)note ?? DBNull.Value }); upd.Parameters.AddWithValue("now", Now);
                 await upd.ExecuteNonQueryAsync(ct);
             }
             await using (var del = new NpgsqlCommand($"DELETE FROM {CL.Table} WHERE {CL.DocumentId} = @id", work.Connection, work.Transaction)) { del.Parameters.AddWithValue("id", cur.Id); await del.ExecuteNonQueryAsync(ct); }
             await InsertLinesAsync(work, cur.Id, lines, ct);
-            await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Draft, CommercialStatus.Draft, cur.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"commercial document updated r{cur.Revision + 1} lines={lines.Count}", ct);
+            await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Draft, CommercialStatus.Draft, working.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"commercial document updated r{working.Revision + 1} lines={lines.Count}", ct);
         }, ct);
     }
 
-    /// <summary>Draft to submitted. A document needs at least one line to be submitted; the submitter is recorded (the independent-approver rule of S1b compares against it).</summary>
+    /// <summary>True when the document has no number yet, or the date lies inside the fiscal year the number was issued in (D-068; the 0029 guard enforces the same rule).</summary>
+    private static async Task<bool> DateInNumberYearAsync(CompanyAuditedWork work, Guid? fiscalYearId, DateOnly date, CancellationToken ct)
+    {
+        if (fiscalYearId is null) return true;
+        await using var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {FY.Table} WHERE {FY.Id} = @y AND @d BETWEEN {FY.StartDate} AND {FY.EndDate})", work.Connection, work.Transaction);
+        q.Parameters.AddWithValue("y", fiscalYearId.Value); q.Parameters.Add(new NpgsqlParameter("d", NpgsqlDbType.Date) { Value = date });
+        return (bool)(await q.ExecuteScalarAsync(ct))!;
+    }
+
+    // ================================================================================================================ the server-produced quote (price, tax, rate)
+
+    private sealed record DocumentQuote(IReadOnlyList<(string Json, string Hash, decimal Net)> Lines, string TaxJson, string TaxHash, decimal Rate, string RateRef, decimal TotalNet, decimal TotalTax, decimal TotalGross, string Fingerprint);
+
+    /// <summary>
+    /// Prices and taxes the whole document THROUGH THE SERVER PATH, inside the caller's transaction: every line through the pricing quote (the item group and the customer group come from stored data), the taxes through the
+    /// tax resolver and engine (the policy is the company's saved policy: without one the document is refused), and the exchange rate from the base currency or the dated rate table. Nothing is taken from the client.
+    /// The fingerprint covers every pricing hash, the tax hash, the rate and the currency, so the approval can prove that nothing changed since the submit (<c>pricing_changed</c>).
+    /// </summary>
+    private async Task<DocumentQuote> QuoteDocumentAsync(CompanyAuditedWork work, CommercialDocumentView doc, CancellationToken ct)
+    {
+        var (rate, rateRef) = await ResolveRateAsync(work, doc.Currency, doc.DocumentDate, ct);
+        var lines = new List<(string, string, decimal)>();
+        var taxLines = new List<TaxLineInput>();
+        TaxPolicy? policy = null;
+        for (var n = 0; n < doc.Lines.Count; n++)
+        {
+            var line = doc.Lines[n];
+            var q = await pricing.QuoteInWorkAsync(work.Connection, work.Transaction!, new PricingRequest(doc.DocumentDate, doc.Currency, line.ItemId, null, line.UnitId, line.Quantity, doc.PartyId), null, ct);
+            if (!q.IsOk) throw Invalid($"lines[{n}]", q.Fields?.FirstOrDefault()?.Code ?? q.Code ?? "pricing_failed");
+            var snapshot = q.Value!;
+            var tax = await taxes.ResolveInWorkAsync(work.Connection, work.Transaction!, doc.DocType, CommercialDefaults.TaxOperation, line.ItemId, doc.PartyId, doc.DocumentDate, ct);
+            if (!tax.IsOk) throw Invalid($"lines[{n}]", tax.Code ?? "tax_failed");
+            policy ??= tax.Value!.Policy;
+            lines.Add((System.Text.Json.JsonSerializer.Serialize(snapshot), snapshot.ContentHash, snapshot.Result.LineNet));
+            taxLines.Add(new TaxLineInput(n + 1, line.Quantity, snapshot.Result.NetUnitPrice, 0m, false, tax.Value!.Components));
+        }
+        if (policy is null) throw Invalid("lines", "lines_required");
+        TaxSnapshot taxSnapshot;
+        try { taxSnapshot = TaxSnapshots.Create(policy, taxLines, ct); }
+        catch (TaxException ex) { throw Invalid("lines", ex.Code); }
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("|", lines.Select(l => l.Item2)) + "|" + taxSnapshot.ContentHash + "|" + rate.ToString("0.############", CultureInfo.InvariantCulture) + "|" + doc.Currency))).ToLowerInvariant();
+        var total = taxSnapshot.Result;
+        return new DocumentQuote(lines, System.Text.Json.JsonSerializer.Serialize(taxSnapshot), taxSnapshot.ContentHash, rate, rateRef, total.TotalNet, total.TotalTax, total.TotalGross, fingerprint);
+    }
+
+    private static async Task<(decimal Rate, string Ref)> ResolveRateAsync(CompanyAuditedWork work, string currency, DateOnly date, CancellationToken ct)
+    {
+        string? baseCurrency;
+        await using (var q = new NpgsqlCommand($"SELECT {CC.Code} FROM {CC.Table} WHERE {CC.IsBase}", work.Connection, work.Transaction)) baseCurrency = (await q.ExecuteScalarAsync(ct)) as string;
+        if (baseCurrency is null) throw Invalid("currency", "base_currency_missing");
+        if (string.Equals(baseCurrency.Trim(), currency, StringComparison.OrdinalIgnoreCase)) return (1m, "base");
+        var applied = await ExchangeRateService.ResolveAsync(work.Connection, work.Transaction, currency, date, ct) ?? throw Invalid("currency", "exchange_rate_missing");
+        return (applied.Rate, "rate:" + applied.RateId.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static async Task WriteQuoteAsync(CompanyAuditedWork work, CommercialDocumentView cur, DocumentQuote quote, CancellationToken ct)
+    {
+        for (var n = 0; n < cur.Lines.Count; n++)
+        {
+            await using var upd = new NpgsqlCommand($"UPDATE {CL.Table} SET {CDS.PricingSnapshot} = @s, {CDS.PricingHash} = @h, {CDS.LineNet} = @net WHERE {CL.DocumentId} = @d AND {CL.LineNo} = @n", work.Connection, work.Transaction);
+            upd.Parameters.AddWithValue("d", cur.Id); upd.Parameters.AddWithValue("n", cur.Lines[n].LineNo); upd.Parameters.AddWithValue("s", quote.Lines[n].Json); upd.Parameters.AddWithValue("h", quote.Lines[n].Hash);
+            upd.Parameters.Add(new NpgsqlParameter("net", NpgsqlDbType.Numeric) { Value = quote.Lines[n].Net });
+            await upd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    // ================================================================================================================ submit, withdraw, approve, reject, cancel
+
+    /// <summary>
+    /// Draft to submitted. The document is priced and taxed by the SERVER (price, tax and rate snapshots are produced here, never accepted from the client), at least one line is required, and the fingerprint of that quote
+    /// is recorded: the approval re-quotes and refuses any difference. The submitter is recorded (the approver is never the creator, the last editor or the submitter).
+    /// </summary>
     public Task<ConfigResult<CommercialDocumentView>> SubmitAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
         Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
         {
             if (cur.Status != CommercialStatus.Draft) throw new Abort(ConfigStatus.Conflict, "document_not_draft");
-            await using (var c = new NpgsqlCommand($"SELECT count(*) FROM {CL.Table} WHERE {CL.DocumentId} = @id", work.Connection, work.Transaction)) { c.Parameters.AddWithValue("id", cur.Id); if ((long)(await c.ExecuteScalarAsync(ct))! == 0) throw Invalid("lines", "lines_required"); }
-            await SetStatusAsync(work, cur, CommercialStatus.Submitted, actor, ct);
-            await AppendEventAsync(work, cur.Id, CommercialEventKind.Submitted, CommercialStatus.Draft, CommercialStatus.Submitted, cur.Revision + 1, actor, null, CommercialAuditEvents.Submitted, $"commercial document submitted r{cur.Revision + 1}", ct);
+            if (cur.Lines.Count == 0) throw Invalid("lines", "lines_required");
+            await RequireBranchAndParty(work, cur.BranchId, cur.PartyId, ct);
+            var quote = await QuoteDocumentAsync(work, cur, ct);
+            await WriteQuoteAsync(work, cur, quote, ct);   // while the document is still a draft (the lines are locked afterwards)
+            await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 2, {CD.SubmittedBy} = @by, {CDA.Fingerprint} = @fp, {CDA.TaxSnapshot} = @ts, {CDA.TaxHash} = @th, {CDA.ExchangeRate} = @rate, {CDA.ExchangeRateRef} = @rref, " +
+                $"{CDA.TotalNet} = @tn, {CDA.TotalTax} = @tt, {CDA.TotalGross} = @tg, {CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+            {
+                upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("by", actor); upd.Parameters.AddWithValue("fp", quote.Fingerprint); upd.Parameters.AddWithValue("ts", quote.TaxJson); upd.Parameters.AddWithValue("th", quote.TaxHash);
+                upd.Parameters.Add(new NpgsqlParameter("rate", NpgsqlDbType.Numeric) { Value = quote.Rate }); upd.Parameters.AddWithValue("rref", quote.RateRef);
+                upd.Parameters.Add(new NpgsqlParameter("tn", NpgsqlDbType.Numeric) { Value = quote.TotalNet }); upd.Parameters.Add(new NpgsqlParameter("tt", NpgsqlDbType.Numeric) { Value = quote.TotalTax }); upd.Parameters.Add(new NpgsqlParameter("tg", NpgsqlDbType.Numeric) { Value = quote.TotalGross });
+                upd.Parameters.AddWithValue("now", Now);
+                await upd.ExecuteNonQueryAsync(ct);
+            }
+            await AppendEventAsync(work, cur.Id, CommercialEventKind.Submitted, CommercialStatus.Draft, CommercialStatus.Submitted, cur.Revision + 1, actor, null, CommercialAuditEvents.Submitted, $"commercial document submitted r{cur.Revision + 1} gross={quote.TotalGross.ToString(CultureInfo.InvariantCulture)}", ct);
         }, ct);
 
-    /// <summary>Submitted back to draft (withdrawal): the submitter record is cleared and the lines become editable again.</summary>
+    /// <summary>Submitted back to draft (withdrawal): the submitter record, the quote and the snapshots are dropped and the lines become editable again.</summary>
     public Task<ConfigResult<CommercialDocumentView>> WithdrawAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
         Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
         {
             if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
-            await SetStatusAsync(work, cur, CommercialStatus.Draft, null, ct);
-            await AppendEventAsync(work, cur.Id, CommercialEventKind.Withdrawn, CommercialStatus.Submitted, CommercialStatus.Draft, cur.Revision + 1, actor, null, CommercialAuditEvents.Withdrawn, $"commercial document withdrawn r{cur.Revision + 1}", ct);
+            await ToDraftAsync(work, cur, CommercialEventKind.Withdrawn, CommercialAuditEvents.Withdrawn, actor, null, $"commercial document withdrawn r{cur.Revision + 1}", ct);
         }, ct);
 
-    /// <summary>Draft or submitted to cancelled (final), with a mandatory reason. The cancellation of an APPROVED document and the voiding of its number are slice S1b.</summary>
+    /// <summary>
+    /// Submitted to approved by an INDEPENDENT approver (never the creator, the last editor or the submitter: <c>approver_not_independent</c>), bound to the exact revision (If-Match). In ONE transaction: the document date must
+    /// lie in an OPEN fiscal period; the document is priced and taxed AGAIN by the server and must produce exactly the fingerprint recorded at submit (otherwise <c>pricing_changed</c> and nothing changes); the official number is
+    /// issued at the FIRST approval (kept through re-approval, D-050); the quote is sealed. Approval creates no stock movement and no ledger entry (later slices).
+    /// </summary>
+    public Task<ConfigResult<CommercialDocumentView>> ApproveAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
+        Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
+        {
+            if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
+            if (actor == cur.SubmittedBy || actor == cur.CreatedBy || actor == cur.LastEditedBy) throw new Abort(ConfigStatus.Conflict, "approver_not_independent");
+            await RequireBranchAndParty(work, cur.BranchId, cur.PartyId, ct);
+            if (!await DateInNumberYearAsync(work, cur.FiscalYearId, cur.DocumentDate, ct)) throw new Abort(ConfigStatus.Conflict, "date_outside_number_year");
+            var check = await FiscalPeriodGate.CheckAsync(work.Connection, work.Transaction!, cur.DocumentDate, false, ct);   // locks the period row FOR SHARE until commit
+            if (!check.Allowed) throw new Abort(ConfigStatus.Conflict, check.Reason!);
+            var quote = await QuoteDocumentAsync(work, cur, ct);
+            if (quote.Fingerprint != cur.Fingerprint) throw new Abort(ConfigStatus.Conflict, "pricing_changed");   // the server prices the document again: any difference since the submit is refused
+            string number = cur.OfficialNumber!; Guid? yearId = null;
+            if (cur.OfficialNumber is null)
+            {
+                string branchCode; int yearLabel; Guid year;
+                await using (var q = new NpgsqlCommand($"SELECT (SELECT {BR.Code} FROM {BR.Table} WHERE {BR.Id} = @b), EXTRACT(YEAR FROM y.{FY.StartDate})::int, y.{FY.Id} FROM {FP.Table} p JOIN {FY.Table} y ON y.{FY.Id} = p.{FP.YearId} WHERE p.{FP.Id} = @p", work.Connection, work.Transaction))
+                {
+                    q.Parameters.AddWithValue("b", cur.BranchId); q.Parameters.AddWithValue("p", check.PeriodId!.Value);
+                    await using var r = await q.ExecuteReaderAsync(ct);
+                    await r.ReadAsync(ct);
+                    branchCode = r.GetString(0); yearLabel = r.GetInt32(1); year = r.GetGuid(2);
+                }
+                var issued = await NumberingService.IssueForRegisteredTypeAsync(work.Connection, work.Transaction!, cur.DocType, new NumberScope(cur.BranchId, branchCode, year, yearLabel.ToString(CultureInfo.InvariantCulture)), cur.Id, actor, Now, ct);
+                number = issued.Number; yearId = year;
+            }
+            await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 3, {CDA.ApprovedBy} = @by, {CDA.ApprovedAtUtc} = @now, {CDA.SealedAtUtc} = @now, {CDA.OfficialNumber} = @num, {CDA.FiscalYearId} = COALESCE(@fy, {CDA.FiscalYearId}), " +
+                $"{CD.Revision} = {CD.Revision} + 1, {CD.UpdatedAtUtc} = @now WHERE {CD.Id} = @id", work.Connection, work.Transaction))
+            {
+                upd.Parameters.AddWithValue("id", cur.Id); upd.Parameters.AddWithValue("by", actor); upd.Parameters.AddWithValue("now", Now); upd.Parameters.AddWithValue("num", number); upd.Parameters.Add(Uuid("fy", yearId));
+                await upd.ExecuteNonQueryAsync(ct);
+            }
+            await AppendEventAsync(work, cur.Id, CommercialEventKind.Approved, CommercialStatus.Submitted, CommercialStatus.Approved, cur.Revision + 1, actor, null, CommercialAuditEvents.Approved, $"commercial document approved r{cur.Revision + 1} number={number}", ct);
+        }, ct);
+
+    /// <summary>Submitted to rejected with a mandatory reason; the submitter's independence rule is the same as for approval. A rejected document may be edited (reopened as a draft) or cancelled.</summary>
+    public Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, string? reason, CancellationToken ct = default)
+    {
+        var text = reason?.Trim() ?? "";
+        if (text.Length is < 1 or > 500 || text.Any(char.IsControl)) return Task.FromResult(ConfigResult<CommercialDocumentView>.Invalid([new FieldError("reason", "reason_required")]));
+        return Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
+        {
+            if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
+            if (actor == cur.SubmittedBy || actor == cur.CreatedBy || actor == cur.LastEditedBy) throw new Abort(ConfigStatus.Conflict, "approver_not_independent");
+            await SetStatusAsync(work, cur, CommercialStatus.Rejected, cur.SubmittedBy, ct);
+            await AppendEventAsync(work, cur.Id, CommercialEventKind.Rejected, CommercialStatus.Submitted, CommercialStatus.Rejected, cur.Revision + 1, actor, text, CommercialAuditEvents.Rejected, $"commercial document rejected r{cur.Revision + 1}", ct);
+        }, ct);
+    }
+
+    /// <summary>
+    /// Cancels a document (final) with a mandatory reason: a draft, submitted, rejected or APPROVED document, the last only before any physical or accounting effect (D-051; no effect exists yet in S1b, the check is the
+    /// <see cref="HasEffectsAsync"/> hook later slices fill). When the document holds an official number it is VOIDED in the numbering ledger in the same transaction and is never issued again (D-050).
+    /// </summary>
     public Task<ConfigResult<CommercialDocumentView>> CancelAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, string? reason, CancellationToken ct = default)
     {
         var text = reason?.Trim() ?? "";
         if (text.Length is < 1 or > 500 || text.Any(char.IsControl)) return Task.FromResult(ConfigResult<CommercialDocumentView>.Invalid([new FieldError("reason", "reason_required")]));
         return Transition(actor, companyId, id, expectedRevision, async (work, cur) =>
         {
-            if (cur.Status is not (CommercialStatus.Draft or CommercialStatus.Submitted)) throw new Abort(ConfigStatus.Conflict, "document_not_cancellable");
+            if (cur.Status == CommercialStatus.Cancelled) throw new Abort(ConfigStatus.Conflict, "document_not_cancellable");
+            if (cur.Status == CommercialStatus.Approved && await HasEffectsAsync(work, cur, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_effects");
+            if (cur.OfficialNumber is not null)
+                await NumberingService.VoidAsync(work.Connection, work.Transaction!, cur.DocType, cur.OfficialNumber, actor, text.Length > 200 ? text[..200] : text, Now, ct);
             await SetStatusAsync(work, cur, CommercialStatus.Cancelled, cur.SubmittedBy, ct);
-            await AppendEventAsync(work, cur.Id, CommercialEventKind.Cancelled, cur.Status, CommercialStatus.Cancelled, cur.Revision + 1, actor, text, CommercialAuditEvents.Cancelled, $"commercial document cancelled r{cur.Revision + 1}", ct);
+            await AppendEventAsync(work, cur.Id, CommercialEventKind.Cancelled, cur.Status, CommercialStatus.Cancelled, cur.Revision + 1, actor, text, CommercialAuditEvents.Cancelled, $"commercial document cancelled r{cur.Revision + 1}{(cur.OfficialNumber is null ? "" : $" number {cur.OfficialNumber} voided")}", ct);
         }, ct);
     }
+
+    /// <summary>Whether a physical (stock) or accounting effect exists for the document. Slice S1b has none; the physical and accounting tracks (S3, S4) replace this with their facts, so a cancel can never undo an effect.</summary>
+    private static Task<bool> HasEffectsAsync(CompanyAuditedWork work, CommercialDocumentView cur, CancellationToken ct) => Task.FromResult(false);
 }
