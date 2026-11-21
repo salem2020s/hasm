@@ -369,7 +369,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
-        Assert.Equal(33L, await JournalRows(good));
+        Assert.Equal(33L, await JournalRows(good));   // 0001-0032 plus the extra 0033
         Assert.Equal(32L, await JournalRows(bad));
         Assert.Equal(0L, await InCompany<long>(bad.PhysicalDatabaseName, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'zz_added'"));
         Assert.Equal(ProvisioningState.Ready, (await Registry.GetAsync(bad.Id))!.State);       // never marked Failed or dropped
