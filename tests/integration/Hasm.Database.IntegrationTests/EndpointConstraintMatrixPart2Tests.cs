@@ -33,7 +33,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     private const int Parallel = 6;
     public enum Mode { One, Same, Append }
 
-    /// <summary>The routes this class probes, each with the kind of probe.</summary>
+    /// <summary>The routes part 2 probes (this class and <see cref="EndpointConstraintMatrixPart2StockTests"/>), each with the kind of probe.</summary>
     public static readonly IReadOnlyDictionary<string, string> Probed = new Dictionary<string, string>
     {
         ["PUT /api/v1/company/accounts/settings"] = "stale-revision race",
@@ -96,6 +96,28 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         ["POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke"] = "decision race (409 not_approved)",
         ["POST /api/v1/company/attachment-retention/holds"] = "append (no uniqueness rule)",
         ["POST /api/v1/company/attachment-retention/holds/{id:guid}/release"] = "decision race (409 already_released)",
+        // batch 3 (probed by EndpointConstraintMatrixPart2StockTests, on the stock fixture): stock documents, stocktakes, stock adjustments
+        ["POST /api/v1/company/stock-documents/"] = "append (no uniqueness rule)",
+        ["PUT /api/v1/company/stock-documents/{id:guid}"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/submit"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/withdraw"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/cancel"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/approve"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/reject"] = "stale-revision race",
+        ["POST /api/v1/company/stock-documents/{id:guid}/posting/"] = "idempotent replay (same answer, one posting)",
+        ["POST /api/v1/company/stock-documents/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
+        ["POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals"] = "approval race (409 already_approved)",
+        ["POST /api/v1/company/stocktakes/"] = "append (no uniqueness rule)",
+        ["PUT /api/v1/company/stocktakes/{id:guid}"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/generate-sheet"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/submit"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/withdraw"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/cancel"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/approve"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/reject"] = "stale-revision race",
+        ["POST /api/v1/company/stocktakes/{id:guid}/adjustment"] = "idempotent replay (same answer, one adjustment)",
+        ["POST /api/v1/company/stock-adjustments/{id:guid}/posting"] = "idempotent replay (same answer, one posting)",
+        ["POST /api/v1/company/stock-adjustments/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
     };
 
     /// <summary>The routes part 1 (<c>EndpointConstraintMatrixTests</c>, #155) probes; listed here so the completeness test is exact before the two classes are folded together.</summary>
@@ -194,85 +216,24 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         "POST /api/v1/company/imports/{id:guid}/withdraw",
         "PUT /api/v1/company/imports/settings",
         "PUT /api/v1/company/imports/{id:guid}/mapping",
-        // stock-adjustments
-        "POST /api/v1/company/stock-adjustments/{id:guid}/posting",
-        "POST /api/v1/company/stock-adjustments/{id:guid}/reversal",
-        // stock-documents
-        "POST /api/v1/company/stock-documents/",
-        "POST /api/v1/company/stock-documents/{id:guid}/approve",
-        "POST /api/v1/company/stock-documents/{id:guid}/cancel",
-        "POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals",
-        "POST /api/v1/company/stock-documents/{id:guid}/posting/",
-        "POST /api/v1/company/stock-documents/{id:guid}/reject",
-        "POST /api/v1/company/stock-documents/{id:guid}/reversal",
-        "POST /api/v1/company/stock-documents/{id:guid}/submit",
-        "POST /api/v1/company/stock-documents/{id:guid}/withdraw",
-        "PUT /api/v1/company/stock-documents/{id:guid}",
-        // stocktakes
-        "POST /api/v1/company/stocktakes/",
-        "POST /api/v1/company/stocktakes/{id:guid}/adjustment",
-        "POST /api/v1/company/stocktakes/{id:guid}/approve",
-        "POST /api/v1/company/stocktakes/{id:guid}/cancel",
-        "POST /api/v1/company/stocktakes/{id:guid}/generate-sheet",
-        "POST /api/v1/company/stocktakes/{id:guid}/reject",
-        "POST /api/v1/company/stocktakes/{id:guid}/submit",
-        "POST /api/v1/company/stocktakes/{id:guid}/withdraw",
-        "PUT /api/v1/company/stocktakes/{id:guid}",
     ];
 
 
     // ------------------------------------------------------------------------------------------------------------------------------- engine
 
-    private readonly List<string> findings = [];
-    private readonly List<string> diagnostics = [];
+    private readonly ConstraintRaces races = new(Parallel);
     private string cookie = "";
 
     private Task<ApiResponse> Call(HttpMethod method, string path, object? body, string? ifMatch = null) => Send(method, path, body, cookie, ifMatch: ifMatch);
+    private static Guid IdOf(ApiResponse r) => ConstraintRaces.IdOf(r);
+    private static string EtagOf(ApiResponse r) => ConstraintRaces.EtagOf(r);
 
-    /// <summary>"status:code" of an answer; a 400 <c>validation_failed</c> is identified by its first field code (for example <c>400:code_taken</c>); a 2xx is "2xx".</summary>
-    private static string Signature(ApiResponse r)
-    {
-        if ((int)r.Status is >= 200 and < 300) return "2xx";
-        var code = EndpointPermissionMatrixTests.ErrorOf(r);
-        if (code == "validation_failed")
-            try { code = r.Json.GetProperty("fields")[0].GetProperty("code").GetString(); } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException) { }
-        return $"{(int)r.Status}:{code}";
-    }
-
-    private static string Short(string body) => body.Length > 160 ? body[..160] : body;
-    private static Guid IdOf(ApiResponse r) => r.Json.GetProperty("id").GetGuid();
-    private static string EtagOf(ApiResponse r) => r.Headers.ETag!.Tag;
-
-    /// <summary>
-    /// Sends the same request <see cref="Parallel"/> times in parallel, then once more. <see cref="Mode.One"/>: exactly one 2xx, every other answer one of <paramref name="expected"/>.
-    /// <see cref="Mode.Same"/>: every answer has the signature <paramref name="expected"/>[0] ("2xx" for an idempotent success). A 5xx is always a finding. Returns a winner or null.
-    /// </summary>
+    /// <summary>One probe (<see cref="ConstraintRaces.Run"/>) of the same request as <paramref name="caller"/> (the administrator by default).</summary>
     private Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One, string? caller = null) =>
-        RaceWith(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
+        races.Run(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
 
-    /// <summary><see cref="Race(string, string[], HttpMethod, string, object?, string?, Mode, string?)"/> for any request (a multipart upload, another caller).</summary>
-    private async Task<ApiResponse?> RaceWith(string what, string[] expected, Func<Task<ApiResponse>> send, Mode mode = Mode.One)
-    {
-        var raced = await Task.WhenAll(Enumerable.Range(0, Parallel).Select(_ => Task.Run(send)));
-        var again = await send();
-        var all = raced.Append(again).ToList();
-        var winners = all.Where(r => Signature(r) == "2xx").ToList();
-        diagnostics.Add($"{what} || {winners.Count} won || {string.Join(" ; ", all.Select(Signature).Distinct())} || {Short(all.FirstOrDefault(r => Signature(r) != "2xx")?.Body ?? all[0].Body)}");
-        // a 5xx is a finding unless the probe pins it EXACTLY as a documented answer (the attachment upload gate's 503 upload_busy); the unhandled-error 503 never matches a pin
-        foreach (var r in all.Where(r => (int)r.Status >= 500 && !expected.Contains(Signature(r))))
-            findings.Add($"{what}: {(int)r.Status} {Short(r.Body)}");
-        if (mode == Mode.Same)
-        {
-            foreach (var s in all.Select(Signature).Distinct().Where(s => s != expected[0]))
-                findings.Add($"{what}: {s} where every answer must be {expected[0]}");
-            return winners.FirstOrDefault();
-        }
-        foreach (var r in all.Where(r => Signature(r) != "2xx" && (int)r.Status < 500 && !expected.Contains(Signature(r))))
-            findings.Add($"{what}: {Signature(r)} is not the expected refusal ({string.Join(" or ", expected)}): {Short(r.Body)}");
-        if (mode == Mode.Append ? winners.Count < 1 : winners.Count != 1)
-            findings.Add($"{what}: {winners.Count} requests succeeded (expected {(mode == Mode.Append ? "at least one" : "exactly one")}): {string.Join(", ", all.Select(Signature))}");
-        return winners.FirstOrDefault();
-    }
+    /// <summary>One probe of any request (a multipart upload).</summary>
+    private Task<ApiResponse?> RaceWith(string what, string[] expected, Func<Task<ApiResponse>> send, Mode mode = Mode.One) => races.Run(what, expected, send, mode);
 
     private async Task<ApiResponse> Create(string path, object body, string? ifMatch = null)
     {
@@ -281,18 +242,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         return r;
     }
 
-    /// <summary>A probe's winner the next step builds on; without one, every finding so far is reported (the probe recorded why nobody won).</summary>
-    private ApiResponse Won(ApiResponse? winner)
-    {
-        if (winner is null) AssertNoFindings();
-        Assert.NotNull(winner);
-        return winner!;
-    }
-
-    private void AssertNoFindings()
-    {
-        Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings) + "\nobserved per probe (winners, signatures):\n" + string.Join("\n", diagnostics));
-    }
+    private ApiResponse Won(ApiResponse? winner) => races.Won(winner);
+    private void AssertNoFindings() => races.AssertNoFindings();
 
     private Guid main;
     private string? storage;
@@ -338,7 +289,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((59, 60, 47), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal((80, 60, 26), (Probed.Count, CoveredByPart1.Count, Pending.Count));
         await Task.CompletedTask;
     }
 
@@ -605,4 +556,66 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
 
         AssertNoFindings();
     }
+}
+
+/// <summary>
+/// The probe engine of the constraint-violation matrix, part 2, shared by its test classes: sends the same request <c>parallel</c> times in parallel, then once more, and records every
+/// finding of a run so they are reported together. <see cref="EndpointConstraintMatrixPart2Tests.Mode.One"/>: exactly one 2xx, every other answer one of <c>expected</c>.
+/// <see cref="EndpointConstraintMatrixPart2Tests.Mode.Same"/>: every answer has the signature <c>expected[0]</c> ("2xx" for an idempotent success).
+/// <see cref="EndpointConstraintMatrixPart2Tests.Mode.Append"/>: at least one 2xx, every refusal one of <c>expected</c>. A 5xx is always a finding unless the probe pins it EXACTLY as a
+/// documented answer (the attachment upload gate's 503 <c>upload_busy</c>); the unhandled-error 503 <c>service_unavailable</c> is never pinned.
+/// </summary>
+internal sealed class ConstraintRaces(int parallel)
+{
+    private readonly List<string> findings = [];
+    private readonly List<string> diagnostics = [];
+
+    /// <summary>"status:code" of an answer; a 400 <c>validation_failed</c> is identified by its first field code (for example <c>400:code_taken</c>); a 2xx is "2xx".</summary>
+    public static string Signature(ApiResponse r)
+    {
+        if ((int)r.Status is >= 200 and < 300) return "2xx";
+        var code = EndpointPermissionMatrixTests.ErrorOf(r);
+        if (code == "validation_failed")
+            try { code = r.Json.GetProperty("fields")[0].GetProperty("code").GetString(); } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException) { }
+        return $"{(int)r.Status}:{code}";
+    }
+
+    private static string Short(string body) => body.Length > 160 ? body[..160] : body;
+    public static Guid IdOf(ApiResponse r) => r.Json.GetProperty("id").GetGuid();
+    public static string EtagOf(ApiResponse r) => r.Headers.ETag!.Tag;
+
+    /// <summary>Runs one probe; returns a winner or null.</summary>
+    public async Task<ApiResponse?> Run(string what, string[] expected, Func<Task<ApiResponse>> send, EndpointConstraintMatrixPart2Tests.Mode mode)
+    {
+        var raced = await Task.WhenAll(Enumerable.Range(0, parallel).Select(_ => Task.Run(send)));
+        var again = await send();
+        var all = raced.Append(again).ToList();
+        var winners = all.Where(r => Signature(r) == "2xx").ToList();
+        diagnostics.Add($"{what} || {winners.Count} won || {string.Join(" ; ", all.Select(Signature).Distinct())} || {Short(all.FirstOrDefault(r => Signature(r) != "2xx")?.Body ?? all[0].Body)}");
+        foreach (var r in all.Where(r => (int)r.Status >= 500 && !expected.Contains(Signature(r))))
+            findings.Add($"{what}: {(int)r.Status} {Short(r.Body)}");
+        if (mode == EndpointConstraintMatrixPart2Tests.Mode.Same)
+        {
+            foreach (var s in all.Select(Signature).Distinct().Where(s => s != expected[0]))
+                findings.Add($"{what}: {s} where every answer must be {expected[0]}");
+            return winners.FirstOrDefault();
+        }
+        foreach (var r in all.Where(r => Signature(r) != "2xx" && (int)r.Status < 500 && !expected.Contains(Signature(r))))
+            findings.Add($"{what}: {Signature(r)} is not the expected refusal ({string.Join(" or ", expected)}): {Short(r.Body)}");
+        var append = mode == EndpointConstraintMatrixPart2Tests.Mode.Append;
+        if (append ? winners.Count < 1 : winners.Count != 1)
+            findings.Add($"{what}: {winners.Count} requests succeeded (expected {(append ? "at least one" : "exactly one")}): {string.Join(", ", all.Select(Signature))}");
+        return winners.FirstOrDefault();
+    }
+
+    /// <summary>A probe's winner the next step builds on; without one, every finding so far is reported (the probe recorded why nobody won).</summary>
+    public ApiResponse Won(ApiResponse? winner)
+    {
+        if (winner is null) AssertNoFindings();
+        Assert.NotNull(winner);
+        return winner!;
+    }
+
+    public void AssertNoFindings() =>
+        Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings) + "\nobserved per probe (winners, signatures):\n" + string.Join("\n", diagnostics));
 }
