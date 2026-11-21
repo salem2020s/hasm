@@ -676,6 +676,301 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
 ### Owner decisions this slice relies on (not re-asked)
 D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
 
+## Slice 6: retention and deletion of backup runs (D-086) - PLAN (docs only)
+Sources:
+* owner decision D-086 (retention and deletion), which this slice implements exactly;
+* the related owner decisions D-082 (removed-attachment retention, register item K), D-080(6) (independent approval for key retirement and restore), D-081 (cutover, slice 7) and D-085 (encrypted backups);
+* lead decision D-114 (attachment-retention holds on backups, `docs/PHASE-R-attachment-retention.md` section 8);
+* SRS 16.
+
+Builds on slices 4 and 5 (encrypted, signed runs; PR #128). Decision ids D-130..D-139 (allocated by the lead; technical defaults under D-048, chosen fail-closed). Risk: **Critical** (deleting a backup is irreversible).
+
+### What D-086 requires, and where each requirement is met
+| D-086 requirement | Met by |
+|---|---|
+| Daily: keep AT LEAST the latest 7; weekly: AT LEAST the latest 4; configuration may raise these, never lower them | D-132 (minimums; a lower value is a configuration error, never clamped) |
+| Month-end and fiscal-year-end backups follow a company-approved legal policy; the default is no automatic deletion | D-131 (classification), D-133 (no legal policy is built in this slice: they are never deleted automatically); owner question Q1 |
+| Classification by the company fiscal calendar and explicitly configured time-zone rules | D-131 |
+| Never automatically delete the last recoverable backup, a backup under legal hold, or one needed by an active recovery chain | D-133 (recoverable), D-134 (legal holds, including D-114), D-135 (recovery chains) |
+| Audit records, retention preview, safe-deletion validation | D-139 (audit 2014-2019), D-136 (preview and validation) |
+| Automatic deletion inactive until the encryption, retention and restore safeguards are complete and independently tested | D-137 (three enforcement layers; activation only by an owner-instructed PR) |
+
+### Scope
+* **In scope:**
+  * classification and keep rules;
+  * the retention preview with a reason for every run;
+  * backup legal holds and recovery-chain pins;
+  * safe-deletion validation;
+  * the deletion executor, built but INACTIVE (D-137);
+  * the audit events;
+  * the key inventory in the signed run status, for the key-retirement report (D-138).
+* **Not in scope:**
+  * the company legal policy for month-end and year-end runs (owner questions Q1-Q3; until answered those runs are never deleted automatically);
+  * releasing a backup legal hold (it needs the Phase 4.1 named login and independent approval; until then a hold can be placed, never released);
+  * off-site or second destinations (none exist);
+  * standalone `backup-company` sets outside a backup root (operator-managed; never touched);
+  * the cutover (slice 7);
+  * key retirement itself (a report only).
+* **One system migration** (backup holds and recovery-chain pins). Its number is requested from the lead when the implementation starts. Migration numbers are contiguous and taken in merge order.
+* No API and no UI in this slice: the commands run through the administrative tool, under the interim mode of slice 5.
+
+### Retention model
+* **D-130, unit of retention: the whole run.** A run is one folder `<root>/<run id>/`: the system dump, one set per company, the signed `run.status.json`, the canary and possibly `recovery-test.json`. Retention keeps or deletes whole runs only.
+  * Every set inside a run is listed in signed documents (the run status names its companies; the manifests name every file). Deleting one company set would make the run fail verification, so it is never done.
+  * A run is KEPT when any rule keeps it, for any company in it or for the system part. It is eligible for deletion only when no rule keeps it for any part.
+  * Standalone sets written by `backup-company` outside a root, kit material, key exports and every folder or file whose name is not a run id are never touched.
+  * Alternative rejected: per-company deletion inside a run. It breaks the signed run, and a run is the unit of a full-installation restore.
+* **D-131, classification (fiscal calendar and explicit time-zone rules).** Every complete run is classified separately for each company it contains, and for the system part.
+  * **Instant of a run:** the run's window `[startedUtc, finishedUtc]`, read from the VERIFIED signed `run.status.json` (slice 5). Retention never decrypts anything and never needs the recovery private key.
+  * **Time zones:**
+    * Daily and weekly classification of a company uses the company's configured time zone (company settings).
+    * Period-end and year-end classification uses the time zone recorded on the fiscal year (`FiscalYear.TimeZone`, fixed when the year is created).
+    * The system part uses `Hasm__Backup__Retention__InstallationTimeZone`, which is required.
+    * Ids are IANA ids resolved by .NET `TimeZoneInfo`.
+    * **The server's local time zone is never used** (pinned by a test).
+    * An unknown or unresolvable id makes the classification of that part `classification_unknown`, and the run is kept.
+  * **Boundaries:**
+    * A local date turns into an instant at local 00:00 of the following day.
+    * A local time skipped by a daylight-saving change becomes the first valid instant after it.
+    * A repeated local time takes the EARLIER instant.
+    * Conversion from an instant to a local date is unambiguous.
+    * Unit tests use zones with a midnight daylight-saving change.
+  * **Daily backup of a company:** on each local calendar day, the newest recoverable run (D-133) whose `startedUtc` falls on that day. Further runs of the same day are not daily backups.
+  * **Weekly backup:** in each week, the newest recoverable run. The week is ISO 8601 (Monday start, ISO week-year); the start day is configurable (`Hasm__Backup__Retention__WeekStart`). This is a technical default, not a legal one.
+  * **Period-end backup (D-086 "month-end"):** for every boundary B, the run is a period-end backup when it is either:
+    * the newest recoverable run with `startedUtc < B` (the last one before the end); or
+    * the oldest recoverable run with `finishedUtc >= B` (the first one after the end, which contains the final postings of the period).
+    * The boundaries B are the end of every fiscal period of the company's fiscal calendar AND the end of every calendar month in the company's time zone.
+    * Keeping both sides of every boundary is the fail-closed reading. Which one the law means is owner question Q2, and whether calendar months count in addition to fiscal periods is Q3.
+    * A run whose window spans B is both.
+  * **Fiscal-year-end backup:** the same rule at the end of every fiscal year of the company (`FiscalYear.EndDate` + 1 day, local 00:00 in the year's time zone).
+  * **Gaps and unknowns:**
+    * A run date not covered by any fiscal year of the company (no calendar configured, a gap, or later than the last year created) is `classification_unknown` for period-end and year-end, and the run is KEPT.
+    * A company that is not Ready, not registered any more, or whose database cannot be read is `classification_unknown`, and all of its runs are kept (owner question Q5).
+* **D-132, minimums (daily at least 7, weekly at least 4).**
+  * `Hasm__Backup__Retention__DailyKeep` defaults to 7 and `Hasm__Backup__Retention__WeeklyKeep` to 4.
+  * A value below 7 or 4, non-numeric, or above 10 000 is a configuration error (`retention_below_minimum` / `retention_config_invalid`, exit 3). It is **never clamped silently**.
+  * The constants 7 and 4 are pinned by a unit test. Lowering them needs a new owner decision.
+  * "Latest 7 daily" means the 7 most recent local days that HAVE a recoverable run of that company, each represented by its daily backup. These are not the last 7 calendar days, so missed days never shrink the history kept. The same applies to "latest 4 weekly".
+  * Daily and weekly sets may overlap; a run is kept if either rule keeps it.
+* **D-133, recoverable, and the last recoverable backup.**
+  * A run counts as a recoverable backup of company X only when all of the following hold:
+    * it is complete;
+    * its `run.status.json` verifies with the server's signing public keys;
+    * X's outcome in it is `ok` (`ok_missing_keys` does not count);
+    * it is encrypted (no DEV/TEST acknowledgement);
+    * its recovery key id has at least one PASSED recovery test on some run (`recovery-test.json`, slice 5).
+  * The system part counts when the run's verdict is not `failed`, under the same signature, encryption and recovery-test conditions.
+  * Runs that are not recoverable never COUNT toward a minimum, and they are not deleted automatically either:
+    * incomplete or unreadable runs (as in slice 4);
+    * runs whose status does not verify (`status_unverifiable`: for example a signing key removed after a compromise; kept as evidence and reported);
+    * unencrypted DEV/TEST runs;
+    * runs encrypted to a recovery key that was never tested.
+  * Hard keeps, independent of the counts:
+    * the newest recoverable run of every company and of the system ("last recoverable backup");
+    * the newest run with a passed recovery test for each recovery key id that a retained run uses (so deletion never turns `backup-status` back to `recovery_untested`, and the key stays proven);
+    * the newest complete run overall.
+  * **Month-end and year-end runs are never deleted automatically in this slice** (D-086 default, `legal_policy_absent`). Building the company legal policy waits for owner questions Q1-Q3.
+* **D-134, legal holds.**
+  * **Backup legal holds (new):** a row in a system table `backup_legal_hold`, append-only (guard trigger; never deleted or updated except the release columns once).
+    * Scope: one run (`run id`), or one company with an optional date range of run start (`company id`, `from`, `to`; open ends allowed). A reason is required; the placing operator and the time are recorded.
+    * Placing is protective and immediate: `backup-hold-place (--run <id> | --company <id> [--from <date>] [--to <date>]) --reason <text>` writes audit 2018.
+    * **Releasing is not available in this slice** (`hold_release_unavailable`). It needs a named administrator and independent approval (two persons), which the administrative tool gets only with the Phase 4.1 login and approval framework. Audit code 2019 is reserved for it. Until then a hold is permanent; an erroneous hold costs storage only.
+  * **Holds from attachment retention (D-114, D-110):**
+    * A hold on an already-purged attachment marks the retained backup sets that contain it as held. Until the Phase R backup inventory exists (R4), D-114 says every retained backup set counts as held: while the company's attachment-retention schema has any such hold and the inventory is unavailable, every run is kept (`d114_hold`).
+    * **Default (owner question Q4):** ANY active attachment legal hold of a company (company-wide, record or attachment scope) keeps every run that contains that company (`attachment_hold`).
+    * A company whose hold tables do not exist yet (migration level below Phase R) can have no holds. A company whose hold tables exist but cannot be read keeps all of its runs (`hold_check_failed`).
+  * Holds are read at preview time AND again immediately before each deletion.
+* **D-135, active recovery chains.** Every run is a full, self-contained backup (no increments), so a chain is the run plus what is needed to read and use it. A run is pinned while any of these holds:
+  * a trial restore or a recovery test from it is running. These now take a shared advisory lock (run-lock namespace of slice 4, object 1) for their duration, and deletion takes it exclusively, so the two are mutually exclusive;
+  * a kept trial database references it (a `*.trial-*.json` file inside the run);
+  * it is the newest recovery-tested run of a recovery key in use (D-133);
+  * a row of the new system table `backup_retention_pin` references it and has not expired. Slice 7 writes these rows: the safety backup taken before a cutover (D-081), pinned for its rollback window. Slice 6 creates the table and honours it. Pins are append-only and expire only by their own `expiresUtc`.
+  * If incremental backups are ever introduced, the base and every increment form one chain and are kept together. That would need a decision of its own.
+* **Exclusions from deletion that are not keep rules:**
+  * a run folder that contains an unexpected file (`run_not_clean`: anything except the slice 5 files and `recovery-test.json`);
+  * a symbolic link anywhere in the run (`symbolic_link_refused`);
+  * a run outside the resolved root.
+
+  These are reported and kept.
+
+### Preview, validation and deletion (D-136)
+* **`backup-retention-plan <root> [--json <file>]`** (new; read-only for files; reads the system and company databases):
+  * classifies every run and prints, per run, its id, its window, the class tags per company (`daily`, `weekly`, `period_end`, `year_end`, `unknown`), and either the keep reasons or `eligible`;
+  * the JSON form is for monitoring and for an operator's record; it carries the plan hash (SHA-256 over the sorted eligible run ids and their status hashes);
+  * it writes audit 2014 (counts by reason and the plan hash);
+  * exit 0 with the plan printed, 3 configuration, 1 failure.
+  * The slice 4 `backup-retention-preview --keep-last` stays as it is: a database-free count preview, documented as NOT the D-086 policy. Nothing is removed.
+* **`backup-retention-apply <root>`** (new; INACTIVE, D-137) is the only deletion path, and it is the "automatic deletion" of D-086 (meant for the operating-system scheduler after `backup-run`). There is no manual deletion command, and no override for held, pinned, month-end, year-end or last-recoverable runs (owner question Q6). Every execution:
+  1. checks the activation gate (D-137); while inactive it writes audit 2017 `retention_deletion_inactive` and stops, exit 3, deleting nothing;
+  2. takes the slice 4 run lock (no backup runs meanwhile) and the restore lock exclusively (no trial restore or recovery test meanwhile), with bounded waits (`run_in_progress`, exit 4);
+  3. **requires current, healthy backups:** `backup-status` of the root must be `ok` (exit 0). Never delete while backups are failing, stale, partial, untested or unreadable (`backups_not_current`);
+  4. **clock sanity:** refuses when now is earlier than the newest run's `finishedUtc` or than the last deletion recorded (`clock_inconsistent`);
+  5. computes the plan and applies the **mass-deletion brake**: it refuses when the plan would delete more than `Hasm__Backup__Retention__MaxDeletionsPerRun` runs (default 7, at most 31), or more than half of the complete runs (`deletion_volume_suspicious`, audit 2017). A changed clock, calendar or configuration must never empty a root in one night;
+  6. for each eligible run, oldest first, **re-validates immediately before touching it:**
+     * the status signature verifies, and its hash equals the hash in the computed plan;
+     * holds and pins are re-read;
+     * classification is recomputed over the CURRENT root;
+     * the invariants still hold AFTER the simulated removal: every company and the system keep their last recoverable run and their minimums, and every recovery key in use keeps a tested run;
+     * the run is clean (no unexpected files and no symbolic links), and its path is inside the resolved root.
+
+     Any failure skips that run with audit 2017 and the reason; the others continue;
+  7. **deletes audit-first and resumably:**
+     * writes audit 2015 (run id, status hash, the keep-rule evaluation, operator or `scheduler`) and commits it;
+     * copies `run.status.json` and its `.sig` to the tombstone folder `<root>/.retention/tombstones/<run id>/` (owner-only);
+     * renames the run folder to `<run id>.deleting-<16 hex>`, so it is no longer a run;
+     * deletes that folder recursively, refusing to follow links;
+     * writes audit 2016 (files, bytes, tombstone path).
+
+     A crash leaves a `.deleting-*` folder. It is never a run, the next execution completes it (audit 2016 with `resumed`), and `backup-status` reports it (`retention_deletion_incomplete`, exit 8). When audit 2015 cannot be written, nothing is touched;
+  8. exit codes: 0 done (possibly nothing eligible), 8 done with skipped runs, 3 inactive or configuration, 4 a run or restore in progress, 1 failure.
+* **Signed sets, slice 5 (what deletion does to them):**
+  * Every run is signed on its own: there is no hash chain or reference across runs. Deleting a run therefore never invalidates the signature, manifest or proof of any other run, and every remaining run stays verifiable with the kit's trust list exactly as before.
+  * Deletion touches only files inside the run folder. It never touches the signing keys, the trust list, the key exports or the recovery kit.
+  * **The tombstone keeps the deleted run's signed `run.status.json` and its `.sig`.** These are small, contain no names, and are readable and verifiable with the same trust list. Together with audit events 2015 and 2016, which carry the SHA-256 of both files, they prove which authentic run existed and when it was deleted. A gap in the run history is therefore explained, never silent. Tombstones are never deleted by HASM (owner question Q7).
+  * Deletion is not cryptographic erasure. The ciphertext was encrypted to the recovery key that also protects every other run (D-085), so a copy that survives elsewhere (storage remnants, a snapshot of the volume, an off-site copy made by the operator) stays decryptable by the key holder. Per-class or per-period recovery keys would allow erasure by key destruction; that would be a change of D-085, recorded as a possible follow-up for the owner, not proposed here.
+* **Monitoring:** `backup-status` adds `retention_deletion_incomplete` (exit 8). A deleted run never counts toward `company_missed_runs`, which counts only consecutive complete runs.
+
+### Automatic deletion stays INACTIVE: how it is enforced (D-137)
+Three independent layers. Any one of them alone keeps deletion off.
+1. **Code gate.** `BackupRetention.AutomaticDeletionActivated` is a compile-time `const bool` that is `false` in this slice. `backup-retention-apply` checks it first.
+   * A unit test pins the value to `false`. Changing it is a code change in a reviewed PR, the **activation PR**.
+   * **The agents never self-merge the activation PR:** it enables an irreversible production operation (CLAUDE.md), so it merges only on an explicit owner instruction recorded in the INTEGRATION-STATUS owner-decision register.
+   * The activation PR must show, in its review record:
+     * (a) the safeguards are complete:
+       * encryption and signing (slice 5, merged);
+       * this slice merged;
+       * the restore safeguards: the slice 7 cutover with its safety backup pinned, plus the Phase R4 backup inventory, or the D-114 hold that keeps every run until it exists;
+     * (b) they were independently tested:
+       * an independent review of the deletion path;
+       * a recorded drill: from a root with more than the minimums, a preview, then a deletion on a disposable copy, then a recovery test of a remaining month-end run that passes.
+2. **Runtime prerequisites**, checked on EVERY execution even with the code gate on:
+   * encryption configured and no DEV/TEST acknowledgement (`unencrypted_ack` refused);
+   * the retention configuration is valid (D-132);
+   * every hold source is readable;
+   * the restore safeguards are detectable: the pin table exists (this slice's migration is applied) and the slice 7 cutover schema is present (`restore_safeguards_missing` otherwise);
+   * backups are current and recovery-tested (step 3 above).
+3. **Explicit opt-in per installation.** `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups` (exact value; anything else is a configuration error). Absent means preview only.
+   * A unit test pins that no repository configuration or installer template sets it, as for D-095.
+
+**What is tested while inactive:**
+* `backup-retention-apply` refuses, writes 2017 and deletes nothing.
+* The executor's validation and deletion steps are tested through an internal test seam, on disposable roots only. The seam is `internal`, visible only to the test assemblies; the command line has no path to it.
+
+Alternative rejected: not building the executor until activation. The activation PR would then introduce untested irreversible code at the last moment. Building it now, gated, lets review and tests cover it twice.
+
+### Interaction with key retirement (register item K, D-082, D-080(6); D-138)
+* **Key inventory in the signed status.**
+  * `run.status.json` version 2 adds, per company, the attachment master-key ids its set needs (`keyIdsRequired`, today only inside the encrypted manifest). At run level it adds the audit key ids of the system and company streams and of every business stream in the run (read as key ids only).
+  * These are key ids, not secrets, and the server can read them unattended without the recovery private key. Version 1 statuses (slice 5) stay readable; their key needs are `unknown`.
+* **Key-retirement report** (consumed by the key-management phase and by Phase R4; retirement itself needs independent approval under D-080(6) and is not built here):
+  * An attachment master key or audit key is retirable only when:
+    * no live row needs it (the existing `oldKeysMayBeRetired` rule; for attachments, the D-114/R rule that a purged row still counts until R4);
+    * AND no RETAINED run lists it;
+    * AND no retained run has `unknown` key needs (`backup_inventory_incomplete` makes the answer false: fail closed).
+  * Runs that are held, pinned, month-end or year-end are retained, so their keys stay needed for as long as they are kept. **Keys follow the backups, never the reverse.**
+* **Recovery keys (`rk-`):** the report lists, per recovery key id, the retained runs encrypted to it. An old recovery private key may be destroyed only when no retained run and no retained key export is encrypted to it (`recovery_key_still_needed`). The operator's kit procedure in `docs/DEVELOPMENT.md` is extended accordingly.
+* **Signing keys (`sk-`):** retiring a signing key (kit status `retired` with a date) does not affect retained runs signed before that date, and deletion needs no private signing key. A COMPROMISED key's runs fail verification on a server whose key directory no longer trusts it. They are `status_unverifiable`: kept, never counted, and reported for the operator.
+* **Key exports** live in the recovery kit, outside the root, and are never deleted by HASM. The preview lists, per retained run, the recovery key id and the key ids it needs, so the operator knows which kit material must be kept.
+* **Deletion never retires, destroys or rewraps a key.** It is the step that may later make a key retirable. The order is always: runs deleted (audited), then the report, then independent approval, then retirement.
+
+### Audit events (system stream, block 2014-2019; D-139)
+| Code | Event | Detail (codes, ids, counts and hashes only; never names or paths of databases) |
+|---|---|---|
+| 2014 | `BackupRetentionEvaluated` | operator, root tag (SHA-256 prefix of the resolved root), run counts by keep reason, eligible count, plan hash |
+| 2015 | `BackupDeletionStarted` | run id, status hash, signing key id, recovery key id, the rule evaluation, operator or `scheduler` |
+| 2016 | `BackupDeleted` | run id, status hash, files, bytes, tombstone written, `resumed` flag |
+| 2017 | `BackupDeletionRefused` | run id or `*`, reason (`retention_deletion_inactive`, `backups_not_current`, `deletion_volume_suspicious`, `clock_inconsistent`, a validation code) |
+| 2018 | `BackupLegalHoldPlaced` | hold id, scope, run id or company id and date range, reason length (the reason text is stored in the hold row, not in the event) |
+| 2019 | `BackupLegalHoldReleased` | reserved; release is not available until the Phase 4.1 approval framework |
+
+* Persisted codes, never renumbered; the registry is checked again before use.
+* This uses the last six codes of the 2010-2019 block that slice 5 reserved for slices 6 and 7. **Slice 7 requests a new block from the lead.**
+* Every command fails closed when its event cannot be written. For a deletion, nothing is touched without event 2015.
+
+### Commands (summary)
+* `backup-retention-plan <root> [--json <file>]`: preview, audited; usable while deletion is inactive.
+* `backup-retention-apply <root>`: INACTIVE (D-137).
+* `backup-hold-place (--run <id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text>`.
+* `backup-hold-list`.
+* No release command (D-134).
+* Interim mode: operating-system access, as for the slice 5 key commands (the dated limitation of RELEASE1-ACCEPTANCE G covers it). The implementation adds a dated limitation "automatic backup deletion inactive (D-086, D-137); backups accumulate and storage is managed by the operator" through the roadmap generator.
+
+### Exact tests (implementation PR)
+* **Unit tests:**
+  * Time zones:
+    * instant-to-local-date conversion and boundary construction, including a zone with a daylight-saving change at midnight (skipped and repeated local midnight);
+    * a pin that `TimeZoneInfo.Local` is never used;
+    * an unknown zone gives `classification_unknown`, and the run is kept.
+  * Fiscal calendar:
+    * monthly periods, a non-calendar fiscal year, 13 periods and 4-4-5 periods;
+    * the last-before and first-after rule at every boundary, a run spanning a boundary, calendar month-ends added;
+    * a date outside every fiscal year gives `unknown`, and the run is kept.
+  * Minimums:
+    * 7 and 4 pinned; 6 and 3 refused (exit 3, never clamped); higher values honoured;
+    * days without a run do not shrink the kept history;
+    * several runs per day: only the representative counts.
+  * Recoverable runs (D-133):
+    * `ok_missing_keys`, unverifiable, unencrypted, untested-key and incomplete runs never count and are never deleted;
+    * the last recoverable run per company and for the system is kept;
+    * the newest tested run per recovery key is kept.
+  * Holds and pins:
+    * run, company and date-range holds;
+    * the D-114 rule (any purged-attachment hold without the inventory keeps every run);
+    * an attachment hold keeps the company's runs;
+    * an unreadable hold source keeps everything;
+    * a pin until `expiresUtc`;
+    * a kept-trial file inside a run pins it.
+  * Validation:
+    * the brake (count and half);
+    * `backups_not_current`, `clock_inconsistent`;
+    * `run_not_clean`, a symbolic link, a path outside the root;
+    * a status hash that changed since the plan.
+  * The gate:
+    * `AutomaticDeletionActivated == false` pinned;
+    * the opt-in variable absent from every repository configuration;
+    * apply refuses with 2017 and nothing deleted.
+  * Executor (internal seam, temporary roots):
+    * audit-first ordering (an audit failure deletes nothing);
+    * tombstone written and verifiable;
+    * rename then delete;
+    * resume of a `.deleting-*` folder;
+    * `backup-status` reports an incomplete deletion.
+  * Key inventory:
+    * a version 2 status carries the ids, version 1 gives `unknown`;
+    * the report is false with `backup_inventory_incomplete`;
+    * a key needed only by a held month-end run is not retirable.
+* **PostgreSQL** (new class, about 7 tests; the registry is raised at push time and the lead is told the count):
+  * a preview over real runs with companies whose fiscal calendars and time zones differ, and the classes asserted;
+  * holds placed with audit 2018, and honoured; release refused;
+  * an active attachment-retention hold (when the Phase R tables exist on main; otherwise the "no tables, no holds" path) keeps the company's runs;
+  * apply refuses while inactive (2017, nothing deleted);
+  * the executor through the seam deletes exactly the eligible run of a disposable root (2015, 2016, tombstone), and a recovery test of a remaining run still passes;
+  * apply refuses while the run lock or the restore lock is held;
+  * the migration's append-only guards on the hold and pin tables.
+
+### Decisions (D-130..D-139, recorded in `docs/DECISIONS.md`, status planned)
+D-130 unit of retention; D-131 classification; D-132 minimums; D-133 recoverable runs and hard keeps; D-134 legal holds; D-135 recovery chains and pins; D-136 preview, validation and deletion; D-137 inactive enforcement; D-138 key inventory and key retirement; D-139 audit codes.
+
+### Owner questions (legal or retention policy; not decided here; the safe default applies until answered)
+* **Q1. Legal policy for month-end and fiscal-year-end runs:**
+  * the retention period;
+  * who in the company approves it (author and approver distinct, as for attachment retention D-108);
+  * whether an approved policy may ever let HASM delete such runs automatically.
+
+  **Default: never deleted automatically; no policy model is built until answered.**
+* **Q2. Which run is "the" month-end backup:** the last one before the boundary, or the first one after it (which contains the final postings)? **Default: both are kept.**
+* **Q3. Calendar month-ends in addition to fiscal period ends** (they differ for 4-4-5, 13-period or quarterly calendars). **Default: both kinds of boundary are kept.**
+* **Q4. Do attachment legal holds extend to backups?** D-114 covers holds on already-purged attachments. **Default: any active attachment hold of a company keeps every run containing that company.**
+* **Q5. Runs of companies that are no longer Ready or registered** (closed, archived, failed). **Default: all of their runs are kept.**
+* **Q6. An authorised manual deletion path** for protected runs (for example an erasure obligation that reaches backups). **Default: none; protected runs cannot be deleted through HASM.**
+* **Q7. How long tombstones and the deletion audit are kept.** **Default: forever.**
+
+Each question's default is the preserving one. An answer that relaxes one is an owner decision recorded in the register, and its implementation follows the PR rules.
+
+### Owner decisions this slice relies on (not re-asked)
+D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 (pins only; the cutover is slice 7), D-085, D-114.
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
@@ -684,4 +979,4 @@ D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention
 ## BLOCKED / owner decisions
 * Audited restore acknowledgement and a new checkpoint epoch after a company restore (`docs/DEVELOPMENT.md`, restore limitations): policy needs an owner decision.
 * Retention/purge of removed attachments (decision R).
-* Set encryption and authentication, automatic deletion of backups (retention), and the key-directory export: OWNER package 4.3-2 (slice 4 plan). Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
+* Set encryption and authentication and the key-directory export: decided (D-085, D-087, D-088), slice 5. Retention and deletion of backups: decided (D-086), planned in slice 6; automatic deletion stays INACTIVE until its activation PR (D-137), and the month-end/year-end legal policy waits for owner questions Q1-Q3 of slice 6. Scheduling (by the operating system), monitoring and measured durations: implemented in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
