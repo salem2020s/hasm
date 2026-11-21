@@ -112,7 +112,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal(1, report.Skipped);
         Assert.False(report.Encrypted);
         Assert.Null(report.Warnings);                                                                            // the run lock was confirmed before the verdict
-        Assert.Equal(new[] { "session", "login_throttle", "user_totp" }, report.Excluded);
+        Assert.Equal(new[] { "session", "login_throttle", "user_totp", "mfa_challenge" }, report.Excluded);
         Assert.Equal(new[] { a.Id, b.Id }.OrderBy(x => x), report.Companies.Select(c => c.CompanyId).OrderBy(x => x));
         Assert.All(report.Companies, c => { Assert.Equal("ok", c.Outcome); Assert.True(c.DumpBytes > 0); Assert.True(c.FinishedUtc >= c.StartedUtc); });
         Assert.True(report.Companies.All(c => c.StartedUtc >= report.System.FinishedUtc));                     // the system database is dumped first
@@ -187,14 +187,14 @@ public class BackupRunTests : PostgresTestBase
         var dir = Path.Combine(runDir, BackupRunFiles.SystemFolder);
         var dump = Path.Combine(dir, BackupSet.DatabaseFileName);
         var toc = await TableOfContents(dump);
-        foreach (var t in new[] { SystemSchema.Session.Table, SystemSchema.LoginThrottle.Table, SystemSchema.UserTotp.Table })
+        foreach (var t in new[] { SystemSchema.Session.Table, SystemSchema.LoginThrottle.Table, SystemSchema.UserTotp.Table, SystemSchema.MfaChallenge.Table })
         {
             Assert.Contains($"TABLE public {t} ", toc);
             Assert.DoesNotContain($"TABLE DATA public {t} ", toc);
         }
         Assert.Contains($"TABLE DATA public {SystemSchema.Company.Table} ", toc);                                   // other tables keep their data
         var manifest = SystemBackupSet.ReadManifest(dir)!;
-        Assert.Equal(new[] { "session", "login_throttle", "user_totp" }, manifest.Excluded);
+        Assert.Equal(new[] { "session", "login_throttle", "user_totp", "mfa_challenge" }, manifest.Excluded);
         Assert.Equal(MigrationScript.LoadEmbedded().Max(s => s.Version), manifest.SystemMigrationVersion);
         Assert.True(SystemBackupSet.Verify(dir));
         var bytes = File.ReadAllBytes(dump); bytes[^20] ^= 0xFF; File.WriteAllBytes(dump, bytes);
