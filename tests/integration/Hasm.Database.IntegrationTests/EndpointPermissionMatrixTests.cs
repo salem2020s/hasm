@@ -80,7 +80,7 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         P("/api/v1/company/commercial-documents/", branch: BranchTarget.CommercialCreate), U("/api/v1/company/commercial-documents/{id:guid}", branch: BranchTarget.CommercialDocument),
         P("/api/v1/company/commercial-documents/{id:guid}/submit", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/{id:guid}/withdraw", branch: BranchTarget.CommercialDocument),
         P("/api/v1/company/commercial-documents/{id:guid}/approve", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/{id:guid}/reject", branch: BranchTarget.CommercialDocument),
-        P("/api/v1/company/commercial-documents/{id:guid}/cancel", branch: BranchTarget.CommercialDocument),
+        P("/api/v1/company/commercial-documents/{id:guid}/cancel", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/links"),
         // company configuration
         U("/api/v1/company/profile"), P("/api/v1/company/profile/display-name-sync"), U("/api/v1/company/settings"), U("/api/v1/company/currencies/{code}"),
         // cost centers and their policies
