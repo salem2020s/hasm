@@ -5,6 +5,7 @@ using Hasm.Infrastructure.Taxes;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>Phase 3.10 slice 1: the pure tax engine and snapshot (SRS 6). Every expected figure below was worked out by hand from the contract in docs/PHASE-3.10.md.</summary>
+[Collection(SerialMeasurementCollection.Name)]   // the scale test measures CPU time of the process: nothing else may run beside it (D-063)
 public class TaxEngineTests
 {
     private static readonly Guid A = Guid.Parse("00000000-0000-0000-0000-00000000000a"), B = Guid.Parse("00000000-0000-0000-0000-00000000000b"), C = Guid.Parse("00000000-0000-0000-0000-00000000000c"),
@@ -263,10 +264,15 @@ public class TaxEngineTests
         var ids = Enumerable.Range(1, 8).Select(i => Guid.Parse($"00000000-0000-0000-0000-0000000001{i:00}")).ToArray();
         var taxes = ids.Select((id, i) => Std(id, "T" + i, 15.123456m, i + 1, ids.Take(i).ToArray())).ToArray();
         var lines = Enumerable.Range(1, 5000).Select(i => Line(i, 1m, (i % 1000 + 1) / 100m, 0m, false, taxes)).ToArray();
-        var watch = Stopwatch.StartNew();
+        // The budget is CPU time of the process, not wall-clock time: wall time measures how busy the machine is (the same call took about 6 s on a busy machine and over 20 s on a heavily loaded one), not the engine.
+        // The class runs in the serial measurement collection, so nothing else consumes CPU in this process meanwhile. An absolute wall-clock performance budget belongs to the Phase 5.1 performance suite.
+        var process = Process.GetCurrentProcess();
+        process.Refresh();
+        var cpuBefore = process.TotalProcessorTime;
         var d = Calc(Pol(2, TaxRoundingMode.HalfEven, TaxRoundingLevel.PerDocument), lines);
-        watch.Stop();
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30), $"took {watch.Elapsed}");
+        process.Refresh();
+        var cpu = process.TotalProcessorTime - cpuBefore;
+        Assert.True(cpu < TimeSpan.FromSeconds(30), $"took {cpu} of CPU time");
         Assert.Equal(d.TotalTax, d.Lines.Sum(l => l.TaxTotal)); Assert.Equal(d.TotalTax, d.TotalsByTax.Sum(t => t.Amount));
         Assert.Equal(5000, d.Lines.Count);
     }
