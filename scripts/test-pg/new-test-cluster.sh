@@ -5,17 +5,24 @@
 assert_safe_locations
 umask 077
 [[ -d "$(dirname "${TEST_ROOT}")" ]] || die "The parent directory of ${TEST_ROOT} does not exist."
-take_lock
 
 # The root must be ABSENT (this script creates it) or be a root this script created earlier (it carries the marker file): a pre-existing directory is never used and never chmod-ed.
-resume=no
-if [[ -e "${TEST_ROOT}" ]]; then
-  [[ -d "${TEST_ROOT}" && ! -L "${TEST_ROOT}" ]] || die "${TEST_ROOT} exists and is not a plain directory; refusing."
-  [[ -f "${MARKER_FILE}" ]] || die "${TEST_ROOT} already exists and was not created by new-test-cluster.sh; refusing to use or modify it (choose another HASM_TEST_ROOT)."
-  [[ -O "${TEST_ROOT}" ]] || die "${TEST_ROOT} is not owned by the current user; refusing."
-  [[ -f "${SUPER_FILE}" && ! -f "${ENV_FILE}" ]] && resume=yes     # an interrupted earlier run that got as far as initdb
-  [[ -d "${DATA_DIR}" && "${resume}" == no ]] && die "Data directory already exists: ${DATA_DIR} (refusing to touch it; run destroy-test-cluster.sh first)."
-else
+# These checks run BEFORE the lock is taken, so a refusal leaves nothing behind (no stray lock file beside a foreign directory); they are repeated under the lock.
+check_root() {
+  resume=no
+  if [[ -e "${TEST_ROOT}" ]]; then
+    [[ -d "${TEST_ROOT}" && ! -L "${TEST_ROOT}" ]] || die "${TEST_ROOT} exists and is not a plain directory; refusing."
+    [[ -f "${MARKER_FILE}" ]] || die "${TEST_ROOT} already exists and was not created by new-test-cluster.sh; refusing to use or modify it (choose another HASM_TEST_ROOT)."
+    [[ -O "${TEST_ROOT}" ]] || die "${TEST_ROOT} is not owned by the current user; refusing."
+    [[ -f "${SUPER_FILE}" && ! -f "${ENV_FILE}" ]] && resume=yes     # an interrupted earlier run that got as far as initdb
+    [[ -d "${DATA_DIR}" && "${resume}" == no ]] && die "Data directory already exists: ${DATA_DIR} (refusing to touch it; run destroy-test-cluster.sh first)."
+  fi
+  return 0
+}
+check_root
+take_lock
+check_root
+if [[ ! -e "${TEST_ROOT}" ]]; then
   # mkdir (not install -d) fails if the directory appeared in the meantime. The root is traversable (711) so the server account can reach its own 700 data directory.
   mkdir -m 711 "${TEST_ROOT}" || die "Cannot create ${TEST_ROOT}."
   ( umask 077; : > "${MARKER_FILE}" )
