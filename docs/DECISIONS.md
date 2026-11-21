@@ -96,6 +96,7 @@
 | D-102 | Phase 4.1 Q7: notifications | LEAD decision (D-048, within D-080): every notification is always written to the audit log and an in-app administrator list; outbound channel SMTP first, webhook optional; none configured = status degraded; production readiness requires one (acceptance criterion). |
 | D-103 | Phase 4.1 Q8: defaults | LEAD decision (D-048, within D-080): step-up freshness 15 min, recovery cooling-off 4 h, emergency window 30 min (max 120), challenge validity 5 min. |
 | D-104 | Phase 4.1 allocations | LEAD allocation: decision IDs D-096..D-107 for Phase 4.1 (D-089..D-095 belong to another agent); system migrations 0030..0033 as M-A..M-D in merge order (reconcile if anything lands first); company 0030 belongs to another agent. |
+| D-105 | Phase 4.1 review H2: first privileged grants | LEAD decision (D-048, within D-080; fail-closed): the very first second administrator and the first approver, when no eligible approver exists, are granted through the admin tool with a DR custodian quorum token (2 of 3), audited and attributed to `admin-tool:<os-user>@<host>` plus the custodian ids; never unilateral. `bootstrap-admin` stays limited to the case where no administrator exists. Every other privilege-granting path (API and admin tool) is routed through the independent-approval framework or removed in slice S4. |
 
 ## توضيحات اتساق مستمدة من القرارات المعتمدة (ليست قرارات جديدة)
 
