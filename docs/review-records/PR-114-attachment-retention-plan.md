@@ -26,7 +26,7 @@
 | 2 | L2 | Low | File-missing-before-purge versus a resumed pending item. | Fixed in 3f094ff: missing before the purge means no pending purge item was committed; a resumed pending item whose file is gone is completed as deleted. |
 | 2 | L3 | Low | Meaning of "potentially affected" before R4. | Fixed in 3f094ff: until R4 every retained backup set is treated as under legal hold for D-086 purposes and the warning says the inventory is unavailable. |
 
-* **Blocker or High findings open:** none (round 1's two High findings are fixed; the round 2 fixes in 3f094ff await the same reviewer's confirmation).
+* **Blocker or High findings open:** none (round 1's two High findings are fixed; the round 2 fixes in 3f094ff were confirmed at 7b47919).
 * **NOT VERIFIED:** none; documentation only. The round-2 fixes in 3f094ff were confirmed by the delta reviewer at 7b47919 (below).
 * **Verdict:** approve
 
