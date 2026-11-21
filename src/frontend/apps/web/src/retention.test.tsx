@@ -130,11 +130,36 @@ describe("attachment retention screen", () => {
     await waitFor(() => expect(client.draftRetentionPolicy).toHaveBeenCalledWith({ effectiveFrom: "2027-01-01", note: null, rules: [{ subjectKind: "*", sensitivity: 0, indefinite: false, months: 60 }] }));
   });
 
+  it.each([["٦٠", "Arabic-Indic"], ["۶۰", "Persian"], ["٦0", "mixed Arabic-Indic and Latin"]])("accepts %s (%s) for the months and sends 60", async (text) => {
+    localStorage.setItem("hasm.locale", "en");
+    const client = render();
+    await go();
+    await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: text } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    await waitFor(() => expect(client.draftRetentionPolicy).toHaveBeenCalledWith({ effectiveFrom: "2027-01-01", note: null, rules: [{ subjectKind: "*", sensitivity: 0, indefinite: false, months: 60 }] }));
+  });
+
+  it.each(["", "x", "0", "1201", "٥٫٥", "1,000", "٦x"])("refuses the invalid months value '%s': nothing is sent and the field shows its error", async (text) => {
+    localStorage.setItem("hasm.locale", "en");
+    const client = render();
+    await go();
+    await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
+    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: text } });
+    await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
+    expect(await screen.findByText(E("field.ret.out_of_range"))).toBeInTheDocument();
+    expect(client.draftRetentionPolicy).not.toHaveBeenCalled();
+  });
+
   it("shows field errors from the server in the scoped wording", async () => {
     localStorage.setItem("hasm.locale", "en");
     render({ draftRetentionPolicy: vi.fn().mockRejectedValue(apiError(400, "invalid_request", { fields: [{ field: "rules[0].months", code: "out_of_range" }] })) });
     await go();
     await screen.findByTestId("policy-2");
+    fireEvent.change(screen.getByLabelText(E("ret.rule.months")), { target: { value: "5000" } });
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.effective_from")}`)), { target: { value: "2027-01-01" } });
     await userEvent.click(screen.getByRole("button", { name: E("ret.policy.save_draft") }));
     expect((await screen.findAllByText(E("field.ret.out_of_range"))).length).toBeGreaterThan(0);
   });

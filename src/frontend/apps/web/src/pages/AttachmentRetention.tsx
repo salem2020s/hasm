@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { useRunner } from "../ledgerCommon";
+import { parseIntegerInRange } from "../numberInput";
 import { useReportUnsaved } from "../unsaved";
 
 /**
@@ -56,10 +57,17 @@ export function AttachmentRetentionPage() {
   const [rules, setRules] = useState<RuleDraft[]>([blankRule()]);
   const draftDirty = effective !== "" || note !== "" || rules.length !== 1 || JSON.stringify(rules[0]) !== JSON.stringify(blankRule());
   const setRule = (i: number, patch: Partial<RuleDraft>) => setRules((r) => r.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  // Months are typed in a text field (Latin, Arabic-Indic or Persian digits, also mixed); a blank, fractional or out-of-range value is refused here and never sent (the server validates again).
+  const [monthErr, setMonthErr] = useState<Record<number, string>>({});
+  const monthsOf = (r: RuleDraft) => (r.mode === "indefinite" ? null : parseIntegerInRange(r.months, 1, 1200));
   const toRules = (): RetentionRuleInfo[] => rules.map((r) => ({
-    subjectKind: r.kind, sensitivity: Number(r.sensitivity), indefinite: r.mode === "indefinite", months: r.mode === "indefinite" ? null : r.months === "" ? 0 : Number(r.months),
+    subjectKind: r.kind, sensitivity: Number(r.sensitivity), indefinite: r.mode === "indefinite", months: monthsOf(r),
   }));
   const saveDraft = async () => {
+    const bad: Record<number, string> = {};
+    rules.forEach((r, i) => { const m = monthsOf(r); if (m !== null && Number.isNaN(m)) bad[i] = t("field.ret.out_of_range"); });
+    setMonthErr(bad);
+    if (Object.keys(bad).length > 0) return;
     const ok = await runner.run(() => auth.api.draftRetentionPolicy({ effectiveFrom: effective, note: note.trim() || null, rules: toRules() }), t("ret.policy.saved"));
     if (ok) { setEffective(""); setNote(""); setRules([blankRule()]); }
   };
@@ -165,8 +173,8 @@ export function AttachmentRetentionPage() {
                     <option value="months">{t("ret.rule.mode_months")}</option><option value="indefinite">{t("ret.rule.mode_indefinite")}</option></select>}
                 </Field>
                 {r.mode === "months" && (
-                  <Field id={`ret-months-${i}`} label={t("ret.rule.months")} error={f[`rules[${i}].months`]}>
-                    {(p) => <input {...p} type="number" min={1} max={1200} value={r.months} onChange={(e) => setRule(i, { months: e.target.value })} />}
+                  <Field id={`ret-months-${i}`} label={t("ret.rule.months")} error={monthErr[i] ?? f[`rules[${i}].months`]}>
+                    {(p) => <input {...p} inputMode="numeric" dir="ltr" autoComplete="off" maxLength={4} value={r.months} onChange={(e) => { setMonthErr((m) => ({ ...m, [i]: "" })); setRule(i, { months: e.target.value }); }} />}
                   </Field>
                 )}
                 </div>
