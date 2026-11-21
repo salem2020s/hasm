@@ -15,7 +15,7 @@ namespace Hasm.Infrastructure.Backup;
 /// </summary>
 public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirectory = null, TimeSpan? timeout = null)
 {
-    private static readonly System.Text.RegularExpressions.Regex Safe = new("^[A-Za-z0-9_.@-]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex Safe = new("^[A-Za-z0-9_.@ -]+$", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
     private readonly TimeSpan limit = timeout ?? TimeSpan.FromMinutes(30);
 
     /// <summary>Dumps <paramref name="sourceDatabase"/> (a company database) to <paramref name="dumpFile"/>, which must not exist. A partial file is removed on failure.</summary>
@@ -54,21 +54,21 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
                 if ((long)(await exists.ExecuteScalarAsync(ct))! != 0) throw new BackupException("target_exists");
             }
             // template0 (never the modifiable template1: nothing a local admin put there leaks in), with the encoding of the source database when it can be read
-            string? encoding = null, collate = null, ctype = null;
-            await using (var enc = new NpgsqlCommand("SELECT pg_encoding_to_char(encoding), datcollate, datctype, datlocprovider::text FROM pg_database WHERE datname = @n", conn))
+            string? encoding = null, collate = null, ctype = null, provider = null;
+            // datlocprovider exists only from PostgreSQL 15: read it through to_jsonb so older servers work (absent or null means libc)
+            await using (var enc = new NpgsqlCommand("SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype, to_jsonb(d)->>'datlocprovider' FROM pg_database d WHERE d.datname = @n", conn))
             {
                 enc.Parameters.AddWithValue("n", sourceDatabase);
                 await using var r = await enc.ExecuteReaderAsync(ct);
                 if (await r.ReadAsync(ct))
                 {
                     encoding = r.GetString(0);
-                    // libc locales only (an ICU/builtin provider keeps the template0 default); each value is validated before it is placed in the statement
-                    if (r.GetString(3) == "c") { collate = r.IsDBNull(1) ? null : r.GetString(1); ctype = r.IsDBNull(2) ? null : r.GetString(2); }
+                    collate = r.IsDBNull(1) ? null : r.GetString(1);
+                    ctype = r.IsDBNull(2) ? null : r.GetString(2);
+                    provider = r.IsDBNull(3) ? null : r.GetString(3);
                 }
             }
-            var clause = "";
-            if (encoding is not null && Safe.IsMatch(encoding)) clause += $" ENCODING '{encoding}'";
-            if (collate is not null && ctype is not null && Safe.IsMatch(collate) && Safe.IsMatch(ctype)) clause += $" LC_COLLATE '{collate}' LC_CTYPE '{ctype}'";
+            var clause = LocaleClause(encoding, collate, ctype, provider);
             await using var create = new NpgsqlCommand($"CREATE DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(targetDatabase)} TEMPLATE template0{clause}", conn);
             try { await create.ExecuteNonQueryAsync(ct); }
             catch (PostgresException ex) when (CreateFailureCode(ex.SqlState) is not null) { throw new BackupException(CreateFailureCode(ex.SqlState)!); }   // lost a creation race
@@ -83,6 +83,18 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
             if (!await TryDropAsync(targetDatabase)) throw new BackupException("restore_failed_cleanup_failed", ex is BackupException be ? be.Code : ex.GetType().Name);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The ENCODING / LC_COLLATE / LC_CTYPE clause that reproduces the source database on template0. A source with an ICU or builtin locale provider, a missing locale or a name with unexpected characters is refused
+    /// (<c>locale_unsupported</c>): the new database must never silently get a different collation than the source. A source that does not exist yields no clause (the restore itself then fails on the dump).
+    /// </summary>
+    internal static string LocaleClause(string? encoding, string? collate, string? ctype, string? provider)
+    {
+        if (encoding is null) return "";
+        if (provider is not (null or "c")) throw new BackupException("locale_unsupported");
+        if (collate is null || ctype is null || !Safe.IsMatch(encoding) || !Safe.IsMatch(collate) || !Safe.IsMatch(ctype)) throw new BackupException("locale_unsupported");
+        return $" ENCODING '{encoding}' LC_COLLATE '{collate}' LC_CTYPE '{ctype}'";
     }
 
     private void RequireCompanyDatabase(string name)
@@ -104,12 +116,15 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { return false; }
     }
 
+    /// <summary>First major version of libpq that accepts <c>PGSSLROOTCERT=system</c>.</summary>
+    internal const int SystemRootCertificateMinimumMajor = 16;
+
     /// <summary>
     /// The ONLY environment the PostgreSQL tools get: <c>PATH</c> and <c>SystemRoot</c> (when present), the credential, the TLS settings and a connect timeout. With the environment cleared there is no HOME, so libpq cannot find
-    /// <c>~/.postgresql/root.crt</c>: in verify-ca/verify-full mode the configured certificate is passed, and without one the system trust store is named explicitly (<c>PGSSLROOTCERT=system</c>, libpq 16+, which the
-    /// major-version rule already requires). A server certificate that cannot be validated makes the tool fail (never a silent downgrade).
+    /// <c>~/.postgresql/root.crt</c>: in verify-ca/verify-full mode the configured certificate is passed. Without one, the system trust store is named explicitly (<c>PGSSLROOTCERT=system</c>) ONLY when the tool's client
+    /// major version is at least 16 (older libpq does not know the value); for an older or unknown client the call is refused BEFORE any tool is launched (<c>ssl_root_certificate_required</c>): TLS validation is never downgraded.
     /// </summary>
-    internal static Dictionary<string, string> BuildEnvironment(HasmDatabaseOptions options, Func<string, string?> getVariable)
+    internal static Dictionary<string, string> BuildEnvironment(HasmDatabaseOptions options, Func<string, string?> getVariable, int clientMajor)
     {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var keep in new[] { "PATH", "SystemRoot" }) if (getVariable(keep) is { } value) env[keep] = value;
@@ -117,9 +132,53 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         var mode = options.SslMode.ToString().ToLowerInvariant() switch { "verifyfull" => "verify-full", "verifyca" => "verify-ca", var m => m };
         env["PGSSLMODE"] = mode;
         if (options.SslRootCertificate is not null) env["PGSSLROOTCERT"] = options.SslRootCertificate;
-        else if (mode is "verify-full" or "verify-ca") env["PGSSLROOTCERT"] = "system";
+        else if (mode is "verify-full" or "verify-ca")
+        {
+            if (clientMajor < SystemRootCertificateMinimumMajor) throw new BackupException("ssl_root_certificate_required");
+            env["PGSSLROOTCERT"] = "system";
+        }
         env["PGCONNECT_TIMEOUT"] = "30";
         return env;
+    }
+
+    /// <summary>The major version in the output of <c>pg_dump --version</c> (for example <c>pg_dump (PostgreSQL) 16.4</c>); 0 when it cannot be read (treated as too old for the system trust store).</summary>
+    internal static int ParseClientMajor(string? versionOutput)
+    {
+        var m = versionOutput is null ? null : System.Text.RegularExpressions.Regex.Match(versionOutput, @"\(PostgreSQL\)\s+(\d+)");
+        return m is { Success: true } && int.TryParse(m.Groups[1].Value, out var major) ? major : 0;
+    }
+
+    private readonly Dictionary<string, int> clientMajors = [];
+
+    private async Task<int> ClientMajorAsync(string tool, CancellationToken ct)
+    {
+        if (clientMajors.TryGetValue(tool, out var known)) return known;
+        var exe = pgBinDirectory is null ? tool : Path.Combine(pgBinDirectory, tool);
+        var psi = new ProcessStartInfo(exe, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        psi.Environment.Clear();
+        foreach (var keep in new[] { "PATH", "SystemRoot" }) if (Environment.GetEnvironmentVariable(keep) is { } value) psi.Environment[keep] = value;
+        Process process;
+        try { process = Process.Start(psi) ?? throw new BackupException("tool_unavailable"); }
+        catch (Exception ex) when (ex is Win32Exception or FileNotFoundException) { throw new BackupException("tool_unavailable"); }
+        using (process)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+            string output;
+            try
+            {
+                var read = process.StandardOutput.ReadToEndAsync(cts.Token);
+                _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null, cts.Token);
+                await process.WaitForExitAsync(cts.Token);
+                output = await read;
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(true); } catch (InvalidOperationException) { /* already gone */ }
+                throw new BackupException(ct.IsCancellationRequested ? "cancelled" : "tool_timeout");
+            }
+            return clientMajors[tool] = process.ExitCode == 0 ? ParseClientMajor(output) : 0;
+        }
     }
 
     /// <summary>The backup code of a CREATE DATABASE failure that has a meaning for the caller (a lost creation race); null for every other SQLSTATE.</summary>
@@ -135,7 +194,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         psi.ArgumentList.Add("--no-password");
         foreach (var a in arguments) psi.ArgumentList.Add(a);
         psi.Environment.Clear();                                   // nothing of the service environment (connection strings, secrets) reaches the tool
-        foreach (var (key, value) in BuildEnvironment(options, Environment.GetEnvironmentVariable)) psi.Environment[key] = value;
+        foreach (var (key, value) in BuildEnvironment(options, Environment.GetEnvironmentVariable, await ClientMajorAsync(tool, ct))) psi.Environment[key] = value;
 
         Process process;
         try { process = Process.Start(psi) ?? throw new BackupException("tool_unavailable"); }

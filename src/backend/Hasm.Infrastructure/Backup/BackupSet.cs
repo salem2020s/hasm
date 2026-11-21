@@ -288,7 +288,7 @@ public static class BackupSet
                 if (info.LinkTarget is not null && info.ResolveLinkTarget(true) is { } resolved)
                     cur = resolved.FullName.TrimEnd(Path.DirectorySeparatorChar);
             }
-            catch (IOException) { throw new BackupException("path_unresolvable"); }   // for example a cyclic symbolic link
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BackupException("path_unresolvable"); }   // for example a cyclic symbolic link or an unreadable component
         }
         return cur;
     }
