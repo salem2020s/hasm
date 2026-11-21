@@ -63,6 +63,8 @@ public sealed record LineQuantityView(int LineNo, decimal Ordered, decimal Fulfi
 public static class CommercialTestType
 {
     public const string Name = "commercial_test";
+    /// <summary>A second test-only type with no registered link pair (the incompatible-type tests).</summary>
+    public const string Other = "commercial_test_other";
 }
 
 /// <summary>A line of a draft (S1a: item, unit, quantity and an optional warehouse; no price, tax or cost). Line numbers are assigned by position.</summary>
