@@ -9,7 +9,7 @@ using Microsoft.Extensions.Configuration;
 namespace Hasm.Infrastructure.Security;
 
 /// <summary>Raised when encryption cannot be performed safely (missing/invalid key, tampered or foreign data). The message never contains key material, paths or content.</summary>
-public sealed class EncryptionUnavailableException(string code, string message) : Exception(message)
+public sealed class EncryptionUnavailableException(string code, string message, Exception? inner = null) : Exception(message, inner)
 {
     public string Code { get; } = code;
 }

@@ -108,6 +108,8 @@ public static class AuthenticationSetup
         services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
         services.AddAuthorizationBuilder()
+            // the default policy of every plain RequireAuthorization(): an authenticated session that carries the second-factor proof where MFA applies (S3b-1, D-166; pass-through for state None, D-161)
+            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()).Build())
             .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
             .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
@@ -174,10 +176,10 @@ public static class AuthenticationSetup
         var (status, code) = error switch
         {
             BadHttpRequestException b => (b.StatusCode, "bad_request"),
+            _ when Hasm.Api.Hosting.HasmExceptionMapping.IsInvalidCharacter(error) => (StatusCodes.Status400BadRequest, "invalid_request"),   // defence in depth: a character the database cannot store (22021) is the caller's data, not an outage
             AuditUnavailableException a => Audit(context, a),
             EncryptionUnavailableException e => Encryption(context, e),
             CompanyDatabaseException c => Company(context, c),
-            _ when Hasm.Api.Hosting.HasmExceptionMapping.IsInvalidCharacter(error) => (StatusCodes.Status400BadRequest, "invalid_request"),   // defence in depth: a character the database cannot store (22021) is the caller's data, not an outage
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };

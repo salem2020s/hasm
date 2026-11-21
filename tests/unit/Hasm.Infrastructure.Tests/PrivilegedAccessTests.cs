@@ -17,6 +17,21 @@ public class PrivilegedAccessTests
     }
 
     [Fact]
+    public void The_exact_classification_is_pinned_so_flipping_any_entry_fails_a_test()
+    {
+        // review L1 of PR #172: an explicit expected list, not a rule derived from the table under test. Changing the classification is a deliberate, reviewed change to THIS list.
+        Assert.Equal(
+            ["access.assignments", "access.audit", "access.members", "access.roles", "company.approvalpolicies", "company.attachmentretention", "company.attachmentssensitive",
+             "company.costcenterpolicies", "company.journalsoftclosed", "company.ledgersettings", "company.settings"],
+            PrivilegedAccess.PrivilegedResources.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(["company.imports.configure"], PrivilegedAccess.PrivilegedPermissions.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            [PermissionAction.Approve, PermissionAction.FinalClose, PermissionAction.NegativeException, PermissionAction.Override, PermissionAction.Reopen],
+            PrivilegedAccess.PrivilegedActions.OrderBy(a => a.ToString(), StringComparer.Ordinal).ToArray());
+        Assert.All(PermissionCatalog.Default.Resources.Where(r => r.Key.StartsWith("access.", StringComparison.Ordinal)), r => Assert.Contains(r.Key, PrivilegedAccess.PrivilegedResources));   // every access.* resource is privileged
+    }
+
+    [Fact]
     public void Role_grant_member_audit_and_security_settings_permissions_are_privileged()
     {
         foreach (var code in PermissionCatalog.Default.All.Where(p => PrivilegedAccess.PrivilegedResources.Contains(p.Resource.Key)).Select(p => p.Code))
