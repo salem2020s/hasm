@@ -4,7 +4,15 @@ Status: **design proposal; nothing is implemented. Execution stays BLOCKED on ow
 * **Q1** is X1-A, which replaces X1 as written.
 * **Q2** is the X2-X8 package, including the X3 and X7 additions.
 
-Everything marked **[P-Q1]** or **[P-Q2]** is *proposed, pending owner approval*. Nothing here changes code, a migration, a trigger, a CHECK or any other safeguard. The planner `LoadCompensationPlanAsync` stays read-only and the application barrier `backdated_not_supported` stays active.
+**Binding owner constraints for this revision (2026-11-21):**
+* X1-A and X2-X8 stay **PENDING OWNER DECISIONS** everywhere; X8 also depends on OD-12.
+* The existing PostgreSQL safeguards and all earlier #48 work are preserved.
+* Nothing is implemented: no X1-A, no migration, no financial execution path.
+* Revaluation stays within the approved 3.8D scope, but needs its own separately reviewed accounting contract, which must preserve FIFO layers (section 11).
+* The method-conversion safeguard exception (Q4) stays unimplemented until it is independently reviewed and approved.
+* Migration-guard hardening (Q5) is a separate security workstream that needs protected-file authorization. It is referenced here, not folded in.
+
+Everything marked **[P-Q1]** or **[P-Q2]** is *proposed, PENDING OWNER DECISION*. **[P-Q1]** = X1-A; **[P-Q2]** = X2-X8, with X8 also pending OD-12. Nothing here changes code, a migration, a trigger, a CHECK or any other safeguard. The planner `LoadCompensationPlanAsync` stays read-only and the application barrier `backdated_not_supported` stays active.
 
 **History of this document:**
 * Revision 1 was reviewed at row level and found not implementable (8 High; `review-records/PR-48-plan-execution-design.md`).
@@ -81,12 +89,14 @@ One new **company** migration and one **system** access migration. Both are forw
 
 ### 3.3 New entry-level guard (tightening) [P-Q1]
 
-A NEW BEFORE INSERT trigger on `t_bc727c1d`. It is a new function; no existing function is replaced.
-1. If `NEW.c_12665ffb` < the position's current `c_3c880b93`, **refuse unless** `NEW.c_eb34b7d8` has an `EpochMember` row whose execution has `created_xact = pg_current_xact_id()`. This closes F1 for every ordinary path.
+A NEW BEFORE INSERT trigger on `t_bc727c1d`. It is a new function; no existing function is replaced. It reads the position row `FOR UPDATE`; the engine already holds that lock, so no new lock order arises (Agent G option (a)). It reads only table rows, **never a GUC or session variable**.
+1. If `NEW.c_12665ffb` < the position's current `c_3c880b93`, **refuse unless** `NEW.c_eb34b7d8` has an `EpochMember` row whose execution has `created_xact = pg_current_xact_id()`. The execution's plan must also be Approved, with an approval whose approver is not the creator and whose fingerprints equal the plan's. This closes F1 for every ordinary path. G's assessment: the new guard could also ship as its own strengthening slice, independent of 3.8D (owner choice).
 2. If `NEW.c_4f9e777a` is set and the operation's kind is not 4, refuse unless the operation is an epoch member with role 1 (storno).
 3. For any entry of an epoch member:
    * the entry date must lie in an **Open** fiscal period (Soft Closed, Final Closed or missing refuses). This gives epoch rows the database period guard that the open owner item STOCK-PERIOD-DB proposes for all stock effects;
-   * the position must hold no open obligation (TM-D10/TM-D13a).
+   * the position must hold no open obligation (TM-D10/TM-D13a);
+   * the position must have no epoch member of ANOTHER plan (X5 as a database rule).
+4. **X6 as a database rule:** a NEW BEFORE INSERT trigger on the operation table refuses a kind-4 reversal whose reversed operation has stornoed entries (an epoch lineage row). This is a new trigger; `f_9c827423` is unchanged.
 
 ### 3.4 Deferred checks (at commit) [P-Q1]
 
@@ -100,7 +110,7 @@ A deferred constraint trigger on `CompensationPlanExecution` (and on `EpochMembe
   * the deferred check requires that the referenced audit row exists and that its target is this execution, whose `created_xact` equals the current transaction.
 
   Without it, the commit fails. Whether this is sufficient against a pre-chosen id is review question 2 in section 10;
-* no epoch member exists without an execution of this transaction.
+* no epoch member exists without an execution of this transaction, and every member operation has at least one entry.
 
 ### 3.5 Executor contract (application) [P-Q1]
 
@@ -117,6 +127,15 @@ A single SECURITY DEFINER writer for back-dated rows:
 * grants re-applied by `grant-company-runtime` after restore.
 
 Then a direct runtime-role SQL write (T2) must also pass the definer's checks. This is not required for increment 1, but recommended before production.
+
+### 3.6a Alternative kept on record (Agent G option (b))
+
+An append-only epoch table read through ONE mandatory read function, with no back-dated write into the cost tables. It is safest for the schema, but it gives two sources of truth for position and layers, changes every reader, and needs an owner decision on how positions move. Choose it only if the owner rules out any back-dated write into cost tables.
+
+**Rejected:**
+* relaxing `f_589a0a19` by `CREATE OR REPLACE`;
+* any session GUC condition (a general bypass);
+* replacing `k_f356c89a` (needs DROP).
 
 ### 3.7 Unchanged backstops
 
@@ -207,6 +226,11 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 | N18 | Trial restore of a dump with executed epochs | identical catalog and data; the schema gate accepts it |
 | N19 | Execution without its business audit event in the same transaction | refused at commit |
 | N20 | Member adopting an operation that already has entries, or one referenced by an obligation or settlement | refused |
+| N21 | Re-executing an executed plan | returns the existing execution and writes nothing |
+| N22 | N1 repeated for each entry kind: receipt, issue, transfer out and in, and reversal | refused |
+| N23 | The application path still answers `backdated_not_supported` before the database guard for ordinary requests | unchanged code |
+| N24 | Approval whose fingerprints differ from the plan's | refused |
+| N25 | (only with 3.6) direct runtime-role back-dated insert outside the definer; a `search_path` hijack attempt; EXECUTE not granted to PUBLIC | refused / not possible |
 
 **Positive and invariant tests:**
 * E1 (132), E2 (120) and E6 (156) executed end to end;
@@ -227,9 +251,10 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 |---|---|---|
 | Q1 | X1-A in place of X1 as written (sections 2-3, 5) | OPEN; everything marked [P-Q1] waits for it |
 | Q2 | X2-X8 as one package with the X3/X7 additions (sections 2, 4) | OPEN; everything marked [P-Q2] waits for it |
-| Q3 | Revaluation scope and contract | OPEN; outside this document |
-| Q4 | Method-conversion safeguard | OPEN; outside this document |
-| Q5 | Migration-guard hardening (allow-pattern) | OPEN; independent. This design already complies by construction (N17) |
+| X8 / OD-12 | Trial counting | PENDING; X8 also depends on OD-12 |
+| Q3 | Revaluation contract (owner: WITHIN 3.8D scope, separately reviewed accounting contract) | PENDING; section 11 states the layer-preservation requirement |
+| Q4 | Method-conversion safeguard exception | stays UNIMPLEMENTED until independently reviewed and approved; not part of this design |
+| Q5 | Migration-guard hardening (allow-pattern) | separate security workstream, needs protected-file authorization; referenced only. This design complies by construction (N17) |
 
 Until Q1 and Q2 are decided, the planner stays read-only and the barrier stays active. Technical choices the agent makes without asking: table layout, key derivation, lock order within the rules above, isolation level, reconcile checks, error codes, plan-status triggers.
 
@@ -239,3 +264,18 @@ Until Q1 and Q2 are decided, the planner stays read-only and the barrier stays a
 2. Is the audit binding of 3.4 sufficient without changing the business audit table? The audit row has no transaction column, so the binding rests on the execution id being generated in this transaction, the audit target reference and the execution's `xid8`. Can a runtime-role writer pre-insert an audit row for a guessed future execution id? (The id is a fresh random UUID, and audit rows are key-authenticated by the application.)
 3. Do the storno and rebook orderings of section 2 cover transfer chains in both directions with equal dates?
 4. Is the plan-scoped hook in the normal posting path (section 5 step 6) narrow enough: no new flag, only the member row of this transaction's execution?
+
+## 11. Revaluation: requirements for its separate contract (owner: within 3.8D scope; contract PENDING)
+
+This design does not define revaluation; its accounting contract is separately reviewed (D-045, Q3). The contract MUST satisfy:
+* **No silent layer collapse.** A FIFO revaluation must never consume all layers and re-create one layer, and must never discard layer history.
+* **Value-only entries are impossible** (`k_0b3e9de8`: quantity > 0), so any representation must use quantity-bearing entries or a new additive structure. The layer-preserving approach to evaluate: **one out/in pair PER LAYER**, typed by the epoch membership table with a new revaluation role:
+  * the out entry consumes exactly that layer's remaining quantity at its remaining value;
+  * the in entry creates its successor layer at the revalued amount;
+  * a lineage row links the old layer to the new one, keeping the original receipt date and the original arrival order as lineage data;
+  * FIFO consumption order is preserved by creating the successors in the original layer order.
+* **The cost of that approach is stated:** new arrival ranks and layer ids (the original layers stay immutable and fully traceable through the lineage), and as many entries as layers. If the contract finds this insufficient (for example, original arrival ranks must stay authoritative), it must propose a different additive structure, such as a per-layer value-adjustment table read by the engine. That would be a reader change subject to its own review.
+* **Moving average:** one out/in pair at the carrying quantity.
+* **Accounting:** counter accounts, write-down only or also write-up, approval, and period and date rules are for the contract, not for this design.
+* **Same protections as epochs:** the same entry guard, the same same-transaction binding, the audit binding and the before/after catalog test. No existing safeguard is changed.
+
