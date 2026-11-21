@@ -32,14 +32,21 @@ export interface SearchPickerProps<T> {
   allowNone?: boolean;
   disabled?: boolean;
   debounceMs?: number;
+  /** Id of the list (select), so a visible <label htmlFor> can name it. */
+  id?: string;
+  /** Field state for assistive technology (error text elsewhere is linked through `describedBy`). */
+  invalid?: boolean;
+  describedBy?: string;
+  required?: boolean;
   /** Change to force a reload when the caller's filter changed (a new `load` identity alone does not). */
   reloadKey?: string | number;
   testId?: string;
 }
 
-export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, disabled, debounceMs = 250, reloadKey, testId }: SearchPickerProps<T>) {
+export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, disabled, debounceMs = 250, reloadKey, testId, id, invalid, describedBy, required }: SearchPickerProps<T>) {
   const { t } = useI18n();
-  const base = useId();
+  const generated = useId();
+  const base = id ?? generated;
   const [search, setSearch] = useState("");
   const [page, setPage] = useState<PickerPage<T> | null>(null);
   const [failed, setFailed] = useState(false);
@@ -75,9 +82,9 @@ export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel,
 
   return (
     <div className="search-picker" data-testid={testId}>
-      <input type="search" dir="auto" aria-label={`${label} — ${t("picker.search")}`} aria-controls={`${base}-list`} value={search} disabled={disabled}
+      <input type="search" dir="auto" aria-label={`${label} — ${t("picker.search")}`} aria-controls={id ?? `${base}-list`} value={search} disabled={disabled}
         onChange={(e) => setSearch(e.target.value)} />
-      <select id={`${base}-list`} aria-label={label} value={value} disabled={disabled}
+      <select id={id ?? `${base}-list`} aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy} aria-required={required || undefined} value={value} disabled={disabled}
         onChange={(e) => { const id = e.target.value; onChange(id, id === "" ? null : known.current.get(id) ?? null); }}>
         {allowNone && <option value="">{t("picker.none")}</option>}
         {value !== "" && !selectedInList && <option value={value}>{pinnedLabel ?? t("picker.unknown_selection")}</option>}
