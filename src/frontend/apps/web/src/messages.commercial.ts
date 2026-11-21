@@ -37,6 +37,11 @@ export const commercialAr: Record<string, string> = {
   "commdoc.error.pricing_changed": "تغيّرت الأسعار أو الضرائب منذ الإرسال؛ اسحب المستند إلى مسودة وأعد إرساله.", "commdoc.error.commercial_document_not_found": "المستند غير موجود.",
   "commdoc.error.idempotency_key_reused": "مفتاح الإرسال مستعمل لمستند آخر.", "commdoc.error.invariant_violation": "رفضت قاعدة البيانات هذا التغيير لأنه يخالف قاعدة حماية.", "commdoc.error.period_closed": "الفترة المالية لتاريخ المستند غير مفتوحة.",
   "commdoc.error.no_open_period": "لا توجد فترة مالية مفتوحة لتاريخ المستند.", "commdoc.error.date_outside_number_year": "يجب أن يبقى التاريخ ضمن السنة المالية لرقم المستند.",
+  "commdoc.approval.title": "تقدّم الاعتماد", "commdoc.approval.hint": "المراحل بالترتيب؛ لا تُفتح مرحلة قبل اكتمال التي قبلها، ويقرّر الخادم من يحق له القرار.", "commdoc.approval.no_plan": "لا توجد سياسة اعتماد مطابقة: يكفي اعتماد واحد من شخص مستقل.",
+  "commdoc.approval.stage": "المرحلة", "commdoc.approval.role": "الدور المطلوب", "commdoc.approval.any_role": "أي معتمد", "commdoc.approval.progress": "القرارات", "commdoc.approval.state": "الحالة", "commdoc.approval.done": "مكتملة", "commdoc.approval.current": "الحالية", "commdoc.approval.waiting": "بانتظار",
+  "commdoc.approval.decisions": "القرارات المتخذة", "commdoc.approval.by": "المعتمد", "commdoc.approval.you": "أنت", "commdoc.decision_recorded": "تم تسجيل قرارك؛ بانتظار بقية المراحل.",
+  "commdoc.approval.not_eligible.decided": "سجّلت قرارك على هذه النسخة؛ يلزم معتمد آخر.", "commdoc.approval.not_eligible.complete": "اكتملت كل مراحل الاعتماد لهذه النسخة.", "commdoc.approval.not_eligible.role": "المرحلة الحالية تتطلب دوراً لا تملكه.",
+  "commdoc.error.approval_stage_complete": "اكتملت هذه المرحلة؛ حدّث الصفحة.", "commdoc.error.approver_role_required": "المرحلة الحالية تتطلب دوراً لا تملكه.", "commdoc.error.already_decided": "سجّلت قرارك على هذه النسخة من قبل.",
 };
 
 export const commercialEn: Record<string, string> = {
@@ -77,4 +82,9 @@ export const commercialEn: Record<string, string> = {
   "commdoc.error.pricing_changed": "Prices or taxes changed since the submission; withdraw the document to draft and submit it again.", "commdoc.error.commercial_document_not_found": "The document was not found.",
   "commdoc.error.idempotency_key_reused": "The submission key was used for another document.", "commdoc.error.invariant_violation": "The database refused this change because it breaks a protection rule.", "commdoc.error.period_closed": "The fiscal period of the document date is not open.",
   "commdoc.error.no_open_period": "No open fiscal period exists for the document date.", "commdoc.error.date_outside_number_year": "The date must stay inside the fiscal year of the document number.",
+  "commdoc.approval.title": "Approval progress", "commdoc.approval.hint": "The stages are in order; a stage opens only when the one before it is complete, and the server decides who may cast the decision.", "commdoc.approval.no_plan": "No approval policy matches: one independent approval is enough.",
+  "commdoc.approval.stage": "Stage", "commdoc.approval.role": "Required role", "commdoc.approval.any_role": "Any approver", "commdoc.approval.progress": "Decisions", "commdoc.approval.state": "State", "commdoc.approval.done": "Complete", "commdoc.approval.current": "Current", "commdoc.approval.waiting": "Waiting",
+  "commdoc.approval.decisions": "Decisions cast", "commdoc.approval.by": "Approver", "commdoc.approval.you": "You", "commdoc.decision_recorded": "Your decision was recorded; the remaining stages are still open.",
+  "commdoc.approval.not_eligible.decided": "You have already decided on this revision; another approver is needed.", "commdoc.approval.not_eligible.complete": "Every approval stage of this revision is complete.", "commdoc.approval.not_eligible.role": "The current stage needs a role you do not hold.",
+  "commdoc.error.approval_stage_complete": "This stage is complete; reload the page.", "commdoc.error.approver_role_required": "The current stage needs a role you do not hold.", "commdoc.error.already_decided": "You have already decided on this revision.",
 };

@@ -44,6 +44,7 @@ function setup(over: Record<string, unknown> = {}, perms = PERMS, types = ["comm
     listInventoryItems: vi.fn().mockResolvedValue({ items: [apple], total: 1 }),
     getInventoryItem: vi.fn().mockResolvedValue(apple),
     lookupInventoryUnits: vi.fn().mockResolvedValue(unitRows),
+    getCommercialApprovals: vi.fn().mockResolvedValue({ plan: [], decisions: [] }),
     createCommercialDocument: vi.fn(), updateCommercialDocument: vi.fn(),
     ...over,
   }, perms);
@@ -303,5 +304,93 @@ describe("commercial documents in English and the Tauri shell", () => {
       await userEvent.click(tab("المستند"));
       expect(screen.getByLabelText("ملاحظة")).toHaveValue("T");
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+});
+
+const submittedDoc = (over: Partial<CommercialDocument> = {}) => doc({ status: 2, revision: 3, submittedBy: "other", createdBy: "someone", lastEditedBy: "someone", ...over });
+const stage = (n: number, required: number, approved: number, roleId: string | null = null) => ({ stage: n, required, approved, roleId });
+const decision = (id: number, approver: string, st: number) => ({ id, revision: 3, approver, stage: st, decidedAtUtc: "2026-03-02T09:30:00Z" });
+const openSubmitted = async (approvals: unknown, over: Record<string, unknown> = {}, current: CommercialDocument = submittedDoc()) => {
+  const client = setup({ getCommercialApprovals: vi.fn().mockResolvedValue(approvals), ...over }, PERMS, ["commercial_test"], [current], current);
+  await openDoc();
+  return client;
+};
+
+describe("approval stage progress on the commercial-document screen (S5a)", () => {
+  it("shows the stages in order with the current stage, and who decided when, in the History tab", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 1), stage(2, 2, 1), stage(3, 1, 0)], decisions: [decision(1, "approver1-xxxx", 1), decision(2, "u1", 2)] });
+    await userEvent.click(tab("السجل"));
+    const plan = within(screen.getByTestId("approval-plan"));
+    expect(within(screen.getByTestId("stage-1")).getByText("مكتملة")).toBeInTheDocument();
+    expect(within(screen.getByTestId("stage-2")).getByText("الحالية")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-2")).toHaveAttribute("aria-current", "step");
+    expect(within(screen.getByTestId("stage-3")).getByText("بانتظار")).toBeInTheDocument();
+    expect(within(screen.getByTestId("stage-2")).getByText("1 / 2")).toBeInTheDocument();
+    expect(plan.getAllByRole("row")).toHaveLength(4);
+    const decisions = within(screen.getByTestId("approval-decisions")).getAllByRole("row");
+    expect(decisions).toHaveLength(3);
+    expect(within(decisions[1]!).getByText("approver")).toBeInTheDocument();                              // the first 8 characters of the approver id
+    expect(within(decisions[1]!).getByText("2026-03-02 09:30:00")).toBeInTheDocument();
+    expect(within(decisions[2]!).getByText("أنت")).toBeInTheDocument();                                   // the signed-in user is named "you"
+  });
+
+  it("says that no policy matches when the plan is empty and keeps Approve for an independent approver", async () => {
+    await openSubmitted({ plan: [], decisions: [] });
+    await userEvent.click(tab("السجل"));
+    expect(screen.getByTestId("approval-no-plan")).toHaveTextContent("لا توجد سياسة اعتماد مطابقة");
+    expect(screen.getByTestId("approve")).toBeEnabled();
+  });
+
+  it("offers Approve for the open stage to an eligible user", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 1), stage(2, 1, 0, "r")], decisions: [decision(1, "approver1", 1)] });       // the stage role "r" is the one the test user holds
+    expect(screen.getByTestId("approve")).toBeEnabled();
+    expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+  });
+
+  it("hides Approve, with the reason, from a user who already decided on this revision", async () => {
+    await openSubmitted({ plan: [stage(1, 2, 1)], decisions: [decision(1, "u1", 1)] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("سجّلت قرارك على هذه النسخة");
+  });
+
+  it("hides Approve from a user who does not hold the role of the open stage, and when every stage is complete", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 0, "some-other-role")], decisions: [] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
+    document.body.innerHTML = "";
+    window.location.hash = "";
+    await openSubmitted({ plan: [stage(1, 1, 1)], decisions: [decision(1, "approver1", 1)] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("اكتملت كل مراحل الاعتماد");
+  });
+
+  it("says a decision was recorded when the document stays submitted, reloads the progress, and says approved when it completes", async () => {
+    const approve = vi.fn().mockResolvedValueOnce(submittedDoc()).mockResolvedValueOnce(approved());
+    const progress = vi.fn().mockResolvedValueOnce({ plan: [stage(1, 1, 0), stage(2, 1, 0)], decisions: [] }).mockResolvedValueOnce({ plan: [stage(1, 1, 1), stage(2, 1, 0)], decisions: [decision(1, "u1", 1)] });
+    await openSubmitted({}, { approveCommercialDocument: approve, getCommercialApprovals: progress });
+    await userEvent.click(screen.getByTestId("approve"));
+    expect(await screen.findByTestId("action-notice")).toHaveTextContent("تم تسجيل قرارك");
+    await waitFor(() => expect(progress).toHaveBeenCalledTimes(2));                                          // the progress was reloaded after the decision
+  });
+
+  it("translates the refusal codes of the stages: role required, already decided, stage complete", async () => {
+    const approve = vi.fn().mockRejectedValueOnce(apiError(403, "approver_role_required")).mockRejectedValueOnce(apiError(409, "already_decided")).mockRejectedValueOnce(apiError(409, "approval_stage_complete"));
+    await openSubmitted({ plan: [stage(1, 2, 0)], decisions: [] }, { approveCommercialDocument: approve });
+    for (const text of ["المرحلة الحالية تتطلب دوراً لا تملكه.", "سجّلت قرارك على هذه النسخة من قبل.", "اكتملت هذه المرحلة؛ حدّث الصفحة."]) {
+      await userEvent.click(screen.getByTestId("approve"));
+      expect(await within(screen.getByTestId("form-error")).findByText(text)).toBeInTheDocument();
+    }
+  });
+
+  it("works in English (LTR)", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const current = submittedDoc();
+    setup({ getCommercialApprovals: vi.fn().mockResolvedValue({ plan: [stage(1, 1, 0)], decisions: [] }) }, PERMS, ["commercial_test"], [current], current);
+    await go("#/commercial/documents");
+    await userEvent.click(await screen.findByRole("button", { name: "View" }));
+    await userEvent.click(await screen.findByRole("tab", { name: /^History/ }));
+    expect(within(await screen.findByTestId("stage-1")).getByText("Current")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Approval progress" })).toBeInTheDocument();
+    expect(document.documentElement.dir).toBe("ltr");
   });
 });
