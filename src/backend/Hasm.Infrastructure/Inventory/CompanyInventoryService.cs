@@ -275,17 +275,20 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
 
     /// <summary>
     /// One page of units for an optional search (code or either name, literal and case-insensitive through PostgreSQL's <c>upper()</c>), ordered by code, with the total of matching rows from the same statement.
-    /// All values are parameters; the limit is clamped (default 50, at most 500).
+    /// All values are parameters; the limit is clamped (default 50, at most 500). <paramref name="ids"/> (a by-ids lookup, at most <see cref="ListPaging.MaxIds"/>, validated by the caller) restricts the rows to those
+    /// units of THIS company (the company database holds only its own rows) and makes the page default to the maximum.
     /// </summary>
-    public async Task<UnitPage> SearchUnitsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    public async Task<UnitPage> SearchUnitsAsync(Guid companyId, string? search, int? offset, int? limit, IReadOnlyCollection<Guid>? ids = null, CancellationToken ct = default)
     {
         ListPaging.TryCleanSearch(search, out var cleaned);
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var cmd = new NpgsqlCommand { Connection = conn };
-        var w = "";
-        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", U.Code, U.NameAr, U.NameEn); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var where = new List<string>();
+        if (cleaned is not null) { where.Add(ListPaging.LikeClause("like", U.Code, U.NameAr, U.NameEn)); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        if (ids is not null) { where.Add($"{U.Id} = ANY(@ids)"); cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Uuid) { Value = ids.Distinct().ToArray() }); }
+        var w = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
         var off = ListPaging.ClampOffset(offset);
-        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
+        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit, ids is null ? ListPaging.DefaultLimit : ListPaging.MaxLimit));
         cmd.Parameters.AddWithValue("off", off);
         cmd.CommandText = $"SELECT {UnitCols}, count(*) OVER () FROM {U.Table}{w} ORDER BY {U.Code} LIMIT @lim OFFSET @off";
         var list = new List<UnitView>(); long total = 0;
@@ -296,17 +299,19 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
 
     /// <summary>
     /// One page of item groups for an optional search (code or either name), ordered by code, with the total from the same statement. The effective valuation of each group still resolves through
-    /// its ancestors, so the (small) full group list is read for that, but only the requested page is returned.
+    /// its ancestors, so the (small) full group list is read for that, but only the requested page is returned. <paramref name="ids"/> is the by-ids lookup (see <see cref="SearchUnitsAsync"/>).
     /// </summary>
-    public async Task<ItemGroupPage> SearchGroupsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    public async Task<ItemGroupPage> SearchGroupsAsync(Guid companyId, string? search, int? offset, int? limit, IReadOnlyCollection<Guid>? ids = null, CancellationToken ct = default)
     {
         ListPaging.TryCleanSearch(search, out var cleaned);
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var cmd = new NpgsqlCommand { Connection = conn };
-        var w = "";
-        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", G.Code, G.NameAr, G.NameEn); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var where = new List<string>();
+        if (cleaned is not null) { where.Add(ListPaging.LikeClause("like", G.Code, G.NameAr, G.NameEn)); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        if (ids is not null) { where.Add($"{G.Id} = ANY(@ids)"); cmd.Parameters.Add(new NpgsqlParameter("ids", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Uuid) { Value = ids.Distinct().ToArray() }); }
+        var w = where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where);
         var off = ListPaging.ClampOffset(offset);
-        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
+        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit, ids is null ? ListPaging.DefaultLimit : ListPaging.MaxLimit));
         cmd.Parameters.AddWithValue("off", off);
         cmd.CommandText = $"SELECT {GroupCols}, count(*) OVER () FROM {G.Table}{w} ORDER BY {G.Code} LIMIT @lim OFFSET @off";
         var page = new List<RawGroup>(); long total = 0;

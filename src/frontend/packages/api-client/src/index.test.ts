@@ -530,3 +530,47 @@ describe("api client: import template routes (odd names)", () => {
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toEqual({ expectedVersion: 3 });
   });
 });
+
+describe("api client: by-ids lookup of units and item groups", () => {
+  const unitRow = (id: string) => ({ id, code: id.toUpperCase() });
+  const idsOf = (url: string) => new URL(url).searchParams.getAll("ids");
+
+  it("sends repeated ids on the list call and nothing else changes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ units: [], groups: [], total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listInventoryUnits({ ids: ["a", "b"], limit: 5 });
+    await client.listInventoryGroups({ ids: ["c"] });
+    await client.listInventoryUnits();
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/inventory/units?limit=5&ids=a&ids=b");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/inventory/groups?ids=c");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/inventory/units");
+  });
+
+  it("never sends a request for an empty id list (an empty ids would mean everything over HTTP)", async () => {
+    const fetchMock = vi.fn();
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.lookupInventoryUnits([])).toEqual([]);
+    expect(await client.lookupInventoryGroups([])).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("removes duplicates, batches at most 100 ids per request and merges the rows", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json({ units: idsOf(url).map(unitRow) })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const ids = Array.from({ length: 150 }, (_, n) => `id-${n}`);
+    const rows = await client.lookupInventoryUnits([...ids, ids[0]!, ids[1]!]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(idsOf(call(fetchMock, 0).url)).toHaveLength(100);
+    expect(idsOf(call(fetchMock, 1).url)).toHaveLength(50);
+    expect(rows.map((r) => r.id)).toEqual(ids);                                       // every id once, in batch order
+  });
+
+  it("uses the same endpoint, credentials and no state-changing header for groups, and surfaces the server's refusal", async () => {
+    const fetchMock = vi.fn().mockImplementationOnce(() => Promise.resolve(json({ groups: [{ id: "g1" }] }))).mockImplementationOnce(() => Promise.resolve(json({ error: "forbidden" }, { status: 403 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.lookupInventoryGroups(["g1"])).toEqual([{ id: "g1" }]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/inventory/groups?ids=g1");
+    expect((call(fetchMock, 0).init.headers as Record<string, string>)["X-Hasm-Request"]).toBeUndefined();      // a read, not a state change
+    await expect(client.lookupInventoryGroups(["g2"])).rejects.toBeInstanceOf(ApiError);
+  });
+});
