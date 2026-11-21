@@ -1,0 +1,30 @@
+# Independent review record
+
+* **Pull request:** #113 (Phase 4.1 plan: MFA and identity security, `docs/PHASE-4.1.md`, decisions D-096..D-107; documentation only)
+* **Head SHA reviewed (full 40 characters):** 4d5012c0fe7b4881176c8ba1eecc56a414a62bb6 (round 3; round 1 reviewed 20fbffd0dd68fd30398b46344bb2de4a6dffc602, round 2 reviewed 6aa77782ee23c407104b53fa93b18ca248a5516f)
+* **Reviewer context:** Agent G, an independent security/audit reviewer, a separate agent from the author (Agent D); model family Claude Opus; read-only. Three rounds, recorded verbatim below.
+* **Scope read:** round 1: the whole PR diff `origin/main...origin/docs/phase-4-1-plan` and `docs/PHASE-4.1.md` in full, D-080 in `docs/DECISIONS.md`, `Totp.cs`, `IdentityStore`/`AuthService` (throttle, sessions, bootstrap), `AuthEndpoints`, `Hasm.Admin/Program.cs`, `PHASE-4.3.md`, `PHASE-3.12.md` item K, the #104 branch `SecretStoreTables`/`SystemDumpExclusions`/pin test; round 2: `20fbffd..6aa7778` (fix commit 26f2e21, migration wording c983557, D-091 alignment 6aa7778, merge ffde344 checked to contain only main content), full read of `PHASE-4.1.md` at 26f2e21 plus the later delta, the `DECISIONS.md` diff, cross-check with #116 D-091; round 3: `6aa7778..4d5012c` (`DECISIONS.md`, `PHASE-4.1.md`) against the earlier findings.
+* **Checks run (commands and results):** only what the reviewer executed, per round (no build or tests: documentation only). Round 1: git ls-remote/fetch, `git diff origin/main...origin/docs/phase-4-1-plan`, reads of the files listed above. Round 2: git log/diff `20fbffd..6aa7778` and the reads listed above. Round 3: git fetch/ls-remote, `git log` and `git diff 6aa7778..4d5012c`, compared with the earlier findings.
+* **Findings:** round 1 request changes (2 High, 8 Medium, 5 Low); round 2 request changes (2 Medium, 4 Low; all round-1 findings resolved); round 3 approve (0 Critical/High/Medium, 2 Low).
+
+Round 1: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent security review of PR #113 Phase 4.1 MFA plan against D-080, bypass paths, backup interaction, code consistency"; Head SHA reviewed 20fbffd0dd68fd30398b46344bb2de4a6dffc602; executed: git ls-remote/fetch, `git diff origin/main...origin/docs/phase-4-1-plan`, read PHASE-4.1.md in full, D-080 in DECISIONS.md, Totp.cs, IdentityStore/AuthService (throttle, sessions, bootstrap), AuthEndpoints, Hasm.Admin/Program.cs, PHASE-4.3.md, PHASE-3.12.md item K, #104 branch SecretStoreTables/SystemDumpExclusions/pin test; no build or tests (docs-only); verdict REQUEST CHANGES; findings 2 High (H1 restore drops TOTP -> password-only re-enrolment; H2 existing unilateral privileged-grant paths), 8 Medium, 5 Low.
+
+Round 2: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm fixes for H1,H2,M1-M8,L1-L5 on #113 and assess judgement calls (a) S4 quorum fail-closed until S7, (b) password-only self-filed recovery request; check D-091 alignment with #116"; Head SHA reviewed 6aa77782ee23c407104b53fa93b18ca248a5516f; executed: git log/diff 20fbffd..6aa7778 (fix commit 26f2e21, migration-wording c983557, D-091 6aa7778, merge ffde344 checked to contain only main content), full read of PHASE-4.1.md at 26f2e21 plus later delta, DECISIONS.md diff, cross-check with #116 D-091; no tests (docs only); verdict REQUEST CHANGES; findings 2 Medium (N1 self-filed request hardening; N2 D-091 restore resurrects revoked secrets / cross-installation / recovery-key compromise response), 4 Low; all prior H/M/L findings resolved.
+
+Round 3: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #113 delta 6aa7778..4d5012c addresses N1, N2 (D-106/D-107) and the four Lows"; Head SHA reviewed 4d5012c0fe7b4881176c8ba1eecc56a414a62bb6; executed: git fetch/ls-remote, git log and git diff 6aa7778..4d5012c (DECISIONS.md, PHASE-4.1.md), checked against my earlier findings; no tests (docs only); verdict APPROVE; findings 0 Critical/High/Medium, 2 Low (L-a restore must invalidate unconsumed bootstrap enrolment codes; L-b specify the audited unblock step after restore).
+
+| ID | Round | Severity | Problem | Resolution |
+|----|-------|----------|---------|------------|
+| H1 | 1 | High | A system restore drops TOTP secrets, so MFA users could re-enrol with only a password | Fixed in 26f2e21 (MFA state in the backed-up user row; `RecoveryRequired`; per-table backup rule aligned in 6aa7778); confirmed in round 2 |
+| H2 | 1 | High | Existing unilateral privileged-grant paths | Fixed in 26f2e21 (S4 enumerates and routes or removes every path; DR quorum first-grant, D-105); confirmed in round 2 |
+| M1-M8 | 1 | Medium | single verifier, unique indexes, AAD, one authorization table, emergency allow-list, restore epoch, key-retirement inventory, enrolment code | Fixed in 26f2e21; confirmed in round 2 |
+| L1-L5 | 1 | Low | cooling-off vs expiry, `mac_key_id`, evidence at decision time, throttle bound and alert, stale wording | Fixed in 26f2e21; confirmed in round 2 |
+| N1 | 2 | Medium | Self-filed recovery request hardening | Fixed in 4d5012c; confirmed in round 3 |
+| N2 | 2 | Medium | D-091 restore effects, cross-installation restore, recovery-key compromise | Fixed in 4d5012c (D-106, D-107); confirmed in round 3 |
+| Lows | 2 | Low | quorum first-grant eligibility, state endpoint classification, bootstrap code hash location, section 11 per-table wording | Fixed in 4d5012c; confirmed in round 3 |
+| L-a | 3 | Low | The restore must invalidate unconsumed bootstrap enrolment codes | Fixed in 0c4e9ad391bc1c3ee49ff73a2950ed518bb7f147 |
+| L-b | 3 | Low | Specify the audited unblock step after a restore | Fixed in 0c4e9ad391bc1c3ee49ff73a2950ed518bb7f147 |
+
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** Agent G has not yet confirmed the small delta 4d5012c..0c4e9ad (L-a and L-b, wording only); documentation only (no code, migration, workflow or protected file), so no build or test applies.
+* **Verdict:** approve
