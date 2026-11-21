@@ -77,6 +77,9 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         // attachments
         P("/api/v1/company/attachments/", Payload.File), P("/api/v1/company/attachments/{id:guid}/remove"), P("/api/v1/company/attachments/maintenance/rewrap"),
         P("/api/v1/company/attachments/maintenance/sweep"), P("/api/v1/company/attachments/maintenance/verify"),
+        // attachment retention (Phase R1): policies and attachment legal holds
+        P("/api/v1/company/attachment-retention/policies"), P("/api/v1/company/attachment-retention/policies/{id:guid}/approve"), P("/api/v1/company/attachment-retention/policies/{id:guid}/revoke"),
+        P("/api/v1/company/attachment-retention/holds"), P("/api/v1/company/attachment-retention/holds/{id:guid}/release"),
         // branches: the edit is branch-scoped; the structure operations are company-wide
         P("/api/v1/company/branches/"), U("/api/v1/company/branches/{id:guid}", branch: BranchTarget.BranchItself), P("/api/v1/company/branches/{id:guid}/deactivate", branch: BranchTarget.BranchItself),
         P("/api/v1/company/branches/{id:guid}/activate", branch: BranchTarget.BranchItself), P("/api/v1/company/branches/{id:guid}/make-main", branch: BranchTarget.BranchItself),
