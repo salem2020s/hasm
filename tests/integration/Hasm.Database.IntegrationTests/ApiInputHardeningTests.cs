@@ -214,6 +214,38 @@ public class ApiInputHardeningTests : JournalTestBase
     // ------------------------------------------------------------------------------------------------------------------------------- tests
 
     [PostgresFact]
+    public async Task A_nul_character_in_a_text_query_value_or_a_json_string_is_a_mapped_400_with_a_field_error_on_the_endpoints_that_used_to_answer_503()
+    {
+        await Start();
+        var admin = await SignIn(Admin);
+        foreach (var (url, field) in new[]
+        {
+            ("/api/v1/company/commercial-documents/?docType=a%00b", "docType"), ("/api/v1/company/inventory/items?search=%00", "search"), ("/api/v1/company/inventory/barcode-lookup?barcode=a%00b", "barcode"),
+            ("/api/v1/company/exchange-rates/history?currency=%00", "currency"), ("/api/v1/company/journal/?q=a%00b", "q"), ("/api/v1/company/imports/?adapter=%00", "adapter"), ("/api/v1/company/parties/?search=a%00b", "search"),
+        })
+        {
+            var (status, body, _) = await Send(HttpMethod.Get, url, admin, null);
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+            using var json = JsonDocument.Parse(body);
+            Assert.Equal("invalid_request", json.RootElement.GetProperty("error").GetString());
+            Assert.Contains(json.RootElement.GetProperty("fields").EnumerateArray(), f => f.GetProperty("field").GetString() == field && f.GetProperty("code").GetString() == "invalid_value");
+        }
+        // a JSON body: authenticated (a real create), and anonymous (the login)
+        var (created, createdBody, _) = await Send(HttpMethod.Post, "/api/v1/company/parties/", admin, new StringContent("{\"code\":\"NUL1\",\"displayName\":\"a\\u0000b\",\"isActive\":true}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, created);
+        Assert.Contains("\"field\":\"displayName\"", createdBody);
+        var (login, loginBody, _) = await Send(HttpMethod.Post, "/api/v1/auth/login", null, new StringContent("{\"login\":\"a\\u0000b\",\"password\":\"x\"}", Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, login);
+        Assert.Contains("\"field\":\"login\"", loginBody);
+        // the same inputs without a NUL are NOT rejected by the rule (they get the normal answers)
+        var (ok, _, _) = await Send(HttpMethod.Get, "/api/v1/company/parties/?search=" + Uri.EscapeDataString("a%_\u202E\u0301"), admin, null);
+        Assert.Equal(HttpStatusCode.OK, ok);
+        // a genuine database 22021 that slips past the rule (an upload field the guard does not scan) is still a mapped 400, never a 503
+        var (upload, uploadBody, _) = await Send(HttpMethod.Post, "/api/v1/company/imports/?adapter=inventory-units&fileName=a.csv", admin, new ByteArrayContent(Encoding.UTF8.GetBytes("code,name\nX,\0\n")));
+        Assert.True((int)upload < 500, $"{(int)upload} {uploadBody}");
+    }
+
+    [PostgresFact]
     public async Task Hostile_query_and_route_values_on_every_endpoint_give_a_mapped_answer_never_a_server_error_and_never_server_internals()
     {
         await Start();
