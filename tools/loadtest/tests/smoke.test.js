@@ -149,8 +149,9 @@ function stubApi() {
       if (p !== "/api/v1/auth/login" && req.headers.authorization !== "Bearer tok") return send(res, 401, { error: "unauthenticated" });
       if (req.method !== "GET" && !["/api/v1/auth/login", "/api/v1/session/company"].includes(p)) db.writes++;
       const injectOnce = (k) => { if (db.inject[k]) { db.inject[k] = false; return true; } return false; };
+      const CAP = { parties: 200, documents: 200 };   // the real server caps these two lists at 200 rows per page
       const page = (all, key, text) => { const s = (q.get("search") || "").toLowerCase(); const hit = s ? all.filter((x) => text(x).toLowerCase().includes(s)) : all;
-        const o = Number(q.get("offset") || 0), l = Number(q.get("limit") || 50); return { [key]: hit.slice(o, o + l), total: hit.length }; };
+        const o = Number(q.get("offset") || 0), l = Math.min(CAP[key] || 500, Number(q.get("limit") || 50)); return { [key]: hit.slice(o, o + l), total: hit.length }; };
       if (p === "/api/v1/auth/login") return send(res, 200, { token: "tok" });
       if (p === "/api/v1/session/company") return send(res, 200, {});
       if (p === "/api/v1/company/inventory/units") { if (req.method === "POST") { unitMade = true; return send(res, 201, unit, 1); } return send(res, 200, { units: unitMade ? [unit] : [] }); }
@@ -240,6 +241,21 @@ test("seed and a short run against a stub API: counts, idempotency, never a seco
     assert.strictEqual(res.environment.declaredReferenceEnvironment, null);
     assert.ok(res.scenarios.find((s) => s.id === "item_search").samples > 0);
     JSON.parse(JSON.stringify(res));
+  } finally { server.close(); }
+});
+
+test("the company check pages by the rows returned: a foreign record behind a server page cap is found and the counts are exact", async () => {
+  const { server, db } = stubApi(); await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const c = new Client({ baseUrl: `http://127.0.0.1:${server.address().port}` }); await c.login("m", "p"); await c.selectCompany("c");
+    for (let i = 1; i <= 1000; i++) db.parties.push({ id: `p${i}`, code: `LT-P-${String(i).padStart(6, "0")}`, displayName: "x" });
+    for (let i = 1; i <= 450; i++) db.docs.set(`d${i}`, { id: `d${i}`, reference: `LT-S-${String(i).padStart(6, "0")}`, status: 3 });
+    let r = await inspectCompany(c);
+    assert.deepStrictEqual([r.measured.parties, r.measured.stockDocs, r.foreignCount], [1000, 450, 0]);          // 200-row pages: all rows counted, none skipped
+    db.parties[300].code = "CUST-300"; db.docs.get("d300").reference = "PO-300";                                // rows 200-499 of a 500-row window
+    r = await inspectCompany(c);
+    assert.strictEqual(r.foreignCount, 2);
+    await assert.rejects(require("../lib/company").assertLoadTestOnly(c), /not load-test data/);
   } finally { server.close(); }
 });
 

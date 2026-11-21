@@ -113,8 +113,10 @@ async function seed({ maker, approver, counts, seed: seedValue, year, concurrenc
   if (counts.stockDocs) {
     const W = warehouses.length; const idByIndex = new Map(); const wanted = new Set(); const specOf = (i) => plan.stockDoc(seedValue, i, { items: counts.items, warehouses: W, year, total: counts.stockDocs });
     for (let i = 1; i <= counts.stockDocs; i++) for (const l of specOf(i).lines) wanted.add(l.itemIndex);
-    for (let offset = 0, total = Infinity; offset < total; offset += 500) {
-      const r = (await maker.call("items", undefined, { query: { search: "LT-I-", offset, limit: 500 } })).json; total = r.total; for (const it of r.items) idByIndex.set(Number(it.code.slice(5)), it.id);
+    for (let offset = 0, total = Infinity; offset < total;) {
+      const r = (await maker.call("items", undefined, { query: { search: "LT-I-", offset, limit: 500 } })).json; total = r.total;
+      for (const it of r.items) idByIndex.set(Number(it.code.slice(5)), it.id);
+      if (r.items.length === 0) break; offset += r.items.length;   // by the rows returned (the server may cap a page)
     }
     for (const idx of wanted) if (!idByIndex.has(idx)) throw new Error(`item LT-I-${String(idx).padStart(6, "0")} is missing: seed the items first`);
     const one = async (i) => {

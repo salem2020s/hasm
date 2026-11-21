@@ -9,13 +9,14 @@ async function pagedWithTotal(client, name, key) {
   const out = []; let offset = 0, total = Infinity;
   while (offset < total) {
     const r = await client.call(name, undefined, { query: { offset, limit: PAGE } });
-    out.push(...r.json[key]); total = r.json.total; offset += PAGE; if (r.json[key].length === 0) break;
+    const rows = r.json[key]; out.push(...rows); total = r.json.total; offset += rows.length;   // advance by the rows RETURNED: the server may cap a page below the requested size
+    if (rows.length === 0) break;
   }
   return out;
 }
 async function journalEntries(client) {
-  const out = []; for (let offset = 0; ; offset += PAGE) {
-    const page = (await client.call("journalList", undefined, { query: { offset, limit: PAGE } })).json.entries; out.push(...page); if (page.length < PAGE) return out;
+  const out = []; for (let offset = 0; ;) {
+    const page = (await client.call("journalList", undefined, { query: { offset, limit: PAGE } })).json.entries; if (page.length === 0) return out; out.push(...page); offset += page.length;
   }
 }
 
