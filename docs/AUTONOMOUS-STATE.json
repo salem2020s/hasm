@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "b1bf424a67eacf2e7ec581b695fff4aa2517249c",
-    "note": "Refresh after the owner decisions of 2026-11-21. main = b1bf424 (merge of #177), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (#181)."
+    "verifiedHead": "2d5da1f99bbc51445d6997e079322dd35e49c41d",
+    "note": "Refresh after the owner decisions of 2026-11-21. main = 2d5da1f (merge of #176, the slice 8 plan; docs only, registry and migrations unchanged), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (#181)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -348,13 +348,19 @@
       "phase": "explicit request-size limits on every body-accepting route (registry unchanged at 1262)",
       "mergeCommit": "b1bf424a67eacf2e7ec581b695fff4aa2517249c",
       "headMerged": "9247d82bd8c1785008b349e1720b1d4aba028cbf"
+    },
+    {
+      "pr": 176,
+      "phase": "Phase 4.3 slice 8 plan, multiple backup destinations (docs; D-182..D-189); plan only, nothing built",
+      "mergeCommit": "2d5da1f99bbc51445d6997e079322dd35e49c41d",
+      "headMerged": "3b726ccd09caafb918d6bd43fa3dadccc52b8663"
     }
   ],
   "active": {
     "phase": "Owner decisions of 2026-11-21 recorded (D-190..D-197); team running after the lead switch",
-    "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1) PENDING until an independent reviewer confirms the final design revision with no unresolved Critical/High/Medium (G requested changes on revision 3; P's fixes pushed at #48 ab1d106; confirmation outstanding). Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 open, comparison in progress. #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197). Exact-head verify-head NOT run by this refresh.",
+    "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1) PENDING until an independent reviewer confirms the final design revision with no unresolved Critical/High/Medium (G requested changes on revision 3; P's fixes pushed at #48 ab1d106; confirmation outstanding). Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 open, comparison in progress. #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh.",
     "knownIssues": [
-      "Decisions: next free ID D-198. D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on #176; D-190..D-197 the owner decisions of 2026-11-21 (in the pull request carrying this refresh); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
+      "Decisions: next free ID D-198. D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (in the pull request carrying this refresh); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
       "Audit: 1336/1337 on main; 1338 allocated to S3b-1b (#181); blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
       "4.1 S3 is NOT complete: S3a (#166), S3b-1a (#172) and the S3b-2a UI (#178) merged; S3b-1b is #181 and S3b-2b is #185 (stacked on #181), both open.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
@@ -364,7 +370,7 @@
   },
   "next": [
     "Merge queue (registry serial): #184 (its base #177 is merged); #181 (system 0034, +9), then #185 (stacked on #181); #182 (+2). #183 (+0) is held for its Low fixes. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
-    "#176: FG's round on 37662d9..f2a9ddd requested changes (M-FG1 forgeable tombstone exception in replication_pending, L-FG1); fix, then FG's confirmation.",
+    "#176 merged (2d5da1f). BINDING for the slice 8 implementation (FG's L-FG3, Low, recorded on the merged plan's review record): when a backup-retention-apply finds a matching 2015 with no 2016 and the run folder present, it closes that orphan 2015 with an audit event (2017 deletion_not_started with run id, status hash and destination id), and a closed 2015 is never a basis for resume, recovery or the 2015/2016 pair; with its test (crash before the rename, hold placed, folder removed by hand: the run must stay pending and be copied again).",
     "#48: G's confirmation of design revision 3 (the 3.8D implementation gate, D-190); then the approved, unblocked replay slices (D-195).",
     "3.8D design only: the Q3 revaluation accounting contract (independent accounting review, owner approval) and the Q4 conversion design (guard untouched).",
     "Q5 migration-guard hardening as its own security PR (D-194; protected-file review and merge gates apply).",
@@ -456,12 +462,6 @@
       "branch": "test/hbe1-exhaustive-tamper",
       "head": "cbdaaedf39cfba962a23de31cba8e7cd6aae46ba",
       "state": "H HBE1 tamper test exhaustive and deterministic (tests only); FH approve at a33d92e with 6 Lows; HELD by the lead for the fixes of those Lows (FF)"
-    },
-    {
-      "pr": 176,
-      "branch": "docs/phase-4-3-multi-destination-plan",
-      "head": "f2a9ddd93ba7e896c0ada9870439cb9aaf5b6ffb",
-      "state": "4.3 slice 8 plan (docs), F2 continued by FF; reopened after an accidental closure (D-197); R request changes at 2647dab (M1, L1-L6), all addressed in 37662d9..f2a9ddd with main merged; FG (taking over from R) requested changes on that delta (M-FG1, L-FG1); fixes in progress; D-182..D-189, audit 2040-2049"
     }
   ],
   "inertPullRequests": [
@@ -501,7 +501,6 @@
     "note": "Roster as of the lead-switch checkpoint. The lead model was switched afterwards and agents are moving to Claude Fable where supported (owner, 2026-11-21); the current assignment per agent is NOT VERIFIED here."
   },
   "outsideQueue": [
-    176,
     48,
     85,
     183
