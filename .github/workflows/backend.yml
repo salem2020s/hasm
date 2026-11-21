@@ -135,7 +135,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1094 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1103 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -149,7 +149,7 @@ jobs:
                 "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
                 "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
                 # Phase 2.3C-2 cryptographic audit integrity
-                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 1, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
                 "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
                 "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
@@ -201,7 +201,7 @@ jobs:
                 # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
                 "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
                 # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
-                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6, "StockPostingInWorkTests": 9,
+                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6, "StockPostingInWorkTests": 10,
                 # Phase 3.7C reversal of executed stock documents, valuation close probe (company migration 0017, system migration 0019).
                 "StockReversalTests": 8, "StockReversalApiTests": 1, "StockReversalScenarioTests": 5,
                 # Phase 3.8A stock balances, item ledger and reconciliation (system migration 0020).
@@ -228,7 +228,7 @@ jobs:
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
-                "PartyRoleTests": 10, "PartyRoleApiTests": 7,
+                "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
                 "AttachmentTests": 10, "AttachmentApiTests": 8,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
@@ -237,5 +237,7 @@ jobs:
                 "BackupRestoreDrillTests": 2,
                 # Phase 4.3 slice 3: registry-bound backup, trial restore with the 21.8 pre-cutover checks, kept trial databases and the Hasm.Admin commands (no migration).
                 "CompanyBackupServiceTests": 11,
+                # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
+                "BackupRunTests": 6,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

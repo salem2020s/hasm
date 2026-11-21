@@ -277,13 +277,15 @@ public class StockPostingInWorkTests : StockPostingTestBase
         });
     }
 
+    private Task ForgeHead() =>
+        Sql($"INSERT INTO {Audit_.Table} ({Audit_.StreamKey}, {Audit_.Seq}, {Audit_.EventId}, {Audit_.OccurredAtUtc}, {Audit_.EventType}, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, {Audit_.Detail}, {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac}) " +
+            $"SELECT {Audit_.StreamKey}, {Audit_.Seq} + 1, gen_random_uuid(), {Audit_.OccurredAtUtc}, 1998, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, 'forged', {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac} " +
+            $"FROM {Audit_.Table} ORDER BY {Audit_.Seq} DESC LIMIT 1");
+
     [PostgresFact]
     public async Task After_a_rolled_back_first_touch_a_forged_head_is_refused_by_the_callers_next_audit_append()
     {
-        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => AfterRefusedFirstTouch(
-            () => Sql($"INSERT INTO {Audit_.Table} ({Audit_.StreamKey}, {Audit_.Seq}, {Audit_.EventId}, {Audit_.OccurredAtUtc}, {Audit_.EventType}, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, {Audit_.Detail}, {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac}) " +
-                      $"SELECT {Audit_.StreamKey}, {Audit_.Seq} + 1, gen_random_uuid(), {Audit_.OccurredAtUtc}, 1998, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, 'forged', {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac} " +
-                      $"FROM {Audit_.Table} ORDER BY {Audit_.Seq} DESC LIMIT 1")));
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => AfterRefusedFirstTouch(ForgeHead));
         Assert.Equal("audit_head_corrupt", ex.Code);                                                              // the full first-touch check ran again
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
     }
@@ -296,5 +298,35 @@ public class StockPostingInWorkTests : StockPostingTestBase
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {StockPostingAuditEvents.Posted}"));
         await AssertBusinessAuditSound();                                                                         // chained onto the advanced head, anchored, no gap
+    }
+
+    /// <summary>
+    /// Review rule of #112/#107: Npgsql recycles the transaction object, so the audit first-touch state of an EARLIER transaction can still sit on it. A savepoint mark taken in a later transaction must carry the transaction id
+    /// with the streams; restoring a mark whose id is not the current transaction's must count as EMPTY, otherwise the stale streams would be restored as "touched in this transaction" and the caller's next append would skip the head check.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_recycled_transaction_object_never_lets_a_savepoint_restore_the_stale_touched_streams_of_an_earlier_transaction()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        await Sql(FailFunction + $" CREATE TRIGGER zz_forced_failure BEFORE INSERT ON {Audit_.Table} FOR EACH ROW WHEN (NEW.{Audit_.EventType} = {StockPostingAuditEvents.Posted}) EXECUTE FUNCTION zz_forced_failure();");
+        await using var conn = await Resolver.OpenAsync(Company.Id);
+
+        // transaction 1 touches the business stream (full first-touch check), then rolls back
+        var tx1 = await conn.BeginTransactionAsync();
+        await new CompanyAuditedWork(Company.Id, conn, tx1, Audit, Clock).AppendAuditAsync(new AuditEventData(1998, ActorUserId: Admin.Id, Detail: "an earlier transaction touches the business stream"));
+        await tx1.RollbackAsync();
+        await tx1.DisposeAsync();
+
+        // transaction 2 on the SAME connection: Npgsql hands back the same transaction object, which still carries the stale state of transaction 1
+        var tx2 = await conn.BeginTransactionAsync();
+        Assert.Same(tx1, tx2);
+        var work = new CompanyAuditedWork(Company.Id, conn, tx2, Audit, Clock);
+        await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m)));   // fails on its first touch of the stream
+        await ForgeHead();                                                                                         // another connection plants a forged head
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "caller append")));
+        Assert.Equal("audit_head_corrupt", ex.Code);                                                              // the first-touch check ran again
+        await tx2.RollbackAsync();
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
     }
 }
