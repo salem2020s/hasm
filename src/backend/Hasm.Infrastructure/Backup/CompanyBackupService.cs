@@ -92,10 +92,8 @@ public sealed class CompanyBackupService
         // R2-L1/R2-L2: the company's provisioning lock is held for the whole backup, so no migration, provisioning or runtime grant of this company runs while it is taken
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
-        // a session lock of a just-closed connection is released by the server asynchronously: wait briefly (bounded) before reporting the company busy
-        var locked = false;
-        for (var attempt = 0; attempt < 10 && !(locked = await CompanyProvisioner.TryLockAsync(lockConn, companyId, ct)); attempt++) await Task.Delay(300, ct);
-        if (!locked) throw new BackupException("company_busy");
+        // a session lock of a just-closed connection is released by the server asynchronously: the shared acquisition waits briefly (bounded) before the company is reported busy
+        if (!await CompanyProvisioner.AcquireLockAsync(lockConn, companyId, ct)) throw new BackupException("company_busy");
         try { return await BackupLockedAsync(companyId, dest, root, parent, leaf, swept, ct); }
         finally
         {

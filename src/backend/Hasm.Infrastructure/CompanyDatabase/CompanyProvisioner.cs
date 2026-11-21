@@ -58,7 +58,7 @@ public sealed class CompanyProvisioner(
 
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
-        if (!await TryLockAsync(lockConn, companyId, ct))
+        if (!await AcquireLockAsync(lockConn, companyId, ct))
             return new ProvisioningResult(companyId, ProvisioningOutcome.InProgressElsewhere, false, [], 0);
         // The lock is released when lockConn is disposed (connections are not pooled); no explicit unlock needed.
 
@@ -129,6 +129,18 @@ public sealed class CompanyProvisioner(
         if (AfterStep is not null) await AfterStep(step, ct);
         ct.ThrowIfCancellationRequested();
     }
+
+    /// <summary>The number of attempts and the pause between them when a company lock is acquired (about 2.7 s at most before a truly held lock is reported busy).</summary>
+    internal const int LockAttempts = 10;
+    internal static readonly TimeSpan LockRetryDelay = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// THE way every administrative operation (provision, grant-company-runtime, migrate-companies, backup) takes a company's lock: a bounded wait (<see cref="LockAttempts"/> tries, <see cref="LockRetryDelay"/> apart),
+    /// because the server releases the session lock of a just-closed connection asynchronously, so one immediate attempt can fail although the previous operation is already finished. A lock that is really held
+    /// still answers false (busy), after the bounded wait. <paramref name="wait"/> exists for unit tests.
+    /// </summary>
+    internal static Task<bool> AcquireLockAsync(NpgsqlConnection conn, Guid companyId, CancellationToken ct, Func<TimeSpan, CancellationToken, Task>? wait = null) =>
+        BoundedWait.UntilAsync(() => TryLockAsync(conn, companyId, ct), LockAttempts, LockRetryDelay, ct, wait);
 
     internal static async Task<bool> TryLockAsync(NpgsqlConnection conn, Guid companyId, CancellationToken ct)
     {

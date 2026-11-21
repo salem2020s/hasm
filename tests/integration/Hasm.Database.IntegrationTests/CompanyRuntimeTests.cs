@@ -234,6 +234,21 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await InCompany<bool>(c.PhysicalDatabaseName, $"SELECT to_regclass('{CompanySchema.BusinessAudit.Table}') IS NOT NULL");
 
     [PostgresFact]
+    public async Task A_company_lock_released_a_moment_ago_is_waited_for_by_the_migration_instead_of_reporting_the_company_busy()
+    {
+        await StartCompanies();
+        var legacy = await ReadyCompany(OnlyFirst);
+        var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await holder.OpenAsync();
+        Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, legacy.Id, default));
+        var migrating = new CompanyMigrator(Options, Registry).MigrateAsync(legacy.Id);
+        await Task.Delay(1000);
+        await holder.DisposeAsync();
+        Assert.Equal(CompanyMigrationStatus.Migrated, Assert.Single(await migrating).Status);    // not Busy
+        Assert.True(await HasAuditTable(legacy));
+    }
+
+    [PostgresFact]
     public async Task Fresh_provisioning_creates_the_business_audit_table_through_migration_0002()
     {
         await StartCompanies();
@@ -312,7 +327,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await using (var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true)))
         {
             await holder.OpenAsync();
-            Assert.True(await CompanyProvisioner.TryLockAsync(holder, legacy.Id, default));       // e.g. provisioning or another migration
+            Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, legacy.Id, default));   // e.g. provisioning or another migration
 
             var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
 
@@ -447,10 +462,8 @@ public class CompanyRuntimeGrantGuardTests : CompanyRuntimeTestBase
         var c = await ReadyCompany();
         await using var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await holder.OpenAsync();
-        // the provisioning session's lock is released by the server asynchronously after its connection closed: take it with a short bounded wait (as the backup service does), then assert as before
-        var locked = false;
-        for (var attempt = 0; attempt < 10 && !(locked = await CompanyProvisioner.TryLockAsync(holder, c.Id, default)); attempt++) await Task.Delay(300);
-        Assert.True(locked);
+        // the provisioning session's lock is released by the server asynchronously after its connection closed: the shared bounded acquisition waits for it
+        Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, c.Id, default));
         var result = await Provisioner().GrantAsync(c.Id);
         Assert.Equal(RuntimeGrantOutcome.InProgressElsewhere, result.Outcome);
         Assert.False(result.RoleCreated);
