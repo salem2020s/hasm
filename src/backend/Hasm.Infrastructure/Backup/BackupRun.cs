@@ -157,7 +157,7 @@ public sealed class BackupRunService
     /// Every secret-store table with its report label, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; which of them a dump excludes
     /// follows the per-table rule (<see cref="SystemDumpExclusionsFor"/>, D-120). The Phase 4.1 TOTP table is added to both, as included only in encrypted runs, in the slice that creates it.
     /// </summary>
-    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table")];
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table"), ("mfa_challenge", "MfaChallenge.Table")];
 
     /// <summary>
     /// The secret-store tables whose DATA a system dump excludes (D-120, per-table rule of <see cref="SystemSchema.SecretStoreTables"/>): an unencrypted DEV/TEST run excludes every one; an encrypted run

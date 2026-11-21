@@ -49,7 +49,10 @@ public class BackupRetentionSchemaDerivationTests
         Assert.Contains($"CREATE TRIGGER {SystemSchema.BackupRetentionPin.TrRow} BEFORE UPDATE OR DELETE ON {SystemSchema.BackupRetentionPin.Table}", sql);
         Assert.Contains($"CREATE TRIGGER {SystemSchema.BackupRetentionPin.TrTruncate} BEFORE TRUNCATE ON {SystemSchema.BackupRetentionPin.Table}", sql);
         foreach (var t in new[] { SystemSchema.BackupLegalHold.Table, SystemSchema.BackupRetentionPin.Table }) Assert.Contains($"REVOKE ALL ON TABLE {t} FROM PUBLIC", sql);
-        // the migration is the LAST system migration: it takes the next free number at merge (allocation rule), so no test pins its number
-        Assert.Equal(MigrationScript.LoadEmbedded().Max(s => s.Version), MigrationScript.LoadEmbedded().Single(s => s.Name.EndsWith("_backup_retention.sql", StringComparison.Ordinal)).Version);
+        // the migration's position is pinned: system 0032 (owner/lead decision). Later system migrations may follow it; numbering must stay contiguous.
+        var all = MigrationScript.LoadEmbedded().Select(s => s.Version).OrderBy(v => v).ToList();
+        var mine = Assert.Single(MigrationScript.LoadEmbedded(), s => s.Name.EndsWith("_backup_retention.sql", StringComparison.Ordinal));
+        Assert.Equal(32, mine.Version);
+        Assert.Equal(Enumerable.Range(all[0], all.Count), all);
     }
 }
