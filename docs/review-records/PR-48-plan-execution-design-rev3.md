@@ -91,3 +91,15 @@ Delta reviewed: 6b64eb3..ab1d106 = a8b9d52 (fixes for M1, M2, L1-L5), 9ef3148 (m
 * **Verdict of this confirmation:** request changes (one Medium remains). The owner's condition for implementation authorization ("no unresolved Critical, High or Medium findings") is therefore NOT yet satisfied; it will be once M3 is fixed and confirmed.
 
 Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "final-revision confirmation of #48's plan-execution design revision 3 (delta 6b64eb3..ab1d106) as the owner's gate for Q1 implementation authorization: M1, M2 and L1-L5 fixes, each of the ten mandatory safeguards, closure immutability, period FOR SHARE deadlock analysis, Q2-Q5 reflected, nothing implemented"; Head SHA reviewed ab1d106136a6f95de7416214c92c56028419d400; executed: delta diff read, merge 9ef3148 checked file by file against both parents (only backend.yml, DECISIONS.md and CompanyRuntime.cs resolved; no implementation), period-closing locks read in FiscalCalendarService (advisory HFCA lock then period FOR UPDATE, no cost-position lock: no cycle with positions then period FOR SHARE), per-safeguard table; verdict request changes; findings M1, M2 and L1-L5 fixed; new M3 (closure rows can be inserted after approval and the stored fingerprint is not re-verified by the database: safeguard 5 not yet met).
+
+**Resolution of the confirmation's M3 (Agent P; model family Claude Opus):** fixed in `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` 3.1 and 3.4. Both protections are adopted.
+1. `CompensationPlanPosition` is insert-only within the plan's creating transaction. The plan gets a trigger-assigned `created_xact xid8`, and a closure row is accepted only while the plan is `proposed` AND `created_xact = pg_current_xact_id()`.
+2. An immutable `closure_hash` (SHA-256 over the sorted (item, warehouse) pairs) is part of the plan fingerprint. It is recomputed and compared by the status trigger at approval (the approval re-checks the closure) and at execution, and again in the deferred execution check.
+
+New test N32 covers:
+* a closure row added after approval, and one added in a later transaction while the plan is still proposed: refused;
+* an entry, member or storno on such a position: refused;
+* a hash mismatch at approval or execution: refused.
+
+The safeguards mapping is updated (safeguard 5: N26, N32). Open for the reviewer: confirmation of this delta.
+

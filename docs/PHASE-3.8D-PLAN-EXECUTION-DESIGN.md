@@ -25,7 +25,7 @@ Markers: **[A-Q1]** = X1-A and **[A-Q2]** = X2-X8, each APPROVED by the owner 20
 * never a client-controlled session flag or a general back-dating bypass;
 * historical accounting records and traceability preserved.
 
-Where each one is met: 3.7 and N17 (existing safeguards); 3.3(1) and N1/N22 (entry guard); 3.1, 3.2 and 3.3(1) (same-transaction binding, N2/N8); 3.1 `CompensationPlanPosition`, 3.2 and 3.3(2, 2a) (closure, N26); 3.1, 3.3(3) and section 4 (SoD and Open periods; N3, N10, N28); 3.3(4) and section 6 (reversals; N27); section 5 and 3.4 (transactional consistency and audit; N19, N31); 3.3 (no GUC; N12); sections 2 and 3.7 (history preserved; hash-identical originals).
+Where each one is met: 3.7 and N17 (existing safeguards); 3.3(1) and N1/N22 (entry guard); 3.1, 3.2 and 3.3(1) (same-transaction binding, N2/N8); 3.1 `CompensationPlanPosition` with the insert-only rule and `closure_hash`, 3.2, 3.3(2, 2a) and 3.4 (approved closure; N26, N32); 3.1, 3.3(3) and section 4 (SoD and Open periods; N3, N10, N28); 3.3(4) and section 6 (reversals; N27); section 5 and 3.4 (transactional consistency and audit; N19, N31); 3.3 (no GUC; N12); sections 2 and 3.7 (history preserved; hash-identical originals).
 
 ### Other binding owner constraints
 
@@ -89,8 +89,15 @@ One new **company** migration and one **system** access migration. Both are forw
 
 ### 3.1 Plan tables
 
-* **`CompensationPlan`**: id, item, warehouse roots, the proposed event's stock document id and revision, the proposed event payload (canonical JSON), the fingerprints (plan, comparison, evidence, periods, position totals/layer hash, valuation policy, accounting version), status (1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale), revision, creator, approver and timestamps. A trigger makes the payload and fingerprints immutable; status moves only along allowed transitions; nothing is ever deleted. **SoD, X3 [A-Q2]:** a trigger refuses an approval when the approver is the creator, the last editor or the submitter of the plan, or the creator, last editor or submitter of the event's stock document. This is the D-066/D-158 pattern, enforced in both the service and PostgreSQL. The approval is bound to the plan revision and fingerprints.
-* **`CompensationPlanPosition`** (rev-3 review M1): the plan's **closure**, i.e. every (item, warehouse) position the replay may touch: the item and warehouse roots plus every downstream position reached through transfers. Written with the plan, immutable, and covered by the plan fingerprint.
+* **`CompensationPlan`**: id, item, warehouse roots, the proposed event's stock document id and revision, the proposed event payload (canonical JSON), the fingerprints (plan, comparison, evidence, periods, position totals/layer hash, valuation policy, accounting version), status (1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale), revision, creator, approver and timestamps. A trigger makes the payload and fingerprints immutable; status moves only along allowed transitions; nothing is ever deleted. **SoD, X3 [A-Q2]:** a trigger refuses an approval when the approver is the creator, the last editor or the submitter of the plan, or the creator, last editor or submitter of the event's stock document. This is the D-066/D-158 pattern, enforced in both the service and PostgreSQL. The approval is bound to the plan revision and fingerprints. **Closure binding at the plan (G's M3 at `ab1d106`):**
+  * the plan row has `created_xact xid8`, assigned by a BEFORE INSERT trigger (`pg_current_xact_id()`, never client-supplied);
+  * it also has an immutable `closure_hash`: SHA-256 over the canonical, sorted list of (item, warehouse) pairs of its closure, which is part of the plan fingerprint;
+  * the status trigger, on the transition to `approved` (and again on `executed`), recomputes the hash from the `CompensationPlanPosition` rows and refuses on any difference, so the approval re-checks the closure.
+* **`CompensationPlanPosition`** (rev-3 review M1): the plan's **closure**, i.e. every (item, warehouse) position the replay may touch: the item and warehouse roots plus every downstream position reached through transfers. Written with the plan, immutable, covered by the plan fingerprint, with `UNIQUE (plan, item, warehouse)`. **Insert-only within the plan's creating transaction (G's M3 at `ab1d106`; both protections are adopted):**
+  1. a BEFORE INSERT trigger accepts a closure row only while its plan is in status `proposed` AND the plan's `created_xact = pg_current_xact_id()`. A row added after approval, or in any later transaction (even while the plan is still proposed), is refused; UPDATE, DELETE and TRUNCATE are refused as before (N5);
+  2. the plan's immutable `closure_hash` (above) is recomputed and compared at approval and at execution, and in the deferred execution check (3.4).
+
+  A new closure set therefore requires a new plan and a new approval.
 * **`CompensationPlanLine`**: line number, posting, date, period, branch, account, debit and credit (immutable).
 * **`CompensationPlanEvent`**: append-only history (created, approved, rejected, cancelled, executed, staled), with actor, time and note.
 * **`CompensationPlanExecution`**: `UNIQUE (plan)`. It records the event's stock posting and the compensation journal ids (append-only; the journal source key is plan id + bucket, so a repeat cannot create a second set; A6, TM-D12).
@@ -126,6 +133,7 @@ A deferred constraint trigger on `CompensationPlanExecution` (and on `EpochMembe
 * every storno member has exactly one rebook member for the same original operation, and every storno entry has its lineage row;
 * the execution has at least one member, and exactly one event member whose stock posting is the execution's posting;
 * the plan is in status `executed`, set in this transaction;
+* the plan's `closure_hash` equals the hash recomputed from its `CompensationPlanPosition` rows (G's M3; a second, independent line of defence next to the insert-only rule);
 * **the plan's business audit event exists in `t_2db8cf1f` (0002, append-only, hash-chained) and was written in the same transaction** (resume review L5). The audit table (0002) has no transaction column and is not altered. The binding works like this:
   * the execution id is generated by the executor in this transaction;
   * the audit event carries the execution id as its target reference (one of the uuid reference columns of `t_2db8cf1f`), and the execution row stores the audit event id, with **`UNIQUE (audit_event_id)`** (rev-3 review L3), so one audit event can never vouch for two executions;
@@ -259,8 +267,9 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 | N29 | (rev-3 L4) Two-warehouse transfer chain in both directions (W1→W2 and W2→W1) with equal dates, executed | storno and rebook keep same-date legs in their original sequence; positions, layers and values equal the replay; `ReconcileAsync` empty |
 | N30 | (rev-3 L1) Member row for a kind-4 operation, or for an operation with `reverses_operation_id` set | refused |
 | N31 | (rev-3 L3) Two executions referencing one audit event; an audit event of another type or another plan | refused |
+| N32 | (G's M3 at `ab1d106`) A closure row inserted after approval; a closure row inserted in a later transaction while the plan is still proposed; an entry, member or storno on such an added position; an approval or execution whose recomputed closure hash differs | all refused |
 
-**Numbering reconciliation (owner's "revised N1-N29 matrix"):** N1-N25 are unchanged. N26 = closure binding (M1), N27 = reversal of any epoch operation (M2), N28 = concurrent period close (L2), N29 = two-way equal-date transfer chain (L4). These complete N1-N29. N30 (member kind-4 refusal, L1) and N31 (audit uniqueness and type, L3) are additional mandatory tests. An earlier draft of this fix numbered L1/L2/L3 as N28/N29/N30; this table supersedes it.
+**Numbering reconciliation (owner's "revised N1-N29 matrix"):** N1-N25 are unchanged. N26 = closure binding (M1), N27 = reversal of any epoch operation (M2), N28 = concurrent period close (L2), N29 = two-way equal-date transfer chain (L4). These complete N1-N29. N30 (member kind-4 refusal, L1), N31 (audit uniqueness and type, L3) and N32 (closure immutability, G's M3) are additional mandatory tests. An earlier draft of this fix numbered L1/L2/L3 as N28/N29/N30; this table supersedes it.
 
 **Positive and invariant tests:**
 * E1 (132), E2 (120) and E6 (156) executed end to end;
