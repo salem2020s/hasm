@@ -44,8 +44,12 @@ jobs:
         run: node tools/schema/company-0029-commercial-approval.cjs --check
       - name: Document-links schema files match the deterministic generator (Phase 3.13 S2, company migration 0030)
         run: node tools/schema/company-0030-document-links.cjs --check
+      - name: Commercial-policies schema files match the deterministic generator (Phase 3.13 S5a, company migration 0032)
+        run: node tools/schema/company-0032-commercial-policies.cjs --check
       - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
         run: node tools/schema/company-0031-attachment-retention.cjs --check
+      - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
+        run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
@@ -139,7 +143,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1202 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1212 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -227,7 +231,7 @@ jobs:
                 # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
                 "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 3,
                 # Phase 3.13 S1b commercial approval, numbering and server-produced snapshots (company migration 0029, system migration 0029).
-                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 5, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1,
+                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 5, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1, "CommercialPolicyTests": 9,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
@@ -236,7 +240,7 @@ jobs:
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
-                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 3, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
+                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 4, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).

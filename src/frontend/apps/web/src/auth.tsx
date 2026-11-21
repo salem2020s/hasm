@@ -37,6 +37,8 @@ export interface AuthValue {
   can(permission: string): boolean;
   /** True when ANY grant (company-wide or for a single branch) holds the permission. Only for showing a screen; the server decides per branch. */
   canAny(permission: string): boolean;
+  /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
+  hasRole(roleId: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -66,6 +68,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<ReadonlySet<string>>(new Set());
   const [anyPermissions, setAnyPermissions] = useState<ReadonlySet<string>>(new Set());
+  const [roleGrants, setRoleGrants] = useState<readonly { roleId: string; scope: string; scopeId: string | null }[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
   const [mfa, setMfa] = useState<MfaFlow | null>(null);
   const mounted = useRef(true);
@@ -76,6 +79,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
+    setRoleGrants([]);
     setNotice(why);
     setPhase("anonymous");
   }, []);
@@ -98,6 +102,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
     setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
+    setRoleGrants(me.grants.map((g) => ({ roleId: g.roleId, scope: g.scope, scopeId: g.scopeId })));
     setPhase("ready");
   }, [api]);
 
@@ -204,6 +209,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
+    setRoleGrants([]);
     try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
     setPhase("needCompany");
   }, [api, handleError, loadCompanies]);
@@ -216,8 +222,9 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
+    hasRole: (r) => roleGrants.some((g) => g.roleId === r),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
-  }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, locale]);
+  }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, roleGrants, locale]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
