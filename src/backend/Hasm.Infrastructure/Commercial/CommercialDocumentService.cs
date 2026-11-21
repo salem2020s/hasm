@@ -355,6 +355,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
                     await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Approved, CommercialStatus.Approved, cur.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"approved commercial document note updated r{cur.Revision + 1}", ct);
                     return;
                 }
+                if (await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075: a linked document stays approved (a material edit would send it back to draft)
                 await ToDraftAsync(work, cur, CommercialEventKind.ReapprovalRequested, CommercialAuditEvents.ReapprovalRequested, actor, null, $"material edit of approved commercial document: re-approval required, number {cur.OfficialNumber} kept", ct);
                 working = cur with { Status = CommercialStatus.Draft, Revision = cur.Revision + 1 };
             }
@@ -541,6 +542,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         {
             if (cur.Status == CommercialStatus.Cancelled) throw new Abort(ConfigStatus.Conflict, "document_not_cancellable");
             if (cur.Status == CommercialStatus.Approved && await HasEffectsAsync(work, cur, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_effects");
+            if (cur.Status == CommercialStatus.Approved && await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075 interim restriction (stricter than Q8)
             if (cur.OfficialNumber is not null)
                 await NumberingService.VoidAsync(work.Connection, work.Transaction!, cur.DocType, cur.OfficialNumber, actor, text.Length > 200 ? text[..200] : text, Now, ct);
             await SetStatusAsync(work, cur, CommercialStatus.Cancelled, cur.SubmittedBy, ct);

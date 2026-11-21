@@ -12,6 +12,7 @@ public static class CommercialAuditEvents
     public const short Rejected = 1906;
     public const short ReapprovalRequested = 1907;
     public const short Reopened = 1908;
+    public const short LinkCreated = 1909;
 }
 
 /// <summary>The commercial-status track (SRS 19.7): draft, submitted, approved (numbered and sealed), rejected, cancelled.</summary>
@@ -28,13 +29,34 @@ public interface ICommercialDocumentTypeRegistry
 {
     bool IsRegistered(string docType);
     IReadOnlyCollection<string> Types { get; }
+    /// <summary>Whether a document of <paramref name="fromType"/> may be linked to a document of <paramref name="toType"/> with this kind (S2, D-075). Fail-closed: only an explicitly registered (source type, target type, kind) pair is allowed.</summary>
+    bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind);
 }
 
-public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types) : ICommercialDocumentTypeRegistry
+/// <summary>The registered types and, separately, the permitted link pairs. Production registers neither until the concrete sales and purchase types (3.15/3.16); only the test composition registers pairs.</summary>
+public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types, IEnumerable<(string From, string To, CommercialLinkKind Kind)>? linkPairs = null) : ICommercialDocumentTypeRegistry
 {
     private readonly HashSet<string> set = new(types, StringComparer.Ordinal);
+    private readonly HashSet<(string, string, CommercialLinkKind)> pairs = [.. linkPairs ?? []];
     public bool IsRegistered(string docType) => set.Contains(docType);
     public IReadOnlyCollection<string> Types => set;
+    public bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind) => set.Contains(fromType) && set.Contains(toType) && pairs.Contains((fromType, toType, kind));
+}
+
+/// <summary>The kind of a link between two documents (S2): the source line is fulfilled, invoiced, returned or amended by the target line. Only the first three have a derived quantity.</summary>
+public enum CommercialLinkKind : short { Fulfils = 1, Invoices = 2, Returns = 3, Amends = 4 }
+
+/// <summary>Create body of a link. Lines are named by (document, line number); the SOURCE is the earlier line (an order, a delivery, an original), the TARGET the later one that fulfils, invoices, returns or amends it.</summary>
+public sealed record DocumentLinkInput(Guid? FromDocumentId, int? FromLineNo, Guid? ToDocumentId, int? ToLineNo, int? Kind, decimal? Quantity, string? IdempotencyKey);
+
+public sealed record DocumentLinkView(Guid Id, Guid FromDocumentId, int FromLineNo, Guid ToDocumentId, int ToLineNo, CommercialLinkKind Kind, decimal Quantity, Guid CreatedBy, DateTimeOffset CreatedAtUtc, bool Replayed = false);
+
+/// <summary>Derived, never stored: ordered is the quantity of the line, the others are the sums of the links FROM this line by kind; remaining is what each kind may still take (tolerance 0, Q3 default).</summary>
+public sealed record LineQuantityView(int LineNo, decimal Ordered, decimal Fulfilled, decimal Invoiced, decimal Returned)
+{
+    public decimal RemainingToFulfil => Ordered - Fulfilled;
+    public decimal RemainingToInvoice => Ordered - Invoiced;
+    public decimal RemainingToReturn => Ordered - Returned;
 }
 
 /// <summary>The one internal, non-user-facing test type. It is registered ONLY by the test composition; the production composition contains no type and no switch.</summary>
