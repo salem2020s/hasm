@@ -271,6 +271,14 @@ public sealed class RetentionService
                         await using var active = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {LH.Table} WHERE {LH.ReleasedAtUtc} IS NULL)", db);
                         if ((bool)(await active.ExecuteScalarAsync(ct))!) holdCode = "attachment_hold";
                     }
+                    else
+                    {
+                        // review L5 of #134: the table is missing. That means "no hold" ONLY when the company's migration level predates the migration that creates it; at that level or later
+                        // a dropped or renamed table keeps every run (fail closed)
+                        await using var level = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {Hasm.Infrastructure.SystemDatabase.SystemSchema.MigrationJournalTable} WHERE version >= @v)", db);
+                        level.Parameters.AddWithValue("v", LegalHoldMigrationVersion);
+                        if ((bool)(await level.ExecuteScalarAsync(ct))!) holdCode = "hold_check_failed";
+                    }
                 }
                 catch (NpgsqlException) { holdCode = "hold_check_failed"; }
             }
@@ -281,6 +289,12 @@ public sealed class RetentionService
 
     /// <summary>The company-schema hold tables retention reads (review H2 of #134); any OTHER table whose logical name contains "Hold" trips the fail-closed tripwire.</summary>
     internal static readonly IReadOnlySet<string> KnownHoldTables = new HashSet<string>(StringComparer.Ordinal) { "LegalHold" };
+
+    /// <summary>The company migration that creates the Phase R LegalHold table (derived from the embedded scripts, never a fixed number).</summary>
+    internal static int LegalHoldMigrationVersion => legalHoldMigration.Value;
+
+    private static readonly Lazy<int> legalHoldMigration = new(() =>
+        Hasm.Infrastructure.SystemDatabase.MigrationScript.LoadEmbeddedCompany().First(s => s.Sql.Contains($"CREATE TABLE {LH.Table} ", StringComparison.Ordinal)).Version);
 
     internal static bool UnknownHoldTables() =>
         CompanySchema.Map.Keys.Any(k => !k.Contains('.') && k.Contains("Hold", StringComparison.OrdinalIgnoreCase) && !KnownHoldTables.Contains(k));

@@ -80,6 +80,9 @@ public sealed class RetentionExecutorTests : IDisposable
         var holdTables = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Map.Keys.Where(k => !k.Contains('.') && k.Contains("Hold", StringComparison.OrdinalIgnoreCase)).ToHashSet();
         Assert.True(holdTables.SetEquals(RetentionService.KnownHoldTables), string.Join(", ", holdTables));
         Assert.False(RetentionService.UnknownHoldTables());
+        // review L5 of #134: the migration that creates the table is found in the embedded company scripts (the level from which a missing table fails closed)
+        Assert.Contains($"CREATE TABLE {Hasm.Infrastructure.CompanyDatabase.CompanySchema.LegalHold.Table} ",
+            Hasm.Infrastructure.SystemDatabase.MigrationScript.LoadEmbeddedCompany().Single(s => s.Version == RetentionService.LegalHoldMigrationVersion).Sql);
     }
 
     [Fact]

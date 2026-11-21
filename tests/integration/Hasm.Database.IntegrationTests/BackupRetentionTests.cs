@@ -248,6 +248,12 @@ public class BackupRetentionTests : PostgresTestBase
         var result = await service.ApplyCoreAsync(Root, Trust, Backup, (_, _, _) => Task.CompletedTask, "os:test", RetentionGateOverride.ForTests(), default);
         Assert.Empty(result.Deleted);
         Assert.All(runs, id => Assert.True(Directory.Exists(Path.Combine(Root, id))));
+
+        // review L5 of #134: a hold table that is missing at an R1+ migration level (dropped or renamed) is never read as "no hold"
+        await Exec(Options.BuildCompanyAdminConnectionString(free.PhysicalDatabaseName), $"ALTER TABLE {LH.Table} RENAME TO t_renamed_hold");
+        var (drift, driftInputs) = await service.PlanAsync(Root, Trust);
+        Assert.Equal("hold_check_failed", driftInputs.Companies.Single(c => c.CompanyId == free.Id).HoldCode);
+        Assert.All(drift.Runs, r => Assert.Contains("hold_check_failed", r.Reasons));
     }
 
     [PostgresFact]
