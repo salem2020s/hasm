@@ -142,6 +142,10 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         ["POST /api/v1/company/imports/templates/{adapter}/{name}/retire"] = "version race (412 revision_conflict)",
         ["POST /api/v1/company/imports/maintenance/run"] = "idempotent (same answer)",
         ["POST /api/v1/company/imports/maintenance/rewrap"] = "idempotent (same answer)",
+        // follow-up after #164 and #165: the three routes held pending by their findings
+        ["POST /api/v1/company/commercial-documents/links"] = "idempotent replay (same answer, one link)",
+        ["POST /api/v1/company/imports/"] = "idempotent replay (same answer, one batch)",
+        ["PUT /api/v1/company/imports/settings"] = "stale-revision race (first save included)",
     };
 
     /// <summary>The routes part 1 (<c>EndpointConstraintMatrixTests</c>, #155) probes; listed here so the completeness test is exact before the two classes are folded together.</summary>
@@ -212,12 +216,6 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     /// <summary>Mutating company routes not probed yet, listed EXPLICITLY by family: a new route must be classified here, in <see cref="Probed"/> or in part 1.</summary>
     public static readonly IReadOnlyList<string> Pending =
     [
-        // commercial-documents: identical concurrent link creates answer 409 link_exists to a loser instead of the documented replay (reported; a fix is in progress)
-        "POST /api/v1/company/commercial-documents/links",
-        // imports: identical concurrent uploads with one Idempotency-Key answer 409 idempotency_key_reused instead of the replay (reported); parallel first settings saves answer
-        // 503 service_unavailable, an unmapped unique violation (a REAL 5xx, reported with its reproduction)
-        "POST /api/v1/company/imports/",
-        "PUT /api/v1/company/imports/settings",
     ];
 
 
@@ -291,7 +289,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((103, 60, 3), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal((106, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));
         await Task.CompletedTask;
     }
 

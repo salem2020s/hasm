@@ -1,11 +1,12 @@
 using Hasm.Infrastructure.Commercial;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
+using DL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentLink;
 using Mode = Hasm.Database.IntegrationTests.EndpointConstraintMatrixPart2Tests.Mode;
 
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Constraint-violation matrix, part 2, batch 4: commercial documents (the links route stays pending, see the test), on the commercial fixture (the internal test document type, branches, a customer, an item with a
+/// Constraint-violation matrix, part 2, batch 4: commercial documents and their links, on the commercial fixture (the internal test document type, branches, a customer, an item with a
 /// price). The rule, the engine (<see cref="ConstraintRaces"/>) and the completeness list are <see cref="EndpointConstraintMatrixPart2Tests"/>'s. Disposable cluster only.
 /// </summary>
 public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
@@ -29,7 +30,7 @@ public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
     }
 
     [PostgresFact]
-    public async Task Commercial_documents_end_in_a_mapped_4xx_never_a_5xx()
+    public async Task Commercial_documents_and_links_end_in_a_mapped_4xx_never_a_5xx()
     {
         await StartApi(configure: b => b.ConfigureServices(RegisterTestType));
         await ComposeAsync();
@@ -60,8 +61,13 @@ public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
         var rejectable = await Ok2xx(HttpMethod.Post, $"{Base}/{IdOf(toReject)}/submit", null, EtagOf(toReject));
         await Race("commercial reject", R, HttpMethod.Post, $"{Base}/{IdOf(toReject)}/reject", new { reason = "matrix" }, EtagOf(rejectable), caller: approver);
 
-        // POST /commercial-documents/links stays PENDING: identical concurrent link creates (one idempotency key) answer 409 link_exists to a loser instead of the documented replay
-        // (the key is looked up before the documents are locked, the pair check after); reported to the lead as a contract finding, never pinned here as if it were the contract.
+        // a link carries an idempotency key too (the key is re-checked after the line locks, #164): every answer is the one link, and exactly ONE exists
+        var approverId = await NewApprover();
+        var order = await NewApproved(branch, party, "cvm2-order-0001", approverId, CommercialTestType.Name, (item, unit, 10m));
+        var delivery = await NewApproved(branch, party, "cvm2-deliv-0001", approverId, CommercialTestType.Name, (item, unit, 6m));
+        await Race("commercial link", ["2xx"], HttpMethod.Post, $"{Base}/links",
+            new { fromDocumentId = order.Id, fromLineNo = 1, toDocumentId = delivery.Id, toLineNo = 1, kind = 1, quantity = 4m, idempotencyKey = "cvm2-link-0001" }, mode: Mode.Same);
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.IdempotencyKey} = 'cvm2-link-0001'"));
 
         races.AssertNoFindings();
     }
