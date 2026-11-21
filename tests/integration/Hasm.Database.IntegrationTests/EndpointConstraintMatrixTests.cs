@@ -5,6 +5,7 @@ using Hasm.Infrastructure.Ledger;
 using Hasm.Infrastructure.Parties;
 using Hasm.Infrastructure.Pricing;
 using Hasm.Infrastructure.Taxes;
+using BA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.BusinessAudit;
 using Br = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
 using Cc = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompanyCurrency;
 using LP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LocalParty;
@@ -16,7 +17,8 @@ namespace Hasm.Database.IntegrationTests;
 /// key, a repeated or concurrent state transition and a stale-revision race must each end in a MAPPED 4xx refusal with a stable error code, never in a 5xx. The global exception handler turns an
 /// unhandled PostgreSQL error (for example a unique violation 23505 that a service does not map, as #129 fixed for numbering) into 503 <c>service_unavailable</c>, so ANY 5xx here is a defect.
 /// Every probe sends the same request several times IN PARALLEL (so the database constraint, not only the service's pre-check, decides the losers) and once more afterwards (the plain duplicate):
-/// exactly one request succeeds (any 2xx) and every other one is a 4xx with an error code (a transition that carries no revision may repeat its 2xx, as it is idempotent). Every finding of a run is collected and reported together.
+/// exactly one request succeeds (any 2xx) and every other one is the probe's EXPECTED refusal (review L1 of #155): the duplicate's own code (409 or 400 <c>code_taken</c>), 412
+/// <c>revision_conflict</c> for a stale revision, or the transition's conflict code. A transition that carries no revision must still change state exactly once (one audit event). Every finding of a run is collected and reported together.
 /// A mutating company route that is neither probed here nor listed as pending fails <see cref="Every_mutating_company_endpoint_is_probed_or_listed_as_pending"/>.
 /// Disposable cluster only.
 /// </summary>
@@ -89,9 +91,145 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         ["POST /api/v1/company/fiscal-periods/{id:guid}/reopen"] = "transition race",
     };
 
-    /// <summary>Mutating company routes not probed yet: the next part of the matrix (their families are listed so the remaining work is explicit, never silently missing).</summary>
-    public static IReadOnlyList<string> Pending => [.. EndpointPermissionMatrixTests.Matrix.Select(r => r.Key).Concat(EndpointPermissionMatrixTests.Excluded.Keys)
-        .Except(Probed.Keys).Order(StringComparer.Ordinal)];
+    /// <summary>
+    /// Mutating company routes NOT probed yet (part 2 of the matrix), listed EXPLICITLY by family (review M1 of #155): a route the API adds must be classified here or in
+    /// <see cref="Probed"/>, or <see cref="Every_mutating_company_endpoint_is_probed_or_listed_as_pending"/> fails.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Pending =
+    [
+        // accounts
+        "POST /api/v1/company/accounts/apply-template",
+        "POST /api/v1/company/accounts/{id:guid}/move",
+        "PUT /api/v1/company/accounts/settings",
+        // approval-policies
+        "POST /api/v1/company/approval-policies/",
+        "POST /api/v1/company/approval-policies/{id:guid}/activate",
+        "POST /api/v1/company/approval-policies/{id:guid}/deactivate",
+        "PUT /api/v1/company/approval-policies/{id:guid}",
+        // attachment-retention
+        "POST /api/v1/company/attachment-retention/holds",
+        "POST /api/v1/company/attachment-retention/holds/{id:guid}/release",
+        "POST /api/v1/company/attachment-retention/policies",
+        "POST /api/v1/company/attachment-retention/policies/{id:guid}/approve",
+        "POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke",
+        // attachments
+        "POST /api/v1/company/attachments/",
+        "POST /api/v1/company/attachments/maintenance/rewrap",
+        "POST /api/v1/company/attachments/maintenance/sweep",
+        "POST /api/v1/company/attachments/maintenance/verify",
+        "POST /api/v1/company/attachments/{id:guid}/remove",
+        // branches
+        "POST /api/v1/company/branches/{id:guid}/make-main",
+        // commercial-documents
+        "POST /api/v1/company/commercial-documents/",
+        "POST /api/v1/company/commercial-documents/links",
+        "POST /api/v1/company/commercial-documents/{id:guid}/approve",
+        "POST /api/v1/company/commercial-documents/{id:guid}/cancel",
+        "POST /api/v1/company/commercial-documents/{id:guid}/reject",
+        "POST /api/v1/company/commercial-documents/{id:guid}/submit",
+        "POST /api/v1/company/commercial-documents/{id:guid}/withdraw",
+        "PUT /api/v1/company/commercial-documents/{id:guid}",
+        // cost-center-policies
+        "PUT /api/v1/company/cost-center-policies/accounts/{accountId:guid}",
+        "PUT /api/v1/company/cost-center-policies/branches/{costCenterId:guid}",
+        // currencies
+        "PUT /api/v1/company/currencies/{code}",
+        // fiscal-closing
+        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward",
+        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close",
+        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing",
+        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening",
+        "PUT /api/v1/company/fiscal-closing/settings",
+        // fiscal-periods
+        "POST /api/v1/company/fiscal-periods/{id:guid}/final-close",
+        "POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests",
+        // fiscal-reopen-requests
+        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve",
+        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel",
+        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny",
+        // fiscal-years
+        "POST /api/v1/company/fiscal-years/{id:guid}/close",
+        "POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests",
+        // imports
+        "POST /api/v1/company/imports/",
+        "POST /api/v1/company/imports/maintenance/rewrap",
+        "POST /api/v1/company/imports/maintenance/run",
+        "POST /api/v1/company/imports/templates/{adapter}/{name}/retire",
+        "POST /api/v1/company/imports/{id:guid}/apply",
+        "POST /api/v1/company/imports/{id:guid}/approve",
+        "POST /api/v1/company/imports/{id:guid}/cancel",
+        "POST /api/v1/company/imports/{id:guid}/dry-run",
+        "POST /api/v1/company/imports/{id:guid}/mapping/apply-template",
+        "POST /api/v1/company/imports/{id:guid}/mapping/template",
+        "POST /api/v1/company/imports/{id:guid}/reject",
+        "POST /api/v1/company/imports/{id:guid}/renew",
+        "POST /api/v1/company/imports/{id:guid}/resolutions",
+        "POST /api/v1/company/imports/{id:guid}/stage",
+        "POST /api/v1/company/imports/{id:guid}/submit",
+        "POST /api/v1/company/imports/{id:guid}/withdraw",
+        "PUT /api/v1/company/imports/settings",
+        "PUT /api/v1/company/imports/{id:guid}/mapping",
+        // inventory
+        "PUT /api/v1/company/inventory/accounting/",
+        "PUT /api/v1/company/inventory/settings",
+        // journal
+        "POST /api/v1/company/journal/",
+        "POST /api/v1/company/journal/{id:guid}/decision",
+        "POST /api/v1/company/journal/{id:guid}/post",
+        "POST /api/v1/company/journal/{id:guid}/reverse",
+        "PUT /api/v1/company/journal/{id:guid}",
+        // ledger-settings
+        "PUT /api/v1/company/ledger-settings/",
+        // negative-stock
+        "PUT /api/v1/company/negative-stock/items/{itemId:guid}",
+        "PUT /api/v1/company/negative-stock/settings",
+        // numbering
+        "PUT /api/v1/company/numbering/{docType}",
+        // parties
+        "POST /api/v1/company/parties/reconcile",
+        "POST /api/v1/company/parties/sync",
+        "POST /api/v1/company/parties/{id:guid}/propose",
+        "PUT /api/v1/company/parties/{id:guid}",
+        // pricing
+        "POST /api/v1/company/pricing/policy",
+        "POST /api/v1/company/pricing/quote",
+        "PUT /api/v1/company/pricing/customer-assignments/{partyId:guid}",
+        // profile
+        "POST /api/v1/company/profile/display-name-sync",
+        "PUT /api/v1/company/profile",
+        // statements
+        "PUT /api/v1/company/statements/mapping",
+        // stock-adjustments
+        "POST /api/v1/company/stock-adjustments/{id:guid}/posting",
+        "POST /api/v1/company/stock-adjustments/{id:guid}/reversal",
+        // stock-documents
+        "POST /api/v1/company/stock-documents/",
+        "POST /api/v1/company/stock-documents/{id:guid}/approve",
+        "POST /api/v1/company/stock-documents/{id:guid}/cancel",
+        "POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals",
+        "POST /api/v1/company/stock-documents/{id:guid}/posting/",
+        "POST /api/v1/company/stock-documents/{id:guid}/reject",
+        "POST /api/v1/company/stock-documents/{id:guid}/reversal",
+        "POST /api/v1/company/stock-documents/{id:guid}/submit",
+        "POST /api/v1/company/stock-documents/{id:guid}/withdraw",
+        "PUT /api/v1/company/stock-documents/{id:guid}",
+        // stocktakes
+        "POST /api/v1/company/stocktakes/",
+        "POST /api/v1/company/stocktakes/{id:guid}/adjustment",
+        "POST /api/v1/company/stocktakes/{id:guid}/approve",
+        "POST /api/v1/company/stocktakes/{id:guid}/cancel",
+        "POST /api/v1/company/stocktakes/{id:guid}/generate-sheet",
+        "POST /api/v1/company/stocktakes/{id:guid}/reject",
+        "POST /api/v1/company/stocktakes/{id:guid}/submit",
+        "POST /api/v1/company/stocktakes/{id:guid}/withdraw",
+        "PUT /api/v1/company/stocktakes/{id:guid}",
+        // taxes
+        "POST /api/v1/company/taxes/policy",
+        "POST /api/v1/company/taxes/rules",
+        "PUT /api/v1/company/taxes/item-classes/{itemId:guid}",
+        "PUT /api/v1/company/taxes/party-classes/{partyId:guid}",
+        "PUT /api/v1/company/taxes/rules/{id:guid}",
+    ];
 
     // ------------------------------------------------------------------------------------------------------------------------------- engine
 
@@ -104,7 +242,7 @@ public class EndpointConstraintMatrixTests : JournalTestBase
     /// Sends the same request <see cref="Parallel"/> times in parallel, then once more: exactly one request may succeed (any 2xx); every other answer must be a 4xx with an error
     /// code. Returns the winning response (or null). Findings are collected, not thrown, so one run reports every endpoint.
     /// </summary>
-    private async Task<ApiResponse?> Race(string what, HttpMethod method, string path, object? body, string? ifMatch = null, bool idempotent = false)
+    private async Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null)
     {
         var raced = await Task.WhenAll(Enumerable.Range(0, Parallel).Select(_ => Task.Run(() => Call(method, path, body, ifMatch))));
         var again = await Call(method, path, body, ifMatch);
@@ -113,23 +251,32 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         var winners = all.Where(Ok2xx).ToList();
         foreach (var r in all.Where(r => (int)r.Status >= 500))
             findings.Add($"{what}: {(int)r.Status} {Short(r.Body)}");
-        foreach (var r in all.Where(r => !Ok2xx(r) && (int)r.Status < 500 && ((int)r.Status < 400 || EndpointPermissionMatrixTests.ErrorOf(r) is null)))
-            findings.Add($"{what}: unmapped answer {(int)r.Status} {Short(r.Body)}");
-        if (idempotent ? winners.Count < 1 : winners.Count != 1)
+        foreach (var r in all.Where(r => !Ok2xx(r) && (int)r.Status < 500 && !expected.Contains(Signature(r))))
+            findings.Add($"{what}: {Signature(r)} is not the expected refusal ({string.Join(" or ", expected)}): {Short(r.Body)}");
+        if (winners.Count != 1)
             findings.Add($"{what}: {winners.Count} requests succeeded (expected exactly one): {string.Join(", ", all.Select(r => $"{(int)r.Status}:{EndpointPermissionMatrixTests.ErrorOf(r)}"))}");
         return winners.FirstOrDefault();
     }
 
     private static string Short(string body) => body.Length > 160 ? body[..160] : body;
+
+    /// <summary>"status:code" of a refusal; a 400 <c>validation_failed</c> is identified by its first field code (for example <c>400:code_taken</c>).</summary>
+    private static string Signature(ApiResponse r)
+    {
+        var code = EndpointPermissionMatrixTests.ErrorOf(r);
+        if (code == "validation_failed")
+            try { code = r.Json.GetProperty("fields")[0].GetProperty("code").GetString(); } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException) { }
+        return $"{(int)r.Status}:{code}";
+    }
     private static Guid IdOf(ApiResponse r) => r.Json.GetProperty("id").GetGuid();
     private static string EtagOf(ApiResponse r) => r.Headers.ETag!.Tag;
 
     /// <summary>Deactivate then activate an entity, each as a race of identical requests carrying the same If-Match.</summary>
     private async Task TransitionRace(string what, string basePath, Guid id, string etag)
     {
-        var off = await Race($"{what} deactivate", HttpMethod.Post, $"{basePath}/{id}/deactivate", new { }, etag);
+        var off = await Race($"{what} deactivate", ["412:revision_conflict"], HttpMethod.Post, $"{basePath}/{id}/deactivate", new { }, etag);
         if (off is null) return;
-        await Race($"{what} activate", HttpMethod.Post, $"{basePath}/{id}/activate", new { }, EtagOf(off));
+        await Race($"{what} activate", ["412:revision_conflict"], HttpMethod.Post, $"{basePath}/{id}/activate", new { }, EtagOf(off));
     }
 
     private async Task Start()
@@ -149,12 +296,18 @@ public class EndpointConstraintMatrixTests : JournalTestBase
     [PostgresFact]
     public async Task Every_mutating_company_endpoint_is_probed_or_listed_as_pending()
     {
-        // the permission matrix (#119) already proves that its rows are exactly the API's mutating company routes; this matrix must cover a subset of them and list the rest
+        // the permission matrix (#119) pins its rows to the API's route table; every one of them is either probed here or explicitly pending, never both, and nothing else is listed
         var all = EndpointPermissionMatrixTests.Matrix.Select(r => r.Key).Concat(EndpointPermissionMatrixTests.Excluded.Keys).ToHashSet(StringComparer.Ordinal);
-        var unknown = Probed.Keys.Where(k => !all.Contains(k)).ToList();
-        Assert.True(unknown.Count == 0, "probed routes the API does not map:\n" + string.Join("\n", unknown));
-        Assert.Equal(all.Count, Probed.Count + Pending.Count);
-        Assert.True(Probed.Count >= 60, $"only {Probed.Count} routes probed");
+        Assert.Equal(Pending.Count, Pending.Distinct(StringComparer.Ordinal).Count());
+        var both = Probed.Keys.Intersect(Pending, StringComparer.Ordinal).ToList();
+        Assert.True(both.Count == 0, "routes both probed and pending:\n" + string.Join("\n", both));
+        var listed = Probed.Keys.Concat(Pending).ToHashSet(StringComparer.Ordinal);
+        var unclassified = all.Except(listed).Order(StringComparer.Ordinal).ToList();
+        Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixTests):\n" + string.Join("\n", unclassified));
+        var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
+        Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
+        Assert.Equal(60, Probed.Count);
+        Assert.Equal(106, Pending.Count);
         await Task.CompletedTask;
     }
 
@@ -164,37 +317,37 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         await Start();
         var main = await Sql<Guid>($"SELECT {Br.Id} FROM {Br.Table} WHERE {Br.IsMain}");
 
-        await Race("account", HttpMethod.Post, "/api/v1/company/accounts", new { code = "9101", nameAr = "حساب", nameEn = "Account", type = "asset" });
-        await Race("branch", HttpMethod.Post, "/api/v1/company/branches", new BranchInput("CVB", "فرع", "Branch", null, null, null, null, null, null, null, null));
-        await Race("warehouse", HttpMethod.Post, "/api/v1/company/warehouses", new WarehouseInput("CVW", main, "مستودع", "Warehouse", null, null, null, null, null, null, null, null));
-        await Race("cost center", HttpMethod.Post, "/api/v1/company/cost-centers", new CostCenterInput("CVC", null, "مركز", "Center", null, false));
-        var unit = await Race("unit", HttpMethod.Post, "/api/v1/company/inventory/units", new UnitInput("CVU", "وحدة", "Unit", 2));
-        var group = await Race("item group", HttpMethod.Post, "/api/v1/company/inventory/groups", new ItemGroupInput("CVG", "مجموعة", "Group", null, 1));
+        await Race("account", ["409:account_code_taken"], HttpMethod.Post, "/api/v1/company/accounts", new { code = "9101", nameAr = "حساب", nameEn = "Account", type = "asset" });
+        await Race("branch", ["409:branch_code_taken"], HttpMethod.Post, "/api/v1/company/branches", new BranchInput("CVB", "فرع", "Branch", null, null, null, null, null, null, null, null));
+        await Race("warehouse", ["409:warehouse_code_taken"], HttpMethod.Post, "/api/v1/company/warehouses", new WarehouseInput("CVW", main, "مستودع", "Warehouse", null, null, null, null, null, null, null, null));
+        await Race("cost center", ["409:code_in_use"], HttpMethod.Post, "/api/v1/company/cost-centers", new CostCenterInput("CVC", null, "مركز", "Center", null, false));
+        var unit = await Race("unit", ["409:unit_code_taken"], HttpMethod.Post, "/api/v1/company/inventory/units", new UnitInput("CVU", "وحدة", "Unit", 2));
+        var group = await Race("item group", ["409:group_code_taken"], HttpMethod.Post, "/api/v1/company/inventory/groups", new ItemGroupInput("CVG", "مجموعة", "Group", null, 1));
         Assert.True(unit is not null && group is not null, string.Join("\n", findings));
-        var item = await Race("item", HttpMethod.Post, "/api/v1/company/inventory/items",
+        var item = await Race("item", ["409:item_code_taken"], HttpMethod.Post, "/api/v1/company/inventory/items",
             new ItemInput("CVI", "صنف", "Item", 1, IdOf(group!), IdOf(unit!), null, null, false, false, false, null, []));
         Assert.True(item is not null, string.Join("\n", findings));
-        await Race("barcode", HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item!)}/barcodes", new BarcodeInput("4006381333931", null, null));
+        await Race("barcode", ["409:barcode_taken"], HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item!)}/barcodes", new BarcodeInput("4006381333931", null, null));
 
-        await Race("customer group", HttpMethod.Post, "/api/v1/company/pricing/customer-groups", new CustomerGroupInput("CVCG", "مجموعة", "Group", true));
-        var list = await Race("price list", HttpMethod.Post, "/api/v1/company/pricing/price-lists",
+        await Race("customer group", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/pricing/customer-groups", new CustomerGroupInput("CVCG", "مجموعة", "Group", true));
+        var list = await Race("price list", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/pricing/price-lists",
             new PriceListInput("CVPL", "قائمة", "List", 10, "JOD", new DateOnly(2026, 1, 1), null, true, null));
         if (list is not null)
-            await Race("price entry", HttpMethod.Post, $"/api/v1/company/pricing/price-lists/{IdOf(list)}/entries", new PriceEntryInput(IdOf(item!), null, IdOf(unit!), 0m, 10m, null));
-        await Race("discount", HttpMethod.Post, "/api/v1/company/pricing/discounts",
+            await Race("price entry", ["400:tier_exists"], HttpMethod.Post, $"/api/v1/company/pricing/price-lists/{IdOf(list)}/entries", new PriceEntryInput(IdOf(item!), null, IdOf(unit!), 0m, 10m, null));
+        await Race("discount", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/pricing/discounts",
             new DiscountRuleInput("CVD", "خصم", "Discount", 1, new DateOnly(2026, 1, 1), null, true, 5m, null, null, IdOf(item!), null));
-        await Race("sales representative", HttpMethod.Post, "/api/v1/company/sales-representatives", new SalesRepresentativeInput("CVR", "مندوب", "Rep", null, true));
-        await Race("party", HttpMethod.Post, "/api/v1/company/parties", new { code = "CVP", displayName = "Party", isActive = true, identity = new { kind = 1, legalNameAr = "طرف" } });
+        await Race("sales representative", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/sales-representatives", new SalesRepresentativeInput("CVR", "مندوب", "Rep", null, true));
+        await Race("party", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/parties", new { code = "CVP", displayName = "Party", isActive = true, identity = new { kind = 1, legalNameAr = "طرف" } });
         var party = Guid.NewGuid();
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CVQ', 'q', true, 1, 1, '{Admin.Id}', now(), now())");
-        await Race("party role", HttpMethod.Post, "/api/v1/company/party-roles", new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null));
+        await Race("party role", ["409:role_exists"], HttpMethod.Post, "/api/v1/company/party-roles", new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null));
 
-        var tax = await Race("tax", HttpMethod.Post, "/api/v1/company/taxes", new TaxInput("CVT", "ضريبة", "Tax", true));
+        var tax = await Race("tax", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/taxes", new TaxInput("CVT", "ضريبة", "Tax", true));
         if (tax is not null)
-            await Race("tax rate", HttpMethod.Post, $"/api/v1/company/taxes/{IdOf(tax)}/rates", new TaxRateInput(new DateOnly(2026, 1, 1), TaxTreatment.Standard, 15m));
-        await Race("tax class", HttpMethod.Post, "/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Item, "CVTC", "فئة", "Class", true));
-        await Race("exchange rate", HttpMethod.Post, "/api/v1/company/exchange-rates", new ExchangeRateInput("USD", 0.71m, new DateOnly(2026, 2, 1), null), "\"0\"");     // If-Match: the latest rate id of the series (none yet)
-        await Race("fiscal year", HttpMethod.Post, "/api/v1/company/fiscal-years", new FiscalYearInput("FY2027", new DateOnly(2027, 1, 1), "monthly"));
+            await Race("tax rate", ["400:rate_not_later"], HttpMethod.Post, $"/api/v1/company/taxes/{IdOf(tax)}/rates", new TaxRateInput(new DateOnly(2026, 1, 1), TaxTreatment.Standard, 15m));
+        await Race("tax class", ["400:code_taken"], HttpMethod.Post, "/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Item, "CVTC", "فئة", "Class", true));
+        await Race("exchange rate", ["412:revision_conflict"], HttpMethod.Post, "/api/v1/company/exchange-rates", new ExchangeRateInput("USD", 0.71m, new DateOnly(2026, 2, 1), null), "\"0\"");     // If-Match: the latest rate id of the series (none yet)
+        await Race("fiscal year", ["409:fiscal_year_overlap"], HttpMethod.Post, "/api/v1/company/fiscal-years", new FiscalYearInput("FY2027", new DateOnly(2027, 1, 1), "monthly"));
 
         Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings));
     }
@@ -212,15 +365,15 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         }
 
         var account = await Create("/api/v1/company/accounts", new { code = "9201", nameAr = "حساب", nameEn = "Account", type = "asset" });
-        var renamed = await Race("account update", HttpMethod.Put, $"/api/v1/company/accounts/{IdOf(account)}", new AccountDetailsInput("حساب", "Renamed", null, null, null, null), EtagOf(account));
+        var renamed = await Race("account update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/accounts/{IdOf(account)}", new AccountDetailsInput("حساب", "Renamed", null, null, null, null), EtagOf(account));
         await TransitionRace("account", "/api/v1/company/accounts", IdOf(account), EtagOf(renamed ?? account));
 
         var branch = await Create("/api/v1/company/branches", new BranchInput("CVT1", "فرع", "Branch", null, null, null, null, null, null, null, null));
-        renamed = await Race("branch update", HttpMethod.Put, $"/api/v1/company/branches/{IdOf(branch)}", new BranchInput(null, "فرع", "Renamed", null, null, null, null, null, null, null, null), EtagOf(branch));
+        renamed = await Race("branch update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/branches/{IdOf(branch)}", new BranchInput(null, "فرع", "Renamed", null, null, null, null, null, null, null, null), EtagOf(branch));
         await TransitionRace("branch", "/api/v1/company/branches", IdOf(branch), EtagOf(renamed ?? branch));
 
         var warehouse = await Create("/api/v1/company/warehouses", new WarehouseInput("CVT2", main, "مستودع", "Warehouse", null, null, null, null, null, null, null, null));
-        renamed = await Race("warehouse update", HttpMethod.Put, $"/api/v1/company/warehouses/{IdOf(warehouse)}",
+        renamed = await Race("warehouse update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/warehouses/{IdOf(warehouse)}",
             new WarehouseInput(null, null, "مستودع", "Renamed", null, null, null, null, null, null, null, null), EtagOf(warehouse));
         await TransitionRace("warehouse", "/api/v1/company/warehouses", IdOf(warehouse), EtagOf(renamed ?? warehouse));
 
@@ -228,7 +381,7 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         await TransitionRace("cost center", "/api/v1/company/cost-centers", IdOf(center), EtagOf(center));
 
         var unit = await Create("/api/v1/company/inventory/units", new UnitInput("CVT4", "وحدة", "Unit", 2));
-        renamed = await Race("unit update", HttpMethod.Put, $"/api/v1/company/inventory/units/{IdOf(unit)}", new UnitInput("CVT4", "وحدة", "Renamed", 2), EtagOf(unit));
+        renamed = await Race("unit update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/inventory/units/{IdOf(unit)}", new UnitInput("CVT4", "وحدة", "Renamed", 2), EtagOf(unit));
         var group = await Create("/api/v1/company/inventory/groups", new ItemGroupInput("CVT5", "مجموعة", "Group", null, 1));
         var item = await Create("/api/v1/company/inventory/items", new ItemInput("CVT6", "صنف", "Item", 1, IdOf(group), IdOf(unit), null, null, false, false, false, null, []));
         await TransitionRace("item", "/api/v1/company/inventory/items", IdOf(item), EtagOf(item));
@@ -239,7 +392,7 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         Assert.NotNull(renamed);
 
         var settings = await Call(HttpMethod.Get, "/api/v1/company/settings", null);
-        await Race("settings update", HttpMethod.Put, "/api/v1/company/settings", new SettingsInput("ar", "dd/MM/yyyy", "latin", "UTC"), EtagOf(settings));
+        await Race("settings update", ["412:revision_conflict"], HttpMethod.Put, "/api/v1/company/settings", new SettingsInput("ar", "dd/MM/yyyy", "latin", "UTC"), EtagOf(settings));
 
         Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings));
     }
@@ -258,61 +411,66 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         // cost centers: update, recode to ONE new code, move under a group
         var parent = await Create("/api/v1/company/cost-centers", new CostCenterInput("CVW1", null, "مجموعة", "Parent", null, true));
         var center = await Create("/api/v1/company/cost-centers", new CostCenterInput("CVW2", null, "مركز", "Center", null, false));
-        var step = Or(await Race("cost center update", HttpMethod.Put, $"/api/v1/company/cost-centers/{IdOf(center)}", new CostCenterDetailsInput("مركز", "Renamed", null, false), EtagOf(center)), center);
-        step = Or(await Race("cost center recode", HttpMethod.Post, $"/api/v1/company/cost-centers/{IdOf(center)}/recode", new CostCenterCodeInput("CVW3"), EtagOf(step)), step);
-        await Race("cost center move", HttpMethod.Post, $"/api/v1/company/cost-centers/{IdOf(center)}/move", new CostCenterMoveInput(IdOf(parent)), EtagOf(step));
+        var step = Or(await Race("cost center update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/cost-centers/{IdOf(center)}", new CostCenterDetailsInput("مركز", "Renamed", null, false), EtagOf(center)), center);
+        step = Or(await Race("cost center recode", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/cost-centers/{IdOf(center)}/recode", new CostCenterCodeInput("CVW3"), EtagOf(step)), step);
+        await Race("cost center move", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/cost-centers/{IdOf(center)}/move", new CostCenterMoveInput(IdOf(parent)), EtagOf(step));
 
         // accounts: recode to ONE new code
         var account = await Create("/api/v1/company/accounts", new { code = "9301", nameAr = "حساب", nameEn = "Account", type = "asset" });
-        await Race("account recode", HttpMethod.Post, $"/api/v1/company/accounts/{IdOf(account)}/recode", new AccountCodeInput("9302"), EtagOf(account));
+        await Race("account recode", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/accounts/{IdOf(account)}/recode", new AccountCodeInput("9302"), EtagOf(account));
 
         // inventory: group and item updates, barcode transitions
         var unit = await Create("/api/v1/company/inventory/units", new UnitInput("CVW4", "وحدة", "Unit", 2));
         var group = await Create("/api/v1/company/inventory/groups", new ItemGroupInput("CVW5", "مجموعة", "Group", null, 1));
-        await Race("item group update", HttpMethod.Put, $"/api/v1/company/inventory/groups/{IdOf(group)}", new ItemGroupInput("CVW5", "مجموعة", "Renamed", null, 1), EtagOf(group));
+        await Race("item group update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/inventory/groups/{IdOf(group)}", new ItemGroupInput("CVW5", "مجموعة", "Renamed", null, 1), EtagOf(group));
         var item = await Create("/api/v1/company/inventory/items", new ItemInput("CVW6", "صنف", "Item", 1, IdOf(group), IdOf(unit), null, null, false, false, false, null, []));
-        var itemStep = Or(await Race("item update", HttpMethod.Put, $"/api/v1/company/inventory/items/{IdOf(item)}",
+        var itemStep = Or(await Race("item update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/inventory/items/{IdOf(item)}",
             new ItemInput("CVW6", "صنف", "Renamed", 1, IdOf(group), IdOf(unit), null, null, false, false, false, null, []), EtagOf(item)), item);
         var barcode = await Create($"/api/v1/company/inventory/items/{IdOf(item)}/barcodes", new BarcodeInput("4006381333931", null, null));
-        // barcode activation carries no revision (no If-Match): a repeated transition may answer 2xx again, but never a 5xx or an unmapped answer
-        await Race("barcode deactivate", HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item)}/barcodes/{IdOf(barcode)}/deactivate", new { }, idempotent: true);
-        await Race("barcode activate", HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item)}/barcodes/{IdOf(barcode)}/activate", new { }, idempotent: true);
+        // barcode activation carries no revision (no If-Match): the state must still change exactly once under concurrency (review L2 of #155): one winner and ONE business audit event
+        foreach (var (what, action, refusal) in new[] { ("barcode deactivate", "deactivate", "409:barcode_already_inactive"), ("barcode activate", "activate", "409:barcode_already_active") })
+        {
+            var events = await Sql<long>($"SELECT count(*) FROM {BA.Table}");
+            await Race(what, [refusal], HttpMethod.Post, $"/api/v1/company/inventory/items/{IdOf(item)}/barcodes/{IdOf(barcode)}/{action}", new { });
+            var written = await Sql<long>($"SELECT count(*) FROM {BA.Table}") - events;
+            if (written != 1) findings.Add($"{what}: {written} business audit events for one state change");
+        }
         Assert.NotNull(itemStep);
 
         // pricing, sales representatives, party roles, taxes: updates from one revision
         var customerGroup = await Create("/api/v1/company/pricing/customer-groups", new CustomerGroupInput("CVW7", "مجموعة", "Group", true));
-        await Race("customer group update", HttpMethod.Put, $"/api/v1/company/pricing/customer-groups/{IdOf(customerGroup)}", new CustomerGroupInput("CVW7", "مجموعة", "Renamed", true), EtagOf(customerGroup));
+        await Race("customer group update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/pricing/customer-groups/{IdOf(customerGroup)}", new CustomerGroupInput("CVW7", "مجموعة", "Renamed", true), EtagOf(customerGroup));
         var list = await Create("/api/v1/company/pricing/price-lists", new PriceListInput("CVW8", "قائمة", "List", 10, "JOD", new DateOnly(2026, 1, 1), null, true, null));
-        await Race("price list update", HttpMethod.Put, $"/api/v1/company/pricing/price-lists/{IdOf(list)}", new PriceListInput("CVW8", "قائمة", "Renamed", 10, "JOD", new DateOnly(2026, 1, 1), null, true, null), EtagOf(list));
+        await Race("price list update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/pricing/price-lists/{IdOf(list)}", new PriceListInput("CVW8", "قائمة", "Renamed", 10, "JOD", new DateOnly(2026, 1, 1), null, true, null), EtagOf(list));
         var entry = await Create($"/api/v1/company/pricing/price-lists/{IdOf(list)}/entries", new PriceEntryInput(IdOf(item), null, IdOf(unit), 0m, 10m, null));
-        await Race("price entry update", HttpMethod.Put, $"/api/v1/company/pricing/entries/{IdOf(entry)}", new PriceEntryInput(IdOf(item), null, IdOf(unit), 0m, 12m, null), EtagOf(entry));
+        await Race("price entry update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/pricing/entries/{IdOf(entry)}", new PriceEntryInput(IdOf(item), null, IdOf(unit), 0m, 12m, null), EtagOf(entry));
         var discount = await Create("/api/v1/company/pricing/discounts", new DiscountRuleInput("CVW9", "خصم", "Discount", 1, new DateOnly(2026, 1, 1), null, true, 5m, null, null, IdOf(item), null));
-        await Race("discount update", HttpMethod.Put, $"/api/v1/company/pricing/discounts/{IdOf(discount)}",
+        await Race("discount update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/pricing/discounts/{IdOf(discount)}",
             new DiscountRuleInput("CVW9", "خصم", "Renamed", 1, new DateOnly(2026, 1, 1), null, true, 6m, null, null, IdOf(item), null), EtagOf(discount));
         var rep = await Create("/api/v1/company/sales-representatives", new SalesRepresentativeInput("CVWA", "مندوب", "Rep", null, true));
-        await Race("sales representative update", HttpMethod.Put, $"/api/v1/company/sales-representatives/{IdOf(rep)}", new SalesRepresentativeInput("CVWA", "مندوب", "Renamed", null, true), EtagOf(rep));
+        await Race("sales representative update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/sales-representatives/{IdOf(rep)}", new SalesRepresentativeInput("CVWA", "مندوب", "Renamed", null, true), EtagOf(rep));
         var party = Guid.NewGuid();
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CVWB', 'q', true, 1, 1, '{Admin.Id}', now(), now())");
         var role = await Create("/api/v1/company/party-roles", new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null));
-        await Race("party role update", HttpMethod.Put, $"/api/v1/company/party-roles/{IdOf(role)}", new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Credit, 30, 100m, null, null), EtagOf(role));
+        await Race("party role update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/party-roles/{IdOf(role)}", new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Credit, 30, 100m, null, null), EtagOf(role));
         var tax = await Create("/api/v1/company/taxes", new TaxInput("CVWC", "ضريبة", "Tax", true));
-        await Race("tax update", HttpMethod.Put, $"/api/v1/company/taxes/{IdOf(tax)}", new TaxInput("CVWC", "ضريبة", "Renamed", true), EtagOf(tax));
+        await Race("tax update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/taxes/{IdOf(tax)}", new TaxInput("CVWC", "ضريبة", "Renamed", true), EtagOf(tax));
         var taxClass = await Create("/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Item, "CVWD", "فئة", "Class", true));
-        await Race("tax class update", HttpMethod.Put, $"/api/v1/company/taxes/classes/{IdOf(taxClass)}", new TaxClassInput(TaxClassKind.Item, "CVWD", "فئة", "Renamed", true), EtagOf(taxClass));
+        await Race("tax class update", ["412:revision_conflict"], HttpMethod.Put, $"/api/v1/company/taxes/classes/{IdOf(taxClass)}", new TaxClassInput(TaxClassKind.Item, "CVWD", "فئة", "Renamed", true), EtagOf(taxClass));
 
         // journal: submit, withdraw and cancel of one draft, each from one revision
         Cash = await NewAccount("1101", "asset");
         Sales = await NewAccount("4101", "revenue");
         var main = await Sql<Guid>($"SELECT {Br.Id} FROM {Br.Table} WHERE {Br.IsMain}");
         var draft = Ok(await Journal.CreateDraftAsync(Admin.Id, Company.Id, new JournalInput(new DateOnly(2026, 3, 10), "matrix", main, [Dr(Cash.Id, 10m), Cr(Sales.Id, 10m)], null), false)).Header;
-        var submitted = await Race("journal submit", HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/submit", null, "\"1\"");
-        var withdrawn = submitted is null ? null : await Race("journal withdraw", HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/withdraw", null, EtagOf(submitted));
-        if (withdrawn is not null) await Race("journal cancel", HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/cancel", null, EtagOf(withdrawn));
+        var submitted = await Race("journal submit", ["409:entry_not_draft", "412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/submit", null, "\"1\"");
+        var withdrawn = submitted is null ? null : await Race("journal withdraw", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/withdraw", null, EtagOf(submitted));
+        if (withdrawn is not null) await Race("journal cancel", ["409:entry_not_cancellable", "412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/journal/{draft.Id}/cancel", null, EtagOf(withdrawn));
 
         // fiscal period: soft close and reopen, each from one revision
         var period = Year.Periods[0];
-        var closed = await Race("period soft-close", HttpMethod.Post, $"/api/v1/company/fiscal-periods/{period.Id}/soft-close", null, $"\"{period.Revision}\"");
-        if (closed is not null) await Race("period reopen", HttpMethod.Post, $"/api/v1/company/fiscal-periods/{period.Id}/reopen", null, EtagOf(closed));
+        var closed = await Race("period soft-close", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/fiscal-periods/{period.Id}/soft-close", null, $"\"{period.Revision}\"");
+        if (closed is not null) await Race("period reopen", ["412:revision_conflict"], HttpMethod.Post, $"/api/v1/company/fiscal-periods/{period.Id}/reopen", null, EtagOf(closed));
 
         Assert.True(findings.Count == 0, $"{findings.Count} constraint-violation finding(s):\n" + string.Join("\n", findings));
     }
