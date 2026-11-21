@@ -119,7 +119,7 @@ if (command is "backup-status" or "backup-retention-preview")
     }
     foreach (var (company, n) in status.MissedRuns) Console.WriteLine($"  [WARNING] company_missed_runs company={company} consecutive={n}");
     if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
-    if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns}");
+    if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns} (a damaged or altered run.json; investigate before relying on the newest run)");
     return status.ExitCode;
 }
 
@@ -430,6 +430,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 Console.WriteLine($"System database: {report.System.Outcome}{(report.System.Code is { } sc ? $" ({sc})" : "")}, {report.System.DurationMs / 1000.0:0.0} s; data excluded: {string.Join(", ", report.Excluded)}.");
                 foreach (var c in report.Companies) Console.WriteLine($"  Company {c.CompanyId}: {c.Outcome}{(c.Code is { } cc ? $" ({cc})" : "")}, {c.DurationMs / 1000.0:0.0} s, {c.AttachmentFiles} attachment file(s)");
                 if (report.Skipped > 0) Console.WriteLine($"  Not Ready (skipped): {report.Skipped}");
+                foreach (var w in report.Warnings ?? []) Console.Error.WriteLine($"WARNING {w}: the run lock connection was lost during the run (check idle_session_timeout of the admin role and the network); the sets were written and verified.");
                 if (report.MissingKeyIds.Count > 0) Console.Error.WriteLine($"WARNING key_ids_missing: the key directory lacks {report.MissingKeyIds.Count} key id(s) the sets need: {string.Join(", ", report.MissingKeyIds)}.");
                 Console.WriteLine("The run is NOT encrypted (owner package 4.3-2): keep the backup root on an encrypted volume; back up the key directory separately. The run is not one point in time across databases.");
                 return report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };

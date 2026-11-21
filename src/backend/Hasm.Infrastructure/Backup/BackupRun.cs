@@ -76,7 +76,7 @@ public sealed record RunCompany(Guid CompanyId, string Outcome, string? Code, Da
 /// The run is NOT one point in time across databases: each dump carries its own window.
 /// </summary>
 public sealed record BackupRunReport(int Version, string RunId, DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc, long DurationMs, RunDump System, IReadOnlyList<RunCompany> Companies, int Skipped,
-    string Verdict, IReadOnlyList<string> MissingKeyIds, IReadOnlyList<string> Excluded, int ClientMajor, bool Encrypted);
+    string Verdict, IReadOnlyList<string> MissingKeyIds, IReadOnlyList<string> Excluded, int ClientMajor, bool Encrypted, IReadOnlyList<string>? Warnings = null);
 
 /// <summary>Run ids, the report file and owner-only writes.</summary>
 public static class BackupRunFiles
@@ -134,7 +134,7 @@ public static class BackupRunFiles
         if (r.System.Outcome is not ("ok" or "failed") || (r.System.Code is not null && !IsCode(r.System.Code))) return null;
         foreach (var c in r.Companies)
             if (c is null || c.CompanyId == Guid.Empty || !CompanyOutcomes.Contains(c.Outcome) || (c.Code is not null && !IsCode(c.Code)) || c.AttachmentFiles < 0 || c.MissingKeyIds < 0) return null;
-        if (r.MissingKeyIds.Any(k => !KekRing.IsValidKeyId(k)) || r.Excluded.Any(e => !IsCode(e))) return null;
+        if (r.MissingKeyIds.Any(k => !KekRing.IsValidKeyId(k)) || r.Excluded.Any(e => !IsCode(e)) || (r.Warnings?.Any(w => !IsCode(w)) ?? false)) return null;
         return r;
     }
 }
@@ -196,15 +196,21 @@ public sealed class BackupRunService
             lk.Parameters.AddWithValue("ns", RunLockNamespace);
             if (!(bool)(await lk.ExecuteScalarAsync(ct))!) throw new BackupException("run_in_progress");
         }
-        try { return await RunLockedAsync(resolved, ct); }
+        // review L3: the run lock is a SESSION lock; a periodic no-op keeps the idle lock connection from being closed by idle_session_timeout or an idle network path while the dumps run
+        var keepAlive = new SessionKeepAlive(lockConn, KeepAliveInterval);
+        try { return await RunLockedAsync(resolved, keepAlive, ct); }
         finally
         {
+            await keepAlive.DisposeAsync();
             try { await using var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", lockConn); await unlock.ExecuteNonQueryAsync(CancellationToken.None); }
             catch (NpgsqlException) { /* the lock ends with the session anyway */ }
         }
     }
 
-    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, CancellationToken ct)
+    /// <summary>Interval of the no-op on the lock connection (review L3); <c>idle_session_timeout</c> of the admin role must be 0 or longer than twice this.</summary>
+    internal static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(30);
+
+    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, SessionKeepAlive keepAlive, CancellationToken ct)
     {
         var started = clock.GetUtcNow();
         var watch = clock.GetTimestamp();
@@ -229,10 +235,13 @@ public sealed class BackupRunService
         }
 
         var anySet = system.Outcome == "ok" || outcomes.Any(o => o.Outcome is "ok" or "ok_missing_keys");
+        // a lost lock connection means another run could have started meanwhile: the sets stay valid, but the run is reported partial with run_lock_lost (monitoring exit 8)
+        var lockLost = keepAlive.Failed;
         var verdict = system.Outcome != "ok" || !anySet ? "failed"
-            : outcomes.Any(o => o.Outcome is not "ok") ? "partial" : "ok";
+            : outcomes.Any(o => o.Outcome is not "ok") || lockLost ? "partial" : "ok";
         var finished = clock.GetUtcNow();
-        var report = new BackupRunReport(BackupRunFiles.ReportVersion, runId, started, finished, (long)clock.GetElapsedTime(watch).TotalMilliseconds, system, outcomes, skipped, verdict, [.. missing], excluded, clientMajor, false);
+        var report = new BackupRunReport(BackupRunFiles.ReportVersion, runId, started, finished, (long)clock.GetElapsedTime(watch).TotalMilliseconds, system, outcomes, skipped, verdict, [.. missing], excluded, clientMajor, false,
+            lockLost ? ["run_lock_lost"] : null);
         BackupRunFiles.WriteReport(runDir, report);
         return (report, runDir);
     }
@@ -319,7 +328,7 @@ public static class BackupRunStatus
 
     /// <summary>
     /// Exit 1: no complete run (<c>backup_missing</c>), the newest complete run failed (<c>backup_failed</c>) or is older than <paramref name="maxAge"/> by its finish time (<c>backup_stale</c>). Exit 8: it is
-    /// partial (<c>backup_partial</c>) or a company missed two or more consecutive runs (<c>company_missed_runs</c>). Otherwise 0 (<c>ok</c>). Incomplete runs older than 24 hours and unreadable reports are counted.
+    /// partial (<c>backup_partial</c>), a company missed two or more consecutive runs (<c>company_missed_runs</c>) or a run's report is unreadable (<c>unreadable_reports</c>). Otherwise 0 (<c>ok</c>). Incomplete runs older than 24 hours are counted (information).
     /// </summary>
     public static BackupStatusResult Evaluate(IReadOnlyList<RunEntry> runs, DateTimeOffset now, TimeSpan maxAge)
     {
@@ -334,6 +343,8 @@ public static class BackupRunStatus
         if (now - latest.FinishedUtc > maxAge) return new(1, "backup_stale", latest, incomplete, unreadable, missed);
         if (latest.Verdict == "partial") return new(8, "backup_partial", latest, incomplete, unreadable, missed);
         if (missed.Count > 0) return new(8, "company_missed_runs", latest, incomplete, unreadable, missed);
+        // review L2 (lead decision under D-048): an unreadable report (possibly the newest run, damaged or altered) never lets the status pass silently: monitoring stays fail-closed
+        if (unreadable > 0) return new(8, "unreadable_reports", latest, incomplete, unreadable, missed);
         return new(0, "ok", latest, incomplete, unreadable, missed);
     }
 
@@ -373,5 +384,41 @@ public static class BackupRunStatus
             selected.Add(complete[i].RunId);
         }
         return selected;
+    }
+}
+
+/// <summary>
+/// Keeps an otherwise idle session alive with a periodic <c>SELECT 1</c> (review L3: a session advisory lock ends with its session, for example through <c>idle_session_timeout</c> or a dropped idle network path).
+/// <see cref="Failed"/> becomes true when a no-op fails: the session, and with it the lock, may be gone. Disposing stops the loop BEFORE the connection is used again (the connection is never used concurrently).
+/// </summary>
+internal sealed class SessionKeepAlive : IAsyncDisposable
+{
+    private readonly CancellationTokenSource stop = new();
+    private readonly Task loop;
+    private volatile bool failed;
+
+    public SessionKeepAlive(NpgsqlConnection connection, TimeSpan interval) => loop = RunAsync(connection, interval);
+
+    public bool Failed => failed;
+
+    private async Task RunAsync(NpgsqlConnection connection, TimeSpan interval)
+    {
+        while (true)
+        {
+            try { await Task.Delay(interval, stop.Token); } catch (OperationCanceledException) { return; }
+            try
+            {
+                await using var cmd = new NpgsqlCommand("SELECT 1", connection);
+                await cmd.ExecuteNonQueryAsync(CancellationToken.None);       // instantaneous; never cancelled half-way, so the connection stays usable for the unlock
+            }
+            catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { failed = true; return; }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        stop.Cancel();
+        await loop;
+        stop.Dispose();
     }
 }

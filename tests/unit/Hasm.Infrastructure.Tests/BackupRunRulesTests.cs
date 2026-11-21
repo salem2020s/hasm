@@ -79,6 +79,36 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Null(BackupRunFiles.ReadReport(P("absent")));
     }
 
+    [Fact]
+    public void A_run_lock_warning_round_trips_and_a_warning_that_is_not_a_code_is_refused()
+    {
+        var id = Id(T0);
+        var dir = P(id); Directory.CreateDirectory(dir);
+        BackupRunFiles.WriteReport(dir, Report(id, "partial") with { Warnings = ["run_lock_lost"] });
+        Assert.Equal(new[] { "run_lock_lost" }, BackupRunFiles.ReadReport(dir)!.Warnings);
+        var other = P(Id(T0.AddHours(3))); Directory.CreateDirectory(other);
+        File.WriteAllText(Path.Combine(other, BackupRunFiles.ReportFileName), File.ReadAllText(Path.Combine(dir, BackupRunFiles.ReportFileName)).Replace(id, Path.GetFileName(other)).Replace("run_lock_lost", "lost: /var/x"));
+        Assert.Null(BackupRunFiles.ReadReport(other));
+    }
+
+    [Fact]
+    public async Task The_keep_alive_reports_a_lost_session_and_stops_when_disposed()
+    {
+        await using (var lost = new Npgsql.NpgsqlConnection("Host=127.0.0.1;Port=1"))                                // never opened: every no-op fails
+        {
+            var keepAlive = new SessionKeepAlive(lost, TimeSpan.FromMilliseconds(10));
+            for (var i = 0; i < 200 && !keepAlive.Failed; i++) await Task.Delay(10);
+            Assert.True(keepAlive.Failed);
+            await keepAlive.DisposeAsync();
+        }
+        await using var idle = new Npgsql.NpgsqlConnection("Host=127.0.0.1;Port=1");
+        var quiet = new SessionKeepAlive(idle, TimeSpan.FromHours(1));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await quiet.DisposeAsync();                                                                                   // stops at once, before any no-op
+        Assert.False(quiet.Failed);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+    }
+
     // ---- system manifest -------------------------------------------------------------------------
 
     [Fact]
@@ -122,7 +152,9 @@ public sealed class BackupRunRulesTests : IDisposable
         var incomplete = new RunEntry(Id(T0.AddHours(1)), null, false, T0.AddHours(1));
         var unreadable = new RunEntry(Id(T0.AddHours(2)), null, true, T0.AddHours(2));
         var s = BackupRunStatus.Evaluate([incomplete, unreadable, Entry(ok)], now, max);
-        Assert.Equal((0, "ok"), Code(s));
+        Assert.Equal((8, "unreadable_reports"), Code(s));                                                             // review L2: an unreadable report never passes silently
+        Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate([incomplete, Entry(ok)], now, max)));                  // a young incomplete folder alone does not warn
+        Assert.Equal((1, "backup_failed"), Code(BackupRunStatus.Evaluate([unreadable, Entry(Report(Id(T0), "failed"))], now, max)));   // a failure still wins
         Assert.Same(ok, s.Latest);
         Assert.Equal(0, s.IncompleteRuns);                                                                            // younger than 24 hours
         Assert.Equal(1, s.UnreadableRuns);

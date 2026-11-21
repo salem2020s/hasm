@@ -552,7 +552,9 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
   * `companies/<company id>/`: one verified set per Ready company, with the same checks as `backup-company`.
   * `run.json`, written LAST: outcomes, codes, the start and end of every dump, sizes, missing key ids, the excluded data and `encrypted: false`.
   * A folder without `run.json` is an incomplete run (interrupted). It is reported, never deleted.
-  * One company's failure never stops the others, and only one run can be in progress.
+  * One company's failure never stops the others, and only one run can be in progress. That rule is enforced by a session lock that a periodic no-op keeps alive.
+    * If the lock connection is lost, the run is reported `partial` with the warning `run_lock_lost`.
+    * Set `idle_session_timeout` of the admin role to 0 (off), or to more than 60 seconds. The per-company locks of the company dumps are held the same way.
   * The configuration is the same as `backup-company`; the attachment storage setting is required.
   * Exit codes: 0 ok, 8 partial (a company busy or failed, or key ids missing), 1 failed (the system dump failed or no set was written), 4 another run in progress, 3 configuration.
 * **The system dump is the most sensitive file of a run.** It holds password hashes, memberships and roles, shared-party personal data and the system audit chain.
@@ -561,9 +563,9 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
 * **A run is not one point in time across databases.** The system database is dumped first, then each company. Registry rows, party links, memberships and migration levels can therefore differ between them. A single-company restore compares with the live system database; a full-installation restore (not built) must reconcile.
 * **`backup-status <root>`** is read only and needs no database settings: it is meant for the monitor. It reads the newest complete run.
   * Exit 0: ok and younger than `--max-age-hours` (default 26).
-  * Exit 8: partial, or a company missed two or more consecutive runs (`company_missed_runs`).
+  * Exit 8: partial, a company missed two or more consecutive runs (`company_missed_runs`), or a run's `run.json` is unreadable (`unreadable_reports`: damaged or altered; it is never used, and the status stays fail-closed).
   * Exit 1: failed, no run (`backup_missing`), or too old (`backup_stale`).
-  * Incomplete runs older than 24 hours, and unreadable reports, are listed as warnings.
+  * Incomplete runs older than 24 hours are listed (information).
 * **`backup-retention-preview <root> --keep-last N [--keep-days D]`** is read only. It lists the complete runs a policy WOULD remove; a run kept by either rule is kept. The newest complete run and incomplete or unreadable runs are never listed. **Nothing is deleted**: deleting backups is an owner decision (package 4.3-2).
 * **Scheduling** uses the operating system, under the service account (HASM has no scheduler, and the API never runs a backup). Examples; replace the paths and run with the same `Hasm__*` environment as the other commands:
   * systemd: `/etc/systemd/system/hasm-backup.service`
@@ -583,7 +585,7 @@ dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> -
     WantedBy=timers.target
     ```
     then run `systemctl enable --now hasm-backup.timer`. For monitoring, a second timer runs `backup-status /srv/hasm-backups` and alerts on a non-zero exit.
-  * cron, for the service account: `17 2 * * * . /etc/hasm/admin.env && /usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups`
+  * cron, for the service account (`set -a` exports the variables to `dotnet`; a plain `.` would not, and the run would exit 3): `17 2 * * * set -a; . /etc/hasm/admin.env; set +a; /usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups`
   * Windows Task Scheduler:
     ```
     schtasks /Create /TN "HASM backup" /SC DAILY /ST 02:17 /RU "<service account>" /TR "\"C:\Program Files\dotnet\dotnet.exe\" \"C:\HASM\Admin\Hasm.Admin.dll\" backup-run D:\HasmBackups"

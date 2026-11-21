@@ -263,6 +263,19 @@ Goal: one company is backed up and trial-restored END TO END from the company re
     * `database_error`, `io_error` and `unexpected_error`: a company's or the system's failure is recorded by a code only and never stops the run.
     * `keep_last_invalid` and `keep_days_invalid`.
   * A refused second run (`run_in_progress`) writes nothing.
+  * **`totp` is NOT in the excluded list yet** because no TOTP-secret table exists. The Phase 4.1 slice that creates it must add it to `SystemSchema.SecretStoreTables` and to `BackupRunService.SystemDumpExclusions` in the same change; the pinning test enforces that the two agree.
+* **Review of PR #104 (Agent C on 5fbc221: approve, Lows only), dispositions:**
+  * **L1, fixed:** the cron example exports the environment (`set -a; . admin.env; set +a`).
+  * **L2, fixed (lead decision under D-048):** an unreadable `run.json` makes `backup-status` exit 8 (`unreadable_reports`) instead of passing behind an older `ok` run. Monitoring stays fail-closed; covered by a unit test.
+  * **L3, fixed:**
+    * `SessionKeepAlive` runs a `SELECT 1` every 30 seconds on the idle run-lock connection.
+    * A failed no-op marks the run `partial` with the warning `run_lock_lost`, carried in an optional `warnings` field of `run.json` that older reports read without.
+    * The documentation requires `idle_session_timeout` of the admin role to be 0, or above 60 seconds; this also covers the per-company locks held during long company dumps.
+    * Unit tests cover the lost session and an immediate stop.
+  * **L4, recorded as known limitations:**
+    * Two runs started in the same second sort by their random suffix rather than by time. This is practically excluded: one run at a time, and a run takes longer than a second.
+    * A `run.json` whose finish time lies in the future (clock skew or a manipulated report) is never reported stale until that time passes. Keep the server clock synchronised (NTP); a future check is a follow-up for the monitoring UI slice.
+  * **L5, fixed:** this status states why `totp` is not yet excluded (above).
 * Local verification and CI results: see the PR description.
 
 ### Plan (as approved)
