@@ -142,7 +142,7 @@ function UnitForm({ editor, canEdit, onClose, onSaved }: { editor: Editor; canEd
   async function reloadLatest() {
     if (editor.mode !== "edit") return;
     try {
-      const latest = (await auth.api.listInventoryUnits()).units.find((u) => u.id === editor.unit.id);
+      const [latest] = await auth.api.lookupInventoryUnits([editor.unit.id]);   // this one unit by id, not the whole list
       if (!latest) return;
       const next = { code: latest.code, nameAr: latest.nameAr ?? "", nameEn: latest.nameEn ?? "", decimals: String(latest.decimals) };
       setRevision(latest.revision); setBase(next); setForm(next); setErrors({}); setConflict(false);
