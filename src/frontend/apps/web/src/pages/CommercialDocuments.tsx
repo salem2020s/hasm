@@ -1,5 +1,5 @@
 import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
-import { Tabs, useI18n, type TabItem } from "@hasm/ui";
+import { SearchPicker, Tabs, useI18n, type PickerPage, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
@@ -461,6 +461,8 @@ function ItemPicker({ id, item, disabled, error, onPick }: { id: string; item: I
 }
 
 const LINK_KINDS: DocumentLinkKind[] = [1, 2, 3, 4];
+const SCAN_PAGE = 100;
+const SCAN_PAGES = 10;   // at most 1000 approved documents of the branch are scanned per search
 /** The server field of a refusal to the form field that shows it (the target document is this one, so its refusal is shown on the source). */
 const LINK_FIELD: Record<string, string> = { fromDocumentId: "fromDocumentId", toDocumentId: "fromDocumentId", fromLineNo: "fromLineNo", toLineNo: "toLineNo", kind: "kind", quantity: "quantity", idempotencyKey: "quantity" };
 
@@ -478,7 +480,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   const [quantities, setQuantities] = useState<LineQuantity[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pairs, setPairs] = useState<CommercialLinkPair[] | null>(null);
-  const [candidates, setCandidates] = useState<CommercialDocument[]>([]);
+  const [names, setNames] = useState<Map<string, string>>(new Map());   // the numbers of the documents the source picker has shown (for the links table)
   const [sourceId, setSourceId] = useState("");
   const [source, setSource] = useState<CommercialDocument | null>(null);
   const [sourceLine, setSourceLine] = useState("");
@@ -489,7 +491,8 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [key, setKey] = useState(newKey);
+  // ONE idempotency key per payload: it is kept only while the payload stays exactly the same (a retry replays it) and rotates as soon as any field changes, after a success and after a reuse refusal
+  const attempt = useRef({ sig: "", key: newKey() });
 
   const reload = useCallback(async () => {
     if (!approved) { setLinks([]); return; }
@@ -509,11 +512,21 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   const kinds = [...new Set(targetPairs.map((p) => p.kind))].sort();
   const sourceTypes = new Set(targetPairs.filter((p) => p.kind === kind).map((p) => p.source));
 
-  // the candidate sources: approved documents of the same branch, party and currency (the server checks the same rules again)
-  useEffect(() => {
-    if (!approved || !canLink) return;
-    void auth.api.listCommercialDocuments({ status: 3, branchId: doc.branchId, limit: 100 }).then((list) => setCandidates(list.filter((d) => d.id !== doc.id && d.partyId === doc.partyId && d.currency === doc.currency))).catch(() => setCandidates([]));
-  }, [auth.api, approved, canLink, doc.id, doc.branchId, doc.partyId, doc.currency]);
+  /**
+   * One bounded page of source candidates for the search text. The server filters by status and branch and pages the list (newest first); the party, the currency, the registered source types and the number search are applied
+   * here to up to SCAN_PAGES pages, so older approved sources stay reachable by searching their number (the list API has no party, currency or search filter; the server checks the same rules again when linking).
+   */
+  async function loadSources(search: string): Promise<PickerPage<CommercialDocument>> {
+    const needle = search.toLowerCase();
+    const found: CommercialDocument[] = [];
+    for (let page = 0; page < SCAN_PAGES; page++) {
+      const list = await auth.api.listCommercialDocuments({ status: 3, branchId: doc.branchId, offset: page * SCAN_PAGE, limit: SCAN_PAGE });
+      for (const d of list) if (d.id !== doc.id && d.partyId === doc.partyId && d.currency === doc.currency && sourceTypes.has(d.docType) && (!needle || (d.officialNumber ?? "").toLowerCase().includes(needle))) found.push(d);
+      if (list.length < SCAN_PAGE) break;
+    }
+    setNames((m) => { const next = new Map(m); for (const d of found) if (d.officialNumber) next.set(d.id, d.officialNumber); return next; });
+    return { items: found.slice(0, 50), total: found.length };
+  }
 
   async function chooseSource(id: string) {
     setSourceId(id); setSource(null); setSourceLine(""); setErrors({}); setError(null);
@@ -531,12 +544,21 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
     setErrors(v);
     if (Object.keys(v).length > 0) { setError(t("commdoc.links.fix")); return; }
     setBusy(true); setError(null); setNotice(null);
+    const payload = { fromDocumentId: sourceId, fromLineNo: Number(sourceLine), toDocumentId: doc.id, toLineNo: Number(targetLine), kind: kind as DocumentLinkKind, quantity: parsePositiveDecimal(quantity) };
+    const sig = JSON.stringify(payload);
+    if (attempt.current.sig !== sig) attempt.current = { sig, key: newKey() };   // another payload is another attempt: never reuse a key for it
     try {
-      await auth.api.createDocumentLink({ fromDocumentId: sourceId, fromLineNo: Number(sourceLine), toDocumentId: doc.id, toLineNo: Number(targetLine), kind: kind as DocumentLinkKind, quantity: parsePositiveDecimal(quantity), idempotencyKey: key });
-      setNotice(t("commdoc.links.created")); setKey(newKey()); setQuantity(""); setErrors({});
+      await auth.api.createDocumentLink({ ...payload, idempotencyKey: attempt.current.key });
+      attempt.current = { sig: "", key: newKey() }; setNotice(t("commdoc.links.created")); setQuantity(""); setErrors({});
       await reload();
     } catch (err) {
       if (auth.handleError(err)) return;
+      if (err instanceof ApiError && err.code === "idempotency_key_reused") {
+        // the key already belongs to a link with another payload (a lost response, then an edit): that link exists, so start a new attempt and show what is there now
+        attempt.current = { sig: "", key: newKey() };
+        setError(errorText(t, err, "commdoc.links.error.")); await reload();
+        return;
+      }
       if (err instanceof ApiError && err.status === 400) {
         const out: Record<string, string> = {};
         for (const f of err.details.fields ?? []) { const k = `commdoc.links.field.${f.code}`; out[LINK_FIELD[f.field] ?? "quantity"] = t(k) === k ? t("field.invalid") : t(k); }
@@ -547,7 +569,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
 
   const lineOf = (d: CommercialDocument | null, no: string) => d?.lines.find((l) => String(l.lineNo) === no);
   const clean = (e: Record<string, string>, k: string) => (e[k] ? e[k] : undefined);
-  const otherLabel = (l: DocumentLink) => { const id = l.toDocumentId === doc.id ? l.fromDocumentId : l.toDocumentId; return candidates.find((c) => c.id === id)?.officialNumber ?? shortId(id); };
+  const otherLabel = (l: DocumentLink) => { const id = l.toDocumentId === doc.id ? l.fromDocumentId : l.toDocumentId; return names.get(id) ?? shortId(id); };
   return (
     <div data-testid="links-panel">
       <p className="hint">{t("commdoc.links.intro")}</p>
@@ -590,11 +612,13 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
         <Card title={t("commdoc.links.create")} hint={t("commdoc.links.create_hint")}>
           {notice && <Banner kind="success" testId="link-created">{notice}</Banner>}
           {error && <Banner kind="error" testId="link-error">{error}</Banner>}
-          {candidates.filter((c) => sourceTypes.has(c.docType)).length === 0 && <p className="hint" data-testid="no-sources">{t("commdoc.links.source_none")}</p>}
           <div className="fields">
-            <Field id="cl-source" label={t("commdoc.links.source")} error={clean(errors, "fromDocumentId")} required>
-              {(aria) => <select {...aria} value={sourceId} onChange={(e) => void chooseSource(e.target.value)}><option value="">{t("form.select")}</option>{candidates.filter((c) => sourceTypes.has(c.docType)).map((c) => <option key={c.id} value={c.id}>{c.officialNumber ?? shortId(c.id)} — {c.docType}</option>)}</select>}
-            </Field>
+            <div className={`field${errors.fromDocumentId ? " field-invalid" : ""}`} data-testid="cl-source-picker">
+              <label htmlFor="cl-source-list">{t("commdoc.links.source")}<span aria-hidden="true" className="required"> *</span></label>
+              <SearchPicker id="cl-source-list" label={t("commdoc.links.source")} value={sourceId} onChange={(id) => void chooseSource(id)} load={loadSources} getId={(c: CommercialDocument) => c.id}
+                getLabel={(c) => `\u2068${c.officialNumber ?? shortId(c.id)}\u2069 — \u2068${c.docType}\u2069`} noneLabel={t("form.select")} reloadKey={kind} disabled={!kind} invalid={!!errors.fromDocumentId} required />
+              {errors.fromDocumentId && <p className="field-error">{errors.fromDocumentId}</p>}
+            </div>
             <Field id="cl-source-line" label={t("commdoc.links.source_line")} error={clean(errors, "fromLineNo")} required>
               {(aria) => <select {...aria} value={sourceLine} disabled={!source} onChange={(e) => setSourceLine(e.target.value)}><option value="">{t("form.select")}</option>{(source?.lines ?? []).map((l) => <option key={l.lineNo} value={l.lineNo}>#{l.lineNo} — {l.quantity}</option>)}</select>}
             </Field>

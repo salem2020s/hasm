@@ -360,12 +360,12 @@ describe("commercial document links (S2 API on the screen)", () => {
     const client = await openLinks({ createDocumentLink: create });
     expect(within(await screen.findByLabelText(/^نوع الرابط/)).getAllByRole("option").map((o) => o.textContent)).toEqual(["— اختر —", "ينفّذ", "يفوتر", "يُرجع", "يعدّل"]);   // only the kinds of the registered pairs
     await userEvent.selectOptions(screen.getByLabelText(/^نوع الرابط/), "2");
-    const sources = within(await screen.findByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent);
+    const sources = within(await screen.findByLabelText("المستند المصدر")).getAllByRole("option").map((o) => o.textContent);
     expect(sources.join("|")).toContain("2026-000002");
     expect(sources.join("|")).not.toContain("2026-000003");                                              // another party
     expect(sources.join("|")).not.toContain("2026-000004");                                              // another currency
     expect(sources.join("|")).not.toContain("2026-000001");                                              // the document itself
-    await userEvent.selectOptions(screen.getByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(screen.getByLabelText("المستند المصدر"), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
     await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "٣");
@@ -386,7 +386,7 @@ describe("commercial document links (S2 API on the screen)", () => {
     const create = vi.fn().mockRejectedValueOnce(apiError(409, "over_fulfilment")).mockResolvedValueOnce(link());
     await openLinks({ createDocumentLink: create });
     await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
-    await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(await screen.findByLabelText("المستند المصدر"), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
     await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "1,500");
@@ -408,7 +408,7 @@ describe("commercial document links (S2 API on the screen)", () => {
       .mockRejectedValueOnce(apiError(409, "party_mismatch")).mockRejectedValueOnce(apiError(409, "link_exists")).mockRejectedValueOnce(apiError(409, "document_not_approved"));
     await openLinks({ createDocumentLink: create });
     await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
-    await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(await screen.findByLabelText("المستند المصدر"), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
     await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "1");
@@ -445,12 +445,55 @@ describe("commercial document links (S2 API on the screen)", () => {
     const kindSelect = await screen.findByLabelText(/^نوع الرابط/);
     expect(within(kindSelect).getAllByRole("option").map((o) => o.textContent)).toEqual(["— اختر —", "ينفّذ", "يُرجع"]);
     await userEvent.selectOptions(kindSelect, "1");
-    expect(within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2026-000002");
-    expect(within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2026-000009");
+    expect(within(screen.getByLabelText("المستند المصدر")).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2026-000002");
+    expect(within(screen.getByLabelText("المستند المصدر")).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2026-000009");
     await userEvent.selectOptions(kindSelect, "3");
-    const options = within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|");
+    const options = within(screen.getByLabelText("المستند المصدر")).getAllByRole("option").map((o) => o.textContent).join("|");
     expect(options).toContain("2026-000009");
     expect(options).not.toContain("2026-000002");
+  });
+
+  it("rotates the idempotency key when any field changes, and on a reuse refusal rotates it again and reloads the links", async () => {
+    const create = vi.fn().mockRejectedValueOnce(apiError(409, "over_fulfilment")).mockRejectedValueOnce(apiError(409, "over_fulfilment")).mockRejectedValueOnce(apiError(409, "idempotency_key_reused")).mockResolvedValueOnce(link());
+    const client = await openLinks({ createDocumentLink: create });
+    const panel = () => within(screen.getByTestId("links-panel"));
+    const keyOf = (n: number) => (create.mock.calls[n]![0] as { idempotencyKey: string }).idempotencyKey;
+    await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
+    await userEvent.selectOptions(await screen.findByLabelText("المستند المصدر"), "src");
+    await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
+    await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
+    await userEvent.type(panel().getByLabelText(/^الكمية/), "20");
+    await userEvent.click(screen.getByTestId("create-link"));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByTestId("create-link"));                                         // the same payload again: the same key
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).toBe(keyOf(0));
+    await userEvent.clear(panel().getByLabelText(/^الكمية/));
+    await userEvent.type(panel().getByLabelText(/^الكمية/), "21");                                    // another payload: another key
+    await userEvent.click(screen.getByTestId("create-link"));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    expect(keyOf(2)).not.toBe(keyOf(0));
+    expect(await within(screen.getByTestId("link-error")).findByText("مفتاح الإرسال مستعمل لرابط آخر.")).toBeInTheDocument();
+    await waitFor(() => expect(client.listDocumentLinks).toHaveBeenCalledTimes(2));                  // the reuse refusal reloaded the links
+    await userEvent.click(screen.getByTestId("create-link"));                                         // the key was rotated after the refusal
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
+    expect(keyOf(3)).not.toBe(keyOf(2));
+  });
+
+  it("reaches older approved sources: the picker pages the server list by status and branch and finds a source by its number beyond the first hundred", async () => {
+    const filler = (n: number) => Array.from({ length: 100 }, (_, i) => approved({ id: `f${n}-${i}`, partyId: "p2", officialNumber: `2025-${n}${String(i).padStart(4, "0")}` }));
+    const old = approved({ id: "src", officialNumber: "2024-000777" });
+    const list = vi.fn().mockImplementation((q: { offset?: number }) => Promise.resolve(q.offset === 0 ? [approved(), ...filler(1).slice(1)] : q.offset === 100 ? filler(2) : [old]));
+    await openLinks({ listCommercialDocuments: list, getCommercialDocument: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "src" ? source : approved())) });
+    await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
+    const select = screen.getByLabelText("المستند المصدر");
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2024-000777"));   // found on the third page
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ status: 3, branchId: "b1", offset: 200, limit: 100 }));
+    expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2025-");                              // another party's documents are never offered
+    await userEvent.type(screen.getByLabelText(/المستند المصدر — /), "777");
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2024-000777"));
+    await userEvent.selectOptions(select, "src");
+    expect(await screen.findByLabelText(/^سطر المصدر/)).toBeEnabled();
   });
 
   it("works in English (LTR)", async () => {
