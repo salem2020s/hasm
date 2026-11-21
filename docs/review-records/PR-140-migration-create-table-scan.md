@@ -1,0 +1,16 @@
+# Independent review record
+
+* **Pull request:** #140
+* **Head SHA reviewed (full 40 characters):** 4b4c3ab0b314f7df90dc67f9c827b9adc5a604e3 (change b93ee88; later commits on the branch are record-only)
+* **Reviewer context:** Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent full-diff review of Draft PR #140 (hardened CREATE TABLE scan in CompanyRuntimePrivilegesCompletenessTests, implementing my #132 Low, plus a merge of main; unit test only): regex covers UNLOGGED/TEMP, IF NOT EXISTS, optional quoted public. prefix and quoted names, every captured name asserted opaque t_[0-9a-f]{8} AND present in the Map, vacuous-pass floor kept, nothing weakened, clean merge"; Head SHA reviewed 4b4c3ab0b314f7df90dc67f9c827b9adc5a604e3 (change b93ee88); executed: commit parents (b93ee88 the test change, 4b4c3ab = b93ee88 + main ae65f9b), the merge compared with a clean `git merge-tree` of b93ee88 and ae65f9b (identical, empty diff), `git diff origin/main...4b4c3ab` (only CompanyRuntimePrivilegesCompletenessTests.cs, +25/−2; no src change); the new regex covers every suggested form (CREATE [UNLOGGED|TEMP|TEMPORARY] TABLE [IF NOT EXISTS] ["public".|public.]["]name["], case-insensitive, \s+ across newlines) and pins them with a recognition test that also covers a captured non-opaque "Plain_Name" and a line comment that is ignored; every captured name must now match ^t_[0-9a-f]{8}$ (a new assertion) and be in CompanySchema.Map (kept); the >90 floor is kept; nothing is removed or weakened (the old pattern only ever captured opaque names, so the change is strictly stricter); own mktemp hasm-g-140 worktree `dotnet test` of CompanyRuntimePrivilegesCompletenessTests (5/5 passed); worktree and dir removed; verdict approve; findings 0 Critical/High/Medium, 1 Low (the scan still misses rare spellings: CREATE GLOBAL/LOCAL TEMP TABLE, whitespace around the dot in public . name, and a CREATE TABLE that follows a '--' inside a string literal on the same line, because the comment stripper is not string-aware. None appears in the migrations today; adding (?:(?:GLOBAL|LOCAL)\s+)? and \s*\.\s* would close the first two, not blocking).
+* **Scope read:** the full diff against origin/main (one unit-test file) and the merge of main
+* **Checks run (commands and results):** by G as stated above. By the author: `dotnet test` of CompanyRuntimePrivilegesCompletenessTests 5/5 passed on the merged tree before the push.
+* **Findings:** 0 Critical, 0 High, 0 Medium, 1 Low.
+
+| # | Severity | Finding (G) | Resolution |
+|---|----------|-------------|------------|
+| 1 | Low | The scan still misses rare spellings: CREATE GLOBAL/LOCAL TEMP TABLE, whitespace around the dot in `public . name`, and a CREATE TABLE after a `--` inside a string literal on the same line (the comment stripper is not string-aware). None appears in the migrations today. | Accepted as a follow-up, no code change now: add `(?:(?:GLOBAL\|LOCAL)\s+)?` and `\s*\.\s*` to the pattern and make the comment stripper string-aware |
+
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the hosted CI run on the final head (the lead merges once it is green); no PostgreSQL class is involved (unit test only).
+* **Verdict:** approve
