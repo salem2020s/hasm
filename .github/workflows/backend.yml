@@ -133,13 +133,13 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1068 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1070 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
           EXPECTED_REGISTRY: |
             EXPECTED = {
-                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 17, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
                 "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
                 "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
                 "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
@@ -152,7 +152,7 @@ jobs:
                 "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
                 # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
-                "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 10, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
+                "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 11, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
                 "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
                 # Phase 3.1A-2 company configuration (migration 0003, system migration 0006, services, API, projection)
                 "CompanyConfigurationMigrationTests": 4, "CompanyProfileTests": 12, "CompanySettingsTests": 5, "CompanyCurrencyTests": 8,
