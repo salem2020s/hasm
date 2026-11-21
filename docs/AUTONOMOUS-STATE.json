@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "89dee05c36c9eec743972a8c5f8f34dee01e98d3",
-    "note": "Refresh after the owner decisions of 2026-11-21. main = 89dee05 (merge of #174), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (#181)."
+    "verifiedHead": "b1bf424a67eacf2e7ec581b695fff4aa2517249c",
+    "note": "Refresh after the owner decisions of 2026-11-21. main = b1bf424 (merge of #177), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1262 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; system 0034 allocated to D's S3b-1b (#181)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -342,6 +342,12 @@
       "phase": "constraint matrix follow-ups (tests; registry unchanged at 1262)",
       "mergeCommit": "89dee05c36c9eec743972a8c5f8f34dee01e98d3",
       "headMerged": "c2648e43e681afe0de7b9c6c0a557b22b492990b"
+    },
+    {
+      "pr": 177,
+      "phase": "explicit request-size limits on every body-accepting route (registry unchanged at 1262)",
+      "mergeCommit": "b1bf424a67eacf2e7ec581b695fff4aa2517249c",
+      "headMerged": "9247d82bd8c1785008b349e1720b1d4aba028cbf"
     }
   ],
   "active": {
@@ -357,8 +363,8 @@
     ]
   },
   "next": [
-    "Merge queue (registry serial): #177, then #184 (stacked on #177); #181 (system 0034, +9), then #185 (stacked on #181); #182 (+2); #183 (+0). Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
-    "#176: address R's M1 (D-186 exit order) and L1-L6, merge main, R's confirmation.",
+    "Merge queue (registry serial): #184 (its base #177 is merged); #181 (system 0034, +9), then #185 (stacked on #181); #182 (+2); #183 (+0). Each: merge main, registry, exact-head verify-head, CI, --match-head-commit.",
+    "#176: R's confirmation of the delta 37662d9..f2a9ddd (M1 and L1-L6 addressed, main merged).",
     "#48: G's confirmation of design revision 3 (the 3.8D implementation gate, D-190); then the approved, unblocked replay slices (D-195).",
     "3.8D design only: the Q3 revaluation accounting contract (independent accounting review, owner approval) and the Q4 conversion design (guard untouched).",
     "Q5 migration-guard hardening as its own security PR (D-194; protected-file review and merge gates apply).",
@@ -422,28 +428,22 @@
   },
   "openPullRequests": [
     {
-      "pr": 177,
-      "branch": "fix/request-size-limits",
-      "head": "9247d82bd8c1785008b349e1720b1d4aba028cbf",
-      "state": "A request-size limits; G approve (L1-L3, record on the branch); next: exact-head verify-head, merge"
-    },
-    {
       "pr": 184,
       "branch": "fix/action-route-limits",
       "head": "591c9032dcd83dc3adfb1b2ea97027b72498729d",
-      "state": "A action routes limited to 16 KiB (G L1 of #177); stacked on #177; review NOT VERIFIED"
+      "state": "A action routes limited to 16 KiB (G L1 of #177, now merged); FG approve at 980e992, head moved since; next: delta confirmation, verify-head, merge"
     },
     {
       "pr": 181,
       "branch": "feature/phase-4-1-s3b-1b",
       "head": "3fbe4c54a6b81380e23eb3c32d44dc6d004aad8c",
-      "state": "D 4.1 S3b-1b company MFA policy and enforcement; system 0034, D-167..D-169, audit 1338, registry 1271 on the branch; review NOT VERIFIED"
+      "state": "D 4.1 S3b-1b company MFA policy and enforcement; system 0034, D-167..D-169, audit 1338, registry 1271 on the branch; review NOT VERIFIED; conflicts with main at this head"
     },
     {
       "pr": 185,
       "branch": "feat/mfa-policy-ui",
-      "head": "2e297000b211d18b4da0c40562fdf70f75fdf64b",
-      "state": "E 4.1 S3b-2b company MFA policy screen; stacked on #181; review NOT VERIFIED"
+      "head": "8ae59bef06a4160adf67cb423f2aea130fd097c9",
+      "state": "E 4.1 S3b-2b company MFA policy screen; stacked on #181; FH request changes at 2e29700, head moved since"
     },
     {
       "pr": 182,
@@ -454,14 +454,14 @@
     {
       "pr": 183,
       "branch": "test/hbe1-exhaustive-tamper",
-      "head": "a33d92eaa1aff73826f97089ca1b02673b82d2a1",
-      "state": "B HBE1 tamper test exhaustive and deterministic (tests only); review NOT VERIFIED"
+      "head": "cbdaaedf39cfba962a23de31cba8e7cd6aae46ba",
+      "state": "H HBE1 tamper test exhaustive and deterministic (tests only); FH approve at a33d92e, head moved since"
     },
     {
       "pr": 176,
       "branch": "docs/phase-4-3-multi-destination-plan",
-      "head": "37662d9b3aae83df09b4664c8135d872a73a1e6e",
-      "state": "4.3 slice 8 plan (docs), F2 continued by FF; reopened after an accidental closure (D-197); R request changes (M1, L1-L6); D-182..D-189, audit 2040-2049; conflicts with main at this head"
+      "head": "f2a9ddd93ba7e896c0ada9870439cb9aaf5b6ffb",
+      "state": "4.3 slice 8 plan (docs), F2 continued by FF; reopened after an accidental closure (D-197); R request changes at 2647dab (M1, L1-L6), all addressed in 37662d9..f2a9ddd with main merged; R's confirmation pending; D-182..D-189, audit 2040-2049"
     }
   ],
   "inertPullRequests": [
@@ -479,7 +479,6 @@
     }
   ],
   "mergeSequence": [
-    177,
     184,
     181,
     185,
