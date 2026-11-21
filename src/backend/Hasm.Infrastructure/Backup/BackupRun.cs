@@ -153,7 +153,7 @@ public sealed class BackupRunService
     /// The secret-store tables whose DATA is excluded from the system dump, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; the Phase 4.1 TOTP
     /// table is added to both in the slice that creates it.
     /// </summary>
-    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table")];
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table"), ("mfa_challenge", "MfaChallenge.Table")];
 
     private readonly HasmDatabaseOptions options;
     private readonly AttachmentOptions attachments;

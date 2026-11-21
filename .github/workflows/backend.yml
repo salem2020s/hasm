@@ -137,7 +137,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1126 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1132 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -151,7 +151,7 @@ jobs:
                 "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
                 "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
                 # Phase 2.3C-2 cryptographic audit integrity
-                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 1, "MfaStoreTests": 14, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 1, "MfaStoreTests": 14, "MfaChallengeStoreTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
                 "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
                 "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
