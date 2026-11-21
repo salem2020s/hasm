@@ -222,6 +222,72 @@ public sealed class RetentionExecutorTests : IDisposable
     }
 
     [Fact]
+    public void A_directory_swapped_for_a_link_during_the_walk_stops_the_deletion_and_its_target_survives()
+    {
+        if (OperatingSystem.IsWindows()) return;                                                                   // creating links needs a privilege there; the rule is platform-neutral
+        var outside = Path.Combine(Path.GetTempPath(), "hasm-ret-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "precious.txt"), "keep me");
+        try
+        {
+            // review L1 of #134: the entry was a real directory when enumerated and is a link when descended into (time of check to time of use)
+            var deleting = Path.Combine(root, "20260301T020000Z-0000abcd.deleting-0123456789abcdef");
+            Directory.CreateDirectory(Path.Combine(deleting, "companies"));
+            File.WriteAllText(Path.Combine(deleting, "companies", "x.hbe"), "x");
+            void Swap(string dir)
+            {
+                if (Path.GetFileName(dir) != "companies") return;
+                Directory.Delete(dir, true);
+                Directory.CreateSymbolicLink(dir, outside);
+            }
+            var ex = Assert.Throws<BackupException>(() => RetentionExecutor.DeleteRunFolder(deleting, Opt(), RetentionGateOverride.ForTests(), Swap));
+            Assert.Equal("path_escaped_deleting_folder", ex.Code);
+            Assert.True(File.Exists(Path.Combine(outside, "precious.txt")));                                       // nothing outside the deleting folder was touched
+            Assert.True(Directory.Exists(deleting));                                                              // the remainder is left for the operator
+        }
+        finally { Directory.Delete(outside, true); }
+    }
+
+    [Fact]
+    public async Task A_deletion_whose_completion_event_was_lost_gets_it_exactly_once()
+    {
+        var runs = Runs(12);
+        // a normal deletion records the completion marker after its 2016
+        var result = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
+        Assert.NotEmpty(result.Deleted);
+        var tombs = Path.Combine(root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder);
+        Assert.All(result.Deleted, id => Assert.True(File.Exists(Path.Combine(tombs, id, RetentionInventory.CompletedMarker))));
+        Assert.Empty(RetentionExecutor.IncompleteTombstones(root));
+
+        // review L2 of #134: a crash after the folder was removed and before 2016 leaves a tombstone without its completion marker
+        var lost = result.Deleted[0];
+        File.Delete(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker));
+        // and a tombstone whose run folder still exists (a crash before the rename) is NOT a completed deletion
+        var notYet = runs.First(r => Directory.Exists(Path.Combine(root, r.RunId))).RunId;
+        Directory.CreateDirectory(Path.Combine(tombs, notYet));
+        File.WriteAllText(Path.Combine(tombs, notYet, RetentionInventory.DeletedMarker), "{\"version\":1,\"runId\":\"" + notYet + "\",\"deletedUtc\":\"2026-03-01T03:00:00+00:00\",\"statusSha256\":\"x\"}");
+        audit.Clear();
+        var recovered = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
+        Assert.Equal(1, recovered.Resumed);
+        Assert.Single(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} ") && a.Detail.Contains("recovered=audit"));
+        Assert.DoesNotContain(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={notYet} "));
+        Assert.True(File.Exists(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker)));
+        Assert.Equal([notYet], RetentionExecutor.IncompleteTombstones(root));
+
+        // a second execution writes no further 2016
+        audit.Clear();
+        await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
+        Assert.DoesNotContain(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} "));
+
+        // a crash between the 2016 and the marker: the stream already holds the 2016, so only the marker is written
+        File.Delete(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker));
+        audit.Clear();
+        await RetentionExecutor.ExecuteAsync(Ctx(runs) with { DeletedRecorded = (id, _) => Task.FromResult(id == lost) }, RetentionGateOverride.ForTests(), default);
+        Assert.DoesNotContain(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} "));
+        Assert.True(File.Exists(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker)));
+    }
+
+    [Fact]
     public void Keepers_must_survive_the_simulated_removal()
     {
         var runs = Runs(12);

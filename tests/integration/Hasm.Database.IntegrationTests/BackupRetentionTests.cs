@@ -325,6 +325,14 @@ public class BackupRetentionTests : PostgresTestBase
         }
         await using (var restore = await RetentionService.AcquireRestoreLockAsync(Options, default))
             Assert.Equal("restore_in_progress", await Code());
+        // review L6 of #134: disposing the holder releases the shared restore lock explicitly, so the exclusive lock is free IMMEDIATELY (no wait for the backend to exit)
+        await using (var probe = new NpgsqlConnection(SystemConnection))
+        {
+            await probe.OpenAsync();
+            await using (var tryLock = new NpgsqlCommand($"SELECT pg_try_advisory_lock({BackupRunService.RunLockNamespace}, 1)", probe))
+                Assert.True((bool)(await tryLock.ExecuteScalarAsync())!);
+            await using (var un = new NpgsqlCommand($"SELECT pg_advisory_unlock({BackupRunService.RunLockNamespace}, 1)", probe)) await un.ExecuteNonQueryAsync();
+        }
         // and a restore cannot start while a deletion holds the restore lock exclusively
         await using var deletion = new NpgsqlConnection(SystemConnection);
         await deletion.OpenAsync();
