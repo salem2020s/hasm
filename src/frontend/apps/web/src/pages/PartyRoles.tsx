@@ -71,27 +71,24 @@ function Notices({ runner, id }: { runner: ReturnType<typeof useRunner>; id: str
 const PARTY_PAGE_LIMIT = 50;
 
 /**
- * Party picker for a NEW role: a bounded server-side SEARCH over the parties (`listParties({ search, limit })`) instead of a list silently cut off at 500. Parties that are inactive or already hold
- * this role are not offered (the role list of this screen is complete, so "already used" is exact); the total is reduced by the rows removed from the page so "N of M" stays honest for a page that
- * holds every match. A 403 (no permission to view parties) turns the picker into the existing "cannot add a role" hint; any other failure shows the picker's own error and retry.
+ * Party picker for a NEW role: a bounded server-side SEARCH over the parties instead of a list silently cut off at 500. Parties that are inactive or already hold this kind of role are excluded BY THE
+ * SERVER (`active=true`, `withoutRole`), before paging, so the page, the total and "N of M" are exact (a first page full of existing customers cannot hide the eligible parties behind it). A 403 (no
+ * permission to view parties) turns the picker into the existing "cannot add a role" hint; any other failure shows the picker's own error and retry.
  */
-function PartyPicker({ id, value, onChange, used, error }: { id: string; value: string; onChange: (v: string) => void; used: ReadonlySet<string>; error?: string }) {
+function PartyPicker({ id, kind, value, onChange, usedCount, error }: { id: string; kind: 1 | 2; value: string; onChange: (v: string) => void; usedCount: number; error?: string }) {
   const { t } = useI18n();
   const auth = useAuth();
   const [forbidden, setForbidden] = useState(false);
-  const usedRef = useRef(used);
-  usedRef.current = used;
-  const load = useCallback((search: string) => auth.api.listParties({ search: search === "" ? undefined : search, limit: PARTY_PAGE_LIMIT }).then((r) => {
-    const items = r.parties.filter((p) => p.isActive && !usedRef.current.has(p.id));
-    return { items, total: Math.max(items.length, r.total - (r.parties.length - items.length)) };
-  }).catch((e) => { if (e instanceof ApiError && e.status === 403) setForbidden(true); else auth.handleError(e); throw e; }), [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = useCallback((search: string) => auth.api.listParties({ search: search === "" ? undefined : search, limit: PARTY_PAGE_LIMIT, active: true, withoutRole: kind === 1 ? "customer" : "supplier" })
+    .then((r) => ({ items: r.parties, total: r.total }))
+    .catch((e) => { if (e instanceof ApiError && e.status === 403) setForbidden(true); else auth.handleError(e); throw e; }), [auth.api, auth.handleError, kind]); // eslint-disable-line react-hooks/exhaustive-deps
   if (forbidden) return <p className="hint">{t("pr.party_unavailable")}</p>;
   const hintId = `${id}-hint`;
   return (
     <div className={`field${error ? " field-invalid" : ""}`} data-testid={`${id}-picker`}>
       <label htmlFor={`${id}-list`}>{t("pr.party")}<span aria-hidden="true" className="required"> *</span></label>
-      <SearchPicker id={`${id}-list`} label={t("pr.party")} value={value} onChange={(v) => onChange(v)} load={load} getId={(p: LocalPartySummary) => p.id} getLabel={(p) => `${p.code} — ${p.displayName}`}
-        noneLabel={t("pr.choose_party")} reloadKey={used.size} invalid={!!error} required describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
+      <SearchPicker id={`${id}-list`} label={t("pr.party")} value={value} onChange={(v) => onChange(v)} load={load} getId={(p: LocalPartySummary) => p.id} getLabel={(p) => `\u2068${p.code}\u2069 — \u2068${p.displayName}\u2069`}   /* isolates keep a Latin code in order next to an Arabic name */
+        noneLabel={t("pr.choose_party")} reloadKey={usedCount} invalid={!!error} required describedBy={[error ? `${id}-error` : null, hintId].filter(Boolean).join(" ")} />
       <p id={hintId} className="hint">{t("pr.party_hint")}</p>
       {error && <p id={`${id}-error`} className="field-error">{error}</p>}
     </div>
@@ -161,7 +158,7 @@ function RoleTab({ kind, resp, canSearchParties, accounts, reps, reload, onDirty
         <fieldset disabled={runner.busy} data-testid={`pr-${id}-form`}>
           <legend>{editing ? `${t("pr.edit_role")} — ${editing.partyCode}` : t(kind === 1 ? "pr.add_customer" : "pr.add_supplier")}</legend>
           {!editing && (!canSearchParties ? <p className="hint">{t("pr.party_unavailable")}</p> : (
-            <PartyPicker id={`pr-${id}-party`} value={form.partyId} onChange={(v) => setForm({ ...form, partyId: v })} used={used} error={runner.fields.partyId} />
+            <PartyPicker id={`pr-${id}-party`} kind={kind} value={form.partyId} onChange={(v) => setForm({ ...form, partyId: v })} usedCount={used.size} error={runner.fields.partyId} />
           ))}
           <Field id={`pr-${id}-mode`} label={t("pr.mode")} required error={runner.fields.paymentMode}>
             {(a) => <select {...a} value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>{[1, 2, 3].map((n) => <option key={n} value={n}>{t(`pr.mode.${n}`)}</option>)}</select>}
