@@ -2,7 +2,7 @@
 
 * **Pull request:** #45 (Phase 3.8B-3, negative-stock exception)
 * **Head SHA reviewed (full 40 characters):** b0684a8f294e4f0a6cbb619e022d2b20d452da41
-* **Reviewer context:** separate agent (Claude Opus 5.5), NOT the author's context; prompt: adversarial code review of the full diff; the fixes below are by the author.
+* **Reviewer context:** separate agent (Claude Opus), NOT the author's context; prompt: adversarial code review of the full diff; the fixes below are by the author.
 * **Scope read:** the full diff `origin/main...b0684a8` (migrations 0020 and 0022, engine, posting, reversal, adjustment, probe, accounting configuration, API, shared UI, tests, documents).
 * **Checks run (commands and results):** by the reviewer: none. By the author after the fixes: see `docs/PHASE-3.8B-3.md` (Review of PR #45) and the commit that records this file.
 * **Findings:** no Critical, no High. DB-1 to DB-4 judged sound.

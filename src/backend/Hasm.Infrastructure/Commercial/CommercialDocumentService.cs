@@ -49,6 +49,13 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     [GeneratedRegex("^[A-Za-z0-9._:-]{8,64}$")] private static partial Regex KeyPattern();
 
     private const int MaxLines = 5000;
+
+    /// <summary>The names of the registered document types (empty in production until 3.15/3.16, the test type only in the test composition). Names only: the screen offers Create only when this is not empty.</summary>
+    public IReadOnlyList<string> RegisteredTypes => [.. types.Types.Order(StringComparer.Ordinal)];
+
+    /// <summary>The registered link pairs (both types registered): static registry data.</summary>
+    public IReadOnlyList<LinkPairView> RegisteredLinkPairs => types.LinkPairs;
+
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static NpgsqlParameter Uuid(string name, Guid? v) => new(name, NpgsqlDbType.Uuid) { Value = v is { } g ? g : DBNull.Value };
 
@@ -59,6 +66,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == CD.UqIdempotency) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "idempotency_race"); }   // a concurrent create with the same key won
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // any other unique index (line number, event revision): a racing writer won, nothing was written
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.ForeignKeyViolation) { return ConfigResult<T>.Invalid([FkField(ex.ConstraintName)]); }
+        catch (PostgresException ex) when (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.SerializationFailure) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "concurrent_change"); }   // safety net: a lock cycle or serialization failure is a retryable conflict, never a 500
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.RaiseException) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, "invariant_violation"); }   // a database guard refused a racing or inconsistent change: nothing was written
     }
 
@@ -105,7 +113,12 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     }
 
     /// <summary>Headers only (no lines or events). <see cref="CommercialDocumentFilter.AllowedBranches"/> restricts the query itself, so paging only walks documents the caller may see.</summary>
-    public async Task<IReadOnlyList<CommercialDocumentView>> ListAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default)
+    public async Task<IReadOnlyList<CommercialDocumentView>> ListAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default) => (await ListPageAsync(companyId, filter, ct)).Items;
+
+    /// <summary>
+    /// One page of headers with the exact total. Every filter is a bound parameter and is applied before paging (newest first); the search is a literal, case-insensitive part of the official number (wildcards of the text are escaped).
+    /// </summary>
+    public async Task<CommercialDocumentPage> ListPageAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
         var where = new List<string>();
@@ -113,13 +126,18 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         if (filter.Status is { } st) { where.Add($"{CD.Status} = @st"); q.Parameters.AddWithValue("st", (short)st); }
         if (!string.IsNullOrWhiteSpace(filter.DocType)) { where.Add($"{CD.DocType} = @dt"); q.Parameters.AddWithValue("dt", filter.DocType); }
         if (filter.BranchId is { } b) { where.Add($"{CD.BranchId} = @br"); q.Parameters.AddWithValue("br", b); }
+        if (filter.PartyId is { } pid) { where.Add($"{CD.PartyId} = @pa"); q.Parameters.AddWithValue("pa", pid); }
+        if (!string.IsNullOrWhiteSpace(filter.Currency)) { where.Add($"{CD.Currency} = @cu"); q.Parameters.AddWithValue("cu", filter.Currency.Trim().ToUpperInvariant()); }
+        if (ListPaging.TryCleanSearch(filter.Search, out var cleaned) && cleaned is not null) { where.Add(ListPaging.LikeClause("like", CDA.OfficialNumber)); q.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
         if (filter.AllowedBranches is { } allowed) { where.Add($"{CD.BranchId} = ANY(@ab)"); q.Parameters.Add(new NpgsqlParameter("ab", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = allowed.ToArray() }); }
-        q.CommandText = $"SELECT {DocCols} FROM {CD.Table}{(where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where))} ORDER BY {CD.CreatedAtUtc} DESC, {CD.Id} LIMIT @lim OFFSET @off";
-        q.Parameters.AddWithValue("lim", Math.Clamp(filter.Limit, 1, 200)); q.Parameters.AddWithValue("off", Math.Max(0, filter.Offset));
-        var rows = new List<CommercialDocumentView>();
-        await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct)) rows.Add(ReadHeader(r));
-        return rows;
+        var fromWhere = $"FROM {CD.Table}{(where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where))}";
+        var off = Math.Max(0, filter.Offset);
+        q.CommandText = $"SELECT {DocCols}, count(*) OVER () {fromWhere} ORDER BY {CD.CreatedAtUtc} DESC, {CD.Id} LIMIT @lim OFFSET @off";
+        q.Parameters.AddWithValue("lim", Math.Clamp(filter.Limit, 1, 200)); q.Parameters.AddWithValue("off", off);
+        var rows = new List<CommercialDocumentView>(); long total = 0;
+        await using (var r = await q.ExecuteReaderAsync(ct)) while (await r.ReadAsync(ct)) { rows.Add(ReadHeader(r)); total = r.GetInt64(25); }
+        if (rows.Count == 0 && off > 0) total = await PagedSql.TotalAsync(conn, fromWhere, q.Parameters, ct);
+        return new CommercialDocumentPage(rows, total);
     }
 
     // ================================================================================================================ validation
@@ -355,6 +373,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
                     await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Approved, CommercialStatus.Approved, cur.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"approved commercial document note updated r{cur.Revision + 1}", ct);
                     return;
                 }
+                if (await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075: a linked document stays approved (a material edit would send it back to draft)
                 await ToDraftAsync(work, cur, CommercialEventKind.ReapprovalRequested, CommercialAuditEvents.ReapprovalRequested, actor, null, $"material edit of approved commercial document: re-approval required, number {cur.OfficialNumber} kept", ct);
                 working = cur with { Status = CommercialStatus.Draft, Revision = cur.Revision + 1 };
             }
@@ -541,6 +560,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         {
             if (cur.Status == CommercialStatus.Cancelled) throw new Abort(ConfigStatus.Conflict, "document_not_cancellable");
             if (cur.Status == CommercialStatus.Approved && await HasEffectsAsync(work, cur, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_effects");
+            if (cur.Status == CommercialStatus.Approved && await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075 interim restriction (stricter than Q8)
             if (cur.OfficialNumber is not null)
                 await NumberingService.VoidAsync(work.Connection, work.Transaction!, cur.DocType, cur.OfficialNumber, actor, text.Length > 200 ? text[..200] : text, Now, ct);
             await SetStatusAsync(work, cur, CommercialStatus.Cancelled, cur.SubmittedBy, ct);

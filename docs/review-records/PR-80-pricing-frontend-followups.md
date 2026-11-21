@@ -2,7 +2,7 @@
 
 * **Pull request:** #80 (Pricing UI follow-ups)
 * **Head SHA reviewed (full 40 characters):** 8ec8f05cdc1a2ae081c1e2a9b68e82e8984324d7
-* **Reviewer context:** Agent D, a separate session from the author (Agent E); model claude-sonnet-5-5, the SAME model family as the author. Prompt: "independent FULL-diff review, read-only, report to the lead only, of PR #80 at 8ec8f05, frontend only". Checklist: Web/Desktop parity, server-authoritative security, signed parser edge cases, quote with a searched item, picker race and selection, adjusted tests not weakened, currency-permission behaviour change.
+* **Reviewer context:** Agent D, a separate session from the author (Agent E); model Claude Sonnet, the SAME model family as the author. Prompt: "independent FULL-diff review, read-only, report to the lead only, of PR #80 at 8ec8f05, frontend only". Checklist: Web/Desktop parity, server-authoritative security, signed parser edge cases, quote with a searched item, picker race and selection, adjusted tests not weakened, currency-permission behaviour change.
 * **Scope read:** `git diff origin/main...8ec8f05` (6 files, +191/-40): `Pricing.tsx`, `messages.pricing.ts`, `pricing.test.tsx`, `numberInput.ts`, `numberInput.test.ts`, `app.css`.
 * **Checks run (commands and results):** typecheck exit 0; vitest for pricing and numberInput 23 passed; full web suite 461 passed (other workspaces: 38 and 33 passed); ar/en key parity 133 keys each. Hosted CI on the reviewed head (author-run query): all 10 jobs succeeded.
 * **Findings:** no Critical, no High, no Medium; seven Low, recorded as accepted follow-ups and deliberately NOT fixed so that the approved code stays unchanged.

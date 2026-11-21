@@ -470,6 +470,23 @@ export interface TaxRuleInput {
 export type AttachmentSubjectKind = "local_party" | "inventory_item";
 export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string | null; isSensitive: boolean; revision: number; createdAtUtc: string }
 export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
+/** Retention of removed attachments (Phase R, owner decision D-082): policy versions, legal holds and a read-only eligibility preview. Nothing here deletes anything. */
+export interface RetentionCapabilities { view: boolean; configure: boolean; hold: boolean; approve: boolean; execute: boolean; /** false while the owner has not answered D-109: no item is eligible and purge stays disabled */ basisConfirmed: boolean }
+/** status: 1 draft, 2 approved, 3 revoked, 4 superseded */
+export interface RetentionRuleInfo { subjectKind: string; sensitivity: number; months: number | null; indefinite: boolean }
+export interface RetentionPolicyVersion {
+  id: string; version: number; status: 1 | 2 | 3 | 4; effectiveFrom: string; shortensAnyPeriod: boolean; shorteningAcknowledgement: string | null; note: string | null; draftedBy: string; draftedAtUtc: string;
+  approvedBy: string | null; approvedAtUtc: string | null; revokedBy: string | null; revokedAtUtc: string | null; revokeReason: string | null; endedAtUtc: string | null; revision: number; rules: RetentionRuleInfo[];
+}
+export interface RetentionPolicyInput { effectiveFrom: string; note: string | null; rules: RetentionRuleInfo[] }
+/** scope: 1 company, 2 one record (subjectKind + subjectId), 3 one attachment (attachmentId) */
+export interface LegalHold {
+  id: string; scope: 1 | 2 | 3; subjectKind: string | null; subjectId: string | null; attachmentId: string | null; reason: string; reference: string | null; placedBy: string; placedAtUtc: string;
+  releasedBy: string | null; releasedAtUtc: string | null; releaseReason: string | null; isActive: boolean; revision: number;
+}
+export interface LegalHoldInput { scope: 1 | 2 | 3; subjectKind?: string | null; subjectId?: string | null; attachmentId?: string | null; reason: string; reference?: string | null }
+export interface RetentionPreviewItem { attachmentId: string; subjectKind: string; subjectId: string; isSensitive: boolean; removedAtUtc: string; reason: string; eligibleAtUtc: string | null; holdId: string | null; policyVersion: number | null }
+export interface RetentionPreview { total: number; basisConfirmed: boolean; reasonCounts: Record<string, number>; items: RetentionPreviewItem[] }
 export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
 
 // ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
@@ -493,6 +510,19 @@ export interface PartyRoleQuery extends ListQuery { ids?: string[] }
 export interface IdsQuery extends ListQuery { ids?: string[] }
 /** The most ids one by-ids request may carry (the server refuses more with 400 `invalid_request`). */
 export const MAX_LOOKUP_IDS = 100;
+function commercialQuery(q: CommercialDocumentQuery): string {
+  const p = new URLSearchParams();
+  if (q.status !== undefined) p.set("status", String(q.status));
+  if (q.docType) p.set("docType", q.docType);
+  if (q.branchId) p.set("branchId", q.branchId);
+  if (q.partyId) p.set("partyId", q.partyId);
+  if (q.currency) p.set("currency", q.currency);
+  if (q.search) p.set("search", q.search);
+  if (q.offset !== undefined) p.set("offset", String(q.offset));
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  const qs = p.toString();
+  return qs ? "?" + qs : "";
+}
 function listQueryString(q?: IdsQuery, extra?: Record<string, string>): string {
   const p = new URLSearchParams();
   if (q?.search) p.set("search", q.search);
@@ -675,6 +705,31 @@ export interface StockReconciliation { asOf: string; costingValue: number; ledge
 export interface StockWarehouseRef { id: string; branchId: string; code: string; nameAr: string | null; nameEn: string | null; isActive: boolean }
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
+
+// ---- Commercial documents (Phase 3.13 S1/S6). Status: 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. Mode: 1 direct, 2 separate. Event kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled,
+// 6 approved, 7 rejected, 8 re-approval requested, 9 reopened. Prices, taxes and totals are produced by the SERVER at submit and sealed at approval; a client never sends one.
+export type CommercialStatus = 1 | 2 | 3 | 4 | 5;
+export interface CommercialLine { lineNo: number; itemId: string; unitId: string; quantity: number; warehouseId: string | null; lineNet: number | null; pricingHash: string | null }
+export interface CommercialEvent { kind: number; fromStatus: CommercialStatus | null; toStatus: CommercialStatus; revision: number; actorUserId: string; reason: string | null; atUtc: string }
+export interface CommercialDocument {
+  id: string; docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; status: CommercialStatus; note: string | null; submittedBy: string | null; lastEditedBy: string | null;
+  officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
+  revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
+}
+export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
+export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
+/** `partyId`, `currency` and `search` (a literal part of the official number) are applied by the SERVER before paging, so a page and its total are exact. */
+export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; partyId?: string; currency?: string; search?: string; offset?: number; limit?: number }
+export interface CommercialDocumentPage { documents: CommercialDocument[]; total: number }
+
+// ---- Document links (Phase 3.13 S2, shown by S6). Kind: 1 fulfils, 2 invoices, 3 returns, 4 amends. A link goes from a line of an approved SOURCE document to a line of an approved TARGET document (same party, currency and branch);
+// ordered / fulfilled / invoiced / returned are DERIVED by the server from the links. Linking needs the update permission on the target and is append-only.
+export type DocumentLinkKind = 1 | 2 | 3 | 4;
+export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; createdBy: string; createdAtUtc: string; replayed: boolean }
+/** A registered link pair: documents of `source` may be linked into documents of `target` with `kind`. Static registry data; empty in production until the concrete types are activated. */
+export interface CommercialLinkPair { source: string; target: string; kind: DocumentLinkKind }
+export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
+export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
 
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
@@ -1026,6 +1081,24 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** Posts an approved document: moves the stock, values it and creates the draft journal entry, atomically. A receipt needs the cost amount of every line. Idempotent. */
     postStockDocument: (id: string, revision: number, lines?: StockPostLineInput[]) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/posting`, { ifMatch: revision, body: { lines: lines ?? [] } }),
     reverseStockDocument: (id: string, effectiveDate: string, reason: string) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
+    /** The registered commercial document types (names only). Empty in production until the concrete types are activated (3.15/3.16): the screen then offers no creation. */
+    listCommercialDocumentTypes: () => get<{ types: string[] }>("/api/v1/company/commercial-documents/types").then((r) => r.types),
+    listCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`).then((r) => r.documents),
+    /** The same list with the exact `total` of the documents matching every filter (what a paged picker needs). */
+    searchCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`),
+    getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
+    createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
+    updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
+    submitCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
+    rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
+    cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    /** The registered link pairs (the same route as the types; static registry data). The screen offers link creation only for a document whose type is the target of a pair. */
+    listCommercialLinkPairs: () => get<{ types: string[]; linkPairs: CommercialLinkPair[] }>("/api/v1/company/commercial-documents/types").then((r) => r.linkPairs ?? []),
+    createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
+    listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
+    getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),
@@ -1224,6 +1297,15 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       return (await response.json()) as Attachment;
     },
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
+    getRetentionCapabilities: () => get<RetentionCapabilities>("/api/v1/company/attachment-retention/capabilities"),
+    listRetentionPolicies: () => get<{ policies: RetentionPolicyVersion[] }>("/api/v1/company/attachment-retention/policies"),
+    draftRetentionPolicy: (input: RetentionPolicyInput) => request<RetentionPolicyVersion>("POST", "/api/v1/company/attachment-retention/policies", { body: input }),
+    approveRetentionPolicy: (id: string, revision: number, shorteningAcknowledgement: string | null) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/approve`, { body: { shorteningAcknowledgement }, ifMatch: revision }),
+    revokeRetentionPolicy: (id: string, revision: number, reason: string) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/revoke`, { body: { reason }, ifMatch: revision }),
+    listLegalHolds: (includeReleased = false) => get<{ holds: LegalHold[] }>(`/api/v1/company/attachment-retention/holds${includeReleased ? "?includeReleased=true" : ""}`),
+    placeLegalHold: (input: LegalHoldInput) => request<LegalHold>("POST", "/api/v1/company/attachment-retention/holds", { body: input }),
+    releaseLegalHold: (id: string, revision: number, reason: string) => request<LegalHold>("POST", `/api/v1/company/attachment-retention/holds/${enc(id)}/release`, { body: { reason }, ifMatch: revision }),
+    previewRetention: (offset = 0, limit = 50) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}`),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
     /**

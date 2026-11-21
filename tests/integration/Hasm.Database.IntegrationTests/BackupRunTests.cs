@@ -208,7 +208,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal((1, "backup_missing"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));
         var a = await NewCompany();
         await Service().RunAsync(Root);
-        Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));
+        Assert.Equal((8, "unencrypted_dev_test"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));   // slice 5, D-095: an unencrypted run is never green
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow.AddHours(30), BackupRunStatus.DefaultMaxAge)));
 
         var b = await NewCompany();
@@ -239,6 +239,7 @@ public class BackupRunTests : PostgresTestBase
         var env = new Dictionary<string, string?>
         {
             ["Hasm__Attachments__StorageDirectory"] = Storage, ["Hasm__Encryption__KeyDirectory"] = Keys, ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+            ["Hasm__Backup__UnencryptedDevTestOnly"] = BackupOptions.UnencryptedAcknowledgement,   // slice 5, D-095: these suites run unencrypted DEV/TEST sets
         };
         var outputs = new List<string>();
         var run1 = await AdminTool.RunWith(Options, env, "backup-run", Root); outputs.Add(run1.All);
@@ -247,9 +248,9 @@ public class BackupRunTests : PostgresTestBase
         var run2 = await AdminTool.RunWith(Options, env, "backup-run", Root); outputs.Add(run2.All);
         Assert.True(run2.Exit == 0, run2.All);
         var status = await AdminTool.RunWith(Options, env, "backup-status", Root); outputs.Add(status.All);
-        Assert.True(status.Exit == 0, status.All);
+        Assert.True(status.Exit == 8, status.All);                                                                 // slice 5, D-095: unencrypted DEV/TEST runs give exit 8
         var withAge = await AdminTool.RunWith(Options, env, "backup-status", Root, "--max-age-hours", "1"); outputs.Add(withAge.All);
-        Assert.True(withAge.Exit == 0, withAge.All);
+        Assert.True(withAge.Exit == 8, withAge.All);
         var runs = Directory.GetDirectories(Root).OrderBy(d => d, StringComparer.Ordinal).ToArray();
         Assert.Equal(2, runs.Length);
         var preview = await AdminTool.RunWith(Options, env, "backup-retention-preview", Root, "--keep-last", "1"); outputs.Add(preview.All);

@@ -2,7 +2,7 @@
 
 * **Pull request:** #72
 * **Head SHA reviewed (full 40 characters):** 6a8df7c1adab1a821897fa2dbf15550068ea99c1
-* **Reviewer context:** Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors, fresh context, read-only). Prompt: "independent FULL-diff adversarial review, read-only" of the complete diff against `origin/main`. Independence is limited to a separate context; the model family is the same as the authors'.
+* **Reviewer context:** Agent C, a separate session (the same model family as the authors, fresh context, read-only). Prompt: "independent FULL-diff adversarial review, read-only" of the complete diff against `origin/main`. Independence is limited to a separate context; the model family is the same as the authors'.
 * **Review history:** first review of head `d1dda9813c25f89eda6fad980b216a488fff721f` (findings below); re-review of head `6a8df7c1adab1a821897fa2dbf15550068ea99c1` after the fixes (section "Re-review" below). The 40-character SHA above is the re-reviewed head.
 * **Scope read:** the full diff against `origin/main` at the reviewed head: `Identity/Totp.cs` and `TotpTests.cs` (two files; no migration, no API, no UI).
 * **Checks run (commands and results):** code reading only by the reviewer. The author ran nothing locally (no dotnet in the sandbox); hosted CI on the reviewed head: backend-build-test, postgres-integration, ci-guard, docs-traceability, guard-selftest, secret-scan and dependency-scan all success.
@@ -24,7 +24,7 @@
 
 ## Re-review (head 6a8df7c1adab1a821897fa2dbf15550068ea99c1)
 
-Reviewer: Agent C, a separate session (claude-sonnet-5-5, the same model family as the authors), full diff against `origin/main`, code reading. It verified that M1 and L1-L3 above are fixed as recorded (compare-and-set requirement on `Verify`, ASCII-only strict Base32, the added tests) and recorded the enforcement-slice tests. **No new findings; no Critical, High or Medium finding is open.**
+Reviewer: Agent C, a separate session (the same model family as the authors), full diff against `origin/main`, code reading. It verified that M1 and L1-L3 above are fixed as recorded (compare-and-set requirement on `Verify`, ASCII-only strict Base32, the added tests) and recorded the enforcement-slice tests. **No new findings; no Critical, High or Medium finding is open.**
 
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** nothing beyond the primitive was built, so enrolment, storage, enforcement, recovery, the emergency account, second approval and AD/Kerberos are not implemented and not reviewed; interoperability with real authenticator apps (the RFC 6238 vectors pass, apps were not used).

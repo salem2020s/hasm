@@ -3,6 +3,7 @@ using System.Text;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using AC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Account;
@@ -28,7 +29,7 @@ namespace Hasm.Infrastructure.Ledger;
 /// (balance, accounts, currencies, rates, cost centers, approvals for exactly this revision, period) in the trigger that performs the state change, so no caller can bypass it.
 /// A failed validation rolls back the number, the audit event and the entry together.
 /// </summary>
-public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
+public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ILogger? logger = null)
 {
     internal const int LockKey1 = 0x48434A45;   // "HCJE": advisory-lock namespace for journal operations that must be serialised company-wide (settings)
     internal const int LockKey2 = 1;
@@ -397,8 +398,8 @@ public sealed class JournalService(CompanyDatabaseResolver resolver, CompanyAudi
                 branchCode = r.GetString(0); yearLabel = r.GetInt32(1); yearId = r.GetGuid(2);
             }
             var now = clock.GetUtcNow().UtcDateTime;
-            var number = await NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.JournalEntry,
-                new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString()), id, actor, now, ct);
+            var number = await NumberingService.IssueOrRefuseAsync(() => NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.JournalEntry,
+                new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString()), id, actor, now, ct), DocumentTypes.JournalEntry, logger, () => new Abort(ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued));
             await using (var upd = new NpgsqlCommand(
                 $"UPDATE {JE.Table} SET {JE.Status} = 4, {JE.Number} = @n, {JE.PostedBy} = @a, {JE.PostedAt} = @t, {JE.Period} = @p, {JE.SoftPost} = @s, {JE.UpdatedAt} = @t WHERE {JE.Id} = @id", work.Connection, work.Transaction))
             {
