@@ -29,6 +29,11 @@ public class DocumentLinkApiTests : CommercialTestBase
         foreach (var (method, path) in routes) Assert.Equal("company_not_selected", (await Send(method, path, method == HttpMethod.Get ? null : new { }, noCompany)).Error);
 
         var cookie = await SignIn(Admin);
+        // the test composition registers two types and the four link pairs of the test type (the screen offers link creation only for such a target type)
+        var types = await Send(HttpMethod.Get, $"{Base}/types", null, cookie);
+        Assert.Equal(["commercial_test", "commercial_test_other"], types.Json.GetProperty("types").EnumerateArray().Select(x => x.GetString()!));
+        Assert.Equal([("commercial_test", "commercial_test", (short)1), ("commercial_test", "commercial_test", (short)2), ("commercial_test", "commercial_test", (short)3), ("commercial_test", "commercial_test", (short)4)],
+            types.Json.GetProperty("linkPairs").EnumerateArray().Select(x => (x.GetProperty("source").GetString()!, x.GetProperty("target").GetString()!, x.GetProperty("kind").GetInt16())));
         object Body(string key, decimal qty, int kind = 1) => new { fromDocumentId = order.Id, fromLineNo = 1, toDocumentId = delivery.Id, toLineNo = 1, kind, quantity = qty, idempotencyKey = key, unitPrice = 999, createdBy = Guid.NewGuid() };   // unknown fields are ignored
         var created = await Send(HttpMethod.Post, $"{Base}/links", Body("api-link-00001", 4m), cookie);
         Assert.Equal(HttpStatusCode.OK, created.Status);

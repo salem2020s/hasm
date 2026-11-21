@@ -2,7 +2,7 @@
 
 * **Pull request:** #77
 * **Head SHA reviewed (full 40 characters):** a5905f2b42fbe8541eac881ebb16f77d91c1bbe7
-* **Reviewer context:** Agent C, a separate session (claude-sonnet-5-5, the same model family as the author, fresh context, read-only, reporting to the lead only). Prompt: "independent FULL-diff review, read-only, report to the lead only, of PR #77 (tests only): are the tests weakened or vacuous, registry +2, no protected files, honesty of scenario coverage". Independence is limited to a separate context; the model family is the same as the author's.
+* **Reviewer context:** Agent C, a separate session (the same model family as the author, fresh context, read-only, reporting to the lead only). Prompt: "independent FULL-diff review, read-only, report to the lead only, of PR #77 (tests only): are the tests weakened or vacuous, registry +2, no protected files, honesty of scenario coverage". Independence is limited to a separate context; the model family is the same as the author's.
 * **Scope read:** the full diff against `origin/main` at the reviewed head: two files, `tests/integration/Hasm.Database.IntegrationTests/PricingApiTests.cs` (two new PostgreSQL tests) and `.github/workflows/backend.yml` (registry raise only).
 * **Checks run (commands and results):** code reading only by the reviewer; the reviewer executed nothing. Hosted CI on the reviewed head: ci-guard, backend-build-test, guard-selftest, postgres-integration, secret-scan, dependency-scan and docs-traceability all success.
 * **Findings:** no Critical, no High, no Medium; five Low, all recorded as follow-ups and deliberately NOT fixed here, so that the approved code stays unchanged.

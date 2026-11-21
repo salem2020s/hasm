@@ -2,7 +2,7 @@
 
 * **Pull request:** #71 (docs-only: `docs/qa/RELEASE1-TEST-PLAN.md`)
 * **Head SHA reviewed (full 40 characters):** 2d11cd7039eeb818ebd175a794d551b61c557169
-* **Reviewer context:** Agent E, a separate session from the author (Agent C); model claude-sonnet-5-5, the SAME model family as the author. Independence is limited to a separate session and context. Full 1-file diff read. Prompt: "independent FULL-diff review (read-only, report to lead only) of PR #71: check every covered claim names a real test, scenario numbering and verdicts 21.1-21.10, no invented/weakened requirements, no secrets".
+* **Reviewer context:** Agent E, a separate session from the author (Agent C); model Claude Sonnet, the SAME model family as the author. Independence is limited to a separate session and context. Full 1-file diff read. Prompt: "independent FULL-diff review (read-only, report to lead only) of PR #71: check every covered claim names a real test, scenario numbering and verdicts 21.1-21.10, no invented/weakened requirements, no secrets".
 * **Scope read:** the full diff of the PR against `origin/main` (one file, `docs/qa/RELEASE1-TEST-PLAN.md`).
 * **Checks run (commands and results):** reading and grep-based verification of the named tests by the reviewer. No test, build or database command was executed by the reviewer or the author.
 * **Findings:** no Critical, no High, no Medium; four Low.
