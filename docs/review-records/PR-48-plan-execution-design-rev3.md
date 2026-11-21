@@ -45,3 +45,14 @@ Applied in `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` on top of `6b64eb3` (one c
 * **L5 fixed.** Section 11 now says "count- and order-preserving with lineage". It states plainly that successor layers carry the revaluation date, so layer identity, arrival rank and the engine-visible receipt date are not preserved except through the lineage, and that the approach relies on oldest-first processing. The Q3 contract must choose either lineage-reading FIFO readers or the per-layer value-adjustment alternative. This is marked as an owner-facing point.
 * **Open for the reviewer:** confirmation of this delta.
 
+
+**Addendum to the resolution (Agent P; model family Claude Opus), after the owner's decisions of 2026-11-21:**
+* **Test renumbering.** To match the owner's "revised N1-N29 matrix", the tests are renumbered: N28 = concurrent period close (L2), N29 = two-way equal-date transfer chain (L4), N30 = member kind-4 refusal (L1), N31 = audit uniqueness, type and subject (L3). N26 (M1) and N27 (M2) are unchanged. The resolution list above used the earlier numbers (L1 = N28, L2 = N29, L3 = N30); the design's reconciliation note supersedes them.
+* **Owner decisions recorded in the design.**
+  * Q1 is approved with mandatory safeguards, recorded verbatim, each mapped to the design section and test that meet it.
+  * Q2 (X2-X8) is approved. X8 is to be reconciled with OD-12/T-2 by the docs agent; the design references this and does not decide it.
+  * Q3: section 11 now lists the REQUIRED contents of the separate revaluation contract; the contract itself is not written.
+  * Q4: the method-immutability guard is unchanged until independently reviewed and authorized.
+  * Q5: a separate security workstream, referenced only.
+  * Statuses now read: "APPROVED by the owner 2026-11-21 with mandatory safeguards; implementation authorization effective after independent confirmation of the final design revision".
+* **Open for the reviewer:** confirmation of the final revision (no unresolved Critical, High or Medium). This is the condition that makes implementation authorization effective.
