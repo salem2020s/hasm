@@ -356,6 +356,8 @@ public sealed class CompanyBackupService
         var manifestLevel = encrypted ? v2!.Company!.CompanyMigrationVersion : manifest!.CompanyMigrationVersion;
         var manifestLocale = encrypted ? v2!.Company!.DatabaseLocale : manifest!.DatabaseLocale;
         IReadOnlyList<string> keyIdsRequired = encrypted ? v2!.Company!.KeyIdsRequired : manifest!.KeyIdsRequired;
+        // slice 6 (D-135): from the first database contact on, the restore holds the shared restore lock, so retention never deletes a run while it is being read
+        await using var restoreLock = await RetentionService.AcquireRestoreLockAsync(options, ct);
         var company = await registry.GetAsync(expectedCompanyId, ct) ?? throw new BackupException("company_not_found");
 
         var embedded = scripts.ToDictionary(s => s.Version, s => s.Checksum);
