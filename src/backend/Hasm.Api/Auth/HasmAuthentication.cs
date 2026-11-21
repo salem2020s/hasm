@@ -174,10 +174,10 @@ public static class AuthenticationSetup
         var (status, code) = error switch
         {
             BadHttpRequestException b => (b.StatusCode, "bad_request"),
+            _ when Hasm.Api.Hosting.HasmExceptionMapping.IsInvalidCharacter(error) => (StatusCodes.Status400BadRequest, "invalid_request"),   // defence in depth: a character the database cannot store (22021) is the caller's data, not an outage
             AuditUnavailableException a => Audit(context, a),
             EncryptionUnavailableException e => Encryption(context, e),
             CompanyDatabaseException c => Company(context, c),
-            _ when Hasm.Api.Hosting.HasmExceptionMapping.IsInvalidCharacter(error) => (StatusCodes.Status400BadRequest, "invalid_request"),   // defence in depth: a character the database cannot store (22021) is the caller's data, not an outage
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };

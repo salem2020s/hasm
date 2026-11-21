@@ -35,7 +35,7 @@ const go = (page: Page, hash: string) => page.evaluate((h) => { window.location.
 const wire = (api: MockApi) => api.requests.map((r) => `${r.method} ${r.path}`);
 /**
  * Readiness without a timer: a screen is ready when the requests it makes are EXACTLY its documented set, all of them answered (nothing in flight). The poll returns the moment that holds, however slow the machine
- * is, and fails with a readable diff if a request is missing or an unexpected one appears (an extra request that arrives late lands in the NEXT screen's window and fails there). Sorted, because the reads a screen
+ * is, and fails with a readable diff if a request is missing or an unexpected one appears (an extra request that arrives late MAY land in the NEXT screen's window and fail there; after the LAST screen there is no next window, which the final check of the test covers). Sorted, because the reads a screen
  * starts concurrently have no defined order.
  */
 async function reads(api: MockApi, from: number, expected: readonly string[]) {
@@ -239,6 +239,11 @@ test("parity: the same scripted flow sends the same requests on both transports 
     await expect(page.getByRole("button", { name: E("jrn.new") })).toBeVisible();
     await reads(api, mark, JOURNAL_SCREEN);
     stages[mode].push(take());
+    // After the last screen is ready no further request may follow: the browser reports its network idle (an observable event, not a sleep), and the count and the in-flight number must not have moved.
+    const finished = api.requests.length;
+    await page.waitForLoadState("networkidle");
+    expect(api.requests.length, `a request arrived after the last screen was ready (${mode})`).toBe(finished);
+    expect(api.inflight).toBe(0);
     sequential[mode] = wire(api).filter((r) => SEQUENTIAL.includes(r));
     await context.close();
   }
