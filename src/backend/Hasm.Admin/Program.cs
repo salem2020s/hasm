@@ -34,6 +34,10 @@ using Npgsql;
 //   Hasm.Admin backup-run <root>  (Phase 4.3 slice 4: system database + every Ready company into <root>/<run id>/, run.json last; exit 0 ok, 8 partial, 1 failed, 4 another run in progress)
 //   Hasm.Admin backup-signing-keygen  (Phase 4.3 slice 5: a new ECDSA P-256 backup signing key in Hasm__Backup__SigningKeyDirectory, owner-only, never overwrites; audited 2013)
 //   Hasm.Admin backup-keys <destination-dir>  (Phase 4.3 slice 5: every key directory as ONE encrypted, signed export; signing PUBLIC keys only; audited 2012)
+//   Hasm.Admin backup-retention-plan <root> [--json <file>]  (Phase 4.3 slice 6: the D-086 retention preview with every run's keep reasons; reads the databases; deletes nothing; audited 2014)
+//   Hasm.Admin backup-retention-apply <root>  (Phase 4.3 slice 6: automatic deletion, INACTIVE (D-137): refuses with retention_deletion_inactive, audited 2017)
+//   Hasm.Admin backup-hold-place (--run <run-id> | --company <id> [--from <date>] [--to <date>]) --reason <text>  (a backup legal hold; never released by this tool; audited 2018)
+//   Hasm.Admin backup-hold-list
 //   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
@@ -50,6 +54,9 @@ var rotateCredential = false;
 var keepTrial = false;
 var maxAgeHours = 26;
 string? recoveryKeyFile = null, signingTrustFile = null, signingPublicKeyFile = null, keysExportDir = null;
+string? holdRun = null, holdReason = null, planJson = null;
+Guid? holdCompany = null;
+DateOnly? holdFrom = null, holdTo = null;
 var passphraseStdin = false;
 var keepLast = 0;
 int? keepDays = null;
@@ -78,6 +85,11 @@ var validUsage = command switch
     "backup-run" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-signing-keygen" => args.Length == 1,
     "backup-keys" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-retention-plan" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "")
+        && (args.Length == 2 || (args.Length == 4 && args[2] == "--json" && Path.IsPathFullyQualified(planJson = args[3]))),
+    "backup-retention-apply" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-hold-place" => ParseHoldFlags(),
+    "backup-hold-list" => args.Length == 1,
     "backup-status" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length == 2
         || (args.Length == 4 && args[2] == "--max-age-hours" && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out maxAgeHours) && maxAgeHours is >= 1 and <= 8760)),
     "backup-retention-preview" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length is 4 or 6) && args[2] == "--keep-last"
@@ -87,7 +99,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -134,6 +146,13 @@ if (command is "backup-status" or "backup-retention-preview")
     foreach (var (company, n) in status.MissedRuns) Console.WriteLine($"  [WARNING] company_missed_runs company={company} consecutive={n}");
     if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
     if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns} (a damaged or altered run.json; investigate before relying on the newest run)");
+    // slice 6 (D-136): a deletion that started and did not finish is never silent
+    var deleting = RetentionInventory.DeletingFolderCount(args[1]);
+    if (deleting > 0)
+    {
+        Console.WriteLine($"  [WARNING] retention_deletion_incomplete count={deleting} (the next backup-retention-apply completes it)");
+        if (status.ExitCode == 0) { Console.WriteLine("Backup status: retention_deletion_incomplete (exit 8)."); return 8; }
+    }
     return status.ExitCode;
 }
 
@@ -356,6 +375,11 @@ try
         case "backup-signing-keygen":
         case "backup-keys":
             return await BackupKeyCommandAsync(command!, args, options, configuration, auditOptions);
+        case "backup-retention-plan":
+        case "backup-retention-apply":
+        case "backup-hold-place":
+        case "backup-hold-list":
+            return await RetentionCommandAsync(command!, args, options, configuration, auditOptions, planJson, new BackupHoldRequest(holdRun, holdCompany, holdFrom, holdTo, holdReason));
         case "migrate-companies":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
@@ -635,6 +659,107 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
     }
 }
 
+// The options of backup-hold-place (slice 6): exactly one scope, an optional date range for a company, and a reason.
+bool ParseHoldFlags()
+{
+    for (var i = 1; i < args.Length; i++)
+    {
+        var value = i + 1 < args.Length ? args[i + 1] : null;
+        switch (args[i])
+        {
+            case "--run" when holdRun is null && value is not null && BackupRunFiles.IsRunId(value): holdRun = value; i++; break;
+            case "--company" when holdCompany is null && Guid.TryParse(value, out var g) && g != Guid.Empty: holdCompany = g; i++; break;
+            case "--from" when holdFrom is null && DateOnly.TryParseExact(value, "yyyy-MM-dd", out var f): holdFrom = f; i++; break;
+            case "--to" when holdTo is null && DateOnly.TryParseExact(value, "yyyy-MM-dd", out var t): holdTo = t; i++; break;
+            case "--reason" when holdReason is null && !string.IsNullOrWhiteSpace(value): holdReason = value; i++; break;
+            default: return false;
+        }
+    }
+    return (holdRun is null) != (holdCompany is null) && holdReason is not null && (holdCompany is not null || (holdFrom is null && holdTo is null));
+}
+
+// Phase 4.3 slice 6 retention commands (D-130..D-139). Interim mode: operating-system access (dated limitation); every command writes its audit event and fails closed when it cannot.
+static async Task<int> RetentionCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions, string? planJson, BackupHoldRequest hold)
+{
+    const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4;
+    var backupOptions = BackupOptions.FromConfiguration(configuration);
+    var retention = RetentionOptions.FromConfiguration(configuration);
+    var trail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
+    var systemConnection = options.BuildSystemConnectionString(admin: true);
+    var service = new RetentionService(options, retention);
+    try
+    {
+        switch (command)
+        {
+            case "backup-hold-place":
+            {
+                var id = await new BackupHoldStore(options, trail).PlaceAsync(hold.Run, hold.Company, hold.From, hold.To, hold.Reason!, BackupAudit.Operator());
+                Console.WriteLine($"Backup legal hold {id:D} placed ({(hold.Run is not null ? $"run {hold.Run}" : $"company {hold.Company:D}, runs started {hold.From?.ToString("yyyy-MM-dd") ?? "any time"} to {hold.To?.ToString("yyyy-MM-dd") ?? "any time"}")}). It takes effect at once.");
+                Console.WriteLine("It cannot be released by this tool until the Phase 4.1 named login and independent approval exist (D-134).");
+                return Ok;
+            }
+            case "backup-hold-list":
+            {
+                await using var conn = new Npgsql.NpgsqlConnection(systemConnection);
+                await conn.OpenAsync();
+                var holds = await BackupHoldStore.ListAsync(conn, CancellationToken.None);
+                foreach (var h in holds)
+                    Console.WriteLine($"  {h.Id:D} {(h.Released ? "released" : "ACTIVE")} {(h.Scope == 1 ? $"run {h.RunId}" : $"company {h.CompanyId:D} from {h.From?.ToString("yyyy-MM-dd") ?? "any"} to {h.To?.ToString("yyyy-MM-dd") ?? "any"}")}");
+                Console.WriteLine($"{holds.Count(h => !h.Released)} active backup legal hold(s).");
+                return Ok;
+            }
+            case "backup-retention-plan":
+            {
+                var (plan, inputs) = await service.PlanAsync(args[1], BackupMaterialLoader.ServerTrust(backupOptions));
+                foreach (var d in plan.Runs)
+                    Console.WriteLine(d.Eligible ? $"  {d.RunId} ELIGIBLE (automatic deletion is INACTIVE: nothing is deleted)" : $"  {d.RunId} keep: {string.Join(", ", d.Reasons)}");
+                var byReason = plan.Runs.SelectMany(d => d.Reasons).GroupBy(r => r).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}={g.Count()}").ToList();
+                Console.WriteLine($"Retention plan (D-086): {plan.Runs.Count} run(s), {plan.Eligible.Count()} eligible, plan {plan.PlanHash}; keep reasons: {string.Join(", ", byReason)}.");
+                Console.WriteLine($"Key inventory of the retained runs: {(plan.KeyInventoryComplete ? "complete" : "INCOMPLETE (backup_inventory_incomplete): no key may be retired")}; recovery key(s) still needed: {string.Join(", ", plan.RecoveryKeysNeeded)}.");
+                if (inputs.DeletingFolders.Count > 0) Console.WriteLine($"  [WARNING] retention_deletion_incomplete count={inputs.DeletingFolders.Count}");
+                if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RetentionEvaluated,
+                    $"backup retention evaluated operator={BackupAudit.Operator()} runs={plan.Runs.Count} eligible={plan.Eligible.Count()} plan={plan.PlanHash} inventory={(plan.KeyInventoryComplete ? "complete" : "incomplete")} reasons={string.Join(',', byReason)}"))
+                    return Failed;
+                if (planJson is not null)
+                {
+                    var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(plan, new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+                    AuditFilePermissions.CreateOwnerOnlyFile(planJson, json);
+                    Console.WriteLine($"Plan written to {planJson}.");
+                }
+                return Ok;
+            }
+            default: // backup-retention-apply
+            {
+                var r = await service.ApplyAsync(args[1], BackupMaterialLoader.ServerTrust(backupOptions), backupOptions, trail, BackupAudit.Operator());
+                foreach (var id in r.Deleted) Console.WriteLine($"  deleted {id}");
+                foreach (var (id, code) in r.Skipped) Console.WriteLine($"  [SKIPPED] {id} {code}");
+                return r.Skipped.Count > 0 ? 8 : Ok;
+            }
+        }
+    }
+    catch (BackupException ex)
+    {
+        Console.Error.WriteLine($"{command} stopped ({ex.Code}); nothing was deleted.");
+        return ex.Code switch
+        {
+            "retention_deletion_inactive" or "retention_below_minimum" or "retention_config_invalid" or "retention_time_zone_invalid" or "backup_encryption_not_configured"
+                or "unencrypted_ack_invalid" or "unencrypted_ack_with_recovery_key" or "restore_safeguards_missing" => BadConfig,
+            "run_in_progress" or "restore_in_progress" => InProgress,
+            _ => Failed,
+        };
+    }
+    catch (Exception ex) when (ex is AuditConfigurationException or AuditUnavailableException)
+    {
+        Console.Error.WriteLine($"{command} stopped: the system audit event could not be written; nothing was changed (D-139).");
+        return Failed;
+    }
+    catch (IOException)
+    {
+        Console.Error.WriteLine($"{command} stopped: a file could not be written (an existing file is never overwritten).");
+        return Failed;
+    }
+}
+
 // The restore options of trial-restore-company and backup-recovery-test (slice 5).
 bool ParseRestoreFlags(int from, bool allowKeep, bool allowKeysExport)
 {
@@ -729,3 +854,6 @@ static void PrintReport(AuditVerificationReport r)
 
 /// <summary>The restore options parsed from the command line (slice 5).</summary>
 sealed record RestoreArgs(string? RecoveryKeyFile, string? TrustFile, string? PublicKeyFile, string? KeysExport, bool PassphraseStdin);
+
+/// <summary>The options of backup-hold-place (slice 6).</summary>
+sealed record BackupHoldRequest(string? Run, Guid? Company, DateOnly? From, DateOnly? To, string? Reason);
