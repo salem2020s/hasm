@@ -729,6 +729,7 @@ Builds on slices 4 and 5 (encrypted, signed runs; PR #128). Decision ids D-130..
     * Ids are IANA ids resolved by .NET `TimeZoneInfo`.
     * **The server's local time zone is never used** (pinned by a test).
     * An unknown or unresolvable id makes the classification of that part `classification_unknown`, and the run is kept.
+    * Review L1 of #130: a company time zone that is not configured, as well as an unknown or unresolvable one, gives `classification_unknown` and the run is kept.
   * **Boundaries:**
     * A local date turns into an instant at local 00:00 of the following day.
     * A local time skipped by a daylight-saving change becomes the first valid instant after it.
@@ -853,9 +854,12 @@ Three independent layers. Any one of them alone keeps deletion off.
 3. **Explicit opt-in per installation.** `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups` (exact value; anything else is a configuration error). Absent means preview only.
    * A unit test pins that no repository configuration or installer template sets it, as for D-095.
 
+**Where the gate is checked (review M1 of #130).** The code gate (1) and the opt-in (3) are checked inside the deletion executor itself, in the lowest-level routine that renames or deletes a run folder, not only in the command. The internal test seam is the only path that can supply a test-only override, it is reachable only from the test assemblies, and a unit test asserts that every non-test entry point refuses while the gate is off.
+
 **What is tested while inactive:**
 * `backup-retention-apply` refuses, writes 2017 and deletes nothing.
 * The executor's validation and deletion steps are tested through an internal test seam, on disposable roots only. The seam is `internal`, visible only to the test assemblies; the command line has no path to it.
+* A unit test calls every non-test entry point that reaches the executor (the command handler and the public service method) and asserts that each refuses while the gate is off, and that the executor's own rename and delete routine refuses without the seam's override.
 
 Alternative rejected: not building the executor until activation. The activation PR would then introduce untested irreversible code at the last moment. Building it now, gated, lets review and tests cover it twice.
 
@@ -863,11 +867,12 @@ Alternative rejected: not building the executor until activation. The activation
 * **Key inventory in the signed status.**
   * `run.status.json` version 2 adds, per company, the attachment master-key ids its set needs (`keyIdsRequired`, today only inside the encrypted manifest). At run level it adds the audit key ids of the system and company streams and of every business stream in the run (read as key ids only).
   * These are key ids, not secrets, and the server can read them unattended without the recovery private key. Version 1 statuses (slice 5) stay readable; their key needs are `unknown`.
+  * **Review M2 of #130:** A retained run's key needs are `unknown` when its status is version 1, does not verify (`status_unverifiable`), is missing or unreadable, or the run is incomplete; any `unknown` run makes the report false (`backup_inventory_incomplete`).
 * **Key-retirement report** (consumed by the key-management phase and by Phase R4; retirement itself needs independent approval under D-080(6) and is not built here):
   * An attachment master key or audit key is retirable only when:
     * no live row needs it (the existing `oldKeysMayBeRetired` rule; for attachments, the D-114/R rule that a purged row still counts until R4);
     * AND no RETAINED run lists it;
-    * AND no retained run has `unknown` key needs (`backup_inventory_incomplete` makes the answer false: fail closed).
+    * AND no retained run has `unknown` key needs (version 1, unverifiable, missing or unreadable status, or an incomplete run; `backup_inventory_incomplete` makes the answer false: fail closed).
   * Runs that are held, pinned, month-end or year-end are retained, so their keys stay needed for as long as they are kept. **Keys follow the backups, never the reverse.**
 * **Recovery keys (`rk-`):** the report lists, per recovery key id, the retained runs encrypted to it. An old recovery private key may be destroyed only when no retained run and no retained key export is encrypted to it (`recovery_key_still_needed`). The operator's kit procedure in `docs/DEVELOPMENT.md` is extended accordingly.
 * **Signing keys (`sk-`):** retiring a signing key (kit status `retired` with a date) does not affect retained runs signed before that date, and deletion needs no private signing key. A COMPROMISED key's runs fail verification on a server whose key directory no longer trusts it. They are `status_unverifiable`: kept, never counted, and reported for the operator.
@@ -901,7 +906,7 @@ Alternative rejected: not building the executor until activation. The activation
   * Time zones:
     * instant-to-local-date conversion and boundary construction, including a zone with a daylight-saving change at midnight (skipped and repeated local midnight);
     * a pin that `TimeZoneInfo.Local` is never used;
-    * an unknown zone gives `classification_unknown`, and the run is kept.
+    * an unknown zone, and a company whose time zone is not configured, give `classification_unknown`, and the run is kept (L1).
   * Fiscal calendar:
     * monthly periods, a non-calendar fiscal year, 13 periods and 4-4-5 periods;
     * the last-before and first-after rule at every boundary, a run spanning a boundary, calendar month-ends added;
@@ -929,7 +934,8 @@ Alternative rejected: not building the executor until activation. The activation
   * The gate:
     * `AutomaticDeletionActivated == false` pinned;
     * the opt-in variable absent from every repository configuration;
-    * apply refuses with 2017 and nothing deleted.
+    * apply refuses with 2017 and nothing deleted;
+    * every non-test entry point refuses while the gate is off, and the executor's own rename/delete routine refuses without the seam's override (M1).
   * Executor (internal seam, temporary roots):
     * audit-first ordering (an audit failure deletes nothing);
     * tombstone written and verifiable;
@@ -937,8 +943,8 @@ Alternative rejected: not building the executor until activation. The activation
     * resume of a `.deleting-*` folder;
     * `backup-status` reports an incomplete deletion.
   * Key inventory:
-    * a version 2 status carries the ids, version 1 gives `unknown`;
-    * the report is false with `backup_inventory_incomplete`;
+    * a version 2 status carries the ids; version 1, an unverifiable status, a missing or unreadable status and an incomplete run each give `unknown` (M2);
+    * any `unknown` run makes the report false with `backup_inventory_incomplete`;
     * a key needed only by a held month-end run is not retirable.
 * **PostgreSQL** (new class, about 7 tests; the registry is raised at push time and the lead is told the count):
   * a preview over real runs with companies whose fiscal calendars and time zones differ, and the classes asserted;
