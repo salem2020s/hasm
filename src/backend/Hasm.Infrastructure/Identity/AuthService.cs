@@ -16,7 +16,6 @@ public abstract record LoginOutcome
     public sealed record MfaRecoveryRequired : LoginOutcome;
 }
 
-/// <summary>The second-factor services the login uses. When absent (no encryption key ring configured, or a test that does not use MFA) the login behaves exactly as before and issues sessions after the password.</summary>
 /// <summary>Result of a step-up (Phase 4.1 S3a). NotApplicable: the user's MFA state is None, so MFA is not required of them (pass-through, D-161). Refused covers a wrong, replayed or malformed code, a missing secret and a missing key: one answer for every cause.</summary>
 public abstract record StepUpOutcome
 {
@@ -26,6 +25,7 @@ public abstract record StepUpOutcome
     public sealed record NotApplicable : StepUpOutcome;
 }
 
+/// <summary>The second-factor services the login uses. When absent (no encryption key ring configured, or a test that does not use MFA) the login behaves exactly as before and issues sessions after the password.</summary>
 public sealed record MfaLoginServices(MfaChallengeStore Challenges, MfaVerifier Verifier, MfaStore State, IMfaAttemptLimiter Limiter);
 
 /// <summary>The answers of the enrolment steps. Every refusal is the same <see cref="Refused"/> (no oracle).</summary>

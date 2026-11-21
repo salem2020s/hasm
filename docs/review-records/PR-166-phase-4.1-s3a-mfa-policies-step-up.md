@@ -22,6 +22,12 @@
   * **L2 (Low, follow-up):** no test shows that a step-up on one session leaves another session of the same user stale (the update is keyed by session id, so the property holds today).
   * **L3 (Low):** in `AuthService.cs` the new `StepUpOutcome` record was inserted between the existing `/// <summary>` of `MfaLoginServices` and its declaration, so that summary now sits above `StepUpOutcome` next to its own summary; move the record.
   * **L4 (Low, scope):** S3a enforces only the access and user administration groups; the plan's S3 row ("all privileged endpoint groups": company administration, approvals, backup/restore) stays open and the endpoint-table classifier covers only `/api/v1/admin`; S3 must not be marked complete until those groups are classified.
+* **Resolutions (author; for the reviewer's delta confirmation c44e71c..head):**
+  * **L1 fixed:** `MfaStepUpTests.A_code_accepted_at_login_cannot_be_reused_for_a_step_up` (the login code is refused for a step-up, audited 1337; the next step's code succeeds).
+  * **L2 fixed:** `MfaStepUpTests.A_step_up_on_one_session_leaves_another_session_of_the_same_user_stale` (two sessions of one user; step-up on A; B's stored proof unchanged and B still not fresh). Mutation: the step-up UPDATE widened from the session id to the user (`WHERE id = @s OR user_id = @u ...`) made this test fail; reverted, tree clean.
+  * **L3 fixed:** `AuthService.cs`: the `MfaLoginServices` summary sits again directly above its own declaration; `StepUpOutcome` keeps its own summary.
+  * **L4 fixed (documented):** `docs/PHASE-4.1.md` S3a notes and the PR body state that S3 is NOT complete; company administration, approvals and backup/restore groups, the requirement model, company-selection step-up and the remaining UI are open for S3b.
+  * Registry: `MfaStepUpTests` 5 -> 7, total 1229 -> 1231, per-class sum consistent; isolated `MfaStepUp*` 10/10; unit 1344/1344.
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** hosted CI on 5b3f1e3 was not checked by the reviewer; no Tauri build was run (the change is in the shared frontend only); the registry total is re-set in the merge queue.
 * **Verdict:** approve

@@ -85,6 +85,40 @@ public class MfaStepUpTests : IdentityTestBase
     }
 
     [PostgresFact]
+    public async Task A_code_accepted_at_login_cannot_be_reused_for_a_step_up()
+    {
+        await Setup();
+        var (session, secret, _) = await SignedIn("alice");                                              // login consumed the code of the current step
+        Assert.IsType<StepUpOutcome.Refused>(await MfaAuth.StepUpAsync(session, Code(secret), "10.0.0.1"));
+        Assert.Equal(1L, await Events(MfaAuditEvents.StepUpFailed));
+        Assert.Equal(0L, await Events(MfaAuditEvents.StepUpSucceeded));
+        Clock.Advance(TimeSpan.FromSeconds(Totp.StepSeconds));                                             // the next step is a new code
+        Assert.IsType<StepUpOutcome.Verified>(await MfaAuth.StepUpAsync(session, Code(secret), "10.0.0.1"));
+    }
+
+    [PostgresFact]
+    public async Task A_step_up_on_one_session_leaves_another_session_of_the_same_user_stale()
+    {
+        await Setup();
+        var (a, secret, tokenA) = await SignedIn("alice");
+        Clock.Advance(TimeSpan.FromSeconds(Totp.StepSeconds));                                             // a new step, so the second login's code is not a replay
+        var challenge = Assert.IsType<LoginOutcome.MfaRequired>(await MfaAuth.LoginAsync("alice", Pw, SessionClient.Desktop, "10.0.0.2"));
+        var okB = Assert.IsType<LoginOutcome.Success>(await MfaAuth.CompleteMfaLoginAsync(challenge.Challenge, Code(secret), SessionClient.Desktop, "10.0.0.2"));
+        var bBefore = await ProofOf(okB.SessionId);
+
+        Clock.Advance(AuthSettings.MfaFreshness + TimeSpan.FromMinutes(2));                                // both proofs are now older than the window
+        var staleA = (await MfaAuth.AuthenticateAsync(tokenA))!;
+        Assert.IsType<StepUpOutcome.Verified>(await MfaAuth.StepUpAsync(staleA, Code(secret), "10.0.0.1"));
+
+        var freshA = (await MfaAuth.AuthenticateAsync(tokenA))!;
+        var staleB = (await MfaAuth.AuthenticateAsync(okB.Token))!;
+        Assert.Equal(MfaRequirementOutcome.Satisfied, MfaFreshness.RequireFresh(freshA.MfaState, freshA.MfaVerifiedAtUtc, Clock.GetUtcNow(), AuthSettings.MfaFreshness));
+        Assert.Equal(MfaRequirementOutcome.StepUpRequired, MfaFreshness.RequireFresh(staleB.MfaState, staleB.MfaVerifiedAtUtc, Clock.GetUtcNow(), AuthSettings.MfaFreshness));
+        Assert.Equal(bBefore, await ProofOf(okB.SessionId));                                               // B's stored proof did not move
+        Assert.NotEqual(a.SessionId, okB.SessionId);
+    }
+
+    [PostgresFact]
     public async Task Repeated_wrong_codes_are_throttled_by_the_shared_mfa_limiter()
     {
         await Setup();
