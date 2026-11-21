@@ -25,7 +25,7 @@ Checked without defect: CSRF (custom header, SameSite=Strict, JSON + If-Match on
 
 ## Second independent review - full diff against main after the integration of #53/#54/#56 (2026-11-20, head 70fbe87)
 
-Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context); code reading only, it did not run the PostgreSQL suite. **Verdict: no Critical, no High.** Verified without defect: company isolation (company only from the session), generated storage names and company directory, download authorization and headers, magic-byte allow-list (no HTML/SVG), sanitized names, size limits and CSRF, removal concurrency, migration 0024/0026 (additive, no delete/truncate, runtime SELECT/INSERT/UPDATE only, contiguous after 0023/0025), registry raise-only (989 -> 1003).
+Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context); code reading only, it did not run the PostgreSQL suite. **Verdict: no Critical, no High.** Verified without defect: company isolation (company only from the session), generated storage names and company directory, download authorization and headers, magic-byte allow-list (no HTML/SVG), sanitized names, size limits and CSRF, removal concurrency, migration 0024/0026 (additive, no delete/truncate, runtime SELECT/INSERT/UPDATE only, contiguous after 0023/0025), registry raise-only (989 -> 1003).
 
 | # | Sev | Finding | Disposition |
 |---|-----|---------|-------------|

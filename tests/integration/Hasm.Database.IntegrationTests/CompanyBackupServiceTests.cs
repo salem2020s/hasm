@@ -222,7 +222,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         await Service().BackupCompanyAsync(c.Id, set);
         var system = await Digest(SystemConnection);
 
-        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false);
+        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false, allowUnencrypted: true);
 
         Assert.Equal(TrialRestoreVerdict.Ok, r.Verdict);
         Assert.Empty(r.Failures); Assert.Empty(r.Warnings);
@@ -243,8 +243,8 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var set = Path.Combine(work, "set");
         await Service().BackupCompanyAsync(c.Id, set);
         var att = Path.Combine(work, "trial-att");
-        Assert.Equal("company_mismatch", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, other.Id, att, false))).Code);
-        Assert.Equal("target_in_live_storage", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, Path.Combine(Storage, "x"), false))).Code);
+        Assert.Equal("company_mismatch", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, other.Id, att, false, allowUnencrypted: true))).Code);
+        Assert.Equal("target_in_live_storage", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, Path.Combine(Storage, "x"), false, allowUnencrypted: true))).Code);
 
         // a set of a company this installation does not know (its registry row is gone in a copy of the set with another id)
         var foreign = Path.Combine(work, "foreign");
@@ -252,7 +252,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var manifestPath = Path.Combine(foreign, BackupSet.ManifestFileName);
         var unknown = Guid.NewGuid();
         File.WriteAllText(manifestPath, File.ReadAllText(manifestPath).Replace(other.Id.ToString(), unknown.ToString()));
-        Assert.Equal("company_not_found", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(foreign, unknown, att, false))).Code);
+        Assert.Equal("company_not_found", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(foreign, unknown, att, false, allowUnencrypted: true))).Code);
 
         // the manifest locale edited to another VALID libc locale while the source exists
         manifestPath = Path.Combine(set, BackupSet.ManifestFileName);
@@ -260,7 +260,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var edited = System.Text.RegularExpressions.Regex.Replace(json, "\"collate\":\\s*\"[^\"]*\"", "\"collate\": \"POSIX\"");
         Assert.NotEqual(json, edited);
         File.WriteAllText(manifestPath, edited);
-        Assert.Equal("locale_mismatch", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, att, false))).Code);
+        Assert.Equal("locale_mismatch", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, att, false, allowUnencrypted: true))).Code);
 
         Assert.Equal(0, trialNames);                                                                                // no trial database was ever named, so none was created
         Assert.False(Directory.Exists(att));
@@ -277,7 +277,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         await Service().BackupCompanyAsync(c.Id, set);
         await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE {c.PhysicalDatabaseName} WITH (FORCE)");
 
-        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: true);
+        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: true, allowUnencrypted: true);
 
         Assert.Equal(TrialRestoreVerdict.Ok, r.Verdict);
         var kept = CompanyBackupService.ReadKeptFile(r.KeptFile!)!;
@@ -301,7 +301,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         await Service().BackupCompanyAsync(c.Id, set);
         var system = await Digest(SystemConnection);
 
-        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false);
+        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false, allowUnencrypted: true);
 
         Assert.Equal(TrialRestoreVerdict.Failed, r.Verdict);
         Assert.Equal("shared_links_unresolved=2", Codes(r.Failures));
@@ -324,7 +324,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var backup = await Service().BackupCompanyAsync(c.Id, set);
         Assert.Equal(new[] { "k9" }, backup.MissingKeyIds);
 
-        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false);
+        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: false, allowUnencrypted: true);
 
         Assert.Equal(TrialRestoreVerdict.Failed, r.Verdict);
         Assert.Equal("attachment_file_missing=1,attachment_hash_mismatch=1", Codes(r.Failures));
@@ -341,20 +341,20 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var manifestPath = Path.Combine(set, BackupSet.ManifestFileName);
         var json = File.ReadAllText(manifestPath);
         File.WriteAllText(manifestPath, System.Text.RegularExpressions.Regex.Replace(json, "\"companyMigrationVersion\":\\s*\\d+", "\"companyMigrationVersion\": 9999"));
-        Assert.Equal("set_newer_than_installation", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "t1"), false))).Code);
+        Assert.Equal("set_newer_than_installation", (await Assert.ThrowsAsync<BackupException>(() => Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "t1"), false, allowUnencrypted: true))).Code);
         Assert.Equal(0, trialNames);
 
         // a source whose journal records another checksum for version 1 (a diverged build)
         await Exec(Db(c.PhysicalDatabaseName), $"UPDATE {SystemSchema.MigrationJournalTable} SET checksum = repeat('0', 64) WHERE version = 1");
         var diverged = Path.Combine(work, "diverged");
         await Service().BackupCompanyAsync(c.Id, diverged);
-        var r = await Service().TrialRestoreAsync(diverged, c.Id, Path.Combine(work, "t2"), false);
+        var r = await Service().TrialRestoreAsync(diverged, c.Id, Path.Combine(work, "t2"), false, allowUnencrypted: true);
         Assert.Equal(TrialRestoreVerdict.Failed, r.Verdict);
         Assert.Equal("migration_checksum_mismatch=1", Codes(r.Failures));
 
         // this installation one script behind the set: refused up front as well
         var older = MigrationScript.LoadEmbeddedCompany().Where(s => s.Version < MigrationScript.LoadEmbeddedCompany().Max(x => x.Version)).ToList();
-        Assert.Equal("set_newer_than_installation", (await Assert.ThrowsAsync<BackupException>(() => Service(scripts: older).TrialRestoreAsync(diverged, c.Id, Path.Combine(work, "t3"), false))).Code);
+        Assert.Equal("set_newer_than_installation", (await Assert.ThrowsAsync<BackupException>(() => Service(scripts: older).TrialRestoreAsync(diverged, c.Id, Path.Combine(work, "t3"), false, allowUnencrypted: true))).Code);
     }
 
     [PostgresFact]
@@ -364,7 +364,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var c = await NewCompany();
         var set = Path.Combine(work, "set");
         await Service().BackupCompanyAsync(c.Id, set);
-        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: true);
+        var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: true, allowUnencrypted: true);
         var keptPath = r.KeptFile!;
         Assert.StartsWith(set + ".trial-", keptPath);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, OperatingSystem.IsWindows() ? UnixFileMode.UserRead | UnixFileMode.UserWrite : File.GetUnixFileMode(keptPath));
@@ -391,7 +391,11 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var env = new Dictionary<string, string?>
         {
             ["Hasm__Attachments__StorageDirectory"] = Storage, ["Hasm__Encryption__KeyDirectory"] = Keys, ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+            ["Hasm__Backup__UnencryptedDevTestOnly"] = BackupOptions.UnencryptedAcknowledgement,   // slice 5, D-095: these suites run unencrypted DEV/TEST sets
+            // slice 5, D-118: a trial restore writes a system-stream audit event
+            ["Hasm__Audit__KeyDirectory"] = Path.Combine(work, "audit-keys"), ["Hasm__Audit__ActiveKeyId"] = "a1", ["Hasm__Audit__CheckpointDirectory"] = Path.Combine(work, "checkpoints"),
         };
+        Hasm.Infrastructure.Audit.FileAuditKeyRing.Generate(Path.Combine(work, "audit-keys"), "a1");
         var set = Path.Combine(work, "set");
         var outputs = new List<string>();
         string? keptDatabase = null;
@@ -410,6 +414,9 @@ public class CompanyBackupServiceTests : PostgresTestBase
             var drop = await AdminTool.RunWith(Options, env, "drop-trial-restore", keptFile); outputs.Add(drop.All);
             Assert.True(drop.Exit == 0, drop.All);
             Assert.False(await Exists(keptDatabase));
+            // D-118: one system-stream event per trial restore, with a database TAG, never the name
+            Assert.Equal(2L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {SystemSchema.AuditEvent.Table} WHERE {SystemSchema.AuditEvent.EventType} = {BackupAuditEvents.TrialRestore}"));
+            Assert.Equal(0L, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {SystemSchema.AuditEvent.Table} WHERE {SystemSchema.AuditEvent.Detail} LIKE '%{keptDatabase}%'"));
 
             Assert.Equal(2, (await AdminTool.RunWith(Options, env, "backup-company", "not-a-guid", set)).Exit);
             Assert.Equal(2, (await AdminTool.RunWith(Options, env, "trial-restore-company", "relative", c.Id.ToString(), Path.Combine(work, "t3"))).Exit);

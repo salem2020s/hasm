@@ -1,6 +1,6 @@
 # Independent review - PR #68, Phase 3.11 slice 2b (pricing persistence)
 
-* Reviewed: the full diff against `origin/main` at head `cecc4d9`. Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; it ran the generator `--check`, it did not run the PostgreSQL suite). **No Critical, no High; two Medium, four Low.**
+* Reviewed: the full diff against `origin/main` at head `cecc4d9`. Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context; it ran the generator `--check`, it did not run the PostgreSQL suite). **No Critical, no High; two Medium, four Low.**
 * Verified: policy versions append-only with max+1 and a unique-index serialization of concurrent inserts; immutability and revision triggers; DELETE/TRUNCATE refused and runtime privileges SELECT/INSERT/UPDATE only; partial unique indexes handle the NULL item/group tier columns; ranges match the engine's bounds and the service pre-validates them; error mapping; audit detail contains codes, ids and prices only; quote in one repeatable-read transaction over active data, override needing `company.pricing.override`; permissions company-wide; system numbering contiguous; generator deterministic with collision checks, `--check` in CI and a derivation unit test; registry only raised (1016 -> 1022).
 
 | # | Sev | Finding | Disposition |

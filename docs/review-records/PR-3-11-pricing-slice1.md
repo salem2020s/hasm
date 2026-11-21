@@ -21,7 +21,7 @@ Tests added: 5 (`PricingReviewTests`: golden hash and culture, snapshot tamper m
 
 ## Re-review - full diff against main (2026-11-20, head 57e4206)
 
-Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; it ran nothing and could not compare against SRS 8.1-8.4 because the SRS is not in the worktree). **No Critical, no High; two Medium, seven Low.** Confirmed: no floating point, clock or culture; exact decimal and BigInteger arithmetic with a single rounding and overflow refusal; margin control never silently skipped (missing cost under Block/RequireApproval refuses; an override cannot bypass the margin); the snapshot hash covers explicit canonical fields and `Verify` recalculates; zero/negative quantity and empty lists are refused; 17 unit tests.
+Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context; it ran nothing and could not compare against SRS 8.1-8.4 because the SRS is not in the worktree). **No Critical, no High; two Medium, seven Low.** Confirmed: no floating point, clock or culture; exact decimal and BigInteger arithmetic with a single rounding and overflow refusal; margin control never silently skipped (missing cost under Block/RequireApproval refuses; an override cannot bypass the margin); the snapshot hash covers explicit canonical fields and `Verify` recalculates; zero/negative quantity and empty lists are refused; 17 unit tests.
 
 | # | Sev | Finding | Disposition |
 |---|-----|---------|-------------|

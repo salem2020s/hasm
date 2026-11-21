@@ -112,7 +112,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal(1, report.Skipped);
         Assert.False(report.Encrypted);
         Assert.Null(report.Warnings);                                                                            // the run lock was confirmed before the verdict
-        Assert.Equal(new[] { "session", "login_throttle" }, report.Excluded);
+        Assert.Equal(new[] { "session", "login_throttle", "user_totp" }, report.Excluded);
         Assert.Equal(new[] { a.Id, b.Id }.OrderBy(x => x), report.Companies.Select(c => c.CompanyId).OrderBy(x => x));
         Assert.All(report.Companies, c => { Assert.Equal("ok", c.Outcome); Assert.True(c.DumpBytes > 0); Assert.True(c.FinishedUtc >= c.StartedUtc); });
         Assert.True(report.Companies.All(c => c.StartedUtc >= report.System.FinishedUtc));                     // the system database is dumped first
@@ -187,14 +187,14 @@ public class BackupRunTests : PostgresTestBase
         var dir = Path.Combine(runDir, BackupRunFiles.SystemFolder);
         var dump = Path.Combine(dir, BackupSet.DatabaseFileName);
         var toc = await TableOfContents(dump);
-        foreach (var t in new[] { SystemSchema.Session.Table, SystemSchema.LoginThrottle.Table })
+        foreach (var t in new[] { SystemSchema.Session.Table, SystemSchema.LoginThrottle.Table, SystemSchema.UserTotp.Table })
         {
             Assert.Contains($"TABLE public {t} ", toc);
             Assert.DoesNotContain($"TABLE DATA public {t} ", toc);
         }
         Assert.Contains($"TABLE DATA public {SystemSchema.Company.Table} ", toc);                                   // other tables keep their data
         var manifest = SystemBackupSet.ReadManifest(dir)!;
-        Assert.Equal(new[] { "session", "login_throttle" }, manifest.Excluded);
+        Assert.Equal(new[] { "session", "login_throttle", "user_totp" }, manifest.Excluded);
         Assert.Equal(MigrationScript.LoadEmbedded().Max(s => s.Version), manifest.SystemMigrationVersion);
         Assert.True(SystemBackupSet.Verify(dir));
         var bytes = File.ReadAllBytes(dump); bytes[^20] ^= 0xFF; File.WriteAllBytes(dump, bytes);
@@ -208,7 +208,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal((1, "backup_missing"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));
         var a = await NewCompany();
         await Service().RunAsync(Root);
-        Assert.Equal((0, "ok"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));
+        Assert.Equal((8, "unencrypted_dev_test"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow, BackupRunStatus.DefaultMaxAge)));   // slice 5, D-095: an unencrypted run is never green
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow.AddHours(30), BackupRunStatus.DefaultMaxAge)));
 
         var b = await NewCompany();
@@ -239,6 +239,7 @@ public class BackupRunTests : PostgresTestBase
         var env = new Dictionary<string, string?>
         {
             ["Hasm__Attachments__StorageDirectory"] = Storage, ["Hasm__Encryption__KeyDirectory"] = Keys, ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+            ["Hasm__Backup__UnencryptedDevTestOnly"] = BackupOptions.UnencryptedAcknowledgement,   // slice 5, D-095: these suites run unencrypted DEV/TEST sets
         };
         var outputs = new List<string>();
         var run1 = await AdminTool.RunWith(Options, env, "backup-run", Root); outputs.Add(run1.All);
@@ -247,9 +248,9 @@ public class BackupRunTests : PostgresTestBase
         var run2 = await AdminTool.RunWith(Options, env, "backup-run", Root); outputs.Add(run2.All);
         Assert.True(run2.Exit == 0, run2.All);
         var status = await AdminTool.RunWith(Options, env, "backup-status", Root); outputs.Add(status.All);
-        Assert.True(status.Exit == 0, status.All);
+        Assert.True(status.Exit == 8, status.All);                                                                 // slice 5, D-095: unencrypted DEV/TEST runs give exit 8
         var withAge = await AdminTool.RunWith(Options, env, "backup-status", Root, "--max-age-hours", "1"); outputs.Add(withAge.All);
-        Assert.True(withAge.Exit == 0, withAge.All);
+        Assert.True(withAge.Exit == 8, withAge.All);
         var runs = Directory.GetDirectories(Root).OrderBy(d => d, StringComparer.Ordinal).ToArray();
         Assert.Equal(2, runs.Length);
         var preview = await AdminTool.RunWith(Options, env, "backup-retention-preview", Root, "--keep-last", "1"); outputs.Add(preview.All);
