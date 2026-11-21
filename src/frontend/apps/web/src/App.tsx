@@ -9,6 +9,7 @@ import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
 import { StepUpHost, createStepUpBridge, type StepUpBridge } from "./stepUp";
+import { SecurityPage } from "./pages/Security";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
 import { ImportsPage } from "./pages/Imports";
@@ -71,6 +72,7 @@ const DevPreviews = import.meta.env.DEV ? {
 
 const ROUTES: RouteDef[] = [
   { path: "/", element: <HomePage /> },
+  { path: "/account/security", element: <SecurityPage /> },                      // the user's OWN security settings: every signed-in user, no company permission
   // Both paths render the same element type in the same place, so switching tabs keeps the page (and unsaved edits) mounted.
   { path: "/company/details", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
   { path: "/company/details/general", anyOf: ["company.profile.view", "company.settings.view"], element: <CompanyDetailsPage /> },
@@ -219,6 +221,7 @@ function Shell() {
           {auth.companyName && <span className="company-name" data-testid="company-name"><bdi>{auth.companyName}</bdi></span>}
           <button type="button" className="ghost" onClick={() => guard(() => void auth.changeCompany())}>{t("nav.change_company")}</button>
           <span className="user-name">{auth.user?.displayName}</span>
+          <button type="button" className="ghost" data-testid="nav-security" aria-current={route === "/account/security" ? "page" : undefined} onClick={() => navigate("/account/security")}>{t("nav.security")}</button>
           <LanguageSwitcher />
           <button type="button" className="ghost" onClick={() => guard(() => void auth.logout())}>{t("nav.logout")}</button>
         </div>

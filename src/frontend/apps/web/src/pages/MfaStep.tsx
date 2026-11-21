@@ -3,6 +3,7 @@ import { useI18n } from "@hasm/ui";
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Field } from "../components";
+import { EnrolmentSecretBlock } from "../mfaParts";
 
 /**
  * The steps between a correct password and a session (Phase 4.1): the second factor, the enrolment of a required authenticator, and the recovery notice.
@@ -91,12 +92,7 @@ function EnrolmentSteps() {
       ) : (
         <>
           <p className="page-description auth-sub">{t("mfa.enrol.secret_intro")}</p>
-          <dl className="kv">
-            <dt>{t("mfa.enrol.secret")}</dt>
-            <dd><code data-testid="mfa-secret" dir="ltr">{secret.secret}</code></dd>
-            <dt>{t("mfa.enrol.uri")}</dt>
-            <dd><a href={secret.otpauthUri} data-testid="mfa-uri" dir="ltr">{secret.otpauthUri}</a></dd>
-          </dl>
+          <EnrolmentSecretBlock secret={secret} />
           <p className="page-description">{t("mfa.enrol.confirm_intro")}</p>
           {confirm.error && <Banner kind="error">{confirm.error}</Banner>}
           <form onSubmit={confirm.submit} noValidate>
