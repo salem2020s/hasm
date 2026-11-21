@@ -1,33 +1,21 @@
+using Hasm.Infrastructure.CompanyConfiguration;
+
 namespace Hasm.Infrastructure.Parties;
 
 /// <summary>One page of party roles with the number of rows that match the filter (before paging).</summary>
 public sealed record PartyRolePage(IReadOnlyList<PartyRoleView> Items, long Total);
 
-/// <summary>
-/// The optional search and paging of the party-role list (backward compatible: a list without these parameters is unchanged). Pure helpers, unit tested:
-/// the search text is trimmed and bounded, matched case-insensitively against the party code and name as a literal substring (the LIKE wildcards are escaped),
-/// and the page size is clamped.
-/// </summary>
+/// <summary>The party-role list's names for the shared <see cref="ListPaging"/> rules (kept so existing callers and tests keep their names).</summary>
 public static class PartyRoleSearch
 {
-    public const int DefaultLimit = 50;
-    public const int MaxLimit = 500;
-    public const int MaxSearchLength = 100;
+    public const int DefaultLimit = ListPaging.DefaultLimit;
+    public const int MaxLimit = ListPaging.MaxLimit;
+    public const int MaxSearchLength = ListPaging.MaxSearchLength;
+    public const int MaxIds = ListPaging.MaxIds;
 
-    /// <summary>Trimmed search text, or null when empty. Longer than <see cref="MaxSearchLength"/> is invalid (the caller answers 400).</summary>
-    public static bool TryCleanSearch(string? search, out string? cleaned)
-    {
-        cleaned = null;
-        var t = search?.Trim();
-        if (string.IsNullOrEmpty(t)) return true;
-        if (t.Length > MaxSearchLength || t.Any(char.IsControl)) return false;
-        cleaned = t;
-        return true;
-    }
-
-    /// <summary>The LIKE pattern of a literal, case-insensitive substring match (use with <c>upper(column) LIKE pattern</c>).</summary>
-    public static string LikePattern(string cleaned) => "%" + cleaned.ToUpperInvariant().Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
-
-    public static int ClampLimit(int? limit) => Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
-    public static int ClampOffset(int? offset) => Math.Max(0, offset ?? 0);
+    public static bool TryCleanSearch(string? search, out string? cleaned) => ListPaging.TryCleanSearch(search, out cleaned);
+    /// <summary>The literal LIKE pattern; the case is folded by PostgreSQL on both sides (<see cref="ListPaging.LikeClause"/>).</summary>
+    public static string LikePattern(string cleaned) => ListPaging.LikePattern(cleaned);
+    public static int ClampLimit(int? limit) => ListPaging.ClampLimit(limit);
+    public static int ClampOffset(int? offset) => ListPaging.ClampOffset(offset);
 }

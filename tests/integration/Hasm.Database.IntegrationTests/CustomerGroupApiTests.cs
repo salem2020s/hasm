@@ -14,6 +14,33 @@ public class CustomerGroupApiTests : HttpApiTestBase
     private const string Base = "/api/v1/company/pricing";
 
     [PostgresFact]
+    public async Task The_customer_group_list_is_unchanged_without_parameters_and_pages_and_searches_with_them_under_the_pricing_view_permission()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        foreach (var code in new[] { "a", "b", "c" })
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Base}/customer-groups", new { code, nameAr = "مجموعة " + code, nameEn = "Group " + code }, cookie)).Status);
+        var all = await Send(HttpMethod.Get, $"{Base}/customer-groups", cookie: cookie);
+        Assert.Equal(3, all.Json.GetProperty("customerGroups").GetArrayLength());
+        Assert.False(all.Json.TryGetProperty("total", out _));                      // today's shape
+        var page = await Send(HttpMethod.Get, $"{Base}/customer-groups?limit=2&offset=1", cookie: cookie);
+        Assert.Equal(3L, page.Json.GetProperty("total").GetInt64());
+        Assert.Equal(["B", "C"], page.Json.GetProperty("customerGroups").EnumerateArray().Select(g => g.GetProperty("code").GetString()).ToArray());
+        Assert.True(page.Json.GetProperty("can").GetProperty("configure").GetBoolean());
+        Assert.Equal(1L, (await Send(HttpMethod.Get, $"{Base}/customer-groups?search=group%20c", cookie: cookie)).Json.GetProperty("total").GetInt64());
+        Assert.Equal(3L, (await Send(HttpMethod.Get, $"{Base}/customer-groups?limit=1000", cookie: cookie)).Json.GetProperty("total").GetInt64());      // clamped, not refused
+        foreach (var bad in new[] { "limit=0", "limit=-1", "offset=-1", "limit=abc", $"search={new string('x', 101)}" })
+            Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{Base}/customer-groups?{bad}", cookie: cookie)).Status);
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PricingView], ScopeKind.Company, null);
+        var viewerPage = await Send(HttpMethod.Get, $"{Base}/customer-groups?search=a", cookie: await SignIn(viewer));
+        Assert.Equal(HttpStatusCode.OK, viewerPage.Status);
+        Assert.False(viewerPage.Json.GetProperty("can").GetProperty("configure").GetBoolean());
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Base}/customer-groups?search=a", cookie: await SignIn(outsider))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Base}/customer-groups?search=a")).Status);
+    }
+
+    [PostgresFact]
     public async Task Customer_groups_and_assignments_are_managed_over_http_with_rbac_revisions_and_a_server_derived_quote_group()
     {
         await StartApi();

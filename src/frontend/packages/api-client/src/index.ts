@@ -476,7 +476,18 @@ export interface PartyRole {
   controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
 }
 export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean }; /** present only when the request used search, limit or offset */ total?: number }
-export interface PartyRoleQuery { search?: string; limit?: number; offset?: number }
+/** The optional search and paging of the master-data lists: all absent = the unchanged, unpaged list. */
+export interface ListQuery { search?: string; limit?: number; offset?: number }
+/** `ids` are PARTY ids (at most 100 per request): only those parties' roles come back, up to 500 rows unless `limit` is smaller. */
+export interface PartyRoleQuery extends ListQuery { ids?: string[] }
+function listQueryString(q?: ListQuery): string {
+  const p = new URLSearchParams();
+  if (q?.search) p.set("search", q.search);
+  if (q?.limit !== undefined) p.set("limit", String(q.limit));
+  if (q?.offset !== undefined) p.set("offset", String(q.offset));
+  const qs = p.toString();
+  return qs ? "?" + qs : "";
+}
 export interface PartyRoleInput { partyId?: string; role?: number; paymentMode: number; termDays?: number | null; creditLimit?: number | null; controlAccountId?: string | null; representativeId?: string | null; isActive?: boolean }
 export interface SalesRepresentative { id: string; code: string; nameAr: string; nameEn: string | null; userId: string | null; isActive: boolean; revision: number }
 export interface SalesRepresentativesResponse { items: SalesRepresentative[]; can: { configure: boolean } }
@@ -506,7 +517,7 @@ export interface DiscountRuleInput { code?: string; nameAr: string; nameEn?: str
 export interface PricingQuoteRequest { date: string; currency: string; itemId: string; itemGroupId?: string | null; unitId: string; quantity: number; customerId?: string | null; unitCost?: number | null; override?: { unitPrice?: number | null; discountPercent?: number | null; reason: string } | null }
 // Customer groups (company migration 0027). A customer belongs to at most one group; the assignment revision 0 means never assigned.
 export interface CustomerGroup { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string }
-export interface CustomerGroupsResponse { customerGroups: CustomerGroup[]; can: { configure: boolean } }
+export interface CustomerGroupsResponse { customerGroups: CustomerGroup[]; can: { configure: boolean }; /** present only when the request used search, limit or offset */ total?: number }
 export interface CustomerGroupInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
 export interface CustomerGroupAssignment { partyId: string; customerGroupId: string | null; customerGroupCode: string | null; revision: number }
 export interface CustomerGroupAssignmentsResponse { assignments: CustomerGroupAssignment[]; can: { configure: boolean } }
@@ -902,12 +913,14 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getInventoryCapabilities: () => get<InventoryCapabilities>("/api/v1/company/inventory/capabilities"),
     getInventorySettings: () => get<InventorySettings>("/api/v1/company/inventory/settings"),
     putInventorySettings: (defaultValuation: ValuationMethodCode | null, revision: number) => request<InventorySettings>("PUT", "/api/v1/company/inventory/settings", { body: { defaultValuation }, ifMatch: revision }),
-    listInventoryUnits: () => get<{ units: InventoryUnit[] }>("/api/v1/company/inventory/units"),
+    /** Without `q` the list is unchanged (all units, no `total`); with `search` (code or name), `limit` (default 50, at most 500) or `offset` the server answers one page ordered by code and adds `total`. */
+    listInventoryUnits: (q?: ListQuery) => get<{ units: InventoryUnit[]; total?: number }>(`/api/v1/company/inventory/units${listQueryString(q)}`),
     createInventoryUnit: (unit: InventoryUnitInput) => request<InventoryUnit>("POST", "/api/v1/company/inventory/units", { body: unit }),
     updateInventoryUnit: (id: string, unit: InventoryUnitInput, revision: number) => request<InventoryUnit>("PUT", `/api/v1/company/inventory/units/${enc(id)}`, { body: unit, ifMatch: revision }),
     deactivateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/deactivate`, { ifMatch: revision }),
     activateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/activate`, { ifMatch: revision }),
-    listInventoryGroups: () => get<{ groups: InventoryGroup[] }>("/api/v1/company/inventory/groups"),
+    /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
+    listInventoryGroups: (q?: ListQuery) => get<{ groups: InventoryGroup[]; total?: number }>(`/api/v1/company/inventory/groups${listQueryString(q)}`),
     createInventoryGroup: (group: InventoryGroupInput) => request<InventoryGroup>("POST", "/api/v1/company/inventory/groups", { body: group }),
     updateInventoryGroup: (id: string, group: InventoryGroupInput, revision: number) => request<InventoryGroup>("PUT", `/api/v1/company/inventory/groups/${enc(id)}`, { body: group, ifMatch: revision }),
     deactivateInventoryGroup: (id: string, revision: number) => request<InventoryGroup>("POST", `/api/v1/company/inventory/groups/${enc(id)}/deactivate`, { ifMatch: revision }),
@@ -1180,13 +1193,14 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     },
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
-    /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500) or `offset` the server answers one page and adds `total`. */
+    /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
     listPartyRoles: (kind?: number, q?: PartyRoleQuery) => {
       const p = new URLSearchParams();
       if (kind) p.set("kind", String(kind));
       if (q?.search) p.set("search", q.search);
       if (q?.limit !== undefined) p.set("limit", String(q.limit));
       if (q?.offset !== undefined) p.set("offset", String(q.offset));
+      for (const id of q?.ids ?? []) p.append("ids", id);
       const qs = p.toString();
       return get<PartyRolesResponse>(`/api/v1/company/party-roles${qs ? "?" + qs : ""}`);
     },
@@ -1224,7 +1238,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listDiscountRules: () => get<DiscountRulesResponse>("/api/v1/company/pricing/discounts"),
     createDiscountRule: (d: DiscountRuleInput) => request<DiscountRule>("POST", "/api/v1/company/pricing/discounts", { body: d }),
     updateDiscountRule: (id: string, d: DiscountRuleInput, revision: number) => request<DiscountRule>("PUT", `/api/v1/company/pricing/discounts/${enc(id)}`, { body: d, ifMatch: revision }),
-    listCustomerGroups: () => get<CustomerGroupsResponse>("/api/v1/company/pricing/customer-groups"),
+    /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
+    listCustomerGroups: (q?: ListQuery) => get<CustomerGroupsResponse>(`/api/v1/company/pricing/customer-groups${listQueryString(q)}`),
     createCustomerGroup: (g: CustomerGroupInput) => request<CustomerGroup>("POST", "/api/v1/company/pricing/customer-groups", { body: g }),
     updateCustomerGroup: (id: string, g: CustomerGroupInput, revision: number) => request<CustomerGroup>("PUT", `/api/v1/company/pricing/customer-groups/${enc(id)}`, { body: g, ifMatch: revision }),
     listCustomerGroupAssignments: () => get<CustomerGroupAssignmentsResponse>("/api/v1/company/pricing/customer-assignments"),

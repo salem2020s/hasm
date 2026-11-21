@@ -65,17 +65,19 @@ public static class PartyRoleEndpoints
     }
 
     /// <summary>
-    /// Without <c>search</c>, <c>offset</c> or <c>limit</c> the list is exactly what it always was (all roles, no <c>total</c>). With any of them it is one bounded page
-    /// (default 50, at most 500, ordered by party code) and the response adds <c>total</c>. The permission and company scoping are the same in both forms.
+    /// Without <c>search</c>, <c>offset</c>, <c>limit</c> or <c>ids</c> the list is exactly what it always was (all roles, no <c>total</c>). With any of them it is one bounded page
+    /// (default 50, at most 500, ordered by party code) and the response adds <c>total</c>. <c>ids</c> (repeated, at most <see cref="ListPaging.MaxIds"/>) are PARTY ids: only those parties' roles come back
+    /// (up to 500 rows unless a smaller <c>limit</c> is given), so a screen can resolve the names of the parties it shows without loading every customer. The permission and company scoping are the same in all forms.
     /// </summary>
-    private static Task<IResult> ListRoles(short? kind, string? search, int? offset, int? limit, HttpContext http, AccessService access, PartyRoleManagementService svc)
+    private static Task<IResult> ListRoles(short? kind, string? search, int? offset, int? limit, Guid[]? ids, HttpContext http, AccessService access, PartyRoleManagementService svc)
     {
         if (kind is not (null or 1 or 2)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
         var role = kind is null ? (PartyRoleKind?)null : (PartyRoleKind)kind;
-        if (search is null && offset is null && limit is null)
+        if (ids is { Length: 0 }) ids = null;      // the framework binds an absent repeated parameter as an empty array: "no ids named" is the unfiltered list, never "no rows"
+        if (search is null && offset is null && limit is null && ids is null)
             return Read(http, access, svc, true, (u, c) => svc.ListRolesAsync(u, c, role, http.RequestAborted), v => v.Select(RoleBody));
-        if (offset is < 0 || limit is < 1 || !PartyRoleSearch.TryCleanSearch(search, out _)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
-        return ReadPaged(http, access, svc, (u, c) => svc.SearchRolesAsync(u, c, role, search, offset, limit, http.RequestAborted));
+        if (offset is < 0 || limit is < 1 || ids is { Length: > ListPaging.MaxIds } || !ListPaging.TryCleanSearch(search, out _)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
+        return ReadPaged(http, access, svc, (u, c) => svc.SearchRolesAsync(u, c, role, search, offset, limit, ids, http.RequestAborted));
     }
 
     private static async Task<IResult> ReadPaged(HttpContext http, AccessService access, PartyRoleManagementService svc, Func<Guid, Guid, Task<ConfigResult<PartyRolePage>>> call)
