@@ -11,7 +11,8 @@ namespace Hasm.Infrastructure.Identity;
 /// <summary>The company MFA policy kinds (Phase 4.1 section 3, D-080 (1)). Persisted numbers; never renumber. A company with no stored policy is Off.</summary>
 public enum CompanyMfaPolicyKind : short { Off = 0, RequiredForRoles = 1, RequiredForAll = 2 }
 
-public sealed record CompanyMfaPolicy(Guid CompanyId, CompanyMfaPolicyKind Kind, IReadOnlyList<Guid> RoleIds, DateTimeOffset? UpdatedAtUtc);
+/// <summary><paramref name="Revision"/> is the optimistic-concurrency revision: 0 while the company has no stored policy (Off), 1 after the first write, +1 on every change.</summary>
+public sealed record CompanyMfaPolicy(Guid CompanyId, CompanyMfaPolicyKind Kind, IReadOnlyList<Guid> RoleIds, DateTimeOffset? UpdatedAtUtc, long Revision);
 
 /// <summary>The one question the request pipeline asks: does the selected company's policy require MFA of this user? (an interface so the authorization handler is testable without a database)</summary>
 public interface ICompanyMfaPolicyEvaluator
@@ -38,18 +39,20 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
     {
         if (!await access.IsAllowedAsync(actorUserId, companyId, PermissionCatalog.Codes.MfaPolicyView, ScopeTarget.Company, ct)) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Forbidden, "forbidden");
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        return AccessResult<CompanyMfaPolicy>.Ok(await ReadAsync(conn, null, companyId, ct));
+        return AccessResult<CompanyMfaPolicy>.Ok(await ReadAsync(conn, null, companyId, false, ct));
     }
 
-    private static async Task<CompanyMfaPolicy> ReadAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid companyId, CancellationToken ct)
+    /// <summary>Reads the policy. With <paramref name="forUpdate"/> the policy row is locked (FOR UPDATE) until the transaction ends, so the revision check, the audit "before" and the write see one state.</summary>
+    private static async Task<CompanyMfaPolicy> ReadAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid companyId, bool forUpdate, CancellationToken ct)
     {
         var kind = CompanyMfaPolicyKind.Off;
         DateTimeOffset? at = null;
-        await using (var cmd = new NpgsqlCommand($"SELECT {P.Policy}, {P.UpdatedAtUtc} FROM {P.Table} WHERE {P.CompanyId} = @c", conn, tx))
+        var revision = 0L;
+        await using (var cmd = new NpgsqlCommand($"SELECT {P.Policy}, {P.UpdatedAtUtc}, {P.Revision} FROM {P.Table} WHERE {P.CompanyId} = @c{(forUpdate ? " FOR UPDATE" : "")}", conn, tx))
         {
             cmd.Parameters.AddWithValue("c", companyId);
             await using var r = await cmd.ExecuteReaderAsync(ct);
-            if (await r.ReadAsync(ct)) { kind = (CompanyMfaPolicyKind)r.GetInt16(0); at = r.GetFieldValue<DateTimeOffset>(1); }
+            if (await r.ReadAsync(ct)) { kind = (CompanyMfaPolicyKind)r.GetInt16(0); at = r.GetFieldValue<DateTimeOffset>(1); revision = r.GetInt64(2); }
         }
         var roles = new List<Guid>();
         await using (var cmd = new NpgsqlCommand($"SELECT {PR.RoleId} FROM {PR.Table} WHERE {PR.CompanyId} = @c ORDER BY {PR.RoleId}", conn, tx))
@@ -58,7 +61,7 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) roles.Add(r.GetGuid(0));
         }
-        return new CompanyMfaPolicy(companyId, kind, roles, at);
+        return new CompanyMfaPolicy(companyId, kind, roles, at, revision);
     }
 
     /// <summary>Does the policy of <paramref name="companyId"/> require MFA of <paramref name="userId"/>? Off: no. RequiredForAll: yes. RequiredForRoles: yes when the user holds an active assignment of a listed role in that company.</summary>
@@ -78,16 +81,30 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
         return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
-    /// <summary>Replaces the policy of the company. <paramref name="roleIds"/> must be empty unless the kind is RequiredForRoles, where it must list 1..<see cref="MaxRoles"/> distinct ACTIVE roles that are presets or belong to this company.</summary>
-    public async Task<AccessResult<CompanyMfaPolicy>> SetAsync(Guid actorUserId, Guid companyId, CompanyMfaPolicyKind kind, IReadOnlyList<Guid>? roleIds, CancellationToken ct = default)
+    /// <summary>Test-only hook between the locked revision read and the write (a start barrier for the first-write race; never set in production).</summary>
+    internal Func<CancellationToken, Task>? AfterRevisionReadForTests { get; set; }
+
+    /// <summary>
+    /// Replaces the policy of the company. <paramref name="roleIds"/> must be empty unless the kind is RequiredForRoles, where it must list 1..<see cref="MaxRoles"/> distinct ACTIVE roles that are presets or belong to this company.
+    /// Optimistic concurrency (review M1 of PR 181, the convention of the other settings): <paramref name="expectedRevision"/> is the revision the caller read (0 = no stored policy yet); null is
+    /// <see cref="AccessStatus.PreconditionRequired"/>, a different current revision is <see cref="AccessStatus.PreconditionFailed"/> <c>revision_conflict</c> with the current revision. The revision check, the
+    /// audit "before" and the write happen under the policy row lock; the first write inserts with ON CONFLICT DO NOTHING, so of two concurrent first writers exactly one wins and the other writes nothing.
+    /// Every successful change (also one that stores the same policy again) moves the revision by one and is audited.
+    /// </summary>
+    public async Task<AccessResult<CompanyMfaPolicy>> SetAsync(Guid actorUserId, Guid companyId, long? expectedRevision, CompanyMfaPolicyKind kind, IReadOnlyList<Guid>? roleIds, CancellationToken ct = default)
     {
         if (!await access.IsAllowedAsync(actorUserId, companyId, PermissionCatalog.Codes.MfaPolicyUpdate, ScopeTarget.Company, ct)) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Forbidden, "forbidden");
+        if (expectedRevision is not { } expected) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.PreconditionRequired, "precondition_required");
         if (!Enum.IsDefined(kind)) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Invalid, "invalid_request");
         var roles = (roleIds ?? []).Distinct().ToList();
         if (kind == CompanyMfaPolicyKind.RequiredForRoles ? roles.Count is 0 or > MaxRoles : roles.Count != 0) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Invalid, "invalid_request");
 
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
+        // the policy row is locked from here to the commit: a concurrent change of an existing policy waits and then sees the new revision (412). With no row yet there is nothing to lock; the insert below decides.
+        var before = await ReadAsync(conn, tx, companyId, forUpdate: true, ct);
+        if (before.Revision != expected) return AccessResult<CompanyMfaPolicy>.Stale(before.Revision);
+        if (AfterRevisionReadForTests is { } hook) await hook(ct);
         foreach (var role in roles)
         {
             await using var cmd = new NpgsqlCommand($"SELECT 1 FROM {RL.Table} WHERE {RL.Id} = @r AND {RL.IsActive} AND ({RL.CompanyId} IS NULL OR {RL.CompanyId} = @c)", conn, tx);
@@ -112,16 +129,24 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
             if (actorWouldBeRequired) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
         }
 
-        var before = await ReadAsync(conn, tx, companyId, ct);
         var now = clock.GetUtcNow();
-        await using (var cmd = new NpgsqlCommand(
-            $"INSERT INTO {P.Table} ({P.CompanyId},{P.Policy},{P.UpdatedAtUtc},{P.UpdatedBy}) VALUES (@c,@p,@n,@u) ON CONFLICT ({P.CompanyId}) DO UPDATE SET {P.Policy} = EXCLUDED.{P.Policy}, {P.UpdatedAtUtc} = EXCLUDED.{P.UpdatedAtUtc}, {P.UpdatedBy} = EXCLUDED.{P.UpdatedBy}", conn, tx))
+        var revision = expected + 1;
+        // first write: INSERT ... ON CONFLICT DO NOTHING (a concurrent first writer that committed first leaves 0 rows here); change: UPDATE guarded by the expected revision. Anything but exactly one row is a lost race.
+        await using (var cmd = new NpgsqlCommand(expected == 0
+            ? $"INSERT INTO {P.Table} ({P.CompanyId},{P.Policy},{P.Revision},{P.UpdatedAtUtc},{P.UpdatedBy}) VALUES (@c,@p,1,@n,@u) ON CONFLICT ({P.CompanyId}) DO NOTHING"
+            : $"UPDATE {P.Table} SET {P.Policy} = @p, {P.Revision} = {P.Revision} + 1, {P.UpdatedAtUtc} = @n, {P.UpdatedBy} = @u WHERE {P.CompanyId} = @c AND {P.Revision} = @e", conn, tx))
         {
             cmd.Parameters.AddWithValue("c", companyId);
             cmd.Parameters.AddWithValue("p", (short)kind);
             cmd.Parameters.AddWithValue("n", now);
             cmd.Parameters.AddWithValue("u", actorUserId);
-            await cmd.ExecuteNonQueryAsync(ct);
+            cmd.Parameters.AddWithValue("e", expected);
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1)
+            {
+                var current = (await ReadAsync(conn, tx, companyId, false, ct)).Revision;                             // read committed: the winner's row is visible to this new statement
+                await tx.RollbackAsync(ct);
+                return AccessResult<CompanyMfaPolicy>.Stale(current);
+            }
         }
         await using (var cmd = new NpgsqlCommand($"DELETE FROM {PR.Table} WHERE {PR.CompanyId} = @c", conn, tx))
         {
@@ -136,8 +161,8 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
             await cmd.ExecuteNonQueryAsync(ct);
         }
         var receipt = await audit.AppendAsync(conn, tx, AuditStream.System, AuditCanonical.FromMicros(AuditCanonical.ToMicros(now)),
-            new AuditEventData(MfaAuditEvents.PolicyChanged, actorUserId, null, null, $"company {companyId:N} mfa policy {before.Kind} -> {kind} roles {before.RoleIds.Count} -> {roles.Count}"), ct);
+            new AuditEventData(MfaAuditEvents.PolicyChanged, actorUserId, null, null, $"company {companyId:N} mfa policy {before.Kind} -> {kind} roles {before.RoleIds.Count} -> {roles.Count} r{revision}"), ct);
         await audit.CommitAsync(tx, receipt, ct);
-        return AccessResult<CompanyMfaPolicy>.Ok(new CompanyMfaPolicy(companyId, kind, roles.Order().ToList(), now));
+        return AccessResult<CompanyMfaPolicy>.Ok(new CompanyMfaPolicy(companyId, kind, roles.Order().ToList(), now, revision));
     }
 }

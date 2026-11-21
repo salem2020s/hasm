@@ -82,8 +82,12 @@ public sealed class MfaAuthorizationResultHandler : IAuthorizationMiddlewareResu
 /// </summary>
 public static class MfaEnforcement
 {
-    /// <summary>Every route under these prefixes must carry the MfaVerified policy.</summary>
+    /// <summary>Every route under these prefixes must carry the MfaVerified requirement.</summary>
     public static readonly string[] PrivilegedPrefixes = ["/api/v1/access", "/api/v1/admin/users", "/api/v1/admin/parties"];
+
+    /// <summary>The privileged prefixes of IDENTITY administration: not company-scoped, so their routes carry the MFA requirements WITHOUT the selected company's policy
+    /// (<see cref="AuthDefaults.AuthenticatedPolicy"/>, <see cref="AuthDefaults.AuthenticatedFreshPolicy"/>; review L2 of PR 181). Every other privileged prefix is company-scoped and carries the company policy too.</summary>
+    public static readonly string[] IdentityAdministrationPrefixes = ["/api/v1/admin/users", "/api/v1/admin/parties"];
 
     /// <summary>Every one of these operations (method, route pattern as mapped) must carry the MfaFresh policy.</summary>
     public static readonly (string Method, string Pattern)[] FreshOperations =

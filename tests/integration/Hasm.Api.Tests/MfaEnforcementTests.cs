@@ -30,29 +30,57 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
 
     private static IEnumerable<string> Methods(RouteEndpoint e) => e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"];
 
+    private async Task<IReadOnlyList<IAuthorizationRequirement>> Requirements(RouteEndpoint e)
+    {
+        var provider = factory.Services.GetRequiredService<IAuthorizationPolicyProvider>();
+        var all = new List<IAuthorizationRequirement>();
+        foreach (var d in e.Metadata.GetOrderedMetadata<IAuthorizeData>())
+        {
+            var policy = string.IsNullOrEmpty(d.Policy) ? await provider.GetDefaultPolicyAsync() : await provider.GetPolicyAsync(d.Policy);
+            Assert.True(policy is not null, $"{Pattern(e)} names the unknown policy '{d.Policy}'");
+            all.AddRange(policy!.Requirements);
+        }
+        return all;
+    }
+
+    private static bool IsIdentityAdministration(RouteEndpoint e) => MfaEnforcement.IdentityAdministrationPrefixes.Any(p => UnderPrefix(Pattern(e), p));
+
     [Fact]
     public void Every_route_under_a_privileged_prefix_carries_the_MfaVerified_or_MfaFresh_policy()
     {
+        // company-scoped privileged routes name MfaVerified/MfaFresh (with the company policy); identity administration names the variants WITHOUT the company policy (review L2 of PR 181)
         var checkedRoutes = 0;
         foreach (var e in Routes().Where(r => MfaEnforcement.PrivilegedPrefixes.Any(p => UnderPrefix(Pattern(r), p))))
         {
             checkedRoutes++;
-            Assert.True(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
+            if (IsIdentityAdministration(e))
+            {
+                Assert.True(HasPolicy(e, AuthDefaults.AuthenticatedPolicy) || HasPolicy(e, AuthDefaults.AuthenticatedFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
+                Assert.False(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} is identity administration but names a company-scoped MFA policy");
+                Assert.True(HasPolicy(e, AuthDefaults.AdministratorPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} lost the administrator policy");
+            }
+            else
+                Assert.True(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
         }
         Assert.True(checkedRoutes >= 15, $"only {checkedRoutes} privileged routes were found; the enumeration is broken");
         foreach (var prefix in MfaEnforcement.PrivilegedPrefixes) Assert.Contains(Routes(), r => UnderPrefix(Pattern(r), prefix));   // no stale prefix
+        foreach (var prefix in MfaEnforcement.IdentityAdministrationPrefixes) Assert.Contains(prefix, MfaEnforcement.PrivilegedPrefixes);   // identity administration is a subset of the privileged set
     }
 
     [Fact]
-    public void The_named_fresh_operations_exist_and_carry_the_MfaFresh_policy()
+    public async Task The_named_fresh_operations_exist_and_carry_the_MfaFresh_policy()
     {
         foreach (var (method, pattern) in MfaEnforcement.FreshOperations)
         {
             var route = Assert.Single(Routes(), r => Pattern(r).Equals(pattern, StringComparison.OrdinalIgnoreCase) && Methods(r).Contains(method, StringComparer.OrdinalIgnoreCase));
-            Assert.True(HasPolicy(route, AuthDefaults.MfaFreshPolicy), $"{method} {pattern} lacks the MfaFresh policy");
+            Assert.True(HasPolicy(route, IsIdentityAdministration(route) ? AuthDefaults.AuthenticatedFreshPolicy : AuthDefaults.MfaFreshPolicy), $"{method} {pattern} lacks the MfaFresh policy");
+            Assert.Contains(await Requirements(route), r => r is MfaFreshRequirement);
         }
-        // and no other route claims MfaFresh: the set is exactly the plan's named operations
-        var fresh = Routes().Where(r => HasPolicy(r, AuthDefaults.MfaFreshPolicy)).SelectMany(r => Methods(r).Select(m => (m.ToUpperInvariant(), Pattern(r)))).ToHashSet();
+        // and no other route requires a fresh proof (by the RESOLVED requirement, whatever the policy is called): the set is exactly the plan's named operations
+        var fresh = new HashSet<(string, string)>();
+        foreach (var r in Routes())
+            if ((await Requirements(r)).Any(x => x is MfaFreshRequirement))
+                foreach (var m in Methods(r)) fresh.Add((m.ToUpperInvariant(), Pattern(r)));
         Assert.Equal(MfaEnforcement.FreshOperations.Select(o => (o.Method, o.Pattern)).ToHashSet(), fresh);
     }
 
@@ -93,11 +121,33 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
         Assert.True(offenders.Count == 0, "protected routes without the MfaVerified requirement: " + string.Join(", ", offenders));
     }
 
-    /// <summary>The only authenticated routes exempt from the selected company's MFA policy: a user must always be able to list and change company, change the password and step up (S3b-1b, D-167).</summary>
+    /// <summary>The only authenticated routes exempt from the selected company's MFA policy: a user must always be able to list and change company, change the password and step up (S3b-1b, D-167),
+    /// and identity administration, which is not company-scoped (review L2 of PR 181): each of its routes is NAMED here, so a new one must be added deliberately.</summary>
     private static readonly HashSet<string> CompanyPolicyExempt = new(StringComparer.OrdinalIgnoreCase)
     {
         "GET /api/v1/companies", "POST /api/v1/session/company", "DELETE /api/v1/session/company", "POST /api/v1/auth/change-password", "POST /api/v1/auth/mfa/step-up",
+        "POST /api/v1/admin/users/", "POST /api/v1/admin/users/{id:guid}/state",                              // the group root is mapped as "" and reported with the trailing slash
+        "GET /api/v1/admin/parties/proposals", "GET /api/v1/admin/parties/proposals/{id:guid}", "POST /api/v1/admin/parties/proposals/{id:guid}/approve", "POST /api/v1/admin/parties/proposals/{id:guid}/reject",
+        "GET /api/v1/admin/parties/search",
     };
+
+    [Fact]
+    public async Task Identity_administration_keeps_the_MFA_requirements_and_the_administrator_claim_but_not_the_selected_company_policy()
+    {
+        var seen = 0;
+        foreach (var e in Routes().Where(IsIdentityAdministration))
+        {
+            seen++;
+            var requirements = await Requirements(e);
+            Assert.Contains(requirements, r => r is MfaVerifiedRequirement);
+            Assert.DoesNotContain(requirements, r => r is MfaCompanyPolicyRequirement);
+            Assert.Contains(requirements, r => r is Microsoft.AspNetCore.Authorization.Infrastructure.ClaimsAuthorizationRequirement c && c.ClaimType == AuthDefaults.AdministratorClaim);
+            foreach (var m in Methods(e)) Assert.Contains($"{m.ToUpperInvariant()} {Pattern(e)}", CompanyPolicyExempt);
+        }
+        Assert.Equal(7, seen);
+        // every exemption that is not one of the five always-reachable routes is identity administration: nothing company-scoped can be exempted through this door
+        Assert.Equal(5, CompanyPolicyExempt.Count(k => !MfaEnforcement.IdentityAdministrationPrefixes.Any(p => UnderPrefix(k[(k.IndexOf(' ') + 1)..], p))));
+    }
 
     [Fact]
     public async Task Every_protected_route_is_gated_by_the_company_MFA_policy_except_the_named_exempt_routes()

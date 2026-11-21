@@ -30,9 +30,11 @@ public static class AuthEndpoints
         auth.MapGet("/status", Status);
         auth.MapPost("/change-password", ChangePassword).RequireAuthorization(AuthDefaults.AuthenticatedPolicy).WithMetadata(new BodyLimit());
 
-        var admin = app.MapGroup("/api/v1/admin/users").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.MfaVerifiedPolicy);
+        // identity administration is not company-scoped: it keeps MfaVerified/MfaFresh but is NOT gated by the SELECTED company's MFA policy (review L2 of PR 181), so an identity administrator
+        // without an authenticator who has a requiring company selected does not lose identity administration
+        var admin = app.MapGroup("/api/v1/admin/users").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.AuthenticatedPolicy);
         admin.MapPost("", CreateUser).WithMetadata(new BodyLimit());
-        admin.MapPost("/{id:guid}/state", SetState).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
+        admin.MapPost("/{id:guid}/state", SetState).RequireAuthorization(AuthDefaults.AuthenticatedFreshPolicy).WithMetadata(new BodyLimit());
     }
 
     private static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);

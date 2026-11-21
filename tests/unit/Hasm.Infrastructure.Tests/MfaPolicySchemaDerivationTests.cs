@@ -22,7 +22,7 @@ public class MfaPolicySchemaDerivationTests
     public void Every_policy_name_is_the_deterministic_derivation_of_its_logical_token()
     {
         var entries = Entries().ToList();
-        Assert.Equal(16, entries.Count);
+        Assert.Equal(18, entries.Count);                                                                             // 16 + the revision column and its check (optimistic concurrency, review M1 of PR 181)
         foreach (var (key, physical) in entries)
         {
             var token = key.EndsWith(".Table", StringComparison.Ordinal) ? key[..^".Table".Length] : key;

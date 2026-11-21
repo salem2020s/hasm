@@ -93,6 +93,9 @@ public static class AccessEndpoints
         AccessStatus.Forbidden => Error(403, result.Code ?? "forbidden"),
         AccessStatus.NotFound => Error(404, result.Code ?? "not_found"),
         AccessStatus.Invalid => Error(400, result.Code ?? "invalid_request"),
+        // optimistic concurrency, the same answers as the settings endpoints (CompanyConfigurationEndpoints.Map): 428 without If-Match, 412 with the current revision on a stale one
+        AccessStatus.PreconditionRequired => Error(428, "precondition_required"),
+        AccessStatus.PreconditionFailed => Results.Json(new { error = "revision_conflict", currentRevision = result.CurrentRevision }, statusCode: 412),
         _ => Error(409, result.Code ?? "conflict"),
     };
 
@@ -122,14 +125,18 @@ public static class AccessEndpoints
     {
         policy = p.Kind switch { CompanyMfaPolicyKind.RequiredForRoles => "roles", CompanyMfaPolicyKind.RequiredForAll => "all", _ => "off" },
         roleIds = p.RoleIds,
+        revision = p.Revision,
         updatedAtUtc = p.UpdatedAtUtc,
     };
+
+    /// <summary>The policy with its revision as the strong <c>ETag</c> (the convention of the settings endpoints).</summary>
+    private static IResult PolicyResult(CompanyMfaPolicy p) => new Hasm.Api.Company.CompanyConfigurationEndpoints.EtagResult(p.Revision, PolicyView(p));
 
     private static async Task<IResult> GetMfaPolicy(HttpContext http, AccessService access, MfaPolicyService policies)
     {
         var (actor, failure) = await ResolveActor(http, access);
         if (failure is not null) return failure;
-        return Map(await policies.GetAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), p => Results.Json(PolicyView(p)));
+        return Map(await policies.GetAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), PolicyResult);
     }
 
     private static async Task<IResult> SetMfaPolicy(SetMfaPolicyRequest? body, HttpContext http, AccessService access, MfaPolicyService policies)
@@ -138,7 +145,8 @@ public static class AccessEndpoints
         if (kind is null) return Error(400, "invalid_request");
         var (actor, failure) = await ResolveActor(http, access);
         if (failure is not null) return failure;
-        return Map(await policies.SetAsync(actor!.UserId, actor.CompanyId, kind.Value, body!.RoleIds, http.RequestAborted), p => Results.Json(PolicyView(p)));
+        if (!Hasm.Api.Company.CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return Error(400, "invalid_if_match");
+        return Map(await policies.SetAsync(actor!.UserId, actor.CompanyId, expected, kind.Value, body!.RoleIds, http.RequestAborted), PolicyResult);
     }
 
     // ---- company selection

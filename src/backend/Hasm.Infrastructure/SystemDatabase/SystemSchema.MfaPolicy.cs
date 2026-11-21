@@ -21,12 +21,14 @@ public static partial class SystemSchema
         public const string Table = "t_b0a079c7";
         public const string CompanyId = "c_40b06ead";
         public const string Policy = "c_bf0fe463";
+        public const string Revision = "c_bdeac2e1";
         public const string UpdatedAtUtc = "c_f14e8986";
         public const string UpdatedBy = "c_d36db703";
         public const string Pk = "k_6c7e1ffa";
         public const string FkCompany = "k_88e835ee";
         public const string FkUpdatedBy = "k_53ec110a";
         public const string CkPolicy = "k_ccc7896f";
+        public const string CkRevision = "k_6fb13eb7";
     }
 
     private static IReadOnlyDictionary<string, string> MfaPolicyMap { get; } = new Dictionary<string, string>
@@ -35,12 +37,14 @@ public static partial class SystemSchema
         ["MfaPolicy.Table"] = MfaPolicy.Table,
         ["MfaPolicy.CompanyId"] = MfaPolicy.CompanyId,
         ["MfaPolicy.Policy"] = MfaPolicy.Policy,
+        ["MfaPolicy.Revision"] = MfaPolicy.Revision,
         ["MfaPolicy.UpdatedAtUtc"] = MfaPolicy.UpdatedAtUtc,
         ["MfaPolicy.UpdatedBy"] = MfaPolicy.UpdatedBy,
         ["MfaPolicy.Pk"] = MfaPolicy.Pk,
         ["MfaPolicy.FkCompany"] = MfaPolicy.FkCompany,
         ["MfaPolicy.FkUpdatedBy"] = MfaPolicy.FkUpdatedBy,
         ["MfaPolicy.CkPolicy"] = MfaPolicy.CkPolicy,
+        ["MfaPolicy.CkRevision"] = MfaPolicy.CkRevision,
         ["MfaPolicyRole.CompanyId"] = MfaPolicyRole.CompanyId,
         ["MfaPolicyRole.RoleId"] = MfaPolicyRole.RoleId,
         ["MfaPolicyRole.Pk"] = MfaPolicyRole.Pk,

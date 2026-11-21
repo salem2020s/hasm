@@ -28,6 +28,8 @@ public static class AuthDefaults
     public const string MfaFreshPolicy = "MfaFresh";
     /// <summary>S3b-1b: an authenticated session with the second-factor proof where MFA applies, WITHOUT the selected company's policy: the routes a user must always reach to leave or change company or to enrol (company list and selection, change password, step-up).</summary>
     public const string AuthenticatedPolicy = "AuthenticatedMfaVerified";
+    /// <summary>The fresh proof WITHOUT the selected company's policy: the fresh operations of identity administration, which is not company-scoped (review L2 of PR 181).</summary>
+    public const string AuthenticatedFreshPolicy = "AuthenticatedMfaFresh";
     public const string AdministratorClaim = "hasm:identity_admin";
     public const string SessionIdClaim = "hasm:session";
     public const string SessionItemKey = "hasm.session";
@@ -117,6 +119,8 @@ public static class AuthenticationSetup
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
             .AddPolicy(AuthDefaults.AuthenticatedPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()))
+            .AddPolicy(AuthDefaults.AuthenticatedFreshPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()))
             .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaCompanyPolicyRequirement()))
             .AddPolicy(AuthDefaults.MfaFreshPolicy, p =>
