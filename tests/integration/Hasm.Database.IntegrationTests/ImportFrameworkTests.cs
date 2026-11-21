@@ -396,6 +396,45 @@ public class ImportServiceTests : ImportTestBase
     }
 
     [PostgresFact]
+    public async Task Concurrent_settings_writes_with_the_same_if_match_have_one_winner_and_412_for_the_others()
+    {
+        // C2 matrix part 2: no settings row yet, seven parallel writers with If-Match 0 used to give 503 (an unmapped unique violation on the singleton)
+        await PrepareImports();
+        var before = await Count(Company, Audit_.Table);
+        var first = await Task.WhenAll(Enumerable.Range(0, 7).Select(_ => Task.Run(() => Imports.PutSettingsAsync(Admin.Id, Company.Id, 0, new ImportSettingsInput(30, 14)))));
+        Assert.Single(first, r => r.IsOk);
+        Assert.All(first.Where(r => !r.IsOk), r => Assert.Equal((ConfigStatus.PreconditionFailed, "revision_conflict", (long?)1), (r.Status, r.Code, r.CurrentRevision)));
+        // and the same for an update at a known revision (the update applies only at the expected revision, so no write is lost)
+        var second = await Task.WhenAll(Enumerable.Range(0, 7).Select(i => Task.Run(() => Imports.PutSettingsAsync(Admin.Id, Company.Id, 1, new ImportSettingsInput(40 + i, 14)))));
+        var winner = Assert.Single(second, r => r.IsOk);
+        Assert.All(second.Where(r => !r.IsOk), r => Assert.Equal((ConfigStatus.PreconditionFailed, "revision_conflict", (long?)2), (r.Status, r.Code, r.CurrentRevision)));
+        var now = await Imports.GetSettingsAsync(Company.Id);
+        Assert.Equal((winner.Value!.RetentionDays, 2L), (now.RetentionDays, now.Revision));
+        Assert.Equal(2L, await Sql<long>($"SELECT count(*) FROM {Ph.Table} WHERE {Ph.Entity} = 6"));            // one history row and one audit event per successful write
+        Assert.Equal(before + 2, await Count(Company, Audit_.Table));
+        await AssertAuditIntact();
+    }
+
+    [PostgresFact]
+    public async Task Concurrent_uploads_with_the_same_key_and_file_replay_one_batch_and_a_different_file_is_refused()
+    {
+        // C2 matrix part 2: seven parallel identical uploads with one Idempotency-Key used to give some 409 idempotency_key_reused instead of the documented replay
+        await PrepareImports();
+        var data = Bytes(Csv2);
+        var results = await Task.WhenAll(Enumerable.Range(0, 7).Select(_ => Task.Run(() => Imports.UploadAsync(Admin.Id, Company.Id, "test-adapter", "chart.csv", data, "same-key"))));
+        Assert.All(results, r => Assert.True(r.IsOk, $"{r.Status} {r.Code}"));
+        var id = results[0].Value!.Id;
+        Assert.All(results, r => Assert.Equal(id, r.Value!.Id));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Ib.Table}"));
+        Assert.Single(StoredFiles());                                                                               // the losers' ciphertext is not left behind
+        // the same key with a different file, or by another user, is still refused
+        var other = await Imports.UploadAsync(Admin.Id, Company.Id, "test-adapter", "chart.csv", Bytes(Csv2 + "0103,Other\n"), "same-key");
+        Assert.Equal((ConfigStatus.Conflict, "idempotency_key_reused"), (other.Status, other.Code));
+        Assert.Single(StoredFiles());
+        await AssertAuditIntact();
+    }
+
+    [PostgresFact]
     public async Task Company_settings_are_revisioned_validated_audited_and_recorded_in_the_policy_history()
     {
         await PrepareImports();
