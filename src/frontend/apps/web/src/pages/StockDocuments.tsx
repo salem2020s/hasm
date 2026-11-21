@@ -1,7 +1,7 @@
 import {
   ApiError, type StockDocType, type StockDocument, type StockPosting, type StockDocumentCapabilities, type StockDocumentInput, type StockDocumentSummary, type StockItemRef, type StockWarehouseRef,
 } from "@hasm/api-client";
-import { toLatinDigits } from "../ledgerCommon";
+import { parsePositiveDecimal } from "../numberInput";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -199,15 +199,14 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
     form.lines.forEach((l, i) => {
       if (!l.item) v[`lines[${i}].itemId`] = t("field.required");
       if (!l.unitId) v[`lines[${i}].unitId`] = t("field.required");
-      const q = Number(l.quantity);
-      if (!l.quantity.trim() || !Number.isFinite(q) || q <= 0 || !/^\d+(\.\d{1,10})?$/.test(l.quantity.trim())) v[`lines[${i}].quantity`] = t("stock.field.invalid_quantity");
+      if (Number.isNaN(parsePositiveDecimal(l.quantity))) v[`lines[${i}].quantity`] = t("stock.field.invalid_quantity");
     });
     return v;
   }
   const tabsWithErrors = (e: Record<string, string>) => new Set(Object.keys(e).map(TAB_OF));
   const toInput = (): StockDocumentInput => ({
     docType: form.docType, sourceWarehouseId: form.source || null, targetWarehouseId: form.target || null, documentDate: form.date, reference: blankToNull(form.reference), notes: blankToNull(form.notes),
-    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: Number(l.quantity), notes: blankToNull(l.notes) })),
+    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: parsePositiveDecimal(l.quantity), notes: blankToNull(l.notes) })),
   });
 
   function showServerError(err: unknown, onPosting = false) {
@@ -316,7 +315,7 @@ function DocumentEditor({ editor, caps, warehouses, onClose, onChanged, onSwitch
                       </td>
                       <td>
                         <Field id={`sd-qty-${i}`} label={t("stock.quantity")} error={errors[`lines[${i}].quantity`]}>
-                          {(aria) => <input {...aria} value={l.quantity} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setForm((f) => ({ ...f, lines: f.lines.map((r) => (r.key === l.key ? { ...r, quantity: toLatinDigits(e.target.value) } : r)) }))} />}
+                          {(aria) => <input {...aria} value={l.quantity} inputMode="decimal" dir="ltr" readOnly={!canEdit} onChange={(e) => setForm((f) => ({ ...f, lines: f.lines.map((r) => (r.key === l.key ? { ...r, quantity: e.target.value } : r)) }))} />}
                         </Field>
                       </td>
                       <td><bdi dir="ltr" data-testid={`base-${i}`}>{doc && !dirty && doc.lines[i] ? `${doc.lines[i]!.baseQuantity} ${doc.lines[i]!.baseUnitCode}` : preview}</bdi></td>

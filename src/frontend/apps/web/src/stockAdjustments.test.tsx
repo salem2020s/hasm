@@ -153,3 +153,19 @@ describe("stock adjustment", () => {
     expect(within(screen.getByTestId("adj-line-2")).getByText("المبلغ لا يكون سالباً.")).toBeInTheDocument();
   });
 });
+
+describe("negative-obligation refusal names the items with the language's list separator", () => {
+  const refuse = () => vi.fn().mockRejectedValue(apiError(409, "negative_obligation_open", { fields: [{ field: "lines[0].itemId", code: "x" }, { field: "lines[1].itemId", code: "x" }] }));
+  const postWith = async (english: boolean) => {
+    setup({ postStockAdjustment: refuse() }, caps(), take({ adjustmentId: "a1", adjustmentNumber: "SA-2026-000001" }));
+    await open();
+    await userEvent.click(tab("التسوية"));
+    const panel = await screen.findByTestId("stk-adjustment");
+    await userEvent.type(within(screen.getByTestId("adj-line-2")).getByLabelText("المبلغ"), "21");
+    if (english) await userEvent.click(screen.getByRole("button", { name: "English" }));
+    await userEvent.click(within(panel).getByTestId("adj-post"));
+    return (await screen.findByTestId("adj-error")).textContent ?? "";
+  };
+  it("Arabic uses the Arabic comma", async () => expect(await postWith(false)).toContain("(APPLE، PEAR)"));
+  it("English uses a Latin comma", async () => expect(await postWith(true)).toContain("(APPLE, PEAR)"));
+});

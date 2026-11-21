@@ -69,4 +69,14 @@ describe("server error codes are translated in Arabic and English", () => {
     expect(errorText(t, new Error("boom"))).toBe(catalog[lang]["error.network"]);
     for (const s of [403, 401, 503, 500]) expect(text(s)).not.toMatch(/^[a-z]+\.[a-z_.]+$/);
   });
+
+  it.each(["ar", "en"] as const)("weak_password lists the broken password rules, translated and separated by the language's separator (%s)", (lang) => {
+    const t = (k: string) => catalog[lang][k] ?? k;
+    const text = errorText(t, new ApiError(400, "weak_password", { problems: ["too_short", "too_repetitive", "made_up_rule"] }));
+    expect(text).toContain(catalog[lang]["error.weak_password"]!);
+    expect(text).toContain(`(${catalog[lang]["error.password.too_short"]}${catalog[lang]["list.separator"]}${catalog[lang]["error.password.too_repetitive"]})`);
+    expect(text).not.toContain("made_up_rule");
+    expect(text).not.toContain("error.password");
+    expect(errorText(t, new ApiError(400, "weak_password", {}))).toBe(catalog[lang]["error.weak_password"]);
+  });
 });

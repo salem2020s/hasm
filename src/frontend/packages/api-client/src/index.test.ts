@@ -117,6 +117,12 @@ describe("api client", () => {
     expect(onUnauthenticated).toHaveBeenCalledTimes(1);
   });
 
+  it("carries the password-policy problems of a weak_password refusal (strings only)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "weak_password", problems: ["too_short", 5, "too_repetitive"] }, { status: 400 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.login("a", "b")).rejects.toMatchObject({ status: 400, code: "weak_password", details: { problems: ["too_short", "too_repetitive"] } });
+  });
+
   it("reports Retry-After for throttled logins", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ error: "too_many_attempts" }, { status: 429, headers: { "Retry-After": "42" } }));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);

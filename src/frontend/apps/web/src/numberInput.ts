@@ -16,3 +16,15 @@ export function parseSignedDecimalInput(s: string): number {
   if (t.startsWith("-") || t.startsWith("\u2212")) { const rest = t.slice(1); if (/^\s/.test(rest)) return Number.NaN; const n = parseDecimalInput(rest); return Number.isNaN(n) ? n : (n === 0 ? 0 : -n); }
   return parseDecimalInput(t);
 }
+
+/** A strictly positive amount with at most `places` decimals (default 10), built on parseDecimalInput; NaN when blank, zero, negative or too precise. */
+export function parsePositiveDecimal(s: string, places = 10): number {
+  const n = parseDecimalInput(s);
+  return Number.isFinite(n) && n > 0 && Number(n.toFixed(places)) === n ? n : Number.NaN;
+}
+
+/** A whole number written with exactly `digits` digits (for example a four-digit year), within [min, max]; NaN otherwise. Leading zeros beyond the width are refused. */
+export function parseWholeNumber(s: string, digits: number, min: number, max: number): number {
+  const n = parseDecimalInput(s);
+  return Number.isInteger(n) && s.trim().length === digits && n >= min && n <= max ? n : Number.NaN;
+}
