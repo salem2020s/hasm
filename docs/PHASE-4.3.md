@@ -277,10 +277,18 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
        * the system audit chain;
        * once Phase 4.1 builds them, TOTP secrets.
        It is the most sensitive file of a run; package 4.3-2 item 4(a) (an encrypted volume for the backup root) applies to it in particular.
-     * **TOTP secrets, fail closed.** Until package 4.3-2 item 1 is decided, `backup-run` EXCLUDES the data of the TOTP-secret table (`pg_dump --exclude-table-data`, by its opaque name) and records `excludedSecrets: ["totp"]` in the system manifest and in `run.json`.
+     * **TOTP secrets, fail closed.** Until package 4.3-2 item 1 is decided, `backup-run` EXCLUDES the data of the TOTP-secret table (`pg_dump --exclude-table-data`, by its opaque name) and records `"totp"` in the `excluded` list of the system manifest and of `run.json`.
        * Chosen over refusing the run: a refusal would leave the installation with no backup at all once MFA exists.
        * Consequence: after a full-installation restore, users re-enrol MFA through the Phase 4.1 recovery procedure.
-       * The table does not exist yet (only the TOTP primitive, #72). The 4.1 slice that creates it must add it to the exclusion list. A unit test pins the list against the system schema: every table whose logical name marks it as a secret store must be excluded or explicitly encrypted, otherwise the test fails.
+       * **Requirement on Phase 4.1 and on the full-installation restore slice (review round 2, M1).** After a restore without TOTP secrets, a user whose account requires MFA but has no secret is BLOCKED until the Phase 4.1 recovery procedure has run. Such a user is never treated as having no MFA, and never logs in with the password alone. This ties to the OPEN owner item 4.1-3 (lost-authenticator recovery); until that is decided, such accounts stay blocked (fail closed).
+       * The table does not exist yet (only the TOTP primitive, #72). The 4.1 slice that creates it must add it to the exclusion list.
+     * **Ephemeral security data, excluded (lead decision under D-048, review round 2, L1).** `backup-run` also EXCLUDES the DATA of the session table (`SystemSchema.Session`) and of the login-throttle table (`SystemSchema.LoginThrottle`) from the system dump. Both are recorded in the `excluded` list of the system manifest and of `run.json`, with the TOTP entry.
+       * They have no recovery value: a restored installation starts with no sessions and fresh throttling.
+       * Excluding them removes session-token hashes and revivable sessions at the source.
+       * The restore requirement to drop or invalidate sessions stays as defence in depth.
+     * **Explicit secret-store marker (review round 2, L2).** The logical schema dictionary gets an explicit flag, not a naming convention: `SystemSchema` marks each table that stores secrets or ephemeral security data, starting with the session and login-throttle tables and later the TOTP table.
+       * A unit test pins the dump exclusion list against that flag: every flagged table must be excluded (or, after package 4.3-2 item 1, explicitly encrypted), and every excluded table must be flagged; otherwise the test fails.
+       * A new secret-store table cannot reach an unencrypted set by omission.
    * **Companies, `companies/<company id N>/`.**
      * Every company in state Ready, in registry order, is backed up through `CompanyBackupService.BackupCompanyAsync` (its own lock, staging folder, checks and verification).
      * The outcome per company is `ok`, `ok_missing_keys` or `busy`, or `failed` with its code.
@@ -335,7 +343,8 @@ Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the re
     * ok -> 0; partial -> 8; failed -> 1; none -> `backup_missing`; too old -> `backup_stale`;
     * an incomplete newest folder is skipped in favour of the newest complete run and reported;
     * consecutive `busy`/`failed` misses per company are counted, and two or more give a warning.
-  * Secret exclusion: the TOTP exclusion list is pinned against the system schema (see the design).
+  * Secret exclusion: the exclusion list (session, login-throttle, and later TOTP data) equals the set of tables flagged as secret stores in the logical schema dictionary, in both directions (see the design).
+  * **PostgreSQL test 4 also asserts:** the table of contents of the system dump (`pg_restore --list`, read by the test itself) lists the session and login-throttle TABLES but no TABLE DATA entry for them.
   * Retention preview (pure): keep-last, keep-days and both together; the newest complete run is never selected; incomplete and unreadable runs are never selected.
   * Path rules: a root inside the attachment root or the key directory, or containing one, is refused.
   * Run folder: owner-only 0700 and refused if it exists (the slice 3 helper).
@@ -395,7 +404,7 @@ Backup sets today are verified but NOT encrypted or authenticated, and nothing i
 
 **Effect while the package is open:**
 * no set encryption or signature;
-* TOTP secrets (once they exist) are excluded from the system dump;
+* TOTP secrets (once they exist), sessions and login-throttle data are excluded from the system dump;
 * nothing deleted (retention is preview only);
 * no key-directory export;
 * sets remain unencrypted with the documentation requirement of item 4(a);
