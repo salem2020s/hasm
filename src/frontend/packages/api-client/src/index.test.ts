@@ -608,6 +608,16 @@ describe("api client: commercial documents (S6)", () => {
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents");
   });
 
+  it("sends the party, currency and number search to the server and reads the exact total", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ documents: [{ id: "d" }], total: 7 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const page = await client.searchCommercialDocuments({ status: 3, branchId: "b", partyId: "p", currency: "JOD", docType: "t", search: "07 7", offset: 50, limit: 50 });
+    expect(page.total).toBe(7);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents?status=3&docType=t&branchId=b&partyId=p&currency=JOD&search=07+7&offset=50&limit=50");
+    expect(await client.listCommercialDocuments({ partyId: "p" })).toEqual([{ id: "d" }]);
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents?partyId=p");
+  });
+
   it("sends the revision as If-Match on every change and the reason in the body of reject and cancel", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "d" })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);

@@ -311,10 +311,17 @@ describe("commercial documents in English and the Tauri shell", () => {
 const link = (over: Record<string, unknown> = {}) => ({ id: "l1", fromDocumentId: "src", fromLineNo: 1, toDocumentId: "d1", toLineNo: 1, kind: 1, quantity: 4, createdBy: "u1", createdAtUtc: STAMP, replayed: false, ...over });
 const qty = (over: Record<string, unknown> = {}) => ({ lineNo: 1, ordered: 10, fulfilled: 4, invoiced: 0, returned: 0, remainingToFulfil: 6, remainingToInvoice: 10, remainingToReturn: 10, ...over });
 const source = approved({ id: "src", officialNumber: "2026-000002", lines: [{ lineNo: 1, itemId: "i1", unitId: "u-box", quantity: 10, warehouseId: null, lineNet: 100, pricingHash: "b".repeat(64) }, { lineNo: 2, itemId: "i1", unitId: "u-box", quantity: 3, warehouseId: null, lineNet: 30, pricingHash: "c".repeat(64) }] });
+/** What the server does: every filter before paging, newest first (the array is ordered newest first), the exact total. */
+const serverSearch = (all: CommercialDocument[]) => vi.fn().mockImplementation((q: { status?: number; branchId?: string; partyId?: string; currency?: string; docType?: string; search?: string; offset?: number; limit?: number }) => {
+  const m = all.filter((d) => (q.status === undefined || d.status === q.status) && (!q.branchId || d.branchId === q.branchId) && (!q.partyId || d.partyId === q.partyId) && (!q.currency || d.currency === q.currency)
+    && (!q.docType || d.docType === q.docType) && (!q.search || (d.officialNumber ?? "").toLowerCase().includes(q.search.toLowerCase())));
+  const off = q.offset ?? 0;
+  return Promise.resolve({ documents: m.slice(off, off + (q.limit ?? 50)), total: m.length });
+});
 const openLinks = async (over: Record<string, unknown> = {}, perms = PERMS, current: CommercialDocument = approved()) => {
   const client = setup({
     getCommercialDocument: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "src" ? source : current)),
-    listCommercialDocuments: vi.fn().mockResolvedValue([current, source, approved({ id: "other-party", partyId: "p2", officialNumber: "2026-000003" }), approved({ id: "other-ccy", currency: "USD", officialNumber: "2026-000004" })]),
+    searchCommercialDocuments: serverSearch([current, source, approved({ id: "other-party", partyId: "p2", officialNumber: "2026-000003" }), approved({ id: "other-ccy", currency: "USD", officialNumber: "2026-000004" })]),
     ...over,
   }, perms, ["commercial_test"], [current], current);
   await go("#/commercial/documents");
@@ -440,7 +447,7 @@ describe("commercial document links (S2 API on the screen)", () => {
   it("offers only the sources whose type is registered for the chosen kind", async () => {
     await openLinks({
       listCommercialLinkPairs: vi.fn().mockResolvedValue([{ source: "commercial_test", target: "commercial_test", kind: 1 }, { source: "special_source", target: "commercial_test", kind: 3 }]),
-      listCommercialDocuments: vi.fn().mockResolvedValue([approved(), source, approved({ id: "sp", docType: "special_source", officialNumber: "2026-000009" })]),
+      searchCommercialDocuments: serverSearch([approved(), source, approved({ id: "sp", docType: "special_source", officialNumber: "2026-000009" })]),
     });
     const kindSelect = await screen.findByLabelText(/^نوع الرابط/);
     expect(within(kindSelect).getAllByRole("option").map((o) => o.textContent)).toEqual(["— اختر —", "ينفّذ", "يُرجع"]);
@@ -480,18 +487,21 @@ describe("commercial document links (S2 API on the screen)", () => {
     expect(keyOf(3)).not.toBe(keyOf(2));
   });
 
-  it("reaches older approved sources: the picker pages the server list by status and branch and finds a source by its number beyond the first hundred", async () => {
-    const filler = (n: number) => Array.from({ length: 100 }, (_, i) => approved({ id: `f${n}-${i}`, partyId: "p2", officialNumber: `2025-${n}${String(i).padStart(4, "0")}` }));
-    const old = approved({ id: "src", officialNumber: "2024-000777" });
-    const list = vi.fn().mockImplementation((q: { offset?: number }) => Promise.resolve(q.offset === 0 ? [approved(), ...filler(1).slice(1)] : q.offset === 100 ? filler(2) : [old]));
-    await openLinks({ listCommercialDocuments: list, getCommercialDocument: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "src" ? source : approved())) });
+  it("reaches older approved sources: every filter is sent to the server, the page and total are exact, and an old source beyond the first page is found by its number", async () => {
+    const recent = Array.from({ length: 120 }, (_, i) => approved({ id: `r${i}`, officialNumber: `2025-${String(1000 + i)}`, createdAtUtc: `2025-06-${String(28 - Math.floor(i / 10)).padStart(2, "0")}T10:00:00Z` }));
+    const old = approved({ id: "src", officialNumber: "2024-000777", createdAtUtc: "2024-01-01T10:00:00Z" });
+    const search = serverSearch([approved(), ...recent, old, approved({ id: "other-party", partyId: "p2", officialNumber: "2025-9999" }), approved({ id: "other-ccy", currency: "USD", officialNumber: "2025-9998" })]);
+    await openLinks({ searchCommercialDocuments: search, getCommercialDocument: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "src" ? source : approved())) });
     await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
     const select = screen.getByLabelText("المستند المصدر");
-    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2024-000777"));   // found on the third page
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ status: 3, branchId: "b1", offset: 200, limit: 100 }));
-    expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2025-");                              // another party's documents are never offered
+    await waitFor(() => expect(within(select).getAllByRole("option").length).toBe(50));                  // one bounded page (50 from the server, this document itself removed) plus the empty choice: the old source is NOT among the newest
+    expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2024-000777");
+    await waitFor(() => expect(within(screen.getByTestId("cl-source-picker")).getByRole("status")).toHaveTextContent(/49.*121/));   // the exact total: the 120 recent ones and the old one; this document itself is never its own source
+    expect(search).toHaveBeenCalledWith({ status: 3, branchId: "b1", partyId: "p1", currency: "JOD", docType: "commercial_test", search: undefined, limit: 50 });
     await userEvent.type(screen.getByLabelText(/المستند المصدر — /), "777");
-    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2024-000777"));
+    await waitFor(() => expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2024-000777"));   // reached by its number
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ search: "777", partyId: "p1", currency: "JOD", status: 3, branchId: "b1" }));
+    expect(within(select).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2025-9999");                           // another party is never offered
     await userEvent.selectOptions(select, "src");
     expect(await screen.findByLabelText(/^سطر المصدر/)).toBeEnabled();
   });

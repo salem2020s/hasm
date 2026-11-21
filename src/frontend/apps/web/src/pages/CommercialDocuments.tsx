@@ -461,8 +461,7 @@ function ItemPicker({ id, item, disabled, error, onPick }: { id: string; item: I
 }
 
 const LINK_KINDS: DocumentLinkKind[] = [1, 2, 3, 4];
-const SCAN_PAGE = 100;
-const SCAN_PAGES = 10;   // at most 1000 approved documents of the branch are scanned per search
+const SOURCE_PAGE = 50;   // one bounded page of source candidates; the picker says when more match and the user refines the number search
 /** The server field of a refusal to the form field that shows it (the target document is this one, so its refusal is shown on the source). */
 const LINK_FIELD: Record<string, string> = { fromDocumentId: "fromDocumentId", toDocumentId: "fromDocumentId", fromLineNo: "fromLineNo", toLineNo: "toLineNo", kind: "kind", quantity: "quantity", idempotencyKey: "quantity" };
 
@@ -513,19 +512,15 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   const sourceTypes = new Set(targetPairs.filter((p) => p.kind === kind).map((p) => p.source));
 
   /**
-   * One bounded page of source candidates for the search text. The server filters by status and branch and pages the list (newest first); the party, the currency, the registered source types and the number search are applied
-   * here to up to SCAN_PAGES pages, so older approved sources stay reachable by searching their number (the list API has no party, currency or search filter; the server checks the same rules again when linking).
+   * One bounded page of source candidates for the search text. EVERY filter runs on the server before paging (status, branch, the party and the currency of this document, the registered source type, and the number search),
+   * so the page and its total are exact and an older approved source is reached by searching its number. A kind may have several registered source types: one query per type, merged newest first.
    */
   async function loadSources(search: string): Promise<PickerPage<CommercialDocument>> {
-    const needle = search.toLowerCase();
-    const found: CommercialDocument[] = [];
-    for (let page = 0; page < SCAN_PAGES; page++) {
-      const list = await auth.api.listCommercialDocuments({ status: 3, branchId: doc.branchId, offset: page * SCAN_PAGE, limit: SCAN_PAGE });
-      for (const d of list) if (d.id !== doc.id && d.partyId === doc.partyId && d.currency === doc.currency && sourceTypes.has(d.docType) && (!needle || (d.officialNumber ?? "").toLowerCase().includes(needle))) found.push(d);
-      if (list.length < SCAN_PAGE) break;
-    }
-    setNames((m) => { const next = new Map(m); for (const d of found) if (d.officialNumber) next.set(d.id, d.officialNumber); return next; });
-    return { items: found.slice(0, 50), total: found.length };
+    const pages = await Promise.all([...sourceTypes].map((type) => auth.api.searchCommercialDocuments({ status: 3, branchId: doc.branchId, partyId: doc.partyId, currency: doc.currency, docType: type, search: search || undefined, limit: SOURCE_PAGE })));
+    const items = pages.flatMap((p) => p.documents).filter((d) => d.id !== doc.id).sort((x, y) => y.createdAtUtc.localeCompare(x.createdAtUtc)).slice(0, SOURCE_PAGE);
+    setNames((m) => { const next = new Map(m); for (const d of items) if (d.officialNumber) next.set(d.id, d.officialNumber); return next; });
+    const selfMatches = sourceTypes.has(doc.docType) && (!search || (doc.officialNumber ?? "").toLowerCase().includes(search.toLowerCase()));   // this document is never its own source
+    return { items, total: pages.reduce((n, p) => n + p.total, 0) - (selfMatches ? 1 : 0) };
   }
 
   async function chooseSource(id: string) {

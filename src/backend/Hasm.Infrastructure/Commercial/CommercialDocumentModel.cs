@@ -95,7 +95,11 @@ public sealed record CommercialDocumentView(Guid Id, string DocType, Guid Branch
     string? OfficialNumber = null, Guid? ApprovedBy = null, DateTimeOffset? ApprovedAtUtc = null, DateTimeOffset? SealedAtUtc = null, decimal? ExchangeRate = null, decimal? TotalNet = null, decimal? TotalTax = null, decimal? TotalGross = null,
     Guid? LastEditedBy = null, string? Fingerprint = null, Guid? FiscalYearId = null);
 
-public sealed record CommercialDocumentFilter(CommercialStatus? Status = null, string? DocType = null, Guid? BranchId = null, IReadOnlyList<Guid>? AllowedBranches = null, int Limit = 50, int Offset = 0);
+/// <summary><c>PartyId</c>, <c>Currency</c> and <c>Search</c> (a literal part of the official number, case-insensitive) are server-side filters applied BEFORE paging, so a page and its total are exact (S6 Links, D-048).</summary>
+public sealed record CommercialDocumentFilter(CommercialStatus? Status = null, string? DocType = null, Guid? BranchId = null, IReadOnlyList<Guid>? AllowedBranches = null, int Limit = 50, int Offset = 0, Guid? PartyId = null, string? Currency = null, string? Search = null);
+
+/// <summary>One page of document headers and the number of documents matching the filters in all (before paging).</summary>
+public sealed record CommercialDocumentPage(IReadOnlyList<CommercialDocumentView> Items, long Total);
 
 /// <summary>The tax operation key the server uses to resolve taxes for a commercial document until the concrete sales and purchase types (3.15/3.16) define their own (recorded decision).</summary>
 public static class CommercialDefaults

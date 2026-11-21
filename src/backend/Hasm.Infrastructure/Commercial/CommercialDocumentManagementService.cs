@@ -44,14 +44,21 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     /// <summary>Lists the documents of the branches the caller may view (the restriction runs inside the query, before paging).</summary>
     public async Task<ConfigResult<IReadOnlyList<CommercialDocumentView>>> ListAsync(Guid user, Guid company, CommercialDocumentFilter filter, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(user, company, filter, ct);
+        return page.IsOk ? ConfigResult<IReadOnlyList<CommercialDocumentView>>.Ok(page.Value!.Items) : ConfigResult<IReadOnlyList<CommercialDocumentView>>.Fail(page.Status, page.Code!);
+    }
+
+    /// <summary>The same branch-restricted list with the exact total of the matching documents (every filter, including party, currency and number search, is applied by the query before paging).</summary>
+    public async Task<ConfigResult<CommercialDocumentPage>> ListPageAsync(Guid user, Guid company, CommercialDocumentFilter filter, CancellationToken ct = default)
+    {
         var eff = await access.GetEffectivePermissionsAsync(user, company, ct);
         IReadOnlyList<Guid>? allowed = null;   // null = company-wide view
         if (!eff.Has(PermissionCatalog.Codes.CommercialView, ScopeTarget.Company))
         {
             allowed = [.. eff.Grants.Where(g => g.Scope == ScopeKind.Branch && g.ScopeId is not null && g.Permissions.Contains(PermissionCatalog.Codes.CommercialView)).Select(g => g.ScopeId!.Value).Distinct()];
-            if (allowed.Count == 0) return Denied<IReadOnlyList<CommercialDocumentView>>();
+            if (allowed.Count == 0) return Denied<CommercialDocumentPage>();
         }
-        return ConfigResult<IReadOnlyList<CommercialDocumentView>>.Ok(await documents.ListAsync(company, filter with { AllowedBranches = allowed }, ct));
+        return ConfigResult<CommercialDocumentPage>.Ok(await documents.ListPageAsync(company, filter with { AllowedBranches = allowed }, ct));
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> CreateAsync(Guid user, Guid company, CommercialDocumentInput? input, CancellationToken ct = default)

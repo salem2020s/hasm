@@ -113,7 +113,12 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     }
 
     /// <summary>Headers only (no lines or events). <see cref="CommercialDocumentFilter.AllowedBranches"/> restricts the query itself, so paging only walks documents the caller may see.</summary>
-    public async Task<IReadOnlyList<CommercialDocumentView>> ListAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default)
+    public async Task<IReadOnlyList<CommercialDocumentView>> ListAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default) => (await ListPageAsync(companyId, filter, ct)).Items;
+
+    /// <summary>
+    /// One page of headers with the exact total. Every filter is a bound parameter and is applied before paging (newest first); the search is a literal, case-insensitive part of the official number (wildcards of the text are escaped).
+    /// </summary>
+    public async Task<CommercialDocumentPage> ListPageAsync(Guid companyId, CommercialDocumentFilter filter, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
         var where = new List<string>();
@@ -121,13 +126,18 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         if (filter.Status is { } st) { where.Add($"{CD.Status} = @st"); q.Parameters.AddWithValue("st", (short)st); }
         if (!string.IsNullOrWhiteSpace(filter.DocType)) { where.Add($"{CD.DocType} = @dt"); q.Parameters.AddWithValue("dt", filter.DocType); }
         if (filter.BranchId is { } b) { where.Add($"{CD.BranchId} = @br"); q.Parameters.AddWithValue("br", b); }
+        if (filter.PartyId is { } pid) { where.Add($"{CD.PartyId} = @pa"); q.Parameters.AddWithValue("pa", pid); }
+        if (!string.IsNullOrWhiteSpace(filter.Currency)) { where.Add($"{CD.Currency} = @cu"); q.Parameters.AddWithValue("cu", filter.Currency.Trim().ToUpperInvariant()); }
+        if (ListPaging.TryCleanSearch(filter.Search, out var cleaned) && cleaned is not null) { where.Add(ListPaging.LikeClause("like", CDA.OfficialNumber)); q.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
         if (filter.AllowedBranches is { } allowed) { where.Add($"{CD.BranchId} = ANY(@ab)"); q.Parameters.Add(new NpgsqlParameter("ab", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = allowed.ToArray() }); }
-        q.CommandText = $"SELECT {DocCols} FROM {CD.Table}{(where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where))} ORDER BY {CD.CreatedAtUtc} DESC, {CD.Id} LIMIT @lim OFFSET @off";
-        q.Parameters.AddWithValue("lim", Math.Clamp(filter.Limit, 1, 200)); q.Parameters.AddWithValue("off", Math.Max(0, filter.Offset));
-        var rows = new List<CommercialDocumentView>();
-        await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct)) rows.Add(ReadHeader(r));
-        return rows;
+        var fromWhere = $"FROM {CD.Table}{(where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where))}";
+        var off = Math.Max(0, filter.Offset);
+        q.CommandText = $"SELECT {DocCols}, count(*) OVER () {fromWhere} ORDER BY {CD.CreatedAtUtc} DESC, {CD.Id} LIMIT @lim OFFSET @off";
+        q.Parameters.AddWithValue("lim", Math.Clamp(filter.Limit, 1, 200)); q.Parameters.AddWithValue("off", off);
+        var rows = new List<CommercialDocumentView>(); long total = 0;
+        await using (var r = await q.ExecuteReaderAsync(ct)) while (await r.ReadAsync(ct)) { rows.Add(ReadHeader(r)); total = r.GetInt64(25); }
+        if (rows.Count == 0 && off > 0) total = await PagedSql.TotalAsync(conn, fromWhere, q.Parameters, ct);
+        return new CommercialDocumentPage(rows, total);
     }
 
     // ================================================================================================================ validation
