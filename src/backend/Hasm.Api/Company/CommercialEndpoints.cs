@@ -38,6 +38,7 @@ public static class CommercialEndpoints
         var g = app.MapGroup("/api/v1/company/commercial-documents").RequireAuthorization();
         g.MapGet("/", List);
         g.MapPost("/", Create).WithMetadata(new BodyLimit());
+        g.MapGet("/types", Types);   // S6: the registered document types, names only (empty in production until 3.15/3.16)
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/submit", Submit);
@@ -54,7 +55,7 @@ public static class CommercialEndpoints
     private static object Body(CommercialDocumentView d) => new
     {
         id = d.Id, docType = d.DocType, branchId = d.BranchId, partyId = d.PartyId, currency = d.Currency, documentDate = d.DocumentDate, mode = (short)d.Mode, status = (short)d.Status, note = d.Note,
-        submittedBy = d.SubmittedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
+        submittedBy = d.SubmittedBy, lastEditedBy = d.LastEditedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
         lines = d.Lines.Select(l => new { lineNo = l.LineNo, itemId = l.ItemId, unitId = l.UnitId, quantity = l.Quantity, warehouseId = l.WarehouseId, lineNet = l.LineNet, pricingHash = l.PricingHash }),
         events = d.Events.Select(e => new { kind = (short)e.Kind, fromStatus = e.FromStatus is { } f ? (short?)f : null, toStatus = (short)e.ToStatus, revision = e.Revision, actorUserId = e.ActorUserId, reason = e.Reason, atUtc = e.AtUtc }),
     };
@@ -68,9 +69,19 @@ public static class CommercialEndpoints
         return CompanyConfigurationEndpoints.Map(await call(actor!.UserId, actor.CompanyId, expected), body, revision);
     }
 
-    private static Task<IResult> List(HttpContext http, AccessService access, CommercialDocumentManagementService svc, int? status, string? docType, Guid? branchId, int? limit, int? offset) =>
-        Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0), http.RequestAborted),
-            v => new { documents = v.Select(Body) }, null);
+    /// <summary>The list. <c>partyId</c>, <c>currency</c> and <c>search</c> (a literal part of the official number) filter on the SERVER before paging, and the answer carries the exact <c>total</c>; an invalid value answers the standard 400 <c>invalid_request</c> naming the field.</summary>
+    private static Task<IResult> List(HttpContext http, AccessService access, CommercialDocumentManagementService svc, int? status, string? docType, Guid? branchId, int? limit, int? offset, string? partyId, string? currency, string? search)
+    {
+        Guid? party = null;
+        if (!string.IsNullOrWhiteSpace(partyId)) { if (!Guid.TryParse(partyId, out var g)) return Task.FromResult(ListParameters.Invalid("partyId")); party = g; }
+        string? ccy = null;
+        if (!string.IsNullOrWhiteSpace(currency)) { ccy = currency.Trim(); if (ccy.Length != 3 || !ccy.All(char.IsAsciiLetter)) return Task.FromResult(ListParameters.Invalid("currency")); ccy = ccy.ToUpperInvariant(); }
+        if (!ListPaging.TryCleanSearch(search, out var cleaned)) return Task.FromResult(ListParameters.Invalid("search"));
+        return Run(http, access, false, (u, c, _) => svc.ListPageAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0, party, ccy, cleaned), http.RequestAborted),
+            v => new { documents = v.Items.Select(Body), total = v.Total }, null);
+    }
+    private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }) }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.GetAsync(u, c, id, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Create(CommercialDocumentInput? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>

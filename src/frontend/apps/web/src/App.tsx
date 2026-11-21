@@ -17,6 +17,7 @@ import { ReportCenterPage } from "./pages/ReportCenter";
 import { InventoryItemsPage } from "./pages/InventoryItems";
 import { InventoryGroupsPage } from "./pages/InventoryGroups";
 import { InventoryUnitsPage } from "./pages/InventoryUnits";
+import { CommercialDocumentsPage } from "./pages/CommercialDocuments";
 import { StockDocumentsPage } from "./pages/StockDocuments";
 import { InventoryAccountingPage } from "./pages/InventoryAccounting";
 import { StockBalancesPage } from "./pages/StockBalances";
@@ -97,6 +98,7 @@ const ROUTES: RouteDef[] = [
   { path: "/inventory/items", permission: "company.items.view", element: <InventoryItemsPage /> },
   { path: "/inventory/groups", anyOf: ["company.itemgroups.view", "company.items.view"], element: <InventoryGroupsPage /> },
   { path: "/inventory/units", anyOf: ["company.units.view", "company.items.view"], element: <InventoryUnitsPage /> },
+  { path: "/commercial/documents", anyScope: "company.commercialdocs.view", element: <CommercialDocumentsPage /> },
   { path: "/accounting/statements", anyScope: "company.financialstatements.view", element: <FinancialStatementsPage /> },
   { path: "/accounting/statement-mapping", permission: "company.statementmapping.view", element: <StatementMappingPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
@@ -165,12 +167,15 @@ function Shell() {
     if (auth.canAny("company.stockbalance.view")) inventory.push({ id: "/inventory/stock-balances", label: t("nav.stock_balances") });
     if (auth.canAny("company.stocktake.view")) inventory.push({ id: "/inventory/stocktakes", label: t("nav.stocktakes") });
     if (auth.canAny("company.stockdocs.view")) inventory.push({ id: "/inventory/negative-stock", label: t("nav.negative_stock") });
+    // Commercial documents (3.13 S6, D-079): shown to anyone who may view them in any scope; the screen itself reports "no document types activated" until the concrete types are activated (3.15/3.16).
+    const commercial: MenuItem[] = auth.canAny("company.commercialdocs.view") || auth.can("company.commercialdocs.view") ? [{ id: "/commercial/documents", label: t("nav.commercial_documents") }] : [];
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
       { id: "/", label: t("nav.home"), icon: <HomeIcon /> },
       ...(accounting.length ? [{ id: "accounting", label: t("nav.accounting"), icon: <AccountingIcon />, children: accounting } as MenuItem] : [soon("accounting", t("nav.accounting"), <AccountingIcon />)]),
       ...(inventory.length ? [{ id: "inventory", label: t("nav.inventory"), icon: <WarehouseIcon />, children: inventory } as MenuItem] : [soon("warehouses", t("nav.warehouses"), <WarehouseIcon />)]),
+      ...(commercial.length ? [{ id: "commercial", label: t("nav.commercial"), icon: <SalesIcon />, children: commercial } as MenuItem] : []),
       soon("sales", t("nav.sales"), <SalesIcon />),
       soon("purchases", t("nav.purchases"), <PurchasesIcon />),
       soon("reports", t("nav.reports"), <ReportsIcon />),
