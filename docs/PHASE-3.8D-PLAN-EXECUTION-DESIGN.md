@@ -351,4 +351,23 @@ Scope: one forward-only, additive company migration, its logical dictionary, the
 | posting guard on the stock posting table | section 4 (X7) | **an addition to the list of section 3, marked for the reviewer:** the database also refuses a posting of a plan-bound document outside that plan's execution, so N13 has a database rule; it is additive and changes no existing object |
 | deferred checks on the execution and on the member | 3.4 | executed plan in this transaction, closure hash, members, pairing, lineage, the event's posting, the audit event (type, subject, target) |
 
-**Tests (all as the real runtime role on the isolated cluster, each N in the test name):** `PlanExecutionGuardTests` (N1, N4, N6, N7, N12, N16, N22, N23), `PlanExecutionPlanTests` (N3, N5, N24, N32), `PlanExecutionEpochTests` (N2, N8, N9, N10, N11, N13, N14, N15, N19, N20, N21, N26, N27, N29, N30, N31), `PlanExecutionConcurrencyTests` (N28), `PlanExecutionCatalogTests` (N17, N18), and N25 as the pinned absence of the optional definer of 3.6. Where a case needs the executor to be complete (N13, N14, N15, N21, N23, N27, N29), the test proves the database rule now and states what the executor-level variant adds.
+**Tests (36, on the isolated cluster; every statement that probes a rule runs as the REAL per-company runtime role, and an execution runs inside the real audited company transaction, so its audit event is genuine):**
+
+| Class | Tests |
+|---|---|
+| `PlanExecutionGuardTests` (9) | N1, N4, N6, N7, N12, N16, N22, N23, N25 |
+| `PlanExecutionPlanTests` (6) | L1/L2 (byte-exact hash, one transaction), N3 (two tests), N5, N24, N32 |
+| `PlanExecutionEpochTests` (17) | a complete epoch (history byte-identical, replayed figures, `ReconcileAsync` empty), N2, N8, N9, N10, N11, N13, N14, N15, N19, N20, N21, N26, N27, N29, N30, N31 |
+| `PlanExecutionCatalogTests` (4) | N17, N18, N28 (two tests: the close waits for the execution; the execution waits for the close and is refused) |
+
+**What the executor-level variants add later (step 5), stated in each test:** N13, N14 and N27 (the services answer `document_bound_to_plan` and `operation_rewritten_by_epoch` as result codes before the database rule; today the database rule answers through the real services), N15 (the planner refuses with `plan_on_epoch_position`), N21 (the executor returns the existing execution), N23 (the barrier accepts an earlier date only for a member of this transaction's execution), N28 (the real close service with its probes), N29 and the complete epoch (the executor derives the rows from the read-only replay, also for FIFO), N25 (only if the optional definer of 3.6 is adopted).
+
+**Implementation notes for the reviewer (none changes the approved design; each is a table-layout or fail-closed choice of section 9):**
+* X5 in the entry guard is expressed through closures: a position in the closure of ANOTHER plan that has an execution is refused. Every epoch entry lies in its plan's closure (3.3(2a)), so this contains "the position has an epoch member of another plan" and equals TM-D12; it is one indexed lookup per entry instead of a scan of the position's history.
+* The storno and rebook rules are slightly stricter than the text: a storno entry must mirror its original (kind, opposite direction, quantity, amount, the ORIGINAL date, the member's original operation), and a rebook entry repeats its original's position, kind, direction, quantity and date (X2). An original operation is stornoed once and rebooked once, ever (unique index).
+* Segregation of duties uses every editor of the event document (its history), which contains the last editor.
+* The execution row is append-only, so it names the event's posting through a deferred foreign key and the journals are recorded in a child table.
+* The audit binding uses the audit table's subject column for the plan and its target reference column for the execution (0002 is not altered).
+* Between applying this migration and re-running `grant-company-runtime`, the runtime role has no SELECT on the new tables, so the new guards make ordinary posting fail closed until the grants are applied (the existing gate already refuses a company whose runtime grants are incomplete).
+* The functions do not pin `search_path` (no existing guard does); N25 pins that the runtime role cannot create any object, temporary ones included, that could shadow a guard's table or function.
+* Compatibility with the pending migration-guard hardening (#188) was checked: the migration is accepted by that guard as it stands.
