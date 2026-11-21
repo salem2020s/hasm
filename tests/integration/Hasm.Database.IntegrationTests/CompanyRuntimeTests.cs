@@ -269,7 +269,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
 
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], outcome.Applied);
+        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], outcome.Applied);
         Assert.True(await HasAuditTable(legacy));
         Assert.Equal(7, await InCompany<int>(legacy.PhysicalDatabaseName, "SELECT a FROM zz_existing"));
         Assert.Equal(legacy.Id, await InCompany<Guid>(legacy.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
@@ -365,7 +365,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var g = outcomes.Single(o => o.CompanyId == good.Id);
         var b = outcomes.Single(o => o.CompanyId == bad.Id);
         Assert.Equal(CompanyMigrationStatus.Migrated, g.Status);
-        Assert.Equal([31], g.Applied);
+        Assert.Equal([32], g.Applied);
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
