@@ -54,6 +54,17 @@ describe("fiscal year: Arabic-Indic start year", () => {
     const c = await create("٢٠٢٧");
     await waitFor(() => expect(c).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2027-01-01" })));
   });
+
+  it.each([["۲۰۲۷", "Persian"], ["٢0٢7", "mixed Arabic-Indic and Latin"], ["2۰۲٧", "mixed Persian and Arabic-Indic"]])("%s (%s) is accepted and sent as 2027-01-01", async (text) => {
+    const c = await create(text);
+    await waitFor(() => expect(c).toHaveBeenCalledWith(expect.objectContaining({ startDate: "2027-01-01" })));
+  });
+
+  it.each(["٢٠٢x", "٢٧", "١٨٩٩", "٢٠٢٫٧"])("refuses the invalid year %s: nothing is sent and the field shows its error", async (text) => {
+    const c = await create(text);
+    expect(await screen.findByText(/الصيغة غير صحيحة/)).toBeInTheDocument();
+    expect(c).not.toHaveBeenCalled();
+  });
 });
 
 describe("stock document: Arabic-Indic quantity", () => {
