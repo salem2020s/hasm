@@ -30,16 +30,17 @@ const isolate = (s: string) => `\u2068${s}\u2069`;
 function HoldRecordPicker({ kind, value, onChange, error }: { kind: string; value: string; onChange: (id: string) => void; error?: string }) {
   const { t, locale } = useI18n();
   const auth = useAuth();
-  const [denied, setDenied] = useState<string | null>(null);   // the kind for which the server answered 403
+  const [denied, setDenied] = useState<ReadonlySet<string>>(new Set());   // EVERY kind for which the server answered 403 (switching kinds and back keeps the fallback)
+  // `auth.can` is the company-wide check: a user who holds the view permission only for some branches gets the typed fallback here (the picker is offered only with the company-wide permission).
   const permitted = kind === "local_party" ? auth.can("company.parties.view") : auth.can("company.items.view");
   const load = useCallback((search: string): Promise<{ items: RecordChoice[]; total: number }> => {
     const s = search === "" ? undefined : search;
     const run: Promise<{ items: RecordChoice[]; total: number }> = kind === "local_party"
       ? auth.api.listParties({ search: s, limit: RECORD_PAGE_LIMIT }).then((r) => ({ items: r.parties.map((p) => ({ id: p.id, label: `${isolate(p.code)} \u2014 ${isolate(p.displayName)}` })), total: r.total }))
       : auth.api.listInventoryItems({ search: s, limit: RECORD_PAGE_LIMIT }).then((r) => ({ items: r.items.map((i) => ({ id: i.id, label: `${isolate(i.code)} \u2014 ${isolate((locale === "ar" ? i.nameAr ?? i.nameEn : i.nameEn ?? i.nameAr) ?? i.code)}` })), total: r.total }));
-    return run.catch((e) => { if (e instanceof ApiError && e.status === 403) setDenied(kind); else auth.handleError(e); throw e; });
+    return run.catch((e) => { if (e instanceof ApiError && e.status === 403) setDenied((d) => new Set(d).add(kind)); else auth.handleError(e); throw e; });
   }, [auth.api, auth.handleError, kind, locale]);   // eslint-disable-line react-hooks/exhaustive-deps
-  if (!permitted || denied === kind) {
+  if (!permitted || denied.has(kind)) {
     return (
       <Field id="ret-hsubject" label={t("ret.hold.subject_id")} required error={error} hint={t("ret.hold.record_unavailable")}>
         {(p) => <input {...p} dir="ltr" value={value} onChange={(e) => onChange(e.target.value)} />}

@@ -490,14 +490,63 @@ describe("attachment retention screen", () => {
       expect(screen.getByRole("button", { name: E("picker.retry") })).toBeInTheDocument();
     });
 
-    it("has the Arabic wording for the picker, the fallback and the attachment hint", async () => {
-      render({ listParties: vi.fn().mockResolvedValue({ parties: [party], total: 1 }) }, caps(), [...perms, "company.parties.view"]);
+    it("shows the Arabic picker, the Arabic fallback hint and the Arabic attachment hint", async () => {
+      render({ listParties: vi.fn().mockResolvedValue({ parties: [party], total: 1 }) }, caps(), [...perms, "company.parties.view"]);   // parties yes, items no
       await go();
       await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${A("ret.tab.holds")}`) }));
       fireEvent.change(screen.getByLabelText(A("ret.hold.scope"), { selector: "select" }), { target: { value: "2" } });
-      expect(await screen.findByRole("combobox", { name: A("ret.hold.record") })).toBeInTheDocument();
-      expect(A("ret.hold.record_unavailable")).not.toBe(E("ret.hold.record_unavailable"));
-      expect(A("ret.hold.attachment_hint")).not.toBe(E("ret.hold.attachment_hint"));
+      expect(await screen.findByRole("combobox", { name: A("ret.hold.record") })).toBeInTheDocument();                                  // the Arabic picker
+      expect(screen.queryByText(A("ret.hold.record_unavailable"))).toBeNull();
+      fireEvent.change(screen.getByLabelText(A("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      expect(await screen.findByText(A("ret.hold.record_unavailable"))).toBeInTheDocument();                                            // the Arabic fallback hint
+      expect(screen.getByLabelText(new RegExp(`^${A("ret.hold.subject_id")}`))).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText(A("ret.hold.scope"), { selector: "select" }), { target: { value: "3" } });
+      expect(await screen.findByText(A("ret.hold.attachment_pick_record"))).toBeInTheDocument();                                        // the Arabic "choose the record first"
+      await userEvent.click(screen.getByRole("button", { name: A("ret.hold.attachment_use_id") }));                                     // the hint belongs to the typed-id fallback
+      expect(await screen.findByText(A("ret.hold.attachment_hint"))).toBeInTheDocument();                                               // the Arabic attachment hint
+    });
+
+    it("remembers a 403 for a kind: switching to the other kind keeps its picker, and switching back keeps the fallback", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn().mockRejectedValue(apiError(403, "forbidden"));
+      const listInventoryItems = vi.fn().mockResolvedValue({ items: [item], total: 1 });
+      render({ listParties, listInventoryItems }, caps(), [...perms, "company.parties.view", "company.items.view"]);
+      await openHoldForm("2");
+      expect(await screen.findByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();                                            // parties: 403 -> typed id
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.record") });                                                   // items: the picker works
+      await waitFor(() => expect(within(box).getByRole("option", { name: /APPLE/ })).toBeInTheDocument());
+      expect(screen.queryByText(E("ret.hold.record_unavailable"))).toBeNull();
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "local_party" } });
+      expect(await screen.findByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();                                            // back to parties: still the fallback
+      expect(listParties).toHaveBeenCalledTimes(1);                                                                                      // and the denied list is not called again
+    });
+
+    it("a 403 on items does not disable the party picker (denied kinds are remembered separately)", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn().mockResolvedValue({ parties: [party], total: 1 });
+      const listInventoryItems = vi.fn().mockRejectedValue(apiError(403, "forbidden"));
+      render({ listParties, listInventoryItems }, caps(), [...perms, "company.parties.view", "company.items.view"]);
+      await openHoldForm("2");
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.record") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /P1/ })).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      expect(await screen.findByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "local_party" } });
+      expect(await screen.findByRole("combobox", { name: E("ret.hold.record") })).toBeInTheDocument();                                  // parties picker is back
+    });
+
+    it("a user holding only the items view permission gets the item picker and the party fallback", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn();
+      const listInventoryItems = vi.fn().mockResolvedValue({ items: [item], total: 1 });
+      render({ listParties, listInventoryItems }, caps(), [...perms, "company.items.view"]);
+      await openHoldForm("2");
+      expect(await screen.findByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();                                            // default kind is party: no permission
+      expect(screen.queryByRole("combobox", { name: E("ret.hold.record") })).toBeNull();
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      expect(await screen.findByRole("combobox", { name: E("ret.hold.record") })).toBeInTheDocument();
+      expect(listParties).not.toHaveBeenCalled();
     });
   });
 
