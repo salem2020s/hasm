@@ -242,12 +242,135 @@ Goal: one company is backed up and trial-restored END TO END from the company re
     * migrating the trial copy automatically (a write the trial restore must not make);
     * ignoring checksums (a set from a diverged build would pass).
 
+## Slice 4: backup runs, monitoring and measured durations - PLAN (docs only; awaits independent review before any code)
+Sources: SRS 16 (manual and scheduled backups, alerting and monitoring of the result, real restore tests, RPO/RTO measured rather than promised), SRS 14.4 (database and attachment folders backed up together), RELEASE1-ACCEPTANCE G. Risk: Critical (ROADMAP 4.3).
+
+**Goal.** Back up the WHOLE installation in one unattended, schedulable run: the system database plus every Ready company (slice 3 sets). The run writes a machine-readable report. A status command lets an operating-system scheduler or monitor raise an alert. Durations are measured and recorded. Retention is evaluated as a preview only.
+
+**Why this slice and not encryption first.** Encryption, deleting old backups and backing up the key directory each change key custody or the retention of financial data, so they are owner decisions. They are collected in ONE package (4.3-2, below). This slice is the largest remaining verifiable step that depends on none of them, and every later slice builds on its run layout.
+
+* **Migrations: none.** Nothing is stored in any database; the run report lives in the run folder. If implementation shows a migration is needed, work stops and the lead allocates the numbers (next free: company 0030, system 0030).
+* **No API endpoint and no UI.** The shared Web/Tauri frontend is unaffected; a backup screen belongs to the later monitoring UI.
+* **What it does not meet.** This slice does NOT meet RELEASE1-ACCEPTANCE G by itself: sets stay unencrypted until package 4.3-2 is decided, nothing is deleted automatically, full-installation restore and the cutover are not built, and the restore acknowledgement remains BLOCKED (4.3-1).
+
+### Design
+1. **`BackupRunService`** (`Hasm.Infrastructure.Backup`, over `CompanyBackupService` and `PgBackupTool`):
+   * **`RunAsync(root)`, refusals before anything is written:**
+     * the root must be absolute and outside the attachment root and the key directory, in both directions (`destination_overlaps_source`);
+     * only one run per installation: a session advisory lock in a dedicated namespace on the system database (`run_in_progress`, exit code 4).
+   * **Run folder.** `<root>/<run id>/`, where the run id is `yyyyMMddTHHmmssZ-<8 hex>`, so ids sort by time. The folder is created owner-only (0700, verified on Linux, as the slice 3 staging folder) and refused if it already exists.
+   * **System database, `system/`.**
+     * `database.dump` comes from a NEW `PgBackupTool.DumpSystemAsync`, which dumps exactly the configured system database name (never a caller-supplied name). The company paths keep refusing the system database.
+     * `manifest.json` is a `SystemBackupManifest`: version, kind `system`, creation time, the dump's size and SHA-256, the captured locale, and the highest system migration version.
+     * After writing, the dump's table of contents is checked to be readable with `pg_restore --list`; only the exit code is used, the output is discarded. Restoring the system database is the later full-installation slice.
+   * **Companies, `companies/<company id N>/`.**
+     * Every company in state Ready, in registry order, is backed up through `CompanyBackupService.BackupCompanyAsync` (its own lock, staging folder, checks and verification).
+     * The outcome per company is `ok`, `ok_missing_keys` or `busy`, or `failed` with its code.
+     * One company's failure never stops the others. Companies not in state Ready are counted as skipped.
+   * **Run report, `run.json`.** Owner-only, written LAST (temp file then rename), so a run folder without `run.json` is an incomplete run. Contents:
+     * the run id, start and finish times (UTC) and duration;
+     * the system outcome and duration;
+     * per company: the company id, outcome code, duration in milliseconds, dump bytes, number of attachment files, number of missing key ids;
+     * totals, and the verdict: `ok`, `partial` (some company or the key coverage failed) or `failed` (the system dump failed or no set was written);
+     * the union of missing key ids (ids only);
+     * the PostgreSQL client major version;
+     * `encrypted: false`, stated explicitly until 4.3-2.
+     * Never a physical database name, a path inside the attachment storage, a password or tool output.
+   * **Exit codes:** 0 `ok`; 8 `partial`; 1 `failed`; 4 `run_in_progress`; 3 configuration.
+2. **Monitoring: `backup-status <root> [--max-age-hours N]`.** Read only. It reads the newest COMPLETE run (the highest run id that has a valid `run.json`) and prints its verdict, age, totals and outcome counts.
+   * Exit 0 when that run is `ok` and younger than the maximum age. The default maximum age is 26 hours (a daily schedule plus slack); it is configurable per call.
+   * Exit 8 when it is `partial`.
+   * Exit 1 when it `failed`, when no complete run exists (`backup_missing`), or when it is too old (`backup_stale`).
+   * Incomplete run folders older than 24 hours are reported as a warning (`incomplete_runs`); they are never deleted.
+   * This exit code is the alert hook for the operating-system monitor (SRS 16).
+3. **Scheduling.** Not built into HASM. An operating-system scheduler starts `Hasm.Admin backup-run <root>` under the service account; tested examples for a systemd timer, cron and Windows Task Scheduler go into `docs/DEVELOPMENT.md`. The API never runs a privileged backup: it holds no admin credential (privilege separation).
+4. **Retention, preview only: `backup-retention-preview <root> --keep-last N [--keep-days D]`.**
+   * A pure policy evaluates the complete runs and lists those that WOULD be removed. It never touches anything.
+   * Hard rules, already in the preview:
+     * the newest complete run is always kept;
+     * incomplete runs are listed separately and never selected;
+     * a run whose report cannot be read is never selected.
+   * Actual deletion is BLOCKED by owner package 4.3-2.
+5. **Measured durations (RPO/RTO inputs).** `backup-run` records the durations above. `trial-restore-company` adds its elapsed time to the result and output, which is the measured restore time of that set. `docs/DEVELOPMENT.md` documents:
+   * how to record them in a drill log: RPO is at most the schedule interval plus the run duration; RTO is the measured trial-restore time plus the cutover procedure once it exists;
+   * that no fixed value is promised (SRS 16).
+
+### Exact tests
+* **Unit (`Hasm.Infrastructure.Tests`):**
+  * Run id: format and time ordering.
+  * `run.json`: round trip; malformed, unknown-version or path-bearing content is refused.
+  * `SystemBackupManifest`: round trip and verification (missing, altered or unlisted file).
+  * Status evaluation (pure, from a list of runs and the current time):
+    * ok -> 0; partial -> 8; failed -> 1; none -> `backup_missing`; too old -> `backup_stale`;
+    * an incomplete newest folder is skipped in favour of the newest complete run and reported.
+  * Retention preview (pure): keep-last, keep-days and both together; the newest complete run is never selected; incomplete and unreadable runs are never selected.
+  * Path rules: a root inside the attachment root or the key directory, or containing one, is refused.
+  * Run folder: owner-only 0700 and refused if it exists (the slice 3 helper).
+* **PostgreSQL (`Hasm.Database.IntegrationTests`, new class `BackupRunTests`, 6 tests).** The registry in `.github/workflows/backend.yml` is RAISED by 6 at push time, counted from main then.
+  1. Two Ready companies and one Pending: the run writes the system set and two verified company sets. The report says `ok`, skipped = 1, and holds no physical name. Both company databases, another database and the system database are unchanged (digests, as in slices 2 and 3).
+  2. One Ready company whose database was dropped (disaster): its outcome is `failed` with `company_database_missing`, the other company is `ok`, and the verdict is `partial`.
+  3. One company whose provisioning lock is held: its outcome is `busy` and the verdict is `partial`. A second run started while the first holds the run lock is refused with `run_in_progress`.
+  4. The system set's dump passes `pg_restore --list`; its manifest is verified and an altered dump is detected.
+  5. `backup-status` on real runs: ok, partial, stale (by `--max-age-hours`), no run, and an incomplete newest folder.
+  6. The real `Hasm.Admin` binary:
+     * `backup-run` exits 0, `backup-status` exits 0, and `backup-retention-preview` lists, and deletes nothing;
+     * usage errors exit 2; missing storage configuration exits 3;
+     * stdout and stderr contain neither the admin password, any physical database name nor tool output.
+* `trial-restore-company` elapsed time: covered by extending the existing `CompanyBackupServiceTests` assertions (no new test method; the registry count for that class is unchanged).
+* **Not tested (recorded):** the operating-system scheduler examples, except by a documented manual drill; real-tool TLS; PostgreSQL 14/15 servers.
+* **Commands before every push:**
+  * `dotnet build src/backend/Hasm.slnx -c Release`;
+  * the unit and API tests;
+  * the PostgreSQL suite in CI, or locally only through the harness lock (status first; own cluster; destroyed afterwards).
+
+### Decisions under D-048 (recorded in docs/DECISIONS.md, status planned)
+* **D-068: scheduling by the operating system.** Decision: a backup run is an administrative command started by the operating-system scheduler; the API never runs privileged backups. Alternatives rejected:
+  * a scheduler inside the API (needs the admin credential in the API process, against privilege separation);
+  * a new resident service (new deployment surface and update path, a product decision for the 4.4/4.5 installers).
+* **D-069: run layout, report and isolation.** Decision: a per-run owner-only folder; the system database dump included; one set per Ready company; `run.json` written last; one company's failure never stops the others; one run at a time. Alternatives rejected:
+  * a report in the system database (a migration, and it would be lost exactly when that database is the problem);
+  * stopping at the first failed company (other companies would lose their backup).
+* **D-070: monitoring through `backup-status` exit codes** with a configurable maximum age (default 26 hours). Alternative rejected: e-mail or other push alerts from HASM (needs mail configuration and secrets; deferred to the monitoring UI slice).
+* **D-071: retention is previewed, never applied, until owner package 4.3-2 is decided.** Hard rules in the preview: the newest complete run is always kept; incomplete or unreadable runs are never selected. Alternative rejected: deleting by a default policy (deleting backups of financial data is an owner decision).
+* **D-072: RPO/RTO are measured, not promised.** Durations are recorded per run and per trial restore, and the formulas are documented. Alternative rejected: a promised fixed value (SRS 16 forbids it without measurement).
+
+### OWNER DECISION PACKAGE 4.3-2 (one consolidated recommendation; recorded once in the INTEGRATION-STATUS register; fail-closed while open)
+Backup sets today are verified but NOT encrypted or authenticated, and nothing is deleted automatically. The four items below decide key custody and the retention of financial data, so they need the owner. **Recommended answer: accept options 1(d), 2(b), 3(b) and 4(a) together.**
+
+1. **Who can decrypt a backup (encryption key custody).** Every file of a run would be encrypted with streaming AES-256-GCM, and the manifest authenticated.
+   * (a) A dedicated backup key in the server's existing key directory. Simple; but whoever controls the server can read every backup.
+   * (b) Reuse the attachment master key. Simplest; but one compromise exposes both, and rotation is coupled.
+   * (c) An operator passphrase. Unattended scheduled runs would need it stored on the server, which defeats the purpose.
+   * **(d) Recommended: public-key encryption to an offline recovery key pair.** The server holds only the PUBLIC key (ECDH P-256, built into .NET), so a compromised server cannot read existing backups. The private key is kept offline by the owner or operator, in two separate places.
+     * Restore and trial restore need the private key to be brought to the machine.
+     * Losing every copy of the private key makes every backup unrecoverable.
+     * The manifest is signed with a server-held signing key (ECDSA P-256 in the key directory), so tampering by anyone without that key is detected.
+2. **Whether HASM may delete backups (retention of backups containing financial data).**
+   * (a) Never delete automatically; operators delete by hand.
+   * **(b) Recommended:** automatic deletion is allowed only for daily and weekly runs beyond a configured count (default: keep 7 daily and 4 weekly). Month-end and year-end runs are NEVER deleted automatically; they are kept until an owner-configured legal retention period has passed, and the default is "never". Every deletion is written to the run report.
+   * (c) A fixed legal period built into the product. Not recommended: legal retention of accounting records differs between jurisdictions, and HASM does not choose it.
+3. **Backup of the key directory.** Without it, encrypted attachments, and under 1(a)/(b) the backups themselves, cannot be read after a server loss.
+   * (a) Stays a manual, documented operator task (decision K).
+   * **(b) Recommended:** `backup-keys <destination>` exports the key directory encrypted to the same offline recovery public key as 1(d). It is written to a destination that must differ from the data run root, and the key ids are listed in the run report.
+4. **Interim, until 1 is built.**
+   * **(a) Recommended:** keep producing unencrypted sets, with the documentation requiring an encrypted volume or disk for the backup root.
+   * (b) Refuse `backup-run` until encryption exists. Safer at rest, but no backups at all meanwhile.
+
+**Effect while the package is open:**
+* no set encryption or signature;
+* nothing deleted (retention is preview only);
+* no key-directory export;
+* sets remain unencrypted with the documentation requirement of item 4(a);
+* RELEASE1-ACCEPTANCE G is not met.
+
+The slice after this one implements whichever answer the owner gives. No migration is expected.
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
-* Restore into a NEW database only; replacing a live company database (cutover), full-installation restore, scheduling, retention, destinations, set encryption, monitoring and RPO/RTO measurement are not built.
+* Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling, monitoring and measured durations: slice 4 (planned). Set encryption and retention: owner package 4.3-2.
 
 ## BLOCKED / owner decisions
 * Audited restore acknowledgement and a new checkpoint epoch after a company restore (`docs/DEVELOPMENT.md`, restore limitations): policy needs an owner decision.
 * Retention/purge of removed attachments (decision R).
-* Scheduling, retention, destinations, encryption, monitoring, RPO/RTO: not started.
+* Set encryption and authentication, automatic deletion of backups (retention), and the key-directory export: OWNER package 4.3-2 (slice 4 plan). Scheduling, monitoring and measured durations: planned in slice 4. Destinations other than a local or mounted folder, and full-installation restore: not started.
