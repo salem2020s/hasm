@@ -269,7 +269,7 @@ public sealed class BackupRunRulesTests : IDisposable
         Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["Session.Table"]);
         Assert.Equal(SecretStoreBackupRule.AlwaysExcluded, SystemSchema.SecretStoreTables["LoginThrottle.Table"]);
         // D-120: a TOTP-secret table (Phase 4.1), once it exists in the dictionary, is a secret-store table included ONLY in encrypted runs
-        foreach (var totp in SystemSchema.Map.Keys.Where(k => k.Contains("Totp", StringComparison.OrdinalIgnoreCase) && k.EndsWith(".Table", StringComparison.Ordinal)))
+        foreach (var totp in SystemSchema.Map.Keys.Where(k => k.Contains("Totp", StringComparison.OrdinalIgnoreCase) && (k.EndsWith(".Table", StringComparison.Ordinal) || !k.Contains('.'))))
         {
             Assert.True(SystemSchema.SecretStoreTables.TryGetValue(totp, out var rule), totp + " must be flagged as a secret-store table");
             Assert.Equal(SecretStoreBackupRule.IncludedOnlyInEncryptedRuns, rule);
