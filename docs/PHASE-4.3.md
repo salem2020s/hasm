@@ -1011,6 +1011,42 @@ Each question's default is the preserving one. An answer that relaxes one is an 
 ### Owner decisions this slice relies on (not re-asked)
 D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 (pins only; the cutover is slice 7), D-085, D-114.
 
+### Recorded as built (implementation of slice 6; branch `feature/phase-4-3-slice6-impl`, stacked on #128)
+* **Built as planned:**
+  * `RetentionOptions` (D-132): minimums 7/4 pinned; a lower or unreadable value is refused and never clamped; `InstallationTimeZone` required.
+  * `RetentionTime` (D-131): IANA zones through `TimeZoneInfo`, never the local zone (pinned by a source scan); skipped local midnight = first valid instant after it, repeated local midnight = the earlier instant.
+  * `RetentionClassifier` (D-130..D-135): every keep reason listed in the operator section of `docs/DEVELOPMENT.md`. An unconfigured, unknown or unresolvable company time zone, an unreadable company and a date outside every fiscal year are `classification_unknown` (review L1 of #130).
+  * `RetentionInventory`: the root scan reads only VERIFIED signed statuses. It reports unclean runs, kept trials, symbolic links and unfinished deletions.
+  * Run status version 2 with the key inventory (D-138): per-company attachment key ids and the run's audit key ids. A run whose inventory cannot be read completely is written as version 1. Key needs are unknown for a version 1, unverifiable, missing or unreadable status and for an incomplete run, and any unknown retained run makes the inventory incomplete (review M2 of #130).
+  * The system tables `BackupLegalHold` and `BackupRetentionPin` (one migration, append-only guards, derived names) and `BackupHoldStore` (placing a hold writes audit 2018 in the same transaction).
+  * `RetentionService.PlanAsync` / `backup-retention-plan` (audit 2014, JSON plan) and `RetentionService.ApplyAsync` / `backup-retention-apply` (inactive: audit 2017, exit 3).
+  * `RetentionExecutor` (D-136): reachable only through the internal `RetentionGateOverride` test seam.
+  * The shared restore lock in trial restores and recovery tests (D-135).
+  * `backup-status` reports `retention_deletion_incomplete` (exit 8).
+* **Review M1 of #130, as built:**
+  * `BackupRetention.GateOpen` (code gate AND opt-in) is checked in `ApplyCoreAsync`, in `RetentionExecutor.ExecuteAsync`, and again in `RenameForDeletion` and `DeleteRunFolder`, the lowest-level routines that touch a run folder.
+  * `RetentionGateOverride.ForTests()` is `internal` (visible only to the test assemblies), and a unit test scans `src/` to confirm that no production code calls it.
+  * A unit test calls every non-test entry point and asserts the refusal while the gate is off.
+* **Layer 2 as built:**
+  * `RestoreSafeguards.CutoverAvailable` is `false` until slice 7, so `restore_safeguards_missing` refuses every non-test execution even after the code gate changes.
+  * The test seam also stands in for this one check, because the slice 7 safeguards cannot exist yet.
+* **Phase R attachment holds:** the company schema has no attachment-hold tables yet, so no such hold can exist. As soon as tables named `AttachmentLegalHold*` or `AttachmentRetention*` appear in the dictionary, every company is `hold_check_failed` until retention reads them (fail closed).
+* **Migration:** system migration `0032_backup_retention.sql` (lead allocation: #133 took 0031 and merged first, so the sequence is contiguous). No test pins its number; the pinned system-migration counts (`SystemDatabaseTests`, `CompanySchemaTests`) are 32.
+* **Review H2 of #134 (fixed):** the attachment-hold tripwire looked for keys that R1 never used, so active Phase R legal holds would have been ignored (fail open). Retention now reads R1's company `LegalHold` table. ANY active hold (company, record or attachment scope) keeps every run containing the company (`attachment_hold`). A hold table that cannot be read keeps everything (`hold_check_failed`). A company whose migration level predates R1 has no hold table and so can have no hold.
+  * The exact R1 keys are pinned by a unit test. Any other company-schema table whose name contains "Hold" trips `hold_check_failed` for every company until retention reads it.
+  * A PostgreSQL test places a real record-scoped R1 hold and shows that every run is kept and the engine deletes nothing.
+* **Activation prerequisites (review L1-L4 of #134; deletion is inactive, so they must be resolved before any owner-approved activation, and are listed with the 4.3-ACT register row):**
+  * **L1 (open):** `DeleteRunFolder` re-checks for symbolic links only once per entry while walking. A link swapped in between the check and the delete (time-of-check to time-of-use) must be excluded, by re-checking `LinkTarget` immediately before each delete or by a non-following delete primitive.
+  * **L2 (open):** audit 2016 is not resumable. A crash after the folder is gone and before 2016 leaves 2015 without its 2016. The next execution must detect a tombstone without a completion record and write the missing 2016.
+  * **L6 (open; review of #134 by Agent C, follow-up):** `AcquireRestoreLockAsync` returns the connection that holds the shared restore lock, and the lock is released only when that unpooled connection closes. PostgreSQL frees it asynchronously, so a deletion right after a trial restore or recovery test may be refused (`restore_in_progress`; fail closed). Fix before activation: return a holder that runs `pg_advisory_unlock_all` before closing.
+  * **L3 (fixed now):** an interrupted deletion is resumed only when the engine's own tombstone (written after audit 2015) exists; otherwise the folder is left for the operator (`resume_unverified`, audit 2017).
+  * **L4 (fixed now):** a refusal for a missing runtime prerequisite (encryption, configuration, restore safeguards) writes audit 2017 too.
+* **Review L5 of #134 (fixed):** a LegalHold table that is missing in a company whose migration journal already reaches the migration that creates it (dropped or renamed) is `hold_check_failed`, never "no hold"; that migration's version is derived from the embedded company scripts.
+* **Tests:**
+  * unit tests: `RetentionClassifierTests`, `RetentionExecutorTests`, `BackupRetentionSchemaDerivationTests`, and the strengthened TOTP pin;
+  * PostgreSQL class `BackupRetentionTests` (6, including the R1 hold test of review H2): the preview per company calendar and time zone, holds and guards, inactive deletion, the engine through the seam with a remaining run that still recovers, and the locks.
+* **Not built here:** the company legal policy for month-end and year-end runs (owner questions Q1-Q3), hold release (Phase 4.1), the slice 7 pins and safeguards, and activation (an owner-instructed PR).
+
 ## Slice 7: live company restore (cutover) with acknowledgement, independent approval and a new audit checkpoint epoch (D-081) - PLAN (docs only)
 Sources:
 * owner decision **D-081**: a live company restore requires explicit acknowledgement, independent administrative approval and comprehensive audit. Cutover creates a new audit checkpoint epoch while the previous audit chain is preserved and verified; epoch rotation never conceals earlier audit failures or bypasses tamper detection. Required: pre-cutover validation, a secure backup taken before cutover, consistent database and attachment restoration, runtime permissions, a rollback plan and post-restore integrity checks;
