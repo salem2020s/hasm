@@ -154,7 +154,7 @@ public sealed partial class PermissionCatalog
         new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
-        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to custom roles, so no system migration is needed.
+        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to the Commercial Approver preset role (system migration 0029), which is granted offline (AccessService.GrantCommercialApproverOfflineAsync) or copied into custom roles.
         new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),

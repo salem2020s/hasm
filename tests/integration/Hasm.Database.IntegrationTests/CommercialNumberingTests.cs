@@ -84,17 +84,17 @@ public class CommercialNumberingTests : CommercialTestBase
         var approver = await Approver();
         var branch = await NewBranchId("BA"); var party = await NewCustomerId("C1"); var (item, unit) = await NewItemAndUnit("NU2");
         var docs = new List<CommercialDocumentView>();
-        for (var i = 0; i < 10; i++) docs.Add(await Submitted(branch, party, item, unit, $"num-race-{i:000}"));
+        for (var i = 0; i < 20; i++) docs.Add(await Submitted(branch, party, item, unit, $"num-race-{i:000}"));
         var results = await Task.WhenAll(docs.Select(d => Docs.ApproveAsync(approver, Company.Id, d.Id, d.Revision)));
         Assert.All(results, r => Assert.True(r.IsOk, $"{r.Status} {r.Code}"));
         var numbers = results.Select(r => r.Value!.OfficialNumber!).Order().ToList();
-        Assert.Equal(Enumerable.Range(1, 10).Select(n => $"2026-{n:000000}"), numbers);                                        // distinct and gapless
-        Assert.Equal(10L, await Sql<long>($"SELECT count(*) FROM {NI.Table}"));
+        Assert.Equal(Enumerable.Range(1, 20).Select(n => $"2026-{n:000000}"), numbers);                                        // distinct and gapless
+        Assert.Equal(20L, await Sql<long>($"SELECT count(*) FROM {NI.Table}"));
         // the same document approved by two requests at once: exactly one approval, one number, the other is refused
         var one = await Submitted(branch, party, item, unit, "num-race-single");
         var twice = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Docs.ApproveAsync(approver, Company.Id, one.Id, one.Revision)));
         Assert.Equal(1, twice.Count(r => r.IsOk));
         Assert.Equal(3, twice.Count(r => !r.IsOk));
-        Assert.Equal(11L, await Sql<long>($"SELECT count(*) FROM {NI.Table}"));
+        Assert.Equal(21L, await Sql<long>($"SELECT count(*) FROM {NI.Table}"));
     }
 }

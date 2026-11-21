@@ -33,6 +33,7 @@ const TEMPLATE = `-- Migration 0029: commercial document approval, numbering and
 -- (rejected -> draft), and the cancellation of an approved document. Physical stock and accounting effects are later slices: the guard knows nothing of them yet.
 -- Invariants enforced by PostgreSQL:
 --   * an approved document has its number, approver, seal and fingerprint; the approver is never the creator, the last editor or the submitter; the sealed fingerprint equals the one produced at submit (a changed price is refused);
+--   * the date of a numbered document stays inside the fiscal year of its number; the quote of a submitted document is frozen when it is decided (approved, rejected or cancelled);
 --   * the official number is set ONLY by the approval transition and never changes or disappears afterwards; the mode never changes once a number exists; an approved document changes only its note (anything material goes back to draft);
 --   * a draft carries no submitter, approval, seal, fingerprint or snapshot (they are produced at submit and approval);
 --   * every event must describe a transition the guard allows (kind, from-status and to-status), continue the status of the previous event and carry the document's current revision and status.
@@ -92,6 +93,18 @@ BEGIN
     END IF;
     IF OLD.{{CommercialDocumentApproval.OfficialNumber}} IS NOT NULL AND (NEW.{{CommercialDocumentApproval.FiscalYearId}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.FiscalYearId}}
        OR NEW.[[CommercialDocument.Mode]] IS DISTINCT FROM OLD.[[CommercialDocument.Mode]]) THEN RAISE EXCEPTION 'the fiscal year of the number and the mode are frozen once the document is numbered'; END IF;
+    -- the date of a NUMBERED document stays inside the fiscal year of its number (D-068): a date outside it would leave the number in a year the document no longer belongs to
+    IF NEW.{{CommercialDocumentApproval.FiscalYearId}} IS NOT NULL AND (NEW.[[CommercialDocument.DocumentDate]] IS DISTINCT FROM OLD.[[CommercialDocument.DocumentDate]] OR NEW.[[CommercialDocument.Status]] = 3)
+       AND NOT EXISTS (SELECT 1 FROM [[FiscalYear.Table]] y WHERE y.[[FiscalYear.Id]] = NEW.{{CommercialDocumentApproval.FiscalYearId}} AND NEW.[[CommercialDocument.DocumentDate]] BETWEEN y.[[FiscalYear.StartDate]] AND y.[[FiscalYear.EndDate]]) THEN
+        RAISE EXCEPTION 'the date of a numbered document stays within the fiscal year of its number';
+    END IF;
+    -- the quote of a SUBMITTED document is frozen when it is decided: approval, rejection or cancellation never rewrite the sealed content
+    IF OLD.[[CommercialDocument.Status]] = 2 AND NEW.[[CommercialDocument.Status]] IN (3, 4, 5) AND (NEW.{{CommercialDocumentApproval.TaxSnapshot}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.TaxSnapshot}} OR NEW.{{CommercialDocumentApproval.TaxHash}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.TaxHash}}
+       OR NEW.{{CommercialDocumentApproval.ExchangeRate}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.ExchangeRate}} OR NEW.{{CommercialDocumentApproval.ExchangeRateRef}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.ExchangeRateRef}}
+       OR NEW.{{CommercialDocumentApproval.TotalNet}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.TotalNet}} OR NEW.{{CommercialDocumentApproval.TotalTax}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.TotalTax}}
+       OR NEW.{{CommercialDocumentApproval.TotalGross}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.TotalGross}} OR NEW.{{CommercialDocumentApproval.Fingerprint}} IS DISTINCT FROM OLD.{{CommercialDocumentApproval.Fingerprint}}) THEN
+        RAISE EXCEPTION 'the quote of a submitted document is frozen when it is decided';
+    END IF;
     IF NEW.[[CommercialDocument.Status]] <> OLD.[[CommercialDocument.Status]] AND (NEW.[[CommercialDocument.PartyId]] IS DISTINCT FROM OLD.[[CommercialDocument.PartyId]] OR NEW.[[CommercialDocument.Currency]] IS DISTINCT FROM OLD.[[CommercialDocument.Currency]]
        OR NEW.[[CommercialDocument.DocumentDate]] IS DISTINCT FROM OLD.[[CommercialDocument.DocumentDate]] OR NEW.[[CommercialDocument.Mode]] IS DISTINCT FROM OLD.[[CommercialDocument.Mode]]
        OR NEW.[[CommercialDocument.Note]] IS DISTINCT FROM OLD.[[CommercialDocument.Note]]) THEN

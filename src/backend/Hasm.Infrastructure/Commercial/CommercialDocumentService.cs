@@ -64,12 +64,12 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
 
     // ================================================================================================================ reading
 
-    private const string DocCols = $"{CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.SubmittedBy}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}, {CDA.OfficialNumber}, {CDA.ApprovedBy}, {CDA.ApprovedAtUtc}, {CDA.SealedAtUtc}, {CDA.ExchangeRate}, {CDA.TotalNet}, {CDA.TotalTax}, {CDA.TotalGross}, {CDA.LastEditedBy}, {CDA.Fingerprint}";
+    private const string DocCols = $"{CD.Id}, {CD.DocType}, {CD.BranchId}, {CD.PartyId}, {CD.Currency}, {CD.DocumentDate}, {CD.Mode}, {CD.Status}, {CD.Note}, {CD.SubmittedBy}, {CD.Revision}, {CD.CreatedBy}, {CD.CreatedAtUtc}, {CD.UpdatedAtUtc}, {CDA.OfficialNumber}, {CDA.ApprovedBy}, {CDA.ApprovedAtUtc}, {CDA.SealedAtUtc}, {CDA.ExchangeRate}, {CDA.TotalNet}, {CDA.TotalTax}, {CDA.TotalGross}, {CDA.LastEditedBy}, {CDA.Fingerprint}, {CDA.FiscalYearId}";
 
     private static CommercialDocumentView ReadHeader(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetGuid(2), r.GetGuid(3), r.GetString(4).Trim(), r.GetFieldValue<DateOnly>(5), (CommercialMode)r.GetInt16(6), (CommercialStatus)r.GetInt16(7),
         r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetGuid(9), r.GetInt64(10), r.GetGuid(11), r.GetFieldValue<DateTimeOffset>(12), r.GetFieldValue<DateTimeOffset>(13), [], [], false,
         r.IsDBNull(14) ? null : r.GetString(14), r.IsDBNull(15) ? null : r.GetGuid(15), r.IsDBNull(16) ? null : r.GetFieldValue<DateTimeOffset>(16), r.IsDBNull(17) ? null : r.GetFieldValue<DateTimeOffset>(17),
-        r.IsDBNull(18) ? null : r.GetDecimal(18), r.IsDBNull(19) ? null : r.GetDecimal(19), r.IsDBNull(20) ? null : r.GetDecimal(20), r.IsDBNull(21) ? null : r.GetDecimal(21), r.IsDBNull(22) ? null : r.GetGuid(22), r.IsDBNull(23) ? null : r.GetString(23).Trim());
+        r.IsDBNull(18) ? null : r.GetDecimal(18), r.IsDBNull(19) ? null : r.GetDecimal(19), r.IsDBNull(20) ? null : r.GetDecimal(20), r.IsDBNull(21) ? null : r.GetDecimal(21), r.IsDBNull(22) ? null : r.GetGuid(22), r.IsDBNull(23) ? null : r.GetString(23).Trim(), r.IsDBNull(24) ? null : r.GetGuid(24));
 
     private static async Task<CommercialDocumentView?> LoadAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid id, bool forUpdate, bool withChildren, CancellationToken ct)
     {
@@ -338,6 +338,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             if (input.BranchId is { } b && b != cur.BranchId) throw Invalid("branchId", "branch_immutable");
             if (cur.OfficialNumber is not null && (CommercialMode)input.Mode!.Value != cur.Mode) throw Invalid("mode", "mode_frozen");   // frozen at the first approval
             await RequireBranchAndParty(work, cur.BranchId, input.PartyId!.Value, ct);
+            if (!await DateInNumberYearAsync(work, cur.FiscalYearId, input.DocumentDate!.Value, ct)) throw Invalid("documentDate", "date_outside_number_year");   // D-068: a numbered document keeps its date inside the fiscal year of its number
             var working = cur;
             if (cur.Status == CommercialStatus.Approved)
             {
@@ -373,6 +374,15 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             await InsertLinesAsync(work, cur.Id, lines, ct);
             await AppendEventAsync(work, cur.Id, CommercialEventKind.Updated, CommercialStatus.Draft, CommercialStatus.Draft, working.Revision + 1, actor, null, CommercialAuditEvents.Updated, $"commercial document updated r{working.Revision + 1} lines={lines.Count}", ct);
         }, ct);
+    }
+
+    /// <summary>True when the document has no number yet, or the date lies inside the fiscal year the number was issued in (D-068; the 0029 guard enforces the same rule).</summary>
+    private static async Task<bool> DateInNumberYearAsync(CompanyAuditedWork work, Guid? fiscalYearId, DateOnly date, CancellationToken ct)
+    {
+        if (fiscalYearId is null) return true;
+        await using var q = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {FY.Table} WHERE {FY.Id} = @y AND @d BETWEEN {FY.StartDate} AND {FY.EndDate})", work.Connection, work.Transaction);
+        q.Parameters.AddWithValue("y", fiscalYearId.Value); q.Parameters.Add(new NpgsqlParameter("d", NpgsqlDbType.Date) { Value = date });
+        return (bool)(await q.ExecuteScalarAsync(ct))!;
     }
 
     // ================================================================================================================ the server-produced quote (price, tax, rate)
@@ -477,6 +487,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
             if (actor == cur.SubmittedBy || actor == cur.CreatedBy || actor == cur.LastEditedBy) throw new Abort(ConfigStatus.Conflict, "approver_not_independent");
             await RequireBranchAndParty(work, cur.BranchId, cur.PartyId, ct);
+            if (!await DateInNumberYearAsync(work, cur.FiscalYearId, cur.DocumentDate, ct)) throw new Abort(ConfigStatus.Conflict, "date_outside_number_year");
             var check = await FiscalPeriodGate.CheckAsync(work.Connection, work.Transaction!, cur.DocumentDate, false, ct);   // locks the period row FOR SHARE until commit
             if (!check.Allowed) throw new Abort(ConfigStatus.Conflict, check.Reason!);
             var quote = await QuoteDocumentAsync(work, cur, ct);
@@ -492,7 +503,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
                     await r.ReadAsync(ct);
                     branchCode = r.GetString(0); yearLabel = r.GetInt32(1); year = r.GetGuid(2);
                 }
-                var issued = await NumberingService.IssueAsync(work.Connection, work.Transaction!, cur.DocType, new NumberScope(cur.BranchId, branchCode, year, yearLabel.ToString(CultureInfo.InvariantCulture)), cur.Id, actor, Now, ct, typeRegisteredByCaller: true);
+                var issued = await NumberingService.IssueForRegisteredTypeAsync(work.Connection, work.Transaction!, cur.DocType, new NumberScope(cur.BranchId, branchCode, year, yearLabel.ToString(CultureInfo.InvariantCulture)), cur.Id, actor, Now, ct);
                 number = issued.Number; yearId = year;
             }
             await using (var upd = new NpgsqlCommand($"UPDATE {CD.Table} SET {CD.Status} = 3, {CDA.ApprovedBy} = @by, {CDA.ApprovedAtUtc} = @now, {CDA.SealedAtUtc} = @now, {CDA.OfficialNumber} = @num, {CDA.FiscalYearId} = COALESCE(@fy, {CDA.FiscalYearId}), " +

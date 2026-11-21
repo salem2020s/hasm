@@ -60,7 +60,7 @@ public sealed record CommercialEventView(CommercialEventKind Kind, CommercialSta
 public sealed record CommercialDocumentView(Guid Id, string DocType, Guid BranchId, Guid PartyId, string Currency, DateOnly DocumentDate, CommercialMode Mode, CommercialStatus Status, string? Note,
     Guid? SubmittedBy, long Revision, Guid CreatedBy, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc, IReadOnlyList<CommercialLineView> Lines, IReadOnlyList<CommercialEventView> Events, bool Replayed = false,
     string? OfficialNumber = null, Guid? ApprovedBy = null, DateTimeOffset? ApprovedAtUtc = null, DateTimeOffset? SealedAtUtc = null, decimal? ExchangeRate = null, decimal? TotalNet = null, decimal? TotalTax = null, decimal? TotalGross = null,
-    Guid? LastEditedBy = null, string? Fingerprint = null);
+    Guid? LastEditedBy = null, string? Fingerprint = null, Guid? FiscalYearId = null);
 
 public sealed record CommercialDocumentFilter(CommercialStatus? Status = null, string? DocType = null, Guid? BranchId = null, IReadOnlyList<Guid>? AllowedBranches = null, int Limit = 50, int Offset = 0);
 

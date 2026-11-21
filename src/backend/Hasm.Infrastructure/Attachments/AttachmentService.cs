@@ -164,7 +164,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     }
     private static Abort Invalid(string field, string code) => new(ConfigStatus.Invalid, code, [new FieldError(field, code)]);
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
-    private static string Context(Guid companyId, Guid id) => $"hasm-attachment:{companyId:N}:{id:N}";
+    internal static string Context(Guid companyId, Guid id) => $"hasm-attachment:{companyId:N}:{id:N}";
 
     /// <summary>Declared type -> allowed, with the signature the content must start with (null = text, validated as UTF-8 without NUL bytes).</summary>
     private static readonly IReadOnlyDictionary<string, byte[]?[]> Types = new Dictionary<string, byte[]?[]>

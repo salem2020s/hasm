@@ -7,6 +7,7 @@
 -- (rejected -> draft), and the cancellation of an approved document. Physical stock and accounting effects are later slices: the guard knows nothing of them yet.
 -- Invariants enforced by PostgreSQL:
 --   * an approved document has its number, approver, seal and fingerprint; the approver is never the creator, the last editor or the submitter; the sealed fingerprint equals the one produced at submit (a changed price is refused);
+--   * the date of a numbered document stays inside the fiscal year of its number; the quote of a submitted document is frozen when it is decided (approved, rejected or cancelled);
 --   * the official number is set ONLY by the approval transition and never changes or disappears afterwards; the mode never changes once a number exists; an approved document changes only its note (anything material goes back to draft);
 --   * a draft carries no submitter, approval, seal, fingerprint or snapshot (they are produced at submit and approval);
 --   * every event must describe a transition the guard allows (kind, from-status and to-status), continue the status of the previous event and carry the document's current revision and status.
@@ -66,6 +67,18 @@ BEGIN
     END IF;
     IF OLD.c_2c5d8f9f IS NOT NULL AND (NEW.c_c8e6ee5a IS DISTINCT FROM OLD.c_c8e6ee5a
        OR NEW.c_523bf0a9 IS DISTINCT FROM OLD.c_523bf0a9) THEN RAISE EXCEPTION 'the fiscal year of the number and the mode are frozen once the document is numbered'; END IF;
+    -- the date of a NUMBERED document stays inside the fiscal year of its number (D-068): a date outside it would leave the number in a year the document no longer belongs to
+    IF NEW.c_c8e6ee5a IS NOT NULL AND (NEW.c_e55881ff IS DISTINCT FROM OLD.c_e55881ff OR NEW.c_8cb62046 = 3)
+       AND NOT EXISTS (SELECT 1 FROM t_4b5bb222 y WHERE y.c_cae1c56a = NEW.c_c8e6ee5a AND NEW.c_e55881ff BETWEEN y.c_5fd77e71 AND y.c_a4d1e8a9) THEN
+        RAISE EXCEPTION 'the date of a numbered document stays within the fiscal year of its number';
+    END IF;
+    -- the quote of a SUBMITTED document is frozen when it is decided: approval, rejection or cancellation never rewrite the sealed content
+    IF OLD.c_8cb62046 = 2 AND NEW.c_8cb62046 IN (3, 4, 5) AND (NEW.c_608f77c6 IS DISTINCT FROM OLD.c_608f77c6 OR NEW.c_47fb663d IS DISTINCT FROM OLD.c_47fb663d
+       OR NEW.c_e05c15dc IS DISTINCT FROM OLD.c_e05c15dc OR NEW.c_b2fcdc92 IS DISTINCT FROM OLD.c_b2fcdc92
+       OR NEW.c_cf5e89bf IS DISTINCT FROM OLD.c_cf5e89bf OR NEW.c_62ca242b IS DISTINCT FROM OLD.c_62ca242b
+       OR NEW.c_f510980d IS DISTINCT FROM OLD.c_f510980d OR NEW.c_8e5953af IS DISTINCT FROM OLD.c_8e5953af) THEN
+        RAISE EXCEPTION 'the quote of a submitted document is frozen when it is decided';
+    END IF;
     IF NEW.c_8cb62046 <> OLD.c_8cb62046 AND (NEW.c_b2463fae IS DISTINCT FROM OLD.c_b2463fae OR NEW.c_496bb3d6 IS DISTINCT FROM OLD.c_496bb3d6
        OR NEW.c_e55881ff IS DISTINCT FROM OLD.c_e55881ff OR NEW.c_523bf0a9 IS DISTINCT FROM OLD.c_523bf0a9
        OR NEW.c_2bf97e4a IS DISTINCT FROM OLD.c_2bf97e4a) THEN

@@ -43,7 +43,7 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal("JOD", created.Json.GetProperty("currency").GetString());
         Assert.False(created.Json.GetProperty("replayed").GetBoolean());
         Assert.False(created.Json.GetProperty("lines")[0].TryGetProperty("unitPrice", out _));                                // the view carries none either
-        Assert.DoesNotContain("999", created.Body);
+        Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"(?<![0-9A-Za-z-])999(?![0-9A-Za-z-])"), created.Body);   // the client-sent price is not echoed (a random id may contain the digits, a number token may not)
         var replay = await Send(HttpMethod.Post, Base, Body("api-key-00001"), cookie);
         Assert.Equal(docId, replay.Json.GetProperty("id").GetGuid());
         Assert.True(replay.Json.GetProperty("replayed").GetBoolean());

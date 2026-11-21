@@ -90,7 +90,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
     }
 
     /// <summary>The encoding, libc locale and locale provider of a database; null when it does not exist. <c>datlocprovider</c> exists only from PostgreSQL 15: it is read through to_jsonb so older servers work (absent means libc).</summary>
-    private static async Task<DatabaseLocale?> ReadLocaleAsync(NpgsqlConnection conn, string database, CancellationToken ct)
+    internal static async Task<DatabaseLocale?> ReadLocaleAsync(NpgsqlConnection conn, string database, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand("SELECT pg_encoding_to_char(d.encoding), d.datcollate, d.datctype, to_jsonb(d)->>'datlocprovider' FROM pg_database d WHERE d.datname = @n", conn);
         cmd.Parameters.AddWithValue("n", database);
@@ -101,6 +101,14 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
 
     /// <summary>The locale the restore reproduces: the one captured at dump time wins; otherwise the live source; with neither the restore is refused (<c>source_locale_unknown</c>), never the template0 default.</summary>
     internal static DatabaseLocale ResolveLocale(DatabaseLocale? captured, DatabaseLocale? live) => captured ?? live ?? throw new BackupException("source_locale_unknown");
+
+    /// <summary>Refuses (<c>locale_unsupported</c>) a locale a restore could not reproduce: the same rules as <see cref="LocaleClause"/>, checked at backup time (decision D-059).</summary>
+    internal static void EnsureRestorable(DatabaseLocale locale) => _ = LocaleClause(locale, 15);
+
+    /// <summary>The same database locale: encoding, collation and ctype exactly; a provider of null (PostgreSQL 14, libc only) and <c>c</c> are the same libc provider (decision D-059).</summary>
+    internal static bool SameLocale(DatabaseLocale a, DatabaseLocale b) =>
+        string.Equals(a.Encoding, b.Encoding, StringComparison.Ordinal) && string.Equals(a.Collate, b.Collate, StringComparison.Ordinal) && string.Equals(a.Ctype, b.Ctype, StringComparison.Ordinal)
+        && string.Equals(a.Provider ?? "c", b.Provider ?? "c", StringComparison.Ordinal);
 
     /// <summary>
     /// The ENCODING / LOCALE_PROVIDER / LC_COLLATE / LC_CTYPE clause that reproduces the source database on template0. A source with an ICU or builtin locale provider, a missing locale or a name with unexpected characters is

@@ -326,6 +326,22 @@ public sealed class BackupSetTests : IDisposable
     }
 
     [Fact]
+    public void The_company_migration_level_is_carried_by_the_manifest_and_an_older_manifest_without_it_still_reads()
+    {
+        var s = Source();
+        var m = BackupSet.Create(company, s.Dump, s.Source, P("set"), DateTimeOffset.UnixEpoch, null, 27);
+        Assert.Equal(27, m.CompanyMigrationVersion);
+        Assert.Equal(27, BackupSet.ReadManifest(P("set"))!.CompanyMigrationVersion);
+        var path = Path.Combine(P("set"), BackupSet.ManifestFileName);
+        var json = File.ReadAllText(path);
+        File.WriteAllText(path, System.Text.RegularExpressions.Regex.Replace(json, ",\\s*\"companyMigrationVersion\":\\s*\\d+", ""));
+        Assert.Null(BackupSet.ReadManifest(P("set"))!.CompanyMigrationVersion);
+        File.WriteAllText(path, json.Replace("\"companyMigrationVersion\": 27", "\"companyMigrationVersion\": 0"));
+        Assert.Null(BackupSet.ReadManifest(P("set")));                                                    // a non-positive level invalidates the manifest
+        Assert.Equal("invalid_migration_version", Assert.Throws<BackupException>(() => BackupSet.Create(company, s.Dump, s.Source, P("set2"), DateTimeOffset.UnixEpoch, null, 0)).Code);
+    }
+
+    [Fact]
     public void A_malformed_locale_is_refused_when_the_set_is_created()
     {
         var s = Source();
