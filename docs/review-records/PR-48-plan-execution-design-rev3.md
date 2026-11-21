@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #48 (Phase 3.8D) - plan-execution design revision 3 (`docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md`, delta c9b2493..9f64f57; author Agent P; DESIGN ONLY, nothing implemented)
-* **Head SHA reviewed (full 40 characters):** ab1d106136a6f95de7416214c92c56028419d400 (final-revision confirmation of the delta 6b64eb3..ab1d106; the first review of revision 3 was at 9f64f575cf0455096ac0381de2b6b65bedc4a0ef)
+* **Head SHA reviewed (full 40 characters):** c73b643978fa6027ad71f491de834d88ce0cac81 (final confirmation of the M3 fix, delta e91b21f..c73b643; before it: the final-revision confirmation of 6b64eb3..ab1d106 at ab1d106136a6f95de7416214c92c56028419d400; the first review of revision 3 was at 9f64f575cf0455096ac0381de2b6b65bedc4a0ef)
 * **Reviewer context:** Agent G, an independent security/audit reviewer and a separate agent (not the author, Agent P); model family Claude Opus; prompt: "independent design review of #48's plan-execution design revision 3 under the owner's binding constraints (X1-A additive only, all safeguards byte-identical, no protected DB change before approval, X1-A and X2-X8 pending, revaluation in scope under a separate contract that never collapses FIFO layers, Q4 unimplemented, Q5 separate): fidelity to the merged resume review and to Agent G's X1 review, the T9/N9 savepoint correction, the four questions of section 10, the entry guard's FOR UPDATE lock order, the X5/X6 triggers, N1-N25 completeness, section 11 layer preservation"
 * **Scope read:** `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` at 9f64f57 (281 lines, revision 3), the revision-3 note in `docs/review-records/PR-48-plan-execution-design.md`, the merged `docs/PHASE-3.8D-RESUME-REVIEW.md`; verified against code on the branch: `InventoryCostingService.cs` (the single entry insert site, line 262; `LockPositionsAsync` lines 195-237 with (warehouse, item) order; `ReverseAsync` line 482), `StockPosting.cs` lines 154-171 (`PostInWorkAsync` savepoint), company migrations 0002 (business audit table `t_2db8cf1f`), 0014, 0020, 0022.
 * **Checks run (commands and results):**
@@ -25,7 +25,7 @@
   * **L5 (Low, section 11):** the per-layer out/in with lineage preserves the NUMBER and ORDER of layers and keeps the original layers immutable and traceable, so it satisfies "never collapse, never discard history". It does not preserve layer identity, arrival rank or the engine-visible receipt date (successor layers carry the revaluation date; the original date lives only in the lineage), and it relies on processing pairs oldest-first so each out entry consumes exactly the oldest remaining layer. The contract must state that every FIFO reader (aging, as-of valuation, layer reports) reads the original date and rank through the lineage, or choose the additive per-layer value-adjustment alternative. Rephrase "layer-preserving" as "layer-count- and order-preserving with lineage".
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** design only; nothing executed on PostgreSQL. The `pg_current_xact_id()` subtransaction behaviour is PostgreSQL's documented behaviour, not tested here. Hosted CI on 9f64f57 was not checked.
-* **Verdict:** request changes
+* **Verdict:** approve
 
 Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent design review of #48's plan-execution design revision 3 under the owner's binding constraints: fidelity, T9/N9 savepoint correction, section 10 questions, entry-guard lock order, X5/X6 triggers, N1-N25, section 11 layer preservation"; Head SHA reviewed 9f64f575cf0455096ac0381de2b6b65bedc4a0ef; executed: revision 3 and the merged resume review read, verified against the branch code (single entry insert site and position lock order, PostInWorkAsync savepoint, audit table chain columns, 0014/0020/0022 guards); verdict request changes; findings M1 (back-dated entries not bound to the plan's closure), M2 (X6 omits the event and rebook operations), L1 (member trigger must refuse kind-4/reversing operations), L2 (period FOR SHARE in the guard), L3 (unique audit event per execution, type and subject checked), L4 (two-way equal-date transfer chain test), L5 (section 11 preserves layer count and order, not identity or dates; readers must use the lineage).
 
@@ -103,3 +103,36 @@ New test N32 covers:
 
 The safeguards mapping is updated (safeguard 5: N26, N32). Open for the reviewer: confirmation of this delta.
 
+
+
+## Confirmation of the M3 fix and final assessment (Agent G; model family Claude Opus)
+
+Delta reviewed: e91b21f..c73b643 (one commit: design sections 3.1, 3.4 and 8, plus the resolution above; nothing implemented). Checks:
+* **No remaining path to alter the closure.** A closure row is accepted only while the plan is `proposed` AND the plan's trigger-assigned `created_xact` (xid8) equals `pg_current_xact_id()`: an INSERT by the runtime role in any later transaction is refused, and `COPY ... FROM` fires the same BEFORE INSERT row trigger, so it is refused too; a savepoint inside the creating transaction shares the top-level id (correct); UPDATE, DELETE and TRUNCATE stay refused (N5); plans are never deleted and the id is the primary key, so a plan cannot be re-created with the same id; `UNIQUE (plan, item, warehouse)` prevents duplicates. A company `pg_restore` creates the triggers post-data, so restored rows are not re-checked (consistent with every guard, T11). The owner role and a superuser remain out of scope (T10). As a second, independent line, the immutable `closure_hash` in the plan fingerprint is recomputed and compared at approval, at execution and in the deferred execution check.
+* **Hash computation:** "SHA-256 over the canonical, sorted list of (item, warehouse) pairs" is not yet byte-exact (see L1); any ambiguity fails closed (a mismatch refuses approval or execution), so it is not a bypass.
+* **Plan creation:** the insert-only rule forces the plan and its closure into one transaction; the design implies it ("written with the plan") but section 4 does not say it explicitly (see L2); a service that split them would fail closed.
+
+**Final per-safeguard assessment (owner's mandatory safeguards for X1-A):**
+
+| # | Safeguard | Met by | Assessment |
+|---|---|---|---|
+| 1 | Preserve all existing CHECKs, triggers and immutability | 3.7, N17 | met |
+| 2 | Never relax or replace an existing safeguard | section 3 (no `CREATE OR REPLACE` of an existing function, no `DISABLE TRIGGER`, no constraint change), N17 | met |
+| 3 | Entry-level guard refusing unauthorized back-dated movements | 3.3(1), N1, N16, N22, N23 | met |
+| 4 | Replay only for an operation bound, in the same DB transaction, to the single execution of an approved plan | 3.1 (`xid8` `created_xact`, `UNIQUE (plan)`), 3.2, 3.3(1), N2, N4, N8, N21, N24 | met |
+| 5 | Every replayed operation and entry bound to the plan's approved item/warehouse closure | 3.1 (insert-only closure in the creating transaction, `closure_hash`), 3.2, 3.3(2), 3.3(2a), 3.4, N26, N32 | met |
+| 6 | Segregation of duties and Open fiscal periods enforced | 3.1 SoD trigger, 3.3(3) Open period with `FOR SHARE`, section 4, N3, N10, N28 | met |
+| 7 | No unauthorized reversals of original, event, storno and rebook operations | 3.3(4), section 6, `k_c8fdc6c0`, N14, N27 | met |
+| 8 | Transactional consistency and an auditable execution record | section 5, 3.4, `UNIQUE (audit_event_id)` with type and subject, N19, N31 | met |
+| 9 | Never a client-controlled session flag or a general back-dating bypass | 3.3 (table rows only), N12 | met |
+| 10 | Historical accounting records and traceability preserved | sections 2, 3.2 lineage, 3.7, hash-identical originals | met |
+
+**Findings of this confirmation:** 0 Critical, 0 High, 0 Medium, 2 Low.
+* **L1 (Low, to fix during implementation):** make the closure hash byte-exact: for example, each pair as the lowercase hyphenated text of the item uuid, a colon and the warehouse uuid, sorted by (item, warehouse) in uuid order (not by a collation), joined by a newline, encoded in UTF-8; preferably computed in PostgreSQL only (the creating transaction stores it through the trigger), so the application and the database can never disagree. Any disagreement fails closed today.
+* **L2 (Low, to fix during implementation):** state in section 4 (Creation) that the plan row and all its closure rows are written in ONE transaction (the insert-only rule requires it).
+
+**Judgement on the owner's condition for implementation authorization:** in my judgement it is now MET for the final design revision at c73b643: M1, M2, M3 and every earlier Medium are resolved, no Critical, High or Medium finding remains, and all ten mandatory safeguards are met by the design and pinned by tests (N1-N29 plus the additional mandatory N30, N31 and N32). The two Lows are implementation details that fail closed. Execution stays disabled until the full PostgreSQL safety, concurrency, rollback, audit, restore and migration tests (N1-N32) pass, as the owner requires.
+
+* **Verdict of this confirmation:** approve.
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #48's delta e91b21f..c73b643 (M3: closure insert-only in the plan's creating transaction via trigger-assigned xid8, closure_hash in the fingerprint re-checked at approval, execution and the deferred check, N32) as the owner's gate for Q1; final per-safeguard assessment"; Head SHA reviewed c73b643978fa6027ad71f491de834d88ce0cac81; executed: delta diff read (design 3.1, 3.4, 8 and the resolution only; nothing implemented), paths to alter the closure analysed (later-transaction INSERT, COPY, savepoint, re-creation, restore), hash and creation-transaction rules checked, final per-safeguard table; verdict approve; findings M3 fixed, no Critical/High/Medium open; new L1 (closure hash byte-exact canonical form, preferably computed in PostgreSQL), L2 (state that plan and closure are written in one transaction); owner's condition for implementation authorization judged MET.
