@@ -66,6 +66,7 @@ var validUsage = command switch
     "trial-restore-company" => (args.Length == 4 || (args.Length == 5 && (keepTrial = args[4] == "--keep")))
         && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty && Path.IsPathFullyQualified(args[1]) && Path.IsPathFullyQualified(args[3]),
     "drop-trial-restore" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-recovery-keygen" => args.Length >= 2 && args.Length <= 4 && Path.IsPathFullyQualified(args[1]) && args.Skip(2).All(a => a is "--separate-passphrases" or "--passphrase-stdin") && args.Skip(2).Distinct().Count() == args.Length - 2,
     "backup-run" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-status" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length == 2
         || (args.Length == 4 && args[2] == "--max-age-hours" && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out maxAgeHours) && maxAgeHours is >= 1 and <= 8760)),
@@ -76,7 +77,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file> | backup-run <root> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -121,6 +122,44 @@ if (command is "backup-status" or "backup-retention-preview")
     if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
     if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns} (a damaged or altered run.json; investigate before relying on the newest run)");
     return status.ExitCode;
+}
+
+if (command == "backup-recovery-keygen")
+{
+    // Phase 4.3 slice 5 (D-085, D-089): run on an OFFLINE workstation. Refused where database settings exist, so it is not run on a configured server by accident; the private key is written only
+    // passphrase-encrypted, in two copies. Passphrases come from a prompt (twice) or, for scripted use, from standard input (--passphrase-stdin); never from an argument or a variable.
+    if (Environment.GetEnvironmentVariables().Keys.Cast<string>().Any(k => k.StartsWith("Hasm__Database__", StringComparison.OrdinalIgnoreCase)))
+    {
+        Console.Error.WriteLine("backup-recovery-keygen refused (recovery_keygen_on_server): Hasm__Database__* settings are present. Generate the recovery key pair on an offline workstation; only the PUBLIC key goes to the server.");
+        return BadConfig;
+    }
+    var separate = args.Contains("--separate-passphrases");
+    var fromStdin = args.Contains("--passphrase-stdin");
+    if (!fromStdin && Console.IsInputRedirected) { Console.Error.WriteLine("Run interactively to be prompted, or pass --passphrase-stdin."); return Usage; }
+    string? Ask(string label)
+    {
+        var first = fromStdin ? Console.In.ReadLine() : ReadHidden($"{label}: ");
+        var again = fromStdin ? Console.In.ReadLine() : ReadHidden($"{label} (again): ");
+        if (first is null || first != again) { Console.Error.WriteLine("The passphrases did not match; nothing was written."); return null; }
+        if (first.Length < RecoveryKeys.MinimumPassphraseLength) { Console.Error.WriteLine($"A recovery passphrase needs at least {RecoveryKeys.MinimumPassphraseLength} characters (or six diceware words); nothing was written."); return null; }
+        return first;
+    }
+    var p1 = Ask(separate ? "Passphrase for copy 1" : "Recovery key passphrase");
+    if (p1 is null) return Failed;
+    var p2 = separate ? Ask("Passphrase for copy 2 (a different custodian)") : p1;
+    if (p2 is null) return Failed;
+    if (separate && p1 == p2) { Console.Error.WriteLine("Separate passphrases must differ; nothing was written."); return Failed; }
+    try
+    {
+        var pair = RecoveryKeys.Generate(separate ? [p1, p2] : [p1]);
+        var files = RecoveryKit.Write(args[1], pair);
+        Console.WriteLine($"Recovery key pair {pair.KeyId} written to {args[1]}:");
+        foreach (var f in files) Console.WriteLine($"  {f}");
+        Console.WriteLine($"Put ONLY {pair.KeyId}.pub.pem on the server (Hasm__Backup__RecoveryPublicKeyFile). Move copy-1 and copy-2 to two separate offline media held apart (separate custodians when the passphrases differ),");
+        Console.WriteLine($"keep {pair.KeyId}.sha256 with each copy, then delete the private-key files from this workstation. Run backup-recovery-test before relying on the key (D-085).");
+        return Ok;
+    }
+    catch (BackupException ex) { Console.Error.WriteLine($"backup-recovery-keygen stopped ({ex.Code}); nothing usable was written."); return Failed; }
 }
 
 if (command == "encryption-keygen")
