@@ -8,6 +8,7 @@ using Hasm.Infrastructure.Configuration;
 using Npgsql;
 using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using FY = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalYear;
+using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LegalHold;
 using H = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupLegalHold;
 using P = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupRetentionPin;
 using ST = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
@@ -232,9 +233,9 @@ public sealed class RetentionService
     /// </summary>
     internal async Task<RetentionCompany> ReadCompanyAsync(Guid companyId, CancellationToken ct)
     {
-        // D-134: the attachment-retention hold tables (Phase R) are not in this schema yet: no company can have such a hold. When they appear in the dictionary without this reader being
-        // extended, every company is hold_check_failed (fail closed) until retention reads them.
-        var holdCode = CompanySchema.Map.Keys.Any(k => k.StartsWith("AttachmentLegalHold", StringComparison.Ordinal) || k.StartsWith("AttachmentRetention", StringComparison.Ordinal)) ? "hold_check_failed" : null;
+        // D-134, D-114 (review H2 of #134): the Phase R legal holds (company table LegalHold) are read below. Tripwire: if the company schema ever gains another hold table that this reader does not
+        // know, every company is hold_check_failed (fail closed) until retention reads it; a unit test pins the known keys so a rename breaks the build instead.
+        var unknownHoldTables = UnknownHoldTables();
         try
         {
             var company = await registry.GetAsync(companyId, ct);
@@ -257,10 +258,32 @@ public sealed class RetentionService
                 while (await r.ReadAsync(ct))
                     years.Add(new RetentionFiscalYear(DateOnly.FromDateTime(r.GetDateTime(1)), DateOnly.FromDateTime(r.GetDateTime(2)), r.IsDBNull(3) ? null : r.GetString(3),
                         periods.GetValueOrDefault(r.GetGuid(0)) ?? []));
+            // review H2 of #134: ANY active Phase R legal hold of the company (company, record or attachment scope) keeps every run containing it (attachment_hold); a company whose migration
+            // level predates R1 has no hold table and can have no hold; a hold table that cannot be read keeps everything (hold_check_failed)
+            string? holdCode = unknownHoldTables ? "hold_check_failed" : null;
+            if (holdCode is null)
+            {
+                try
+                {
+                    await using var exists = new NpgsqlCommand($"SELECT to_regclass('public.{LH.Table}') IS NOT NULL", db);
+                    if ((bool)(await exists.ExecuteScalarAsync(ct))!)
+                    {
+                        await using var active = new NpgsqlCommand($"SELECT EXISTS (SELECT 1 FROM {LH.Table} WHERE {LH.ReleasedAtUtc} IS NULL)", db);
+                        if ((bool)(await active.ExecuteScalarAsync(ct))!) holdCode = "attachment_hold";
+                    }
+                }
+                catch (NpgsqlException) { holdCode = "hold_check_failed"; }
+            }
             return new RetentionCompany(companyId, true, zone, years, holdCode);
         }
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException or InvalidCastException) { return new RetentionCompany(companyId, false, null, []); }
     }
+
+    /// <summary>The company-schema hold tables retention reads (review H2 of #134); any OTHER table whose logical name contains "Hold" trips the fail-closed tripwire.</summary>
+    internal static readonly IReadOnlySet<string> KnownHoldTables = new HashSet<string>(StringComparer.Ordinal) { "LegalHold" };
+
+    internal static bool UnknownHoldTables() =>
+        CompanySchema.Map.Keys.Any(k => !k.Contains('.') && k.Contains("Hold", StringComparison.OrdinalIgnoreCase) && !KnownHoldTables.Contains(k));
 
     /// <summary>
     /// <c>backup-retention-apply</c> (D-136): the ONLY deletion path, INACTIVE (D-137). While the code gate is off or the installation has not opted in it writes audit 2017 and throws
@@ -278,10 +301,18 @@ public sealed class RetentionService
             await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason=retention_deletion_inactive", ct);
             throw new BackupException("retention_deletion_inactive");
         }
-        // layer 2: runtime prerequisites on every execution
-        if (BackupGuard.Resolve(backup) != BackupProtection.Encrypted) throw new BackupException("backup_encryption_not_configured");
-        retention.Validate();
-        if (!RestoreSafeguards.CutoverAvailable && seam is null) throw new BackupException("restore_safeguards_missing");
+        // layer 2: runtime prerequisites on every execution; a refusal is audited too (review L4 of #134)
+        try
+        {
+            if (BackupGuard.Resolve(backup) != BackupProtection.Encrypted) throw new BackupException("backup_encryption_not_configured");
+            retention.Validate();
+            if (!RestoreSafeguards.CutoverAvailable && seam is null) throw new BackupException("restore_safeguards_missing");
+        }
+        catch (BackupException ex)
+        {
+            await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "prerequisite_missing")}", ct);
+            throw;
+        }
         var resolved = BackupSet.RealPath(root);
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
@@ -353,6 +384,9 @@ internal static class RetentionExecutor
         // finish deletions an earlier execution started (audit 2015 was written before the rename)
         foreach (var folder in inputs.DeletingFolders)
         {
+            // review L3 of #134: resume only a deletion this engine started (its tombstone, written after audit 2015, exists); anything else is left for the operator
+            if (!File.Exists(Path.Combine(ctx.Root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder, folder[..25], RetentionInventory.DeletedMarker)))
+            { await Refuse(folder[..25], "resume_unverified"); continue; }
             DeleteRunFolder(Path.Combine(ctx.Root, folder), ctx.Options, seam);
             await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={folder[..25]} resumed=yes", ct);
             resumed++;

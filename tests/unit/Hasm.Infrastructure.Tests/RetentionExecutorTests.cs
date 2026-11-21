@@ -72,6 +72,17 @@ public sealed class RetentionExecutorTests : IDisposable
     }
 
     [Fact]
+    public void The_phase_r_legal_hold_table_is_read_and_any_unknown_hold_table_fails_closed()
+    {
+        // review H2 of #134: the exact R1 keys retention reads; a rename or a new hold table breaks this test (and the build of the reader) instead of failing open
+        Assert.Equal("t_282abaa0", Hasm.Infrastructure.CompanyDatabase.CompanySchema.Map["LegalHold"]);
+        Assert.Equal("c_71754c89", Hasm.Infrastructure.CompanyDatabase.CompanySchema.Map["LegalHold.ReleasedAtUtc"]);
+        var holdTables = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Map.Keys.Where(k => !k.Contains('.') && k.Contains("Hold", StringComparison.OrdinalIgnoreCase)).ToHashSet();
+        Assert.True(holdTables.SetEquals(RetentionService.KnownHoldTables), string.Join(", ", holdTables));
+        Assert.False(RetentionService.UnknownHoldTables());
+    }
+
+    [Fact]
     public async Task Every_non_test_entry_point_refuses_while_the_gate_is_off()
     {
         var runs = Runs();
@@ -188,6 +199,14 @@ public sealed class RetentionExecutorTests : IDisposable
             File.WriteAllText(Path.Combine(deleting, "system", "database.dump.hbe"), "x");
             if (!OperatingSystem.IsWindows()) Directory.CreateSymbolicLink(Path.Combine(deleting, "link"), outside);
             Assert.Equal(1, RetentionInventory.DeletingFolderCount(root));                                          // backup-status reports retention_deletion_incomplete
+            // review L3 of #134: without the engine's tombstone the folder is NOT resumed
+            var unverified = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
+            Assert.Equal(0, unverified.Resumed);
+            Assert.Contains(("20260301T020000Z-0000abcd", "resume_unverified"), unverified.Skipped);
+            Assert.True(Directory.Exists(deleting));
+            var tomb = Path.Combine(root, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder, "20260301T020000Z-0000abcd");
+            Directory.CreateDirectory(tomb);
+            File.WriteAllText(Path.Combine(tomb, RetentionInventory.DeletedMarker), "{\"version\":1,\"runId\":\"20260301T020000Z-0000abcd\",\"deletedUtc\":\"2026-03-01T03:00:00+00:00\",\"statusSha256\":\"x\"}");
             var result = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
             Assert.Equal(1, result.Resumed);
             Assert.Equal(0, RetentionInventory.DeletingFolderCount(root));

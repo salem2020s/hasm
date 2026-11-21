@@ -11,6 +11,7 @@ using E = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
 using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using FY = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalYear;
 using H = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupLegalHold;
+using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LegalHold;
 using P = Hasm.Infrastructure.SystemDatabase.SystemSchema.BackupRetentionPin;
 using ST = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
 
@@ -214,6 +215,39 @@ public class BackupRetentionTests : PostgresTestBase
         var (pinned, _) = await new RetentionService(Options, Retention, clock).PlanAsync(Root, Trust);
         Assert.DoesNotContain("legal_hold", pinned.Runs.Single(r => r.RunId == r1).Reasons);                         // released
         Assert.Contains("recovery_chain", pinned.Runs.Single(r => r.RunId == r1).Reasons);                           // pinned (clock in March, pin expires tomorrow)
+    }
+
+    [PostgresFact]
+    public async Task An_active_phase_r_attachment_legal_hold_of_any_scope_keeps_every_run_of_the_company()
+    {
+        // review H2 of #134 (D-134, D-114): R1's company LegalHold table is read; any ACTIVE hold, whatever its scope, keeps every run containing the company (fail closed, never ignored)
+        await Init();
+        var held = await NewCompany("UTC");
+        var free = await NewCompany("UTC");
+        var clock = new Clock();
+        var runs = new List<string>();
+        for (var d = 2; d <= 13; d++) runs.Add(await RunAt(clock, new DateTimeOffset(2026, 3, d, 2, 0, 0, TimeSpan.Zero)));
+        await Prove(runs[^1]);
+        clock.Now = new DateTimeOffset(2026, 3, 13, 3, 0, 0, TimeSpan.Zero);
+        var service = new RetentionService(Options, Retention, clock);
+        var (before, _) = await service.PlanAsync(Root, Trust);
+        Assert.NotEmpty(before.Eligible);
+        Assert.All(before.Runs, r => Assert.DoesNotContain("attachment_hold", r.Reasons));
+
+        // a RECORD-scoped hold (scope 2) in one company, placed with valid SQL as R1's own tests do
+        var db = Options.BuildCompanyAdminConnectionString(held.PhysicalDatabaseName);
+        await Exec(db, $"INSERT INTO {LH.Table} ({LH.Id}, {LH.Scope}, {LH.SubjectKind}, {LH.SubjectId}, {LH.Reason}, {LH.PlacedBy}, {LH.PlacedAtUtc}, {LH.Revision}, {LH.UpdatedAtUtc}) " +
+                       $"VALUES (gen_random_uuid(), 2, 'local_party', gen_random_uuid(), 'pending litigation', gen_random_uuid(), now(), 1, now())");
+        var (after, inputs) = await service.PlanAsync(Root, Trust);
+        Assert.Equal("attachment_hold", inputs.Companies.Single(c => c.CompanyId == held.Id).HoldCode);
+        Assert.Null(inputs.Companies.Single(c => c.CompanyId == free.Id).HoldCode);
+        Assert.All(after.Runs, r => Assert.Contains("attachment_hold", r.Reasons));                                  // every run contains the held company
+        Assert.Empty(after.Eligible);
+
+        // and the deletion engine (through the test seam) deletes nothing while the hold is active
+        var result = await service.ApplyCoreAsync(Root, Trust, Backup, (_, _, _) => Task.CompletedTask, "os:test", RetentionGateOverride.ForTests(), default);
+        Assert.Empty(result.Deleted);
+        Assert.All(runs, id => Assert.True(Directory.Exists(Path.Combine(Root, id))));
     }
 
     [PostgresFact]
