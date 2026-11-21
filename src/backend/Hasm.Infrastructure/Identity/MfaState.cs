@@ -41,6 +41,6 @@ public static class MfaStateGraph
 /// <summary>Throttle keys of the second factor (stored under <see cref="ThrottleScope.Login"/>, domain-separated from every login key): SHA-256 of a domain-separated string, never the raw user id or address.</summary>
 public static class MfaThrottleKeys
 {
-    public static byte[] UserAndSource(Guid userId, string source) => SessionToken.HashKey("mfa-pair:" + userId.ToString("N") + "|" + source);
-    public static byte[] User(Guid userId) => SessionToken.HashKey("mfa-user:" + userId.ToString("N"));
+    public static byte[] UserAndSource(Guid userId, string source) => SessionToken.HashKey(ThrottleKeyDomains.MfaPair + userId.ToString("N") + "|" + source);
+    public static byte[] User(Guid userId) => SessionToken.HashKey(ThrottleKeyDomains.MfaUser + userId.ToString("N"));
 }

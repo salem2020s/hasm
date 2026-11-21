@@ -34,12 +34,12 @@ The replay compare-and-set used by `MfaVerifier` is exactly `UPDATE UserTotp SET
 **Privileges:** the runtime role gets SELECT, INSERT and UPDATE (no DELETE); reporting roles get nothing on this table.
 **Backup rule (LEAD D-120, supersedes the earlier sequencing question):** S1 ships with `UserTotp.Table` in `SystemSchema.SecretStoreTables` AND in `BackupRunService.SystemDumpExclusions` (label `user_totp`), i.e. ALWAYS excluded; it does not wait for #116. The table becomes "included only in encrypted runs" (a per-table rule: `Session.Table` and `LoginThrottle.Table` stay always excluded) in the Phase 4.3 slice 5 implementation PR, the code that actually encrypts runs. Until then every system restore leaves `Enrolled` users `RecoveryRequired`, which the H1 safeguard already handles.
 
-## 3. Throttle scope
-`LoginThrottle` scope CHECK widens from `0..1` to `0..2` (2 = `Mfa`, `ThrottleScope.Mfa`, already an enum member in this branch). Key hashes keep their domain-separated prefixes (`mfa-pair:<user>|<source>` and `mfa-user:<user>`), SHA-256, never the raw key.
+## 3. Throttle counters (LEAD D-121)
+No schema change: the second-factor counters reuse the login throttle table under scope `Login` with the domain-separated keys `mfa-pair:` and `mfa-user:` (`ThrottleKeyDomains`, prefix-free, pinned by a unit test). Migrations may not DROP, so the scope check is not widened; relaxing that loader rule belongs to the owner. MFA and password counters never count toward or reset each other, and the MFA bounds (5, 100, 15 minutes) are independent of `AuthOptions`.
 
 ## 4. Store seams (code, no schema)
 * `IMfaSecretStore` (implemented over `UserTotp` and `TotpSecretProtector`): `FindActiveSecretAsync` reads the Active row, decrypts, returns `MfaSecret`; a missing key or authentication failure surfaces as `MfaUnavailableException` (no downgrade). `TryAdvanceLastStepAsync` is the compare-and-set above.
-* `IMfaAttemptLimiter` (implemented over `LoginThrottle` with `ThrottleScope.Mfa`, bounds `MfaThrottleOptions`: 5 per user and source, 100 per user, 15 minutes window and block); the per-user bound crossing is reported for the alert.
+* `IMfaAttemptLimiter` (implemented over `LoginThrottle` with scope `Login` and the `mfa-` key domains, bounds `MfaThrottleOptions`: 5 per user and source, 100 per user, 15 minutes window and block); the per-user bound crossing is reported for the alert.
 * `totp-rewrap` / `--check` (admin tool, authorization per the table in plan section 5): batches of rows inside transactions, resumable, idempotent; `--check` lists the key ids still referenced.
 * Restore procedure hooks (plan section 4, D-106/D-107): after a system restore, every `Enrolled` user without an Active `UserTotp` row (or whose secret cannot be read) becomes `RecoveryRequired`, unconsumed enrolment codes are invalidated, and logins stay blocked until the audited completion step.
 

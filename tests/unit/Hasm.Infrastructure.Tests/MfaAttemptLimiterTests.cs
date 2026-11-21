@@ -90,4 +90,86 @@ public class MfaAttemptLimiterTests
         Assert.All(s.Scopes, sc => Assert.Equal(ThrottleScope.Login, sc));
         Assert.Null(await l.BlockedForAsync(Guid.NewGuid(), "a", default));
     }
+
+    // ---- D-121: the second-factor counters share the login throttle table but are separate in every way ----
+
+    private static byte[] LoginPairKey(string login, string source) => SessionToken.HashKey(ThrottleKeyDomains.LoginPair + login + "|" + source);
+    private static byte[] LoginGlobalKey(string login) => SessionToken.HashKey(ThrottleKeyDomains.LoginIdentifier + login);
+    private static byte[] LoginSourceKey(string source) => SessionToken.HashKey(ThrottleKeyDomains.LoginSource + source);
+    private static readonly TimeSpan Win = TimeSpan.FromMinutes(15);
+
+    [Fact]
+    public void The_hash_domains_are_prefix_free_so_no_two_domains_can_ever_produce_the_same_key_input()
+    {
+        var all = ThrottleKeyDomains.All;
+        Assert.Equal(all.Count, all.Distinct().Count());
+        foreach (var a in all)
+            foreach (var b in all.Where(b => b != a))
+                Assert.False(a.StartsWith(b, StringComparison.Ordinal), $"{a} starts with {b}");                // prefix-free: a+x can never equal b+y for any x and y
+    }
+
+    [Fact]
+    public void Mfa_keys_never_equal_any_login_source_or_change_password_key_even_for_adversarial_content()
+    {
+        var u = Guid.NewGuid();
+        var mfa = new[] { MfaThrottleKeys.User(u), MfaThrottleKeys.UserAndSource(u, "a") };
+        var hostile = new[] { u.ToString("N"), "mfa-pair:" + u.ToString("N") + "|a", "mfa-user:" + u.ToString("N"), "|a", "", "x" };
+        foreach (var text in hostile)
+        {
+            var others = new[] { LoginGlobalKey(text), LoginPairKey(text, "a"), LoginSourceKey(text), SessionToken.HashKey(ThrottleKeyDomains.ChangePassword + text) };
+            foreach (var m in mfa) foreach (var o in others) Assert.NotEqual(Convert.ToHexString(o), Convert.ToHexString(m));
+        }
+        Assert.NotEqual(Convert.ToHexString(mfa[0]), Convert.ToHexString(mfa[1]));
+    }
+
+    [Fact]
+    public async Task Mfa_failures_never_count_toward_or_reset_the_password_login_counters()
+    {
+        var (l, s, _) = Make();
+        var login = "alice";
+        for (var i = 0; i < 4; i++) await s.RecordFailureAsync(ThrottleScope.Login, LoginPairKey(login, "a"), 5, Win, Win);                    // four password failures
+        for (var i = 0; i < 100; i++) await l.RecordFailureAsync(User, "a", default);                                                           // the user's MFA is locked out
+        await l.ResetPairAsync(User, "a", default);                                                                                             // and one MFA pair counter was cleared
+        Assert.Null(await s.GetBlockedUntilAsync([(ThrottleScope.Login, LoginPairKey(login, "a")), (ThrottleScope.Login, LoginGlobalKey(login)), (ThrottleScope.Source, LoginSourceKey("a"))]));   // the login keys are untouched
+        Assert.True(await s.RecordFailureAsync(ThrottleScope.Login, LoginPairKey(login, "a"), 5, Win, Win));                                   // the FIFTH password failure still blocks: MFA neither raised nor reset the count
+    }
+
+    [Fact]
+    public async Task Password_login_failures_and_resets_never_count_toward_or_reset_the_mfa_counters()
+    {
+        var (l, s, _) = Make();
+        var login = "alice";
+        for (var i = 0; i < 4; i++) await l.RecordFailureAsync(User, "a", default);                                                             // four MFA failures
+        for (var i = 0; i < 100; i++)
+        {
+            await s.RecordFailureAsync(ThrottleScope.Login, LoginPairKey(login, "a"), 5, Win, Win);
+            await s.RecordFailureAsync(ThrottleScope.Login, LoginGlobalKey(login), 100, Win, Win);
+            await s.RecordFailureAsync(ThrottleScope.Source, LoginSourceKey("a"), 20, Win, Win);
+        }
+        await s.ResetThrottleAsync(ThrottleScope.Login, LoginPairKey(login, "a"));                                                              // a successful login clears its pair counter
+        Assert.Null(await l.BlockedForAsync(User, "a", default));                                                                               // MFA is not blocked by any of it
+        await l.RecordFailureAsync(User, "a", default);                                                                                         // the fifth MFA failure still blocks: the MFA count survived the login traffic
+        Assert.NotNull(await l.BlockedForAsync(User, "a", default));
+    }
+
+    [Fact]
+    public void The_mfa_bounds_are_their_own_constants_and_the_limiter_cannot_see_the_login_options()
+    {
+        var o = new MfaThrottleOptions();
+        Assert.Equal((5, 100, 15, 15), (o.MaxFailuresPerUserSource, o.MaxFailuresPerUser, o.WindowMinutes, o.BlockMinutes));                   // pinned: 5, 100, 15 minutes
+        Assert.DoesNotContain(typeof(MfaAttemptLimiter).GetConstructors().SelectMany(ctor => ctor.GetParameters()), p => p.ParameterType == typeof(AuthOptions));
+        Assert.DoesNotContain(typeof(MfaThrottleOptions).GetProperties(), p => p.PropertyType == typeof(AuthOptions));
+    }
+
+    [Fact]
+    public async Task The_mfa_limiter_blocks_at_exactly_five_whatever_the_login_options_are()
+    {
+        // a deployment that tightens the PASSWORD bounds (here to 1) changes AuthOptions only; the limiter takes no AuthOptions, so its bounds are fixed
+        _ = new AuthOptions { MaxFailuresPerLoginSource = 1, MaxFailuresPerLoginGlobal = 1, MaxFailuresPerSource = 1 };
+        var (l, _, _) = Make();
+        for (var i = 0; i < 4; i++) await l.RecordFailureAsync(User, "a", default);
+        Assert.Null(await l.BlockedForAsync(User, "a", default));
+        await l.RecordFailureAsync(User, "a", default);
+        Assert.NotNull(await l.BlockedForAsync(User, "a", default));
+    }
 }
