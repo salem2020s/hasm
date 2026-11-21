@@ -73,7 +73,7 @@ if [[ "${1:-}" == "--recover" ]]; then MODE=recover; shift; [[ $# -eq 0 ]] || di
 else [[ $# -ge 1 && "$1" != -* ]] || die "Usage: $0 <worktree> [--build] [extra dotnet test arguments] | $0 --recover"; fi
 [[ "$(id -u)" == "0" ]] || die "run-isolated.sh needs root (network namespaces and runuser)."
 for c in unshare flock runuser awk sha256sum mktemp; do command -v "$c" >/dev/null 2>&1 || die "$c is required."; done
-unshare --net -- true 2>/dev/null || die "unshare --net is not permitted here (it needs root with CAP_SYS_ADMIN and a kernel/container that allows new network namespaces). Isolated mode is unavailable on this machine: use the shared cluster (run-pg-tests.sh, one run at a time under its lock) instead."
+unshare --net -- true 2>/dev/null || die "unshare --net is not permitted here (it needs root with CAP_SYS_ADMIN and a kernel/container that allows new network namespaces). Isolated mode is unavailable on this machine: use scripts/test-pg/run-oneshot.sh (one self-cleaning run at a time), or a standing shared cluster with run-pg-tests.sh, instead."
 
 if [[ "${MODE}" == run ]]; then
 WT="$(cd "$1" 2>/dev/null && pwd -P)" || die "Worktree $1 not found."; shift

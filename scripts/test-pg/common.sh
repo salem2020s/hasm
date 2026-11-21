@@ -5,6 +5,16 @@
 # every checkout of the repository with owner-only permissions, random fresh passwords, a marker database with a fresh 256-bit fingerprint, no Unix-domain sockets, nothing started as a service.
 set -euo pipefail
 
+# Inherited settings that could redirect psql or the test process to another server are removed before anything else: libpq variables (PGHOST, PGPORT, PGSERVICE, PGOPTIONS,
+# PGPASSWORD, ...; PG followed by a LETTER, so the harness's own PG_BIN/PG_RUN_AS are not matched), PSQLRC, any inherited HASM_TEST_PG_* (the only source of these is the
+# generated secrets/test-env.sh, sourced by run-pg-tests.sh) and application settings (Hasm__*, matched without regard to case because .NET reads them that way).
+# Only names that are valid shell identifiers can be listed and removed here. Everything a script needs is set explicitly afterwards.
+scrub_inherited_env() {
+  local v
+  while IFS= read -r v; do unset "${v}"; done < <( { compgen -e | grep -E '^(PG[A-Z][A-Z0-9_]*|PSQLRC|HASM_TEST_PG_[A-Z0-9_]*)$'; compgen -e | grep -Ei '^hasm__'; } || true)
+}
+scrub_inherited_env
+
 TEST_PORT=5433                                         # fixed on purpose; the integration-test gate (PostgresClusterIdentity) also requires it
 if [[ -n "${HASM_TEST_PORT:-}" && "${HASM_TEST_PORT}" != "${TEST_PORT}" ]]; then
   echo "Refusing: the disposable test cluster port is fixed at ${TEST_PORT} (HASM_TEST_PORT=${HASM_TEST_PORT} is not allowed)." >&2; exit 1
@@ -78,6 +88,23 @@ assert_safe_locations() {
   done < <(sort -u <<<"${checkouts}")
 }
 assert_cluster_present() { [[ -f "${DATA_DIR}/PG_VERSION" && -f "${MARKER_FILE}" ]] || die "No test cluster at ${DATA_DIR}; run new-test-cluster.sh first."; }
+# True when <pid> is a live, non-zombie process whose command line names exactly this cluster's data directory (a server of THIS cluster).
+pid_serves_data_dir() {
+  local pid="$1"
+  [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" && "$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null)" != Z ]] || return 1
+  grep -qxF -- "${DATA_DIR}" < <(tr '\0' '\n' 2>/dev/null < "/proc/${pid}/cmdline")   # not a pipeline: grep -q leaving early must not turn into a pipefail error
+}
+# pg_ctl stop signals whatever PID postmaster.pid records. If that PID is not a live server of THIS data directory (the server died and the PID may have been reused by an
+# unrelated process of the same account), the file is moved aside inside the data directory so that pg_ctl sees no server and signals nothing. Fail closed: a live server that
+# cannot be identified (unreadable /proc) is treated the same way, and the callers then refuse because the port is still held.
+neutralize_stale_pidfile() {
+  local f="${DATA_DIR}/postmaster.pid" pid
+  [[ -e "${f}" || -L "${f}" ]] || return 0
+  pid="$(head -1 "${f}" 2>/dev/null || true)"
+  if [[ ! -L "${f}" ]] && pid_serves_data_dir "${pid}"; then return 0; fi
+  as_pg mv -f -- "${f}" "${DATA_DIR}/postmaster.pid.stale" 2>/dev/null || mv -f -- "${f}" "${DATA_DIR}/postmaster.pid.stale"
+  echo "Moved aside a stale postmaster.pid in ${DATA_DIR} (PID ${pid:-?} is not a server of this cluster; nothing is signalled)." >&2
+}
 cluster_running() { as_pg "${PG_BIN}/pg_ctl" -D "${DATA_DIR}" status >/dev/null 2>&1; }
 port_listening() { (exec 3<>"/dev/tcp/${TEST_HOST}/${TEST_PORT}") >/dev/null 2>&1; }
 new_secret() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }   # 256 random bits as 64 hex characters

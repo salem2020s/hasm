@@ -4,6 +4,9 @@
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 assert_safe_locations
 umask 077
+# The suite is validated against PostgreSQL 16 (CI uses the postgres:16 image): a cluster of another major version is never created.
+pg_major="$("${PG_BIN}/postgres" --version 2>/dev/null | sed -nE 's/^[^0-9]*([0-9]+).*/\1/p')"
+[[ "${pg_major}" == "16" ]] || die "PostgreSQL 16 is required; ${PG_BIN}/postgres reports major version '${pg_major:-unknown}' (set HASM_PG_BIN)."
 [[ -d "$(dirname "${TEST_ROOT}")" ]] || die "The parent directory of ${TEST_ROOT} does not exist."
 
 # The root must be ABSENT (this script creates it) or be a root this script created earlier (it carries the marker file): a pre-existing directory is never used and never chmod-ed.
