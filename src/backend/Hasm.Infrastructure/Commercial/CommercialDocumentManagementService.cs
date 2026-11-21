@@ -54,9 +54,9 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
         }
         else if (!HoldsAnywhere(await access.GetEffectivePermissionsAsync(user, company, ct), PermissionCatalog.Codes.CommercialCreate)) return Denied<CommercialDocumentView>();
         var created = await documents.CreateAsync(user, company, input, ct);   // a missing branch is then a validation error for a caller who may create somewhere
-        // a REPLAY returns the current state of the document: a caller who may create but not view it receives only the identifiers (never the party, note, lines or history)
+        // a REPLAY returns the current state of the document: a caller who may create but not view it receives ONLY the document id and the replayed flag (decided in S1b; nothing else of the document is disclosed)
         if (created.IsOk && created.Value!.Replayed && !await CoversAsync(user, company, PermissionCatalog.Codes.CommercialView, created.Value.BranchId, ct))
-            return ConfigResult<CommercialDocumentView>.Ok(created.Value with { PartyId = Guid.Empty, Currency = "", Note = null, SubmittedBy = null, Lines = [], Events = [] });
+            return ConfigResult<CommercialDocumentView>.Ok(Redacted(created.Value));
         return created;
     }
 
@@ -77,6 +77,23 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     {
         var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialSubmit, ct);
         return a.IsOk ? await documents.WithdrawAsync(user, company, id, revision, ct) : a;
+    }
+
+    /// <summary>The only thing a creator without the view permission learns from a replay: the id and the replayed flag.</summary>
+    private static CommercialDocumentView Redacted(CommercialDocumentView v) =>
+        new(v.Id, "", Guid.Empty, Guid.Empty, "", default, 0, 0, null, null, 0, Guid.Empty, default, default, [], [], true);
+
+    /// <summary>Approval (<c>company.commercialdocs.approve</c> on the document's branch) is separate from every other permission and is not in the Company Administrator preset; the service additionally requires the approver to be independent.</summary>
+    public async Task<ConfigResult<CommercialDocumentView>> ApproveAsync(Guid user, Guid company, Guid id, long? revision, CancellationToken ct = default)
+    {
+        var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialApprove, ct);
+        return a.IsOk ? await documents.ApproveAsync(user, company, id, revision, ct) : a;
+    }
+
+    public async Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
+    {
+        var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialApprove, ct);
+        return a.IsOk ? await documents.RejectAsync(user, company, id, revision, reason, ct) : a;
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> CancelAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
