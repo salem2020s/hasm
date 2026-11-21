@@ -25,24 +25,48 @@ Maintained by the lead agent; the authoritative record of what is open, how it d
 
 Migrations on `main`: see the cloud-team handoff section below (current values are kept there only, to avoid contradictions).
 
-## Cloud team handoff (refreshed 2026-11-21 against GitHub; lead = Claude Opus 5.5; recover from here)
+## Cloud team handoff (refreshed 2026-11-21, sprint 1, recovered from git and GitHub REST at `main` = `045dd2a`; lead = Claude Opus 5.5; recover from here)
 
-`main` = `0c4661d`; PostgreSQL registry **1085**; company migrations 0001-0029, system 0001-0029; company 0030 is ALLOCATED to 3.13 S2 (A). Decisions on `main`: D-001..D-073 except D-044/D-045 (reserved for #48); D-074..D-077 are ALLOCATED to 3.13 S2 (A); D-078..D-088 record the owner decisions of 2026-11-21; the next free decision ID is D-089. Cloud environment: .NET SDK 10 (installed in-session by the environment's own apt command); PostgreSQL 16 binaries; the Linux disposable-cluster harness (`scripts/test-pg/*.sh`, single holder lock, port 5433 only, destroy after use) is merged (#89). GraphQL is blocked: exact-head verification = the unmodified `main` copy of `tools/verify/verify-head.js` with `--input` from REST data; merges via REST with the head SHA pinned; for a final head that adds only a review record or a `main` merge, the code delta is proven identical to the reviewed head by `git patch-id`.
+**State of `main`:** `045dd2a` (merge of #116). PostgreSQL registry **1092** (read from the `EXPECTED` registry and the step title of `.github/workflows/backend.yml`; the running total is whatever that file says at merge time, never this sentence). Migrations on `main`: company 0001-0029 (29 files) and system 0001-0029 (29 files); company 0030 is ALLOCATED to 3.13 S2 (#108, A).
+
+**Decisions on `main`:** D-001..D-073 except D-044/D-045 (reserved for #48); D-078..D-107 (contiguous); D-116..D-120. Allocated ranges and where their text lives:
+
+| Range | Owner | State |
+|-------|-------|-------|
+| D-074..D-077 | A (3.13 S2) | ALLOCATED, text arrives with #108 |
+| D-078..D-088 | owner decisions of 2026-11-21 | on `main` (#110) |
+| D-089..D-095 and D-116..D-119 | B (4.3) | merged |
+| D-096..D-107 and D-120..D-129 | D | D-096..D-107 and D-120 on `main`; D-121..D-129 ALLOCATED, not yet on `main` |
+| D-108..D-115 | E and R | ALLOCATED, not yet on `main` (R's plan #114 is merged; its D-109/D-113 await the owner) |
+
+**Next free decision ID: D-130.** Audit-event blocks: **2000-2009** for R (attachment retention; the highest code in use on `main` is 1908); **2010-2019 requested for 4.3 slice 5, UNCONFIRMED** until the lead records the allocation. Migration allocation rule: system and company migrations are numbered in MERGE ORDER (the loader refuses gaps and generated names are never reused), allocated here and never reserved ahead in a PR; R1 (attachment retention) is expected to take **system 0030 and company 0031** (after #108's company 0030); 4.1 and 4.3 slice 5 take the next free number at merge.
+
+Cloud environment: .NET SDK 10 (installed in-session by the environment's own apt command); PostgreSQL 16 binaries; the Linux disposable-cluster harness (`scripts/test-pg/*.sh`, single holder lock, port 5433 only, destroy after use) is merged (#89). GraphQL is blocked: exact-head verification = the unmodified `main` copy of `tools/verify/verify-head.js` with `--input` from REST data; merges via REST with the head SHA pinned; for a final head that adds only a review record or a `main` merge, the code delta is proven identical to the reviewed head by `git patch-id`.
 
 Merged by the cloud team since the Opus resumption (each: independent full-diff review recorded, verify-head green on the exact merged head, mergeable clean, no Critical/High, no protected file except #82, merged on the owner's explicit instruction, D-078): #83 handoff, #84/#86/#88/#92/#93/#97/#103 pricing frontend follow-ups (bounded server-side pickers, catalog-wide unique message keys, by-ids customer lookup, active-group filter), #78 4.3 slice 2 (PgBackupTool, locale capture D-053), #91/#94 4.3 slice 3 (registry-bound backup, trial restore with the 21.8 pre-cutover checks, D-058..D-062), #100 4.3 slice 4 plan (D-069..D-073; owner package 4.3-2), #89 Linux test harness, #90/#96/#98/#101 list search/paging/ids/active and standard invalid_request bodies, #95 isolated measurement tests (D-063), #87 3.13 S1a (company/system 0028), #102 shared bounded advisory-lock acquisition, #105 handoff refresh, #99 3.13 S1b (company/system 0029, D-064..D-068), #106 by-ids lookup of units and item groups, #82 CLAUDE.md standing authorization (owner-instructed merge, D-078).
 
-| Open work | Owner agent | Head | State and next step |
-|-----------|-------------|------|---------------------|
-| #104 4.3 slice 4 implementation (scheduled whole-installation backup) | B (Opus) | `0e7d184` | approved by Agent C; L1-L7 fixed; C confirms the L6/L7 delta, then exact-head CI and merge (registry reconciled with #107) |
-| #107 3.7B in-transaction PostInWorkAsync (prerequisite of 3.13 S3) | D (Sonnet) | `a81d15c` | Critical; round-2 audit finding (touched-stream state after savepoint rollback) fixed; C reviews round 3 |
-| #109 party picker search (truncated at 500) | E (Sonnet) | moving | C requested changes (M1: client-side filtering hid matches); server-side `active`/`withoutRole` filters being added |
-| 3.13 S2 document links and partial fulfilment | A (Sonnet) | branch `feature/phase-3-13-s2` | company 0030, D-074..D-077; fail-closed defaults for Q2/Q3 (owner-pending) |
+**Merged since the previous refresh, all recovered from GitHub (merge commit on `main`):** #110 `e31c823` owner decisions 1-11 (D-078..D-088); #111 `3e5a3eb` PostgreSQL client/server major-version assertion (D-084); #104 `db2a55e` 4.3 slice 4, backup run of the whole installation; #114 `b676f5f` plan for decision R, attachment retention (D-082); #113 `002ffa3` 4.1 MFA and identity security plan (D-080); #120 `039ad58` D-120, S1 ships with `user_totp` always excluded; #112 `7f65b32` AuditTrail first-touch state scoped to one PostgreSQL transaction; #115 `bdb63f8` endpoint authorization inventory (every route protected or allowlisted, anonymous 401); #118 `b8f551e` frontend i18n parity, permission/session states, Arabic-digit input and the translated error codes; #116 `045dd2a` 4.3 slice 5 plan (encrypted and signed backup sets); #105 `d3bee74` handoff refresh; #99 `98c3a0a` 3.13 S1b; #106 `61ee7be` by-ids lookup of units and item groups; #82 `0c4661d` CLAUDE.md standing authorization.
 
-Agents: A Sonnet (3.13), B Opus High (4.3), C Opus High (independent review), D Sonnet (backend/QA), E Sonnet (frontend). Next 3.13 slices: S3 needs Q6, Q16, Q17 and #107; S4 needs Q4, Q5, Q12; S6 screen approved (D-079). Phases unblocked by the owner decisions of 2026-11-21: 4.1 MFA and identity (D-080), 4.3 encryption, signing, retention, key export and restore cutover (D-081, D-085..D-088), attachment retention R (D-082), the CV workflow step (D-084).
+**Open pull requests (exact heads read from `gh api repos/salem2020s/hasm/pulls?state=open`; every one is a Draft):**
 
-#85 (`feature/tooling-linux-pg-test-harness`, `8b87ea3`) is an older Linux harness PR SUPERSEDED by the merged #89; not to be merged; the owner may close it.
+| PR | Branch | Head | Owner agent | State and next step |
+|----|--------|------|-------------|---------------------|
+| #109 | `feature/party-picker-search` | `d6e9ff4` | E (Sonnet) | party picker searches the server; first in the merge sequence; C requested changes earlier (client-side filtering), server-side filters added; re-verify the exact head before merge |
+| #108 | `feature/phase-3-13-s2` | `e0483b5` | A (Sonnet) | 3.13 S2 document links and partial fulfilment (company 0030, D-074..D-077); Q2/Q3 built fail-closed (owner-pending); merges after #109 |
+| #107 | `feature/stock-posting-in-work` | `a81d15c` | D (Sonnet) | 3.7B in-transaction `PostInWorkAsync` (prerequisite of 3.13 S3); Critical, so its independent review must be recorded on the exact head; merges after #108 and reconciles the registry |
+| #117 | `test/cross-module-scenarios` | `b85e770` | F (Opus) | cross-module accounting scenarios (gap 3); PostgreSQL tests, so the registry is reconciled at merge; follows #107 |
+| #121 | `test/concurrency-invariants` | `146a66e` | H (Sonnet) | parallel same-revision writers (6 PostgreSQL classes, registry +6) and the translated conflict-message test; F is reviewing; last in the sequence, the lead gives the registry total at its turn |
+| #123 | `feature/frontend-followups-118` | `b98853f` | H (Sonnet) | #118 follow-ups (shared decimal parser, list separator, weak_password rules); G approved 8cf855e and four Lows were fixed on top; G confirms the delta; frontend only, no registry change |
+| #119 | `test/endpoint-permission-matrix` | `230075c` | not stated in this refresh (gap 2 was given to another agent) | per-endpoint 403 matrix of every mutating company endpoint; PostgreSQL tests, registry reconciliation needed at merge; add to the sequence once confirmed |
+| #122 | `feature/phase-3-13-s6` | `2d524f0` | not stated in this refresh (3.13 S6 belongs to the 3.13 line) | shared commercial-document screen, first slice (D-079); next step to be confirmed by the lead |
 
-Owner decisions of 2026-11-21: items 1-11 RESOLVED (D-078..D-088, register below). Still open with the owner: X1-X8 (#48), OD-11, Q (attachment quota and malware scanning), S and C (production-readiness hardening), and the 3.13 questions Q2/Q3 (built fail-closed), Q4, Q5, Q6, Q12, Q16 and Q17.
+Inert pull requests (no action; details in the next section): #48 (`1e8f477`, BLOCKED on X1-X8), #51 (`fe2ee06`) and #55 (`23d4850`) (security proposals superseded by the merged #61), #62 (`8552693`, VALIDATION ONLY), #85 (`8b87ea3`, superseded by the merged #89; the owner may close it).
+
+**Merge sequence:** #109, then #108, then #107, then #117, then #121 (#119 and #122 join once their owners and state are confirmed). At EVERY step: merge `main` into the next branch (never rebase, never force-push), then re-reconcile (1) the PostgreSQL registry in `.github/workflows/backend.yml` (raise it to main's total at that moment plus the PR's own new tests; check with `node tools/verify/ci-guard.js --base origin/main` and the parser), (2) the migration numbers (company 0030 for #108, then the next free numbers in merge order, see the allocation rule above), (3) the decision and audit-event ranges, and repeat the exact-head verification (`verify-head.js` from `main`) because the head SHA changed; `--match-head-commit` on the merge.
+
+**Agent roster:** lead = Claude Opus 5.5; A, D, E, H = Sonnet; B, C, F, G = Opus. Roles: A 3.13 (documents), B 4.3 (backup), C independent review, D backend and stock posting, E frontend and party picker, F accounting scenarios and review, G independent security/audit review, H Release 1 scenario and regression QA. Next 3.13 slices: S3 needs Q6, Q16, Q17 and #107; S4 needs Q4, Q5, Q12; S6 screen approved (D-079). Phases unblocked by the owner decisions of 2026-11-21: 4.1 MFA and identity (D-080), 4.3 encryption, signing, retention, key export and restore cutover (D-081, D-085..D-088), attachment retention R (D-082), the CV workflow step (D-084, merged as #111).
+
+**Still open with the owner:** X1-X8 (#48), OD-11, Q (attachment quota and malware scanning), S and C (production-readiness hardening), the 3.13 questions Q2/Q3 (built fail-closed), Q4, Q5, Q6, Q12, Q16 and Q17, and R's Q1-Q3 (D-109 and D-113 are owner-pending). Owner decisions of 2026-11-21 items 1-11 are RESOLVED (D-078..D-088, register below).
 
 
 ## Inert or blocked pull requests (open work: see the cloud-team handoff section)
@@ -69,8 +93,11 @@ Owner decisions of 2026-11-21: items 1-11 RESOLVED (D-078..D-088, register below
 | 4.3-2 | RESOLVED by the owner 2026-11-21 (D-085..D-088): envelope encryption with an offline recovery key pair and a separate manifest signing key; retention at least 7 daily / 4 weekly (minimums; never the last recoverable, legal-hold or active-chain backup), month-end and year-end by legal policy (default never), automatic deletion inactive until safeguards are tested; `backup-keys` to a separate destination; unencrypted sets DEV/TEST only | UNBLOCKED; no set encryption, signature, deletion or key export yet; RELEASE1-ACCEPTANCE G not met (D-088 keeps release acceptance blocked until encryption and authenticated manifests are tested) |
 | 3.13-Q10 | RESOLVED by the owner 2026-11-21 (D-079): a minimal shared Web/Tauri commercial-document screen in S6; test-only types never shown in production | UNBLOCKED for S6 |
 | TIE | RESOLVED by the owner 2026-11-21 (D-083): keep the 0026 tie index; no DROP exception | equal-key group rules stay refused with ambiguous_rule |
-| CV | RESOLVED by the owner 2026-11-21 (D-084): add the client-version assertion to backend-selfhosted.yml (adding only; protected-file process) | not yet added |
+| CV | RESOLVED by the owner 2026-11-21 (D-084): add the client-version assertion to backend-selfhosted.yml (adding only; protected-file process) | added and merged in #111 (`3e5a3eb`) |
 | AR | RESOLVED by the owner 2026-11-20: Arabic label for retiring an import template is "إيقاف استخدام القالب" | applied in #73 |
+| 3.13-Q2, Q3 | OPEN with the owner (3.13 S2 questions) | #108 is built with fail-closed defaults; the behavior stays disabled until decided |
+| 3.13-Q4, Q5, Q6, Q12, Q16, Q17 | OPEN with the owner | S3 needs Q6, Q16, Q17 (and #107); S4 needs Q4, Q5, Q12; not started |
+| R-Q1..Q3 | OPEN with the owner: questions of the retention plan (`docs/PHASE-R-attachment-retention.md`); D-109 and D-113 are owner-pending | the plan (#114) is merged; retention policy and purge are not built; nothing deleted |
 | C | Production-readiness: mandatory Rust `cargo audit` job (M6) | no Rust audit exists (pre-existing gap); adding a mandatory job changes protected gates, so it needs the owner |
 
 ## Medium follow-ups recorded in review records (no approval needed; schedule with the owning slice)

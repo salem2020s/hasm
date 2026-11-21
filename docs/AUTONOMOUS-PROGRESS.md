@@ -1,5 +1,12 @@
 # HASM — Autonomous execution progress
 
+## Sprint 1 of the cloud team: merges and handoff refresh (2026-11-21, recovered from GitHub REST at `main` = `045dd2a`)
+
+Merged on `main` since the previous refresh (each by pull request, merge commit from GitHub): #110 owner decisions 1-11 (`e31c823`); #111 PostgreSQL client/server major-version assertion (`3e5a3eb`); #104 4.3 slice 4, backup run of the whole installation (`db2a55e`); #114 plan for attachment retention, decision R (`b676f5f`); #113 4.1 MFA and identity security plan (`002ffa3`); #120 D-120, `user_totp` always excluded from S1 (`039ad58`); #112 AuditTrail first-touch state scoped to one PostgreSQL transaction (`7f65b32`); #115 endpoint authorization inventory (`bdb63f8`); #118 frontend i18n parity, permission/session states and Arabic-digit input (`b8f551e`); #116 4.3 slice 5 plan (`045dd2a`); and, recorded for completeness from the previous refresh, #105 (`d3bee74`), #99 (`98c3a0a`), #106 (`61ee7be`) and #82 (`0c4661d`).
+
+PostgreSQL registry on `main`: 1092 (from `.github/workflows/backend.yml`). Migrations on `main`: company 0001-0029, system 0001-0029; company 0030 allocated to #108. Open Draft PRs and the merge sequence (#109, #108, #107, #117, #121) are in `docs/INTEGRATION-STATUS.md`; this entry records no result that GitHub does not show. Hosted CI and independent-review status of the open pull requests were NOT VERIFIED by this refresh (read each head again before any merge).
+
+
 ## Phase 3.9A follow-ups before 3.9B (branch fix/phase-3-9a-followups) — 2026-11-19
 
 The four Medium follow-ups recorded in `review-records/PR-46-final.md` are implemented on a separate branch from main: (1) a change proposal carries the shared identity revision the user VIEWED (`viewedSharedRevision`) and the server requires it and refuses a stale one (`shared_revision_required` 428 / `shared_revision_conflict` 412 with the current revision) instead of silently basing the change on newer data; (2) Save refreshes only the local data and Propose only the identity, so unrelated edits are preserved; (3) the central proposal queue is paged (25 per page, total shown); (4) per-tab unsaved markers on the party editor (shared `Tabs` `dirty`). Tests: PostgreSQL party classes 16/16 (one new test, registry 962 -> 963), frontend 395 web tests + typecheck + production build, unit 868/868. Independent review and hosted CI on the exact head are PENDING. Not merged; merging needs explicit owner approval.
