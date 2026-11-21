@@ -151,6 +151,51 @@ describe("attachment retention screen", () => {
     await waitFor(() => expect(client.releaseLegalHold).toHaveBeenCalledWith("h1", 2, "Case closed"));
   });
 
+  it("shows the server refusal when a hold is released by the person who placed it (the UI mirror can be stale)", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render({ releaseLegalHold: vi.fn().mockRejectedValue(apiError(409, "releaser_must_differ")) });
+    await go();
+    await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${E("ret.tab.holds")}`) }));
+    await userEvent.click(within(screen.getByTestId("hold-h1")).getByRole("button", { name: E("ret.hold.release") }));
+    await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(new RegExp(`^${E("ret.reason")}`)), "Closed");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.hold.release") }));
+    expect(await screen.findByText(E("ret.error.releaser_must_differ"))).toBeInTheDocument();
+  });
+
+  it("applies the same two-person mirror in Arabic (own draft and own hold offer no action)", async () => {
+    render({
+      listRetentionPolicies: vi.fn().mockResolvedValue({ policies: [{ ...draft, draftedBy: "u1" }] }),
+      listLegalHolds: vi.fn().mockResolvedValue({ holds: [{ ...hold, placedBy: "u1" }] }),
+    });
+    await go();
+    const row = await screen.findByTestId("policy-2");
+    expect(within(row).queryByRole("button", { name: A("ret.policy.approve") })).toBeNull();
+    expect(within(row).getByText(A("ret.policy.own_draft"))).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: new RegExp(`^${A("ret.tab.holds")}`) }));
+    const h = screen.getByTestId("hold-h1");
+    expect(within(h).queryByRole("button", { name: A("ret.hold.release") })).toBeNull();
+    expect(within(h).getByText(A("ret.hold.own"))).toBeInTheDocument();
+  });
+
+  it("revokes the approved version with a reason, using its revision", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const client = render();
+    await go();
+    await userEvent.click(within(await screen.findByTestId("policy-1")).getByRole("button", { name: E("ret.policy.revoke") }));
+    await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(new RegExp(`^${E("ret.reason")}`)), "Superseded by counsel");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.policy.revoke") }));
+    await waitFor(() => expect(client.revokeRetentionPolicy).toHaveBeenCalledWith("v1", 3, "Superseded by counsel"));
+  });
+
+  it("shows the conflict message when the revision is stale (412)", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render({ approveRetentionPolicy: vi.fn().mockRejectedValue(apiError(412, "precondition_failed")) });
+    await go();
+    await userEvent.click(within(await screen.findByTestId("policy-2")).getByRole("button", { name: E("ret.policy.approve") }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: E("ret.policy.approve") }));
+    expect(await screen.findByText(E("common.conflict"))).toBeInTheDocument();
+  });
+
   it("places a record-level hold", async () => {
     localStorage.setItem("hasm.locale", "en");
     const client = render();
