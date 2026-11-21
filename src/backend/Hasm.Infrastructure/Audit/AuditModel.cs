@@ -85,7 +85,8 @@ public sealed record AuditReceipt(string StreamKey, long Seq, byte[] Hash, long 
 /// The audit trail cannot be written safely (keys, checkpoint store or configuration unavailable). Callers abort the protected
 /// mutation: an audited mutation never succeeds without its audit event. The message never contains keys, paths or secrets.
 /// </summary>
-public class AuditUnavailableException(string code, string message) : Exception(message)
+/// <remarks>The optional <paramref name="inner"/> lets a wrapper keep the cause; the API only inspects it for a database error caused by the caller's data (22021).</remarks>
+public class AuditUnavailableException(string code, string message, Exception? inner = null) : Exception(message, inner)
 {
     /// <summary>Short machine-readable reason, safe to return to clients.</summary>
     public string Code { get; } = code;

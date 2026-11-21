@@ -216,10 +216,12 @@ public class DocumentLinkTests : CommercialTestBase
         Assert.Equal(6, results.Count(r => r.Value!.Replayed));
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.IdempotencyKey} = 'rp-link-00001'"));
         Assert.Equal(4m, Assert.Single(await Links.QuantitiesAsync(Company.Id, order.Id)).Fulfilled);                          // one link of 4, never 4 x 7
+        Assert.Equal(1L, await Events(CommercialAuditEvents.LinkCreated));                                                   // exactly ONE business audit event for the seven requests: a replay writes none (review Low of #164)
         // the same key with ANOTHER payload keeps its refusal; a later replay of the original is still the original
         Fails(await Links.CreateAsync(Admin.Id, Company.Id, Link(order.Id, 1, delivery.Id, 1, 2m, "rp-link-00001")), ConfigStatus.Conflict, "idempotency_key_reused");
         var again = Ok(await Links.CreateAsync(Admin.Id, Company.Id, input));
         Assert.Equal((id, true), (again.Id, again.Replayed));
+        Assert.Equal(1L, await Events(CommercialAuditEvents.LinkCreated));                                                   // the refusal and the later replay wrote none either
     }
 
     [PostgresFact]

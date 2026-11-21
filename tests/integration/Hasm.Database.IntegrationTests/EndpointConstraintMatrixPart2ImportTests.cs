@@ -131,8 +131,14 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
         await Race("import apply template", ["2xx"], HttpMethod.Post, $"{Base}/{itemsId}/mapping/apply-template", new { name = "Matrix" }, mode: Mode.Same);
         await Race("import retire template", ["412:revision_conflict"], HttpMethod.Post, $"{Base}/templates/items/Matrix/retire", new { expectedVersion = 1 });
 
-        // settings from one revision, the first save included (#165); maintenance is repeatable
+        // settings from one revision, the first save included (#165); maintenance is repeatable. Deterministic (#168 H L1): the six parallel writers are held between their revision
+        // read and their write until all six have read (the seventh, sequential request passes the spent barrier)
+        var settingsService = factory!.Services.GetRequiredService<ImportService>();
+        var settingsGate = new StartBarrier(6, TimeSpan.FromSeconds(60));
+        settingsService.AfterSettingsReadForTests = settingsGate.WaitAsync;
         await Race("import settings", R, HttpMethod.Put, $"{Base}/settings", new ImportSettingsInput(30, 14), "\"0\"");
+        settingsService.AfterSettingsReadForTests = null;
+        Assert.Equal(6, settingsGate.Arrived);
         await Race("import maintenance", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/run", null, mode: Mode.Same);
         await Race("import rewrap", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/rewrap", null, mode: Mode.Same);
 
