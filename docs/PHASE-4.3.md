@@ -1011,6 +1011,32 @@ Each question's default is the preserving one. An answer that relaxes one is an 
 ### Owner decisions this slice relies on (not re-asked)
 D-086 (implemented exactly; nothing lowered), D-082 and item K, D-080(6), D-081 (pins only; the cutover is slice 7), D-085, D-114.
 
+### Recorded as built (implementation of slice 6; branch `feature/phase-4-3-slice6-impl`, stacked on #128)
+* **Built as planned:**
+  * `RetentionOptions` (D-132): minimums 7/4 pinned; a lower or unreadable value is refused and never clamped; `InstallationTimeZone` required.
+  * `RetentionTime` (D-131): IANA zones through `TimeZoneInfo`, never the local zone (pinned by a source scan); skipped local midnight = first valid instant after it, repeated local midnight = the earlier instant.
+  * `RetentionClassifier` (D-130..D-135): every keep reason listed in the operator section of `docs/DEVELOPMENT.md`. An unconfigured, unknown or unresolvable company time zone, an unreadable company and a date outside every fiscal year are `classification_unknown` (review L1 of #130).
+  * `RetentionInventory`: the root scan reads only VERIFIED signed statuses. It reports unclean runs, kept trials, symbolic links and unfinished deletions.
+  * Run status version 2 with the key inventory (D-138): per-company attachment key ids and the run's audit key ids. A run whose inventory cannot be read completely is written as version 1. Key needs are unknown for a version 1, unverifiable, missing or unreadable status and for an incomplete run, and any unknown retained run makes the inventory incomplete (review M2 of #130).
+  * The system tables `BackupLegalHold` and `BackupRetentionPin` (one migration, append-only guards, derived names) and `BackupHoldStore` (placing a hold writes audit 2018 in the same transaction).
+  * `RetentionService.PlanAsync` / `backup-retention-plan` (audit 2014, JSON plan) and `RetentionService.ApplyAsync` / `backup-retention-apply` (inactive: audit 2017, exit 3).
+  * `RetentionExecutor` (D-136): reachable only through the internal `RetentionGateOverride` test seam.
+  * The shared restore lock in trial restores and recovery tests (D-135).
+  * `backup-status` reports `retention_deletion_incomplete` (exit 8).
+* **Review M1 of #130, as built:**
+  * `BackupRetention.GateOpen` (code gate AND opt-in) is checked in `ApplyCoreAsync`, in `RetentionExecutor.ExecuteAsync`, and again in `RenameForDeletion` and `DeleteRunFolder`, the lowest-level routines that touch a run folder.
+  * `RetentionGateOverride.ForTests()` is `internal` (visible only to the test assemblies), and a unit test scans `src/` to confirm that no production code calls it.
+  * A unit test calls every non-test entry point and asserts the refusal while the gate is off.
+* **Layer 2 as built:**
+  * `RestoreSafeguards.CutoverAvailable` is `false` until slice 7, so `restore_safeguards_missing` refuses every non-test execution even after the code gate changes.
+  * The test seam also stands in for this one check, because the slice 7 safeguards cannot exist yet.
+* **Phase R attachment holds:** the company schema has no attachment-hold tables yet, so no such hold can exist. As soon as tables named `AttachmentLegalHold*` or `AttachmentRetention*` appear in the dictionary, every company is `hold_check_failed` until retention reads them (fail closed).
+* **Migration:** the system migration file is `0030_backup_retention.sql` as a PLACEHOLDER number. It takes the next free system number in merge order (allocation rule). No test pins its number; the pinned system-migration counts (`SystemDatabaseTests`, `CompanySchemaTests`) are reconciled at merge.
+* **Tests:**
+  * unit tests: `RetentionClassifierTests`, `RetentionExecutorTests`, `BackupRetentionSchemaDerivationTests`, and the strengthened TOTP pin;
+  * PostgreSQL class `BackupRetentionTests` (5): the preview per company calendar and time zone, holds and guards, inactive deletion, the engine through the seam with a remaining run that still recovers, and the locks.
+* **Not built here:** the company legal policy for month-end and year-end runs (owner questions Q1-Q3), hold release (Phase 4.1), the slice 7 pins and safeguards, and activation (an owner-instructed PR).
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
