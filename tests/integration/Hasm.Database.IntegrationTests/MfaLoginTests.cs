@@ -144,6 +144,26 @@ public class MfaLoginTests : IdentityTestBase
         Assert.IsType<LoginOutcome.Success>(await MfaAuth.CompleteMfaLoginAsync(cc.Challenge, Code(bobSecret), SessionClient.Web, "10.0.0.3"));
     }
 
+    /// <summary>
+    /// G's L6 of PR #133 (won't fix: an INSERT trigger on the user row would break the COPY-based system restore, D-106/D-107): a user row INSERTED as Enrolled with no secret is not a bypass, because the second factor fails closed.
+    /// The password step issues a challenge (never a session), and no code can ever verify, so no session is created.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_user_inserted_as_Enrolled_without_a_secret_fails_closed_at_the_second_factor()
+    {
+        await Setup();
+        var template = await NewUser("template");
+        await Exec($"INSERT INTO {U.Table} ({U.Id}, {U.Login}, {U.DisplayName}, {U.PasswordHash}, {U.State}, {U.IsIdentityAdministrator}, {U.CreatedAtUtc}, {U.StateChangedAtUtc}, {U.PasswordChangedAtUtc}, {M.State}) " +
+                   $"SELECT gen_random_uuid(), 'inserted', 'Inserted', {U.PasswordHash}, 0, false, {U.CreatedAtUtc}, {U.StateChangedAtUtc}, {U.PasswordChangedAtUtc}, 2 FROM {U.Table} WHERE {U.Id} = @t", ("t", template.Id));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTotp.Table} t JOIN {U.Table} u ON u.{U.Id} = t.{Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTotp.UserId} WHERE u.{U.Login} = 'inserted'"));
+
+        var required = Assert.IsType<LoginOutcome.MfaRequired>(await PasswordStep("inserted"));                                              // a challenge, never a session
+        Assert.Equal(0L, await Sessions());
+        foreach (var code in new[] { "000000", "123456", Totp.Compute(Totp.GenerateSecret(), Step) })
+            Assert.IsType<LoginOutcome.InvalidCredentials>(await MfaAuth.CompleteMfaLoginAsync(required.Challenge, code, SessionClient.Web, "10.0.0.1"));   // no code can ever verify
+        Assert.Equal(0L, await Sessions());
+    }
+
     [PostgresFact]
     public async Task A_missing_key_fails_closed_without_a_session_and_the_service_without_MFA_services_cannot_complete_anything()
     {
