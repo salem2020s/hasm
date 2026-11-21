@@ -1,4 +1,5 @@
 import { ApiError, type FiscalPeriod, type FiscalReopenRequest, type FiscalYear, type FiscalYearsResponse } from "@hasm/api-client";
+import { toLatinDigits } from "../ledgerCommon";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -289,7 +290,7 @@ function YearForm({ years, today, onClose, onSaved }: { years: FiscalYear[]; tod
             )}
           </Field>
           <Field id="fy-year" label={t("fiscal.start_year")} error={errors.startYear} required>
-            {(aria) => <input {...aria} name="startYear" value={year} onChange={(e) => setYear(e.target.value)} readOnly={next !== null} dir="ltr" inputMode="numeric" maxLength={4} autoComplete="off" />}
+            {(aria) => <input {...aria} name="startYear" value={year} onChange={(e) => setYear(toLatinDigits(e.target.value))} readOnly={next !== null} dir="ltr" inputMode="numeric" maxLength={4} autoComplete="off" />}
           </Field>
           <Field id="fy-type" label={t("fiscal.period_type")} error={errors.periodType}>
             {(aria) => (
