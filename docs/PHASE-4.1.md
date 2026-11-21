@@ -123,7 +123,7 @@ Each slice: own PR, own independent security review (C) of the full diff recorde
 | **S5** | Recovery request (admin-filed and self-filed), approve with evidence entered by the approver, cancel, execute, cooling-off, enrolment code (M8), notifier (audit + in-app + SMTP/webhook), recovery inbox UI | S4 |
 | **S6** | Emergency account (M-D part 1): create/activate/deactivate/rotate, fixed allow-list, `EmergencyEnded` revocation, session flag, alerts, post-restore `Disabled` | S4, S5, S7 token verifier |
 | **S7** | DR procedure (M-D part 2): installation id, key registry, token verification with restore-epoch and installation binding, `mfa-dr-reset`, runbook (S6 `emergency-activate` and the S4 first-grant use its verifier) | S4 |
-| **S8** | `encryption.key.retire` and `restore.execute` approvals wired (with the 4.3 restore slice), operations runbook, full regression, Web/Tauri compile checks | S4, 4.3 restore slice |
+| **S8** | `encryption.key.retire` and `restore.execute` approvals wired (with the 4.3 restore slice), operations runbook, full regression, Web/Tauri compile checks. `restore.execute` follows the contract in PHASE-4.3 slice 7 (D-144): the approval is CLAIMED at execution start, and a reversal leaves it consumed, which deviates from the retry rule of section 7 | S4, 4.3 restore slice |
 
 AD/Kerberos: deferred beyond Release 1 (D-080 (7)); no slice.
 
