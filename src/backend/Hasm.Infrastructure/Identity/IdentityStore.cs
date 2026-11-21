@@ -26,6 +26,9 @@ public sealed record ActiveSession(
     Guid SessionId, Guid UserId, SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset LastSeenAtUtc,
     string Login, string DisplayName, bool IsIdentityAdministrator, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
 
+/// <summary>A session to create: its id, the hash of its token, the client, its expiries and (after the second factor) the verification time.</summary>
+public sealed record SessionIssue(Guid SessionId, byte[] TokenHash, SessionClient Client, DateTimeOffset IdleExpires, DateTimeOffset AbsoluteExpires, DateTimeOffset? MfaVerifiedAt);
+
 public sealed class DuplicateLoginException() : Exception("The login identifier is already in use.");
 
 /// <summary>
@@ -246,7 +249,14 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        var now = clock.GetUtcNow();
+        await InsertSessionAsync(conn, tx, new SessionIssue(sessionId, tokenHash, client, idleExpires, absoluteExpires, mfaVerifiedAt), userId, clock.GetUtcNow(), ct);
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>Inserts a session (and records the login time) inside the CALLER's transaction, so a session can be created atomically with another change.</summary>
+    internal static async Task InsertSessionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, SessionIssue issue, Guid userId, DateTimeOffset now, CancellationToken ct)
+    {
+        var (sessionId, tokenHash, client, idleExpires, absoluteExpires, mfaVerifiedAt) = (issue.SessionId, issue.TokenHash, issue.Client, issue.IdleExpires, issue.AbsoluteExpires, issue.MfaVerifiedAt);
         // a session created after the second factor records it: auth_methods 3 (password + totp) with the verification time; otherwise the column defaults (1, password only)
         var mfaColumns = mfaVerifiedAt is null ? "" : $",{SM.AuthMethods},{SM.VerifiedAtUtc}";
         var mfaValues = mfaVerifiedAt is null ? "" : ",3,@mv";
@@ -270,7 +280,15 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
             login.Parameters.AddWithValue("u", userId);
             await login.ExecuteNonQueryAsync(ct);
         }
-        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>The MFA state of a user (None when the user does not exist). Read by the login to refuse a password-only session when no second-factor services are wired.</summary>
+    public async Task<MfaState> GetMfaStateAsync(Guid userId, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
+        cmd.Parameters.AddWithValue("u", userId);
+        return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : MfaState.None;
     }
 
     /// <summary>
@@ -292,16 +310,6 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
             r.GetGuid(0), r.GetGuid(1), (SessionClient)r.GetInt16(2),
             r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetFieldValue<DateTimeOffset>(5),
             r.GetString(6), r.GetString(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), (MfaState)r.GetInt16(10));
-    }
-
-    /// <summary>Records that the session has now passed the second factor (an enrolment confirmed in a live session): auth_methods password + totp with the verification time. Returns false when the session is not live.</summary>
-    public async Task<bool> MarkSessionMfaVerifiedAsync(Guid sessionId, DateTimeOffset at, CancellationToken ct = default)
-    {
-        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand($"UPDATE {S.Table} SET {SM.AuthMethods} = 3, {SM.VerifiedAtUtc} = @t WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn);
-        cmd.Parameters.AddWithValue("t", at);
-        cmd.Parameters.AddWithValue("id", sessionId);
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
     /// <summary>Records activity and extends the idle expiry (capped at the absolute expiry) of a live session.</summary>
@@ -334,7 +342,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return await RevokeUserSessionsAsync(conn, null, userId, reason, exceptSessionId, clock.GetUtcNow(), ct);
     }
 
-    private static async Task<int> RevokeUserSessionsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, SessionRevocation reason, Guid? except, DateTimeOffset now, CancellationToken ct)
+    internal static async Task<int> RevokeUserSessionsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, SessionRevocation reason, Guid? except, DateTimeOffset now, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             $"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL" +

@@ -102,9 +102,7 @@ public static class AuthEndpoints
             case MfaEnrolOutcome.Started s:
                 return Results.Json(new { otpauthUri = s.OtpauthUri, secret = s.SecretBase32 });                  // shown once; never returned again
             case MfaEnrolOutcome.Confirmed { NewSession: { } session }:
-                return LoginResult(session, client, http);                                                          // a challenge-mode enrolment ends in a session, exactly like a login
-            case MfaEnrolOutcome.Confirmed:
-                return Results.Json(new { mfa = "enrolled" });
+                return LoginResult(session, client, http);                                                          // BOTH modes end in a NEW session exactly like a login (a new cookie or bearer token; the old token is revoked)
             case MfaEnrolOutcome.Throttled t:
                 http.Response.Headers.RetryAfter = ((int)Math.Ceiling(t.RetryAfter.TotalSeconds)).ToString();
                 return Error(429, "too_many_attempts");

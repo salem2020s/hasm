@@ -16,6 +16,8 @@ public sealed record MfaChallengeInfo(Guid Id, Guid UserId, MfaChallengePurpose 
 /// The short-lived, single-purpose, single-use challenge that follows the PASSWORD step of a login that needs a second factor (Phase 4.1 section 5). A challenge is NOT a session. Only the SHA-256 of its 256-bit token is stored;
 /// it is bound to the user, the client kind and the source address, expires after <see cref="MfaChallengeOptions.ValidityMinutes"/>, and allows <see cref="MfaChallengeOptions.MaxAttempts"/> verification attempts. Every refusal
 /// (unknown, malformed, expired, used, wrong client, wrong source, wrong purpose, budget spent) looks the same to the caller: <c>null</c>.
+/// The client-kind and source bindings are CONSISTENCY checks (a challenge issued to the Web client is not accepted by the Desktop client or from another address): the client kind is chosen by the caller and the address can change behind a proxy,
+/// so neither is an authentication factor. The factors are the password (before) and the single-use token plus the TOTP code (after).
 /// </summary>
 public sealed class MfaChallengeStore(Func<string> connectionStringFactory, TimeProvider clock, MfaChallengeOptions? options = null) : IAsyncDisposable
 {

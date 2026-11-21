@@ -164,6 +164,25 @@ public class MfaLoginTests : IdentityTestBase
         Assert.Equal(0L, await Sessions());
     }
 
+    /// <summary>Review M1: a service built WITHOUT the second-factor services must not turn a password into a session for a user who needs the second factor, and a password-only session of such a user is not a session.</summary>
+    [PostgresFact]
+    public async Task A_service_without_MFA_services_fails_closed_for_a_user_who_needs_the_second_factor_and_a_password_only_session_of_such_a_user_is_rejected()
+    {
+        await Setup();
+        await EnrolledUser("alice");
+        await NewUser("plain");
+        Assert.IsType<LoginOutcome.InvalidCredentials>(await Auth.LoginAsync("alice", Pw, SessionClient.Web, "10.0.0.1"));       // the plain service refuses; it does NOT issue a password-only session
+        Assert.Equal(0L, await Sessions());
+        Assert.IsType<LoginOutcome.Success>(await Auth.LoginAsync("plain", Pw, SessionClient.Web, "10.0.0.1"));                // a user without MFA is unaffected
+
+        // a password-only session that exists when the user becomes Enrolled (a session from before enforcement) is rejected by the authentication itself
+        var early = Assert.IsType<LoginOutcome.Success>(await Auth.LoginAsync("plain", Pw, SessionClient.Web, "10.0.0.2"));
+        Assert.NotNull(await Auth.AuthenticateAsync(early.Token));
+        await Exec($"UPDATE {U.Table} SET {M.State} = 2 WHERE {U.Login} = 'plain'");
+        Assert.Null(await Auth.AuthenticateAsync(early.Token));
+        Assert.Null(await MfaAuth.AuthenticateAsync(early.Token));
+    }
+
     [PostgresFact]
     public async Task A_missing_key_fails_closed_without_a_session_and_the_service_without_MFA_services_cannot_complete_anything()
     {

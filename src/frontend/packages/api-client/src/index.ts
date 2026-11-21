@@ -965,10 +965,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** Starts an enrolment: with a challenge and the one-time enrolment code, or (voluntary, in a live session) with the password. */
     beginEnrolment: (input: { challenge: string; enrolmentCode: string } | { password: string }) =>
       request<EnrolmentSecret & { otpauthUri: string }>("POST", "/api/v1/auth/mfa/enrol/begin", { body: { ...input, client: kind }, anonymous: true }),
-    /** Confirms the enrolment with a code from the new authenticator. With a challenge it ends in a session like a login. */
-    async confirmEnrolment(input: { challenge: string; code: string } | { code: string }): Promise<LoginResult | { mfa: "enrolled" }> {
-      const body = await request<LoginBody | { mfa: "enrolled" }>("POST", "/api/v1/auth/mfa/enrol/confirm", { body: { ...input, client: kind }, anonymous: true });
-      return "mfa" in body ? body : interpretLogin(body);
+    /** Confirms the enrolment with a code from the new authenticator. Both modes end in a NEW session like a login (a new cookie or bearer token; the previous session is revoked). */
+    async confirmEnrolment(input: { challenge: string; code: string } | { code: string }): Promise<LoginResult> {
+      return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/enrol/confirm", { body: { ...input, client: kind }, anonymous: true }));
     },
     async logout(): Promise<void> {
       try {

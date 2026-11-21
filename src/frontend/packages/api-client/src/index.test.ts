@@ -713,14 +713,14 @@ describe("api client: the second factor (Phase 4.1; one implementation for Web a
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=AAAA", secret: "AAAA" }))
       .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=BBBB", secret: "BBBB" }))
-      .mockResolvedValueOnce(json({ mfa: "enrolled" }))
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: null }))
       .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: null }));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
     expect((await client.beginEnrolment({ challenge: "c", enrolmentCode: "CODE" })).secret).toBe("AAAA");
     expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ challenge: "c", enrolmentCode: "CODE", client: "web" });
     expect((await client.beginEnrolment({ password: "pw" })).secret).toBe("BBBB");
     expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ password: "pw", client: "web" });
-    expect(await client.confirmEnrolment({ code: "123456" })).toEqual({ mfa: "enrolled" });
+    expect(await client.confirmEnrolment({ code: "123456" })).toMatchObject({ user: { id: "u" } });                 // a voluntary enrolment also ends in a NEW session
     expect(await client.confirmEnrolment({ challenge: "c", code: "123456" })).toMatchObject({ user: { id: "u" } });
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/auth/mfa/enrol/confirm");
   });

@@ -112,13 +112,15 @@ public class MfaEnrolmentTests : IdentityTestBase
         Assert.IsType<MfaEnrolOutcome.Refused>(await MfaAuth.ConfirmEnrolmentWithSessionAsync(session, "000000", Source));
         Assert.Equal(MfaState.None, await Mfa.GetStateAsync(user.Id));
         var done = Assert.IsType<MfaEnrolOutcome.Confirmed>(await MfaAuth.ConfirmEnrolmentWithSessionAsync(session, Code(secret), Source));
-        Assert.Null(done.NewSession);                                                                          // the caller's own session was upgraded in place
+        Assert.NotNull(done.NewSession);                                                                       // D-142 (d): a NEW session (a new cookie or bearer token), returned like a login
         Assert.Equal(MfaState.Enrolled, await Mfa.GetStateAsync(user.Id));
-        Assert.Null(await MfaAuth.AuthenticateAsync(other.Token));                                             // every OTHER session is revoked
-        var upgraded = (await MfaAuth.AuthenticateAsync(s.Token))!;                                            // the confirming session lives and is password + totp
-        Assert.Equal(MfaState.Enrolled, upgraded.MfaState);
-        Assert.NotNull(upgraded.MfaVerifiedAtUtc);
-        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", s.SessionId)));
+        Assert.Null(await MfaAuth.AuthenticateAsync(other.Token));                                             // every other session is revoked ...
+        Assert.Null(await MfaAuth.AuthenticateAsync(s.Token));                                                 // ... and so is the confirming one: its old token no longer works
+        var fresh = (await MfaAuth.AuthenticateAsync(done.NewSession!.Token))!;                                // the new session is password + totp
+        Assert.Equal(MfaState.Enrolled, fresh.MfaState);
+        Assert.NotNull(fresh.MfaVerifiedAtUtc);
+        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", done.NewSession.SessionId)));
+        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", ("u", user.Id)));   // exactly one live session remains
         // the used code cannot sign in again (replay protection carries over from the confirmation)
         var login = Assert.IsType<LoginOutcome.MfaRequired>(await MfaAuth.LoginAsync("vol", Pw, SessionClient.Web, "10.7.7.7"));
         Assert.IsType<LoginOutcome.InvalidCredentials>(await MfaAuth.CompleteMfaLoginAsync(login.Challenge, Code(secret), SessionClient.Web, "10.7.7.7"));
@@ -139,5 +141,69 @@ public class MfaEnrolmentTests : IdentityTestBase
             Assert.Equal(0L, await Pending(u.Id));
         }
         Assert.IsType<MfaEnrolOutcome.Refused>(await Auth.BeginEnrolmentWithChallengeAsync("x", "y", SessionClient.Web, Source));       // the plain service (no MFA services) refuses everything
+    }
+
+    private async Task<long> LiveSessions(Guid user) => await Scalar<long>($"SELECT count(*) FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", ("u", user));
+
+    /// <summary>Review M3 (challenge mode): the challenge is consumed first; then ONE transaction activates, spends the code, revokes the sessions and creates the new one. A failure at either seam undoes ALL of it.</summary>
+    [PostgresTheory]
+    [InlineData("after_activate")]
+    [InlineData("after_revoke")]
+    public async Task A_failure_between_the_steps_of_a_challenge_mode_confirmation_leaves_nothing_half_done(string failAt)
+    {
+        await Setup();
+        var user = await NewUser("atomic");
+        var early = await Session("atomic", "10.9.9.9");
+        await SetState(user.Id, 1);
+        var code = await Mfa.IssueEnrolmentCodeAsync(user.Id, TimeSpan.FromHours(24), null);
+        var challenge = Assert.IsType<LoginOutcome.MfaEnrolmentRequired>(await MfaAuth.LoginAsync("atomic", Pw, SessionClient.Web, Source));
+        var secret = SecretOf(Assert.IsType<MfaEnrolOutcome.Started>(await MfaAuth.BeginEnrolmentWithChallengeAsync(challenge.Challenge, code, SessionClient.Web, Source)));
+
+        Mfa.FaultProbe = step => step == failAt ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => MfaAuth.ConfirmEnrolmentWithChallengeAsync(challenge.Challenge, Code(secret), SessionClient.Web, Source));
+        Mfa.FaultProbe = null;
+
+        Assert.Equal(MfaState.EnrolmentRequired, await Mfa.GetStateAsync(user.Id));                            // the state did not move
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {TO.Table} WHERE {TO.UserId} = @u AND {TO.State} = 1", ("u", user.Id)));   // no active secret
+        Assert.Equal(1L, await Pending(user.Id));                                                               // the enrolment is still pending
+        Assert.True(await Mfa.CheckEnrolmentCodeAsync(user.Id, code));                                          // the one-time code is NOT spent
+        Assert.Null(await MfaAuth.AuthenticateAsync(early.Token));                                              // the earlier password-only session is rejected by the defence in depth (the user now needs MFA) ...
+        Assert.Equal(1L, await LiveSessions(user.Id));                                                          // ... but the failed attempt revoked nothing and created nothing
+        // the challenge was consumed first (single use): the user simply logs in again and completes the enrolment
+        var again = Assert.IsType<LoginOutcome.MfaEnrolmentRequired>(await MfaAuth.LoginAsync("atomic", Pw, SessionClient.Web, Source));
+        Assert.IsType<MfaEnrolOutcome.Started>(await MfaAuth.BeginEnrolmentWithChallengeAsync(again.Challenge, code, SessionClient.Web, Source));
+        var pendingSecret = (await Mfa.FindPendingSecretAsync(user.Id, default))!;
+        var finalSecret = pendingSecret.Secret.ToArray();
+        pendingSecret.Dispose();
+        Assert.IsType<MfaEnrolOutcome.Confirmed>(await MfaAuth.ConfirmEnrolmentWithChallengeAsync(again.Challenge, Code(finalSecret), SessionClient.Web, Source));
+        Assert.Equal(MfaState.Enrolled, await Mfa.GetStateAsync(user.Id));
+    }
+
+    [PostgresTheory]
+    [InlineData("after_activate")]
+    [InlineData("after_revoke")]
+    public async Task A_failure_between_the_steps_of_a_session_mode_confirmation_leaves_nothing_half_done(string failAt)
+    {
+        await Setup();
+        var user = await NewUser("atomic2");
+        var other = await Session("atomic2", "10.8.8.8");
+        var s = await Session("atomic2");
+        var session = await Authenticated(s);
+        var secret = SecretOf(Assert.IsType<MfaEnrolOutcome.Started>(await MfaAuth.BeginEnrolmentWithSessionAsync(session, Pw, Source)));
+
+        Mfa.FaultProbe = step => step == failAt ? Task.FromException(new InvalidOperationException("injected")) : Task.CompletedTask;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => MfaAuth.ConfirmEnrolmentWithSessionAsync(session, Code(secret), Source));
+        Mfa.FaultProbe = null;
+
+        Assert.Equal(MfaState.None, await Mfa.GetStateAsync(user.Id));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {TO.Table} WHERE {TO.UserId} = @u AND {TO.State} = 1", ("u", user.Id)));
+        Assert.Equal(1L, await Pending(user.Id));
+        Assert.NotNull(await MfaAuth.AuthenticateAsync(s.Token));                                              // the confirming session and the other one are both still alive
+        Assert.NotNull(await MfaAuth.AuthenticateAsync(other.Token));
+        Assert.Equal(2L, await LiveSessions(user.Id));
+        // retry on the same session completes (the code of the next step)
+        Assert.IsType<MfaEnrolOutcome.Confirmed>(await MfaAuth.ConfirmEnrolmentWithSessionAsync(session, Code(secret, 1), Source));
+        Assert.Equal(MfaState.Enrolled, await Mfa.GetStateAsync(user.Id));
+        Assert.Equal(1L, await LiveSessions(user.Id));
     }
 }

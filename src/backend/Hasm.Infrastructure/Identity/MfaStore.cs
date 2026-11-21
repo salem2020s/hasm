@@ -26,6 +26,9 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
 
     public MfaStore(string connectionString, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector) : this(() => connectionString, clock, audit, protector) { }
 
+    /// <summary>TEST SEAM (internal): called inside the activation transaction at "after_activate" and "after_revoke", so tests can inject a failure between the steps and prove nothing is half done.</summary>
+    internal Func<string, Task>? FaultProbe { get; set; }
+
     public ValueTask DisposeAsync() => dataSource.IsValueCreated ? dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
 
     private Task<AuditReceipt> AuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, short type, Guid? actor, Guid? target, string detail, CancellationToken ct) =>
@@ -140,7 +143,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     /// <see cref="MfaState.Enrolled"/> (from <see cref="MfaState.EnrolmentRequired"/>, or from <see cref="MfaState.None"/> for a voluntary enrolment), all in ONE transaction. A user who is <see cref="MfaState.RecoveryRequired"/> can NEVER
     /// activate a secret here (only recovery or DR moves them): returns false, as it does when the pending secret is gone.
     /// </summary>
-    public async Task<bool> ActivatePendingAsync(Guid userId, Guid secretId, long matchedStep, Guid? actor, CancellationToken ct = default, bool consumeEnrolmentCode = false)
+    public async Task<bool> ActivatePendingAsync(Guid userId, Guid secretId, long matchedStep, Guid? actor, CancellationToken ct = default, bool consumeEnrolmentCode = false, SessionIssue? reissue = null)
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -180,6 +183,14 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
             receipts.Add(await AuditAsync(conn, tx, MfaAuditEvents.StateChanged, actor, userId, $"mfa state {current} -> Enrolled (EnrolmentConfirmed)", ct));
         }
         receipts.Add(await AuditAsync(conn, tx, MfaAuditEvents.SecretActivated, actor, userId, $"TOTP secret {secretId:N} activated", ct));
+        if (FaultProbe is { } afterActivate) await afterActivate("after_activate");
+        if (reissue is not null)
+        {
+            // D-142 (d), review M2/M3: the new factor invalidates EVERY session of the user (the confirming one too) and a NEW session, verified now, replaces them, all in this ONE transaction with the activation
+            await IdentityStore.RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, clock.GetUtcNow(), ct);
+            if (FaultProbe is { } afterRevoke) await afterRevoke("after_revoke");
+            await IdentityStore.InsertSessionAsync(conn, tx, reissue, userId, clock.GetUtcNow(), ct);
+        }
         await audit.CommitAsync(tx, receipts, ct);
         return true;
     }
