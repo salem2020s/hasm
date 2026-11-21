@@ -171,6 +171,55 @@ public class PartyRoleApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
+    public async Task The_party_list_filters_by_active_and_without_role_in_SQL_before_paging_even_when_the_first_page_of_parties_all_hold_the_role()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        const string Parties = "/api/v1/company/parties";
+        var ids = new Dictionary<string, Guid>();
+        for (var n = 1; n <= 60; n++) ids[$"P{n:000}"] = await NewParty($"P{n:000}");
+        // the first 55 parties (by code) are customers, so the first page of 50 holds nobody who may still get the customer role
+        for (var n = 1; n <= 55; n++)
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, Roles, new { partyId = ids[$"P{n:000}"], role = 1, paymentMode = 2, termDays = 30 }, cookie)).Status);
+        // P001 is also a supplier; P056 is inactive
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, Roles, new { partyId = ids["P001"], role = 2, paymentMode = 2, termDays = 30 }, cookie)).Status);
+        await Sql($"UPDATE {LP.Table} SET {LP.IsActive} = false, {LP.Revision} = {LP.Revision} + 1 WHERE {LP.Code} = 'P056'");
+        string[] Codes(ApiResponse r) => [.. r.Json.GetProperty("parties").EnumerateArray().Select(i => i.GetProperty("code").GetString()!)];
+        long Total(ApiResponse r) => r.Json.GetProperty("total").GetInt64();
+
+        // unfiltered: the first page is the 50 customers; with the filter the page and the total are about the parties still eligible
+        var all = await Send(HttpMethod.Get, $"{Parties}?limit=50", cookie: cookie);
+        Assert.Equal((60L, 50), (Total(all), Codes(all).Length));
+        Assert.Equal("P001", Codes(all)[0]);
+        var free = await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer&limit=50", cookie: cookie);
+        Assert.Equal(["P056", "P057", "P058", "P059", "P060"], Codes(free));                        // not "nothing": the eligible ones come first
+        Assert.Equal(5L, Total(free));
+        var freeActive = await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer&active=true&limit=50", cookie: cookie);
+        Assert.Equal(["P057", "P058", "P059", "P060"], Codes(freeActive));
+        Assert.Equal(4L, Total(freeActive));
+        Assert.Equal(["P056"], Codes(await Send(HttpMethod.Get, $"{Parties}?active=false", cookie: cookie)));
+        // the role kind matters: only P001 is a supplier, the filter is case-insensitive, and the page size and offset apply AFTER the filter
+        var noSupplier = await Send(HttpMethod.Get, $"{Parties}?withoutRole=SUPPLIER&limit=50&offset=10", cookie: cookie);
+        Assert.Equal((59L, 49), (Total(noSupplier), Codes(noSupplier).Length));
+        Assert.DoesNotContain("P001", Codes(noSupplier));
+        // combined with the search; no match is an empty page with a zero total
+        var searched = await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer&search=p05", cookie: cookie);
+        Assert.Equal(["P056", "P057", "P058", "P059"], Codes(searched));
+        Assert.Equal(4L, Total(searched));
+        Assert.Equal(0L, Total(await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer&search=P001", cookie: cookie)));
+        // a malformed filter is refused with the standard body; the same permission as the unfiltered list; no session, no answer
+        foreach (var bad in new[] { "withoutRole=both", "withoutRole=1", "active=maybe" })
+        {
+            var r = await Send(HttpMethod.Get, $"{Parties}?{bad}", cookie: cookie);
+            Assert.Equal(HttpStatusCode.BadRequest, r.Status);
+            Assert.Equal("invalid_request", r.Error);
+        }
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer", cookie: await SignIn(outsider))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Parties}?withoutRole=customer")).Status);
+    }
+
+    [PostgresFact]
     public async Task The_unit_and_group_lists_can_be_looked_up_by_ids_with_a_bound_the_paged_form_and_the_same_permission()
     {
         await StartApi();
@@ -207,6 +256,7 @@ public class PartyRoleApiTests : HttpApiTestBase
             ($"{Roles}?ids=not-a-guid", "ids"), ($"{Roles}?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"), ($"{Roles}?search={new string('x', 101)}", "search"),
             ("/api/v1/company/inventory/units?limit=abc", "limit"), ("/api/v1/company/inventory/units?offset=-1", "offset"), ("/api/v1/company/inventory/units?search=a%0Ab", "search"),
             ("/api/v1/company/inventory/groups?limit=0", "limit"), ("/api/v1/company/inventory/groups?offset=1.5", "offset"),
+            ("/api/v1/company/parties?active=maybe", "active"), ("/api/v1/company/parties?withoutRole=both", "withoutRole"), ("/api/v1/company/parties?withoutRole=1", "withoutRole"),
             ("/api/v1/company/inventory/units?ids=not-a-guid", "ids"), ("/api/v1/company/inventory/groups?ids=not-a-guid", "ids"),
             ($"/api/v1/company/inventory/units?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"), ($"/api/v1/company/inventory/groups?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", "ids"),
             ("/api/v1/company/pricing/customer-groups?limit=-2", "limit"), ("/api/v1/company/pricing/customer-groups?offset=zz", "offset"),

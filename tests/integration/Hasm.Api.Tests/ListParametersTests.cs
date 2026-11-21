@@ -64,6 +64,31 @@ public class ListParametersTests
     [Theory]
     [InlineData(null, null)]
     [InlineData("", null)]
+    [InlineData("  ", null)]
+    [InlineData("customer", (short)1)]
+    [InlineData("Customer", (short)1)]
+    [InlineData(" SUPPLIER ", (short)2)]
+    public void The_without_role_filter_is_absent_customer_or_supplier_in_any_case(string? raw, short? expected)
+    {
+        Assert.Null(ListParameters.TryParseWithoutRole(raw, out var kind));
+        Assert.Equal(expected, kind);
+    }
+
+    [Theory]
+    [InlineData("both")]
+    [InlineData("1")]
+    [InlineData("customers")]
+    [InlineData("cust omer")]
+    [InlineData("x'; DROP TABLE t; --")]
+    public void Any_other_without_role_value_is_refused_by_name(string raw)
+    {
+        Assert.Equal("withoutRole", ListParameters.TryParseWithoutRole(raw, out var kind));
+        Assert.Null(kind);
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
     [InlineData("true", true)]
     [InlineData("False", false)]
     [InlineData(" TRUE ", true)]

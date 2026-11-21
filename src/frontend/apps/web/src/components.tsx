@@ -103,7 +103,11 @@ export function errorText(t: (k: string) => string, e: unknown, keyPrefix = "err
   if (e instanceof ApiError) {
     const specific = `${keyPrefix}${e.code}`;
     const translated = t(specific);
-    if (translated !== specific) return translated;
+    if (translated !== specific) {
+      // a weak password lists which rules it broke (server short codes, translated; an unknown code is never shown raw)
+      const rules = e.code === "weak_password" ? (e.details.problems ?? []).map((p) => t(`error.password.${p}`).replace(/^error\.password\..*$/, "")).filter(Boolean) : [];
+      return rules.length > 0 ? `${translated} (${rules.join(t("list.separator"))})` : translated;
+    }
     if (e.status === 403) return t("error.forbidden");
     if (e.status === 401) return t("error.session_expired");
     if (e.status === 503) return t("error.company_unavailable");
