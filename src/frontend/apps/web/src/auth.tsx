@@ -30,6 +30,11 @@ export interface AuthValue {
   confirmEnrolment(code: string): Promise<void>;
   /** Abandons the second step and returns to the password form. */
   cancelMfa(): void;
+  /**
+   * After a VOLUNTARY enrolment (security settings) the server answers with a NEW session and revokes the old one: keeps the user, selects the same company again on the new session and reloads the permissions.
+   * A failure to re-enter falls back to company selection (never a half-signed-in screen).
+   */
+  adoptEnrolledSession(user: SessionUser): Promise<void>;
   logout(): Promise<void>;
   chooseCompany(id: string): Promise<void>;
   changeCompany(): Promise<void>;
@@ -204,6 +209,17 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
 
   const cancelMfa = useCallback(() => { setMfa(null); setPhase("anonymous"); }, []);
 
+  const adoptEnrolledSession = useCallback(async (enrolled: SessionUser) => {
+    setUser(enrolled);
+    const previous = companyId;
+    try {
+      if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
+    } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
+    setCompanyId(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
+    await loadCompanies();
+    setPhase("needCompany");
+  }, [api, companyId, enterCompany, handleError, loadCompanies]);
+
   const logout = useCallback(async () => {
     try { await api.logout(); } catch { /* the server session may already be gone; the local state is cleared regardless */ }
     endSession("logged_out");
@@ -230,13 +246,13 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   }, [handleError, loadCompanies]);
 
   const value = useMemo<AuthValue>(() => ({
-    phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
+    phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, adoptEnrolledSession, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
     canOnBranch: (p, branchId) => permissions.has(p) || (branchPermissions.get(branchId)?.has(p) ?? false),
     hasRole: (r) => roleGrants.some((g) => g.roleId === r),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
-  }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
+  }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, adoptEnrolledSession, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
