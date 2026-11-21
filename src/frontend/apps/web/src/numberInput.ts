@@ -5,7 +5,7 @@
 export function parseDecimalInput(s: string): number {
   const v = s.trim().replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/٫/g, ".");
   if (!/^\d+([.,]\d+)?$/.test(v)) return Number.NaN;
-  if (/^\d{1,3},\d{3}$/.test(v)) return Number.NaN;            // "5,000" could be five or five thousand: refuse instead of guessing
+  if (/^\d+,\d{3}$/.test(v)) return Number.NaN;               // "5,000" or "1234,567" could be a decimal or a grouped integer: refuse instead of guessing
   const n = Number(v.replace(",", "."));
   return Number.isFinite(n) ? n : Number.NaN;
 }
@@ -15,4 +15,16 @@ export function parseSignedDecimalInput(s: string): number {
   const t = s.trim();
   if (t.startsWith("-") || t.startsWith("\u2212")) { const rest = t.slice(1); if (/^\s/.test(rest)) return Number.NaN; const n = parseDecimalInput(rest); return Number.isNaN(n) ? n : (n === 0 ? 0 : -n); }
   return parseDecimalInput(t);
+}
+
+/** A strictly positive amount with at most `places` decimals (default 10), built on parseDecimalInput; NaN when blank, zero, negative or too precise. */
+export function parsePositiveDecimal(s: string, places = 10): number {
+  const n = parseDecimalInput(s);
+  return Number.isFinite(n) && n > 0 && Number(n.toFixed(places)) === n ? n : Number.NaN;
+}
+
+/** A whole number written with exactly `digits` digits (for example a four-digit year), within [min, max]; NaN otherwise. Leading zeros beyond the width are refused. */
+export function parseWholeNumber(s: string, digits: number, min: number, max: number): number {
+  const n = parseDecimalInput(s);
+  return Number.isInteger(n) && s.trim().length === digits && n >= min && n <= max ? n : Number.NaN;
 }
