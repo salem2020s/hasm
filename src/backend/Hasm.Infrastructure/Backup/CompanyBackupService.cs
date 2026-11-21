@@ -92,8 +92,22 @@ public sealed class CompanyBackupService
         // R2-L1/R2-L2: the company's provisioning lock is held for the whole backup, so no migration, provisioning or runtime grant of this company runs while it is taken
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
-        if (!await CompanyProvisioner.TryLockAsync(lockConn, companyId, ct)) throw new BackupException("company_busy");
-        company = await registry.GetAsync(companyId, ct) ?? throw new BackupException("company_not_found");      // re-read under the lock
+        // a session lock of a just-closed connection is released by the server asynchronously: wait briefly (bounded) before reporting the company busy
+        var locked = false;
+        for (var attempt = 0; attempt < 10 && !(locked = await CompanyProvisioner.TryLockAsync(lockConn, companyId, ct)); attempt++) await Task.Delay(300, ct);
+        if (!locked) throw new BackupException("company_busy");
+        try { return await BackupLockedAsync(companyId, dest, root, parent, leaf, swept, ct); }
+        finally
+        {
+            // released explicitly, so the next administrative command on this company does not race the asynchronous release of a closed session
+            try { await using var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", lockConn); await unlock.ExecuteNonQueryAsync(CancellationToken.None); }
+            catch (NpgsqlException) { /* the lock ends with the session anyway */ }
+        }
+    }
+
+    private async Task<CompanyBackupResult> BackupLockedAsync(Guid companyId, string dest, string root, string parent, string leaf, int swept, CancellationToken ct)
+    {
+        var company = await registry.GetAsync(companyId, ct) ?? throw new BackupException("company_not_found");  // re-read under the lock
         if (company.State != ProvisioningState.Ready) throw new BackupException("company_not_ready");
 
         // restorability up front (D-059): an ICU/builtin company is refused before anything is dumped

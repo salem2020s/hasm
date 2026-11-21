@@ -105,6 +105,42 @@ public class PartyRoleApiTests : HttpApiTestBase
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {PR.Table}"));
     }
     [PostgresFact]
+    public async Task The_role_list_is_unchanged_without_parameters_and_pages_and_searches_with_them_under_the_same_permission()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        foreach (var code in new[] { "A1", "A2", "B1" })
+        {
+            var party = await NewParty(code);
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, Roles, new { partyId = party, role = 1, paymentMode = 2, termDays = 30 }, cookie)).Status);
+        }
+        // no parameters: exactly today's shape (all roles, no total)
+        var all = await Send(HttpMethod.Get, Roles, cookie: cookie);
+        Assert.Equal(3, all.Json.GetProperty("items").GetArrayLength());
+        Assert.False(all.Json.TryGetProperty("total", out _));
+        Assert.Equal(3, (await Send(HttpMethod.Get, $"{Roles}?kind=1", cookie: cookie)).Json.GetProperty("items").GetArrayLength());
+        // with parameters: one page, ordered by party code, plus the total of the matches
+        var search = await Send(HttpMethod.Get, $"{Roles}?search=a", cookie: cookie);
+        Assert.Equal(2L, search.Json.GetProperty("total").GetInt64());
+        Assert.Equal(["A1", "A2"], search.Json.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("partyCode").GetString()).ToArray());
+        var page = await Send(HttpMethod.Get, $"{Roles}?limit=1&offset=1", cookie: cookie);
+        Assert.Equal(3L, page.Json.GetProperty("total").GetInt64());
+        Assert.Equal("A2", Assert.Single(page.Json.GetProperty("items").EnumerateArray()).GetProperty("partyCode").GetString());
+        Assert.True(page.Json.GetProperty("can").GetProperty("configure").GetBoolean());
+        Assert.Equal(0, (await Send(HttpMethod.Get, $"{Roles}?search=zzz", cookie: cookie)).Json.GetProperty("items").GetArrayLength());
+        Assert.Equal(3L, (await Send(HttpMethod.Get, $"{Roles}?limit=1000", cookie: cookie)).Json.GetProperty("total").GetInt64());      // the page size is clamped, not refused
+        // malformed parameters are refused
+        foreach (var bad in new[] { "limit=0", "limit=-1", "offset=-1", "limit=abc", "kind=7&limit=5", $"search={new string('x', 101)}" })
+            Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{Roles}?{bad}", cookie: cookie)).Status);
+        // the permission is unchanged: a viewer may search, a user without the permission may not
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PartyRolesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Roles}?search=a", cookie: await SignIn(viewer))).Status);
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Roles}?search=a", cookie: await SignIn(outsider))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Roles}?search=a")).Status);
+    }
+
+    [PostgresFact]
     public async Task A_user_without_the_permissions_reads_and_writes_nothing_and_a_viewer_cannot_configure()
     {
         await StartApi();

@@ -182,4 +182,15 @@ describe("SearchPicker", () => {
     expect(box).not.toHaveAttribute("aria-required");
     expect(box).not.toHaveAttribute("aria-describedby");
   });
+  it("shows a caller-supplied text for the empty choice instead of the catalog default", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render(
+      <I18nProvider catalog={catalog}>
+        <SearchPicker label="Item" value="" onChange={() => undefined} load={() => Promise.resolve({ items: rows(1), total: 1 })} getId={(r: Row) => r.id} getLabel={(r: Row) => r.name} noneLabel="All customers" />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Item 0" });
+    expect(screen.getByRole("option", { name: "All customers" })).toHaveValue("");
+    expect(screen.queryByRole("option", { name: "— None —" })).not.toBeInTheDocument();
+  });
 });
