@@ -349,6 +349,96 @@ describe("attachment retention screen", () => {
     await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 2, reason: "Dispute", reference: null, subjectKind: "local_party", subjectId: "p1", attachmentId: null }));
   });
 
+  describe("hold target pickers", () => {
+    const party = { id: "p1", code: "P1", displayName: "Acme", isActive: true, linkState: 1, legalNameAr: null, legalNameEn: null, hasOpenRequest: false };
+    const item = { id: "i1", code: "APPLE", nameAr: "تفاح", nameEn: "Apple", isActive: true };
+    const openHoldForm = async (scopeValue: string) => {
+      await go();
+      await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${E("ret.tab.holds")}`) }));
+      fireEvent.change(screen.getByLabelText(E("ret.hold.scope"), { selector: "select" }), { target: { value: scopeValue } });
+    };
+    const reasonAndPlace = async () => {
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.reason")}`)), { target: { value: "Dispute" } });
+      await userEvent.click(screen.getByRole("button", { name: E("ret.hold.place") }));
+    };
+
+    it("picks a party by search when the user may read parties, and sends its id", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn().mockResolvedValue({ parties: [party], total: 1 });
+      const client = render({ listParties }, caps(), [...perms, "company.parties.view"]);
+      await openHoldForm("2");
+      expect(screen.queryByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`))).toBeNull();          // no typed id when the picker works
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.record") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /P1/ })).toBeInTheDocument());
+      expect(listParties).toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
+      await userEvent.selectOptions(box, "p1");
+      await reasonAndPlace();
+      await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 2, reason: "Dispute", reference: null, subjectKind: "local_party", subjectId: "p1", attachmentId: null }));
+    });
+
+    it("picks an item by search when the user may read items, and clears the choice when the kind changes", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn().mockResolvedValue({ parties: [party], total: 1 });
+      const listInventoryItems = vi.fn().mockResolvedValue({ items: [item], total: 1 });
+      const client = render({ listParties, listInventoryItems }, caps(), [...perms, "company.parties.view", "company.items.view"]);
+      await openHoldForm("2");
+      const first = await screen.findByRole("combobox", { name: E("ret.hold.record") });
+      await waitFor(() => expect(within(first).getByRole("option", { name: /P1/ })).toBeInTheDocument());
+      await userEvent.selectOptions(first, "p1");
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      const box = await screen.findByRole("combobox", { name: E("ret.hold.record") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /APPLE/ })).toBeInTheDocument());
+      expect(box).toHaveValue("");                                                                        // the party choice was cleared
+      await userEvent.selectOptions(box, "i1");
+      await reasonAndPlace();
+      await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 2, reason: "Dispute", reference: null, subjectKind: "inventory_item", subjectId: "i1", attachmentId: null }));
+    });
+
+    it("falls back to the typed id with a hint when the user may not read that kind", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn();
+      const client = render({ listParties }, caps(), [...perms, "company.parties.view"]);              // parties yes, items no
+      await openHoldForm("2");
+      fireEvent.change(screen.getByLabelText(E("ret.rule.kind"), { selector: "#ret-hkind" }), { target: { value: "inventory_item" } });
+      const typed = await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`));
+      expect(screen.getByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: E("ret.hold.record") })).toBeNull();
+      fireEvent.change(typed, { target: { value: "i9" } });
+      await reasonAndPlace();
+      await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 2, reason: "Dispute", reference: null, subjectKind: "inventory_item", subjectId: "i9", attachmentId: null }));
+    });
+
+    it("falls back to the typed id when the server answers 403 to the list, never a broken picker", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const listParties = vi.fn().mockRejectedValue(apiError(403, "forbidden"));
+      render({ listParties }, caps(), [...perms, "company.parties.view"]);
+      await openHoldForm("2");
+      expect(await screen.findByLabelText(new RegExp(`^${E("ret.hold.subject_id")}`))).toBeInTheDocument();
+      expect(screen.getByText(E("ret.hold.record_unavailable"))).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: E("ret.hold.record") })).toBeNull();
+    });
+
+    it("keeps the typed attachment id with the hint to copy it from the Eligibility preview", async () => {
+      localStorage.setItem("hasm.locale", "en");
+      const client = render();
+      await openHoldForm("3");
+      expect(screen.getByText(E("ret.hold.attachment_hint"))).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText(new RegExp(`^${E("ret.hold.attachment_id")}`)), { target: { value: "a1" } });
+      await reasonAndPlace();
+      await waitFor(() => expect(client.placeLegalHold).toHaveBeenCalledWith({ scope: 3, reason: "Dispute", reference: null, subjectKind: null, subjectId: null, attachmentId: "a1" }));
+    });
+
+    it("has the Arabic wording for the picker, the fallback and the attachment hint", async () => {
+      render({ listParties: vi.fn().mockResolvedValue({ parties: [party], total: 1 }) }, caps(), [...perms, "company.parties.view"]);
+      await go();
+      await userEvent.click(await screen.findByRole("tab", { name: new RegExp(`^${A("ret.tab.holds")}`) }));
+      fireEvent.change(screen.getByLabelText(A("ret.hold.scope"), { selector: "select" }), { target: { value: "2" } });
+      expect(await screen.findByRole("combobox", { name: A("ret.hold.record") })).toBeInTheDocument();
+      expect(A("ret.hold.record_unavailable")).not.toBe(E("ret.hold.record_unavailable"));
+      expect(A("ret.hold.attachment_hint")).not.toBe(E("ret.hold.attachment_hint"));
+    });
+  });
+
   it("shows the read-only preview with ids and reasons, never file names", async () => {
     localStorage.setItem("hasm.locale", "en");
     render();

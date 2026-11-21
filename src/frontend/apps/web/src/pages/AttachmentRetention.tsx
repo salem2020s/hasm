@@ -1,5 +1,5 @@
-import { type LegalHold, type RetentionCapabilities, type RetentionPolicyVersion, type RetentionPreview, type RetentionRuleInfo } from "@hasm/api-client";
-import { Tabs, useI18n } from "@hasm/ui";
+import { ApiError, type LegalHold, type RetentionCapabilities, type RetentionPolicyVersion, type RetentionPreview, type RetentionRuleInfo } from "@hasm/api-client";
+import { SearchPicker, Tabs, useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
@@ -19,6 +19,43 @@ interface RuleDraft { key: string; kind: string; sensitivity: string; mode: "mon
 let ruleSeq = 0;   // a stable key per rule row, so row state (errors) follows the row when another row is removed
 const blankRule = (): RuleDraft => ({ key: `r${++ruleSeq}`, kind: "*", sensitivity: "0", mode: "months", months: "" });
 const isBlank = (r: RuleDraft) => r.kind === "*" && r.sensitivity === "0" && r.mode === "months" && r.months === "";
+const RECORD_PAGE_LIMIT = 50;
+interface RecordChoice { id: string; label: string }
+const isolate = (s: string) => `\u2068${s}\u2069`;
+
+/**
+ * Picks the record a record-level hold covers with the shared SearchPicker (bounded server-side search over the EXISTING party and item lists). A user who cannot read that list (company.parties.view or
+ * company.items.view missing, or the server answers 403) gets the typed record id instead, with a hint saying so: never a broken picker. The server authorizes the hold itself either way.
+ */
+function HoldRecordPicker({ kind, value, onChange, error }: { kind: string; value: string; onChange: (id: string) => void; error?: string }) {
+  const { t, locale } = useI18n();
+  const auth = useAuth();
+  const [denied, setDenied] = useState<string | null>(null);   // the kind for which the server answered 403
+  const permitted = kind === "local_party" ? auth.can("company.parties.view") : auth.can("company.items.view");
+  const load = useCallback((search: string): Promise<{ items: RecordChoice[]; total: number }> => {
+    const s = search === "" ? undefined : search;
+    const run: Promise<{ items: RecordChoice[]; total: number }> = kind === "local_party"
+      ? auth.api.listParties({ search: s, limit: RECORD_PAGE_LIMIT }).then((r) => ({ items: r.parties.map((p) => ({ id: p.id, label: `${isolate(p.code)} \u2014 ${isolate(p.displayName)}` })), total: r.total }))
+      : auth.api.listInventoryItems({ search: s, limit: RECORD_PAGE_LIMIT }).then((r) => ({ items: r.items.map((i) => ({ id: i.id, label: `${isolate(i.code)} \u2014 ${isolate((locale === "ar" ? i.nameAr ?? i.nameEn : i.nameEn ?? i.nameAr) ?? i.code)}` })), total: r.total }));
+    return run.catch((e) => { if (e instanceof ApiError && e.status === 403) setDenied(kind); else auth.handleError(e); throw e; });
+  }, [auth.api, auth.handleError, kind, locale]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!permitted || denied === kind) {
+    return (
+      <Field id="ret-hsubject" label={t("ret.hold.subject_id")} required error={error} hint={t("ret.hold.record_unavailable")}>
+        {(p) => <input {...p} dir="ltr" value={value} onChange={(e) => onChange(e.target.value)} />}
+      </Field>
+    );
+  }
+  return (
+    <div className={`field${error ? " field-invalid" : ""}`} data-testid="ret-hold-record-picker">
+      <label htmlFor="ret-hsubject-list">{t("ret.hold.record")}<span aria-hidden="true" className="required"> *</span></label>
+      <SearchPicker id="ret-hsubject-list" label={t("ret.hold.record")} value={value} onChange={(id) => onChange(id)} load={load} getId={(r: RecordChoice) => r.id} getLabel={(r) => r.label}
+        noneLabel={t("ret.hold.record_choose")} reloadKey={kind} invalid={!!error} required describedBy={error ? "ret-hsubject-error" : undefined} />
+      {error && <p id="ret-hsubject-error" className="field-error">{error}</p>}
+    </div>
+  );
+}
+
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 export function AttachmentRetentionPage() {
@@ -231,14 +268,12 @@ export function AttachmentRetentionPage() {
             </Field>
             {scope === "2" && (<>
               <Field id="ret-hkind" label={t("ret.rule.kind")} error={f.subjectKind}>
-                {(p) => <select {...p} value={hKind} onChange={(e) => setHKind(e.target.value)}>{KINDS.filter((k) => k !== "*").map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}</select>}
+                {(p) => <select {...p} value={hKind} onChange={(e) => { setHKind(e.target.value); setHSubject(""); }}>{KINDS.filter((k) => k !== "*").map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}</select>}
               </Field>
-              <Field id="ret-hsubject" label={t("ret.hold.subject_id")} required error={f.subjectId}>
-                {(p) => <input {...p} dir="ltr" value={hSubject} onChange={(e) => setHSubject(e.target.value)} />}
-              </Field>
+              <HoldRecordPicker kind={hKind} value={hSubject} onChange={setHSubject} error={f.subjectId} />
             </>)}
             {scope === "3" && (
-              <Field id="ret-hatt" label={t("ret.hold.attachment_id")} required error={f.attachmentId}>
+              <Field id="ret-hatt" label={t("ret.hold.attachment_id")} required error={f.attachmentId} hint={t("ret.hold.attachment_hint")}>
                 {(p) => <input {...p} dir="ltr" value={hAttachment} onChange={(e) => setHAttachment(e.target.value)} />}
               </Field>
             )}
