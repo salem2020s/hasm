@@ -44,6 +44,7 @@ function setup(over: Record<string, unknown> = {}, perms = PERMS, types = ["comm
     listInventoryItems: vi.fn().mockResolvedValue({ items: [apple], total: 1 }),
     getInventoryItem: vi.fn().mockResolvedValue(apple),
     lookupInventoryUnits: vi.fn().mockResolvedValue(unitRows),
+    getCommercialApprovals: vi.fn().mockResolvedValue({ plan: [], decisions: [] }),
     listDocumentLinks: vi.fn().mockResolvedValue([]), getLineQuantities: vi.fn().mockResolvedValue([]), createDocumentLink: vi.fn(),
     listCommercialLinkPairs: vi.fn().mockResolvedValue([1, 2, 3, 4].map((kind) => ({ source: "commercial_test", target: "commercial_test", kind }))),
     createCommercialDocument: vi.fn(), updateCommercialDocument: vi.fn(),
@@ -305,6 +306,167 @@ describe("commercial documents in English and the Tauri shell", () => {
       await userEvent.click(tab("المستند"));
       expect(screen.getByLabelText("ملاحظة")).toHaveValue("T");
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+});
+
+const submittedDoc = (over: Partial<CommercialDocument> = {}) => doc({ status: 2, revision: 3, submittedBy: "other", createdBy: "someone", lastEditedBy: "someone", ...over });
+const stage = (n: number, required: number, approved: number, roleId: string | null = null) => ({ stage: n, required, approved, roleId });
+const decision = (id: number, approver: string, st: number) => ({ id, revision: 3, approver, stage: st, decidedAtUtc: "2026-03-02T09:30:00Z" });
+const openSubmitted = async (approvals: unknown, over: Record<string, unknown> = {}, current: CommercialDocument = submittedDoc()) => {
+  const client = setup({ getCommercialApprovals: vi.fn().mockResolvedValue(approvals), ...over }, PERMS, ["commercial_test"], [current], current);
+  await openDoc();
+  return client;
+};
+
+describe("approval stage progress on the commercial-document screen (S5a)", () => {
+  it("shows the stages in order with the current stage, and who decided when, in the History tab", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 1), stage(2, 2, 1), stage(3, 1, 0)], decisions: [decision(1, "approver1-xxxx", 1), decision(2, "u1", 2)] });
+    await userEvent.click(tab("السجل"));
+    const plan = within(screen.getByTestId("approval-plan"));
+    expect(within(screen.getByTestId("stage-1")).getByText("مكتملة")).toBeInTheDocument();
+    expect(within(screen.getByTestId("stage-2")).getByText("الحالية")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-2")).toHaveAttribute("aria-current", "step");
+    expect(within(screen.getByTestId("stage-3")).getByText("بانتظار")).toBeInTheDocument();
+    expect(within(screen.getByTestId("stage-2")).getByText("1 / 2")).toBeInTheDocument();
+    expect(plan.getAllByRole("row")).toHaveLength(4);
+    const decisions = within(screen.getByTestId("approval-decisions")).getAllByRole("row");
+    expect(decisions).toHaveLength(3);
+    expect(within(decisions[1]!).getByText("approver")).toBeInTheDocument();                              // the first 8 characters of the approver id
+    expect(within(decisions[1]!).getByText("2026-03-02 09:30:00")).toBeInTheDocument();
+    expect(within(decisions[2]!).getByText("أنت")).toBeInTheDocument();                                   // the signed-in user is named "you"
+  });
+
+  it("says that no policy matches when the plan is empty and keeps Approve for an independent approver", async () => {
+    await openSubmitted({ plan: [], decisions: [] });
+    await userEvent.click(tab("السجل"));
+    expect(screen.getByTestId("approval-no-plan")).toHaveTextContent("لا توجد سياسة اعتماد مطابقة");
+    expect(screen.getByTestId("approve")).toBeEnabled();
+  });
+
+  it("offers Approve for the open stage to an eligible user", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 1), stage(2, 1, 0, "r")], decisions: [decision(1, "approver1", 1)] });       // the stage role "r" is the one the test user holds
+    expect(screen.getByTestId("approve")).toBeEnabled();
+    expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+  });
+
+  it("hides Approve, with the reason, from a user who already decided on this revision", async () => {
+    await openSubmitted({ plan: [stage(1, 2, 1)], decisions: [decision(1, "u1", 1)] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("سجّلت قرارك على هذه النسخة");
+  });
+
+  it("hides Approve, with the reason, from a user who does not hold the role of the open stage, but keeps Reject (the server asks for no stage role to reject)", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 0, "some-other-role")], decisions: [] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("reject")).toBeEnabled();                                                      // Reject mirrors the server rule: submitted, independent, approve permission on the branch; no stage role, no decided rule
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
+  });
+
+  it("hides Approve when every stage of the plan is complete, and keeps Reject", async () => {
+    await openSubmitted({ plan: [stage(1, 1, 1)], decisions: [decision(1, "approver1", 1)] });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.getByTestId("reject")).toBeEnabled();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("اكتملت كل مراحل الاعتماد");
+  });
+
+  it("counts a stage role held through a grant for another branch, like the server (it reads role ids from every grant and scopes only the approve permission)", async () => {
+    const grants = [
+      { roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS },                              // approve on the document's branch (company-wide)
+      { roleId: "r", scope: "branch", scopeId: "other-branch", permissions: [] },                             // the stage role, held through ANOTHER branch's grant
+    ];
+    await openSubmitted({ plan: [stage(1, 1, 0, "r")], decisions: [] }, { accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    expect(screen.getByTestId("approve")).toBeEnabled();
+    expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+  });
+
+  describe("Approve and Reject follow the approve permission for the DOCUMENT'S branch, like the server (C4 of PR #137)", () => {
+    const NO_APPROVE = PERMS.filter((p) => p !== "company.commercialdocs.approve");
+    const withGrants = (grants: unknown[]) => ({ accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    const open = (grants: unknown[]) => openSubmitted({ plan: [], decisions: [] }, withGrants(grants));      // the document is in branch "b1"
+
+    it("a grant of approve for ANOTHER branch hides Approve and Reject (and their notes): the server would refuse both", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "other-branch", permissions: ["company.commercialdocs.approve"] },
+      ]);
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+      expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+      expect(screen.queryByTestId("self-approval-note")).toBeNull();
+    });
+
+    it("a grant of approve for the document's own branch shows both, enabled", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.approve"] },
+      ]);
+      expect(screen.getByTestId("approve")).toBeEnabled();
+      expect(screen.getByTestId("reject")).toBeEnabled();
+    });
+
+    it("a company-wide grant covers every branch (the document's branch included)", async () => {
+      await open([{ roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS }]);
+      expect(screen.getByTestId("approve")).toBeEnabled();
+      expect(screen.getByTestId("reject")).toBeEnabled();
+    });
+
+    it("another branch's approve grant does not turn into approval through a different permission, and a branch grant of something else gives nothing", async () => {
+      await open([
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "other", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.submit"] },    // this branch, but not the approve permission
+      ]);
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+    });
+
+    it("user A with a branch approve grant signs out and user B, with only a view grant, signs in: B sees no Approve or Reject", async () => {
+      const gA = [
+        { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
+        { roleId: "approver", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.approve"] },
+      ];
+      const gB = [{ roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE }];            // the same company-wide view/edit rights, but no approve anywhere
+      const accessMe = vi.fn().mockResolvedValueOnce({ companyId: "c1", grants: gA }).mockResolvedValue({ companyId: "c1", grants: gB });
+      await openSubmitted({ plan: [], decisions: [] }, { accessMe, login: vi.fn().mockResolvedValue({ user: { id: "u2", login: "b", displayName: "B", isIdentityAdministrator: false } }) });
+      expect(screen.getByTestId("approve")).toBeEnabled();                                                     // user A may decide on branch b1
+      await userEvent.click(screen.getByRole("button", { name: "تسجيل الخروج" }));
+      await userEvent.type(await screen.findByLabelText(/اسم المستخدم/), "b");
+      await userEvent.type(screen.getByLabelText(/كلمة المرور/), "pw");
+      await userEvent.click(screen.getByRole("button", { name: "دخول" }));
+      await openDoc();                                                                                        // user B opens the same submitted document
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+      expect(accessMe).toHaveBeenCalledTimes(2);                                                              // B's own grants were read, A's were not reused
+    });
+  });
+
+  it("says a decision was recorded when the document stays submitted, reloads the progress, and says approved when it completes", async () => {
+    const approve = vi.fn().mockResolvedValueOnce(submittedDoc()).mockResolvedValueOnce(approved());
+    const progress = vi.fn().mockResolvedValueOnce({ plan: [stage(1, 1, 0), stage(2, 1, 0)], decisions: [] }).mockResolvedValueOnce({ plan: [stage(1, 1, 1), stage(2, 1, 0)], decisions: [decision(1, "u1", 1)] });
+    await openSubmitted({}, { approveCommercialDocument: approve, getCommercialApprovals: progress });
+    await userEvent.click(screen.getByTestId("approve"));
+    expect(await screen.findByTestId("action-notice")).toHaveTextContent("تم تسجيل قرارك");
+    await waitFor(() => expect(progress).toHaveBeenCalledTimes(2));                                          // the progress was reloaded after the decision
+  });
+
+  it("translates the refusal codes of the stages: role required, already decided, stage complete", async () => {
+    const approve = vi.fn().mockRejectedValueOnce(apiError(403, "approver_role_required")).mockRejectedValueOnce(apiError(409, "already_decided")).mockRejectedValueOnce(apiError(409, "approval_stage_complete"));
+    await openSubmitted({ plan: [stage(1, 2, 0)], decisions: [] }, { approveCommercialDocument: approve });
+    for (const text of ["المرحلة الحالية تتطلب دوراً لا تملكه.", "سجّلت قرارك على هذه النسخة من قبل.", "اكتملت هذه المرحلة؛ حدّث الصفحة."]) {
+      await userEvent.click(screen.getByTestId("approve"));
+      expect(await within(screen.getByTestId("form-error")).findByText(text)).toBeInTheDocument();
+    }
+  });
+
+  it("works in English (LTR)", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    const current = submittedDoc();
+    setup({ getCommercialApprovals: vi.fn().mockResolvedValue({ plan: [stage(1, 1, 0)], decisions: [] }) }, PERMS, ["commercial_test"], [current], current);
+    await go("#/commercial/documents");
+    await userEvent.click(await screen.findByRole("button", { name: "View" }));
+    await userEvent.click(await screen.findByRole("tab", { name: /^History/ }));
+    expect(within(await screen.findByTestId("stage-1")).getByText("Current")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Approval progress" })).toBeInTheDocument();
+    expect(document.documentElement.dir).toBe("ltr");
   });
 });
 

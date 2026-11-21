@@ -92,19 +92,22 @@ public sealed class AttachmentRetentionService(CompanyDatabaseResolver resolver,
     /// Read-only preview (nothing is changed): the REMOVED attachments in removal order with their eligibility answer. Ids and kinds only. The environment says "basis not confirmed" until the owner answers D-109, so
     /// every attachment that would otherwise be eligible answers <c>retention_basis_pending</c>.
     /// </summary>
-    public async Task<RetentionPreviewPage> PreviewAsync(Guid companyId, int? offset, int? limit, CancellationToken ct = default)
+    public async Task<RetentionPreviewPage> PreviewAsync(Guid companyId, int? offset, int? limit, string? subjectKind = null, Guid? subjectId = null, CancellationToken ct = default)
     {
+        // Optional ids-only filter: the removed attachments of one record kind, or of one record. The caller validates the kind (a registered attachment subject kind) and passes a parsed id; both are bound as parameters.
+        var filter = (subjectKind is null ? "" : $" AND {AT.SubjectKind} = @k") + (subjectId is null ? "" : $" AND {AT.SubjectId} = @s");
+        void Bind(NpgsqlCommand c) { if (subjectKind is not null) c.Parameters.AddWithValue("k", subjectKind); if (subjectId is not null) c.Parameters.AddWithValue("s", subjectId.Value); }
         await using var conn = await resolver.OpenAsync(companyId, ct);
         var policies = await LoadPolicies(conn, null, "", _ => { }, false, ct);
         var holds = await LoadHolds(conn, null, $"{LH.ReleasedAtUtc} IS NULL", _ => { }, false, ct);
         var off = ListPaging.ClampOffset(offset);
         var lim = ListPaging.ClampLimit(limit);
         long total;
-        await using (var count = new NpgsqlCommand($"SELECT count(*) FROM {AT.Table} WHERE {AT.State} = 2", conn)) total = Convert.ToInt64(await count.ExecuteScalarAsync(ct));
+        await using (var count = new NpgsqlCommand($"SELECT count(*) FROM {AT.Table} WHERE {AT.State} = 2{filter}", conn)) { Bind(count); total = Convert.ToInt64(await count.ExecuteScalarAsync(ct)); }
         var facts = new List<AttachmentRetentionFacts>();
-        await using (var cmd = new NpgsqlCommand($"SELECT {AT.Id}, {AT.SubjectKind}, {AT.SubjectId}, {AT.Sensitivity}, {AT.RemovedAtUtc}, {AT.KeyId} FROM {AT.Table} WHERE {AT.State} = 2 ORDER BY {AT.RemovedAtUtc}, {AT.Id} LIMIT @lim OFFSET @off", conn))
+        await using (var cmd = new NpgsqlCommand($"SELECT {AT.Id}, {AT.SubjectKind}, {AT.SubjectId}, {AT.Sensitivity}, {AT.RemovedAtUtc}, {AT.KeyId} FROM {AT.Table} WHERE {AT.State} = 2{filter} ORDER BY {AT.RemovedAtUtc}, {AT.Id} LIMIT @lim OFFSET @off", conn))
         {
-            cmd.Parameters.AddWithValue("lim", lim); cmd.Parameters.AddWithValue("off", off);
+            Bind(cmd); cmd.Parameters.AddWithValue("lim", lim); cmd.Parameters.AddWithValue("off", off);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
                 facts.Add(new AttachmentRetentionFacts(r.GetGuid(0), r.GetString(1), r.GetGuid(2), r.GetInt16(3) == 2, true, r.GetFieldValue<DateTimeOffset>(4), r.IsDBNull(5) ? null : r.GetString(5), false));   // R1 has no purge: nothing is purged
@@ -327,8 +330,8 @@ public sealed class AttachmentRetentionManagementService(AccessService access, A
     public async Task<ConfigResult<IReadOnlyList<LegalHoldView>>> ListHoldsAsync(Guid user, Guid company, bool includeReleased, CancellationToken ct = default) =>
         await Can(user, company, PermissionCatalog.Codes.RetentionView, ct) ? ConfigResult<IReadOnlyList<LegalHoldView>>.Ok(await store.ListHoldsAsync(company, includeReleased, ct)) : Denied<IReadOnlyList<LegalHoldView>>();
 
-    public async Task<ConfigResult<RetentionPreviewPage>> PreviewAsync(Guid user, Guid company, int? offset, int? limit, CancellationToken ct = default) =>
-        await Can(user, company, PermissionCatalog.Codes.RetentionView, ct) ? ConfigResult<RetentionPreviewPage>.Ok(await store.PreviewAsync(company, offset, limit, ct)) : Denied<RetentionPreviewPage>();
+    public async Task<ConfigResult<RetentionPreviewPage>> PreviewAsync(Guid user, Guid company, int? offset, int? limit, string? subjectKind = null, Guid? subjectId = null, CancellationToken ct = default) =>
+        await Can(user, company, PermissionCatalog.Codes.RetentionView, ct) ? ConfigResult<RetentionPreviewPage>.Ok(await store.PreviewAsync(company, offset, limit, subjectKind, subjectId, ct)) : Denied<RetentionPreviewPage>();
 
     public async Task<ConfigResult<RetentionPolicyVersionView>> DraftPolicyAsync(Guid user, Guid company, RetentionPolicyInput? input, CancellationToken ct = default) =>
         await Can(user, company, PermissionCatalog.Codes.RetentionConfigure, ct) ? await store.DraftPolicyAsync(user, company, input, ct) : Denied<RetentionPolicyVersionView>();

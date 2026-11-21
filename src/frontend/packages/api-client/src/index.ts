@@ -37,7 +37,18 @@ export interface AuthStatus {
   authenticated: boolean;
   user?: SessionUser;
   session?: { client: string; idleExpiresAtUtc: string; absoluteExpiresAtUtc: string };
+  /** Phase 4.1: the second-factor state of the signed-in user. The server decides; the client only shows it. */
+  mfa?: { state: "none" | "enrolmentrequired" | "enrolled" | "recoveryrequired"; verified: boolean; verifiedAtUtc: string | null };
 }
+/** What the password step answers when the account needs more than a password. NO session exists until the steps are completed. */
+export type LoginStep =
+  | { kind: "mfa_required"; challenge: string }
+  | { kind: "mfa_enrolment_required"; challenge: string }
+  | { kind: "mfa_recovery_required" };
+/** A login (or a completed second step) either yields a signed-in user or names the next step. */
+export type LoginResult = { user: SessionUser; step?: undefined } | { user?: undefined; step: LoginStep };
+/** The new authenticator, shown ONCE: the provisioning URI (for a QR code) and the same secret as Base32 text. */
+export interface EnrolmentSecret { otpauthUri: string; secret: string }
 export interface CompanySummary {
   id: string;
   nameAr: string | null;
@@ -716,6 +727,10 @@ export interface CommercialDocument {
   officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
   revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
 }
+/** The approval plan of the CURRENT revision of a submitted document (stages in order, with the decisions counted per stage) and the decisions cast on it. An empty plan means no policy matches: the single independent approval applies. */
+export interface CommercialApprovalStage { stage: number; required: number; approved: number; roleId: string | null }
+export interface CommercialApprovalDecision { id: number; revision: number; approver: string; stage: number; decidedAtUtc: string }
+export interface CommercialApprovals { plan: CommercialApprovalStage[]; decisions: CommercialApprovalDecision[] }
 export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
 export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
 /** `partyId`, `currency` and `search` (a literal part of the official number) are applied by the SERVER before paging, so a page and its total are exact. */
@@ -906,6 +921,14 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     return (await response.json()) as T;
   }
 
+  type LoginBody = { user?: SessionUser; token?: string | null; status?: "mfa_required" | "mfa_enrolment_required" | "mfa_recovery_required"; challenge?: string };
+  function interpretLogin(result: LoginBody): LoginResult {
+    if (result.status === "mfa_required" || result.status === "mfa_enrolment_required") return { step: { kind: result.status, challenge: result.challenge ?? "" } };
+    if (result.status === "mfa_recovery_required") return { step: { kind: "mfa_recovery_required" } };
+    bearer = kind === "desktop" ? (result.token ?? null) : null;
+    return { user: result.user! };
+  }
+
   const get = <T>(path: string) => request<T>("GET", path);
   const enc = encodeURIComponent;
 
@@ -932,13 +955,23 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   return {
     getHealth: () => get<HealthResponse>("/api/v1/health"),
 
-    async login(login: string, password: string): Promise<{ user: SessionUser }> {
-      const result = await request<{ user: SessionUser; token?: string | null }>("POST", "/api/v1/auth/login", {
+    async login(login: string, password: string): Promise<LoginResult> {
+      const result = await request<LoginBody>("POST", "/api/v1/auth/login", {
         body: { login, password, client: kind },
         anonymous: true,
       });
-      bearer = kind === "desktop" ? (result.token ?? null) : null;
-      return { user: result.user };
+      return interpretLogin(result);
+    },
+    /** Second step of a login: the challenge from the password step and the 6-digit code. Every refusal is the same 401. */
+    async verifyMfa(challenge: string, code: string): Promise<LoginResult> {
+      return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/verify", { body: { challenge, code, client: kind }, anonymous: true }));
+    },
+    /** Starts an enrolment: with a challenge and the one-time enrolment code, or (voluntary, in a live session) with the password. */
+    beginEnrolment: (input: { challenge: string; enrolmentCode: string } | { password: string }) =>
+      request<EnrolmentSecret & { otpauthUri: string }>("POST", "/api/v1/auth/mfa/enrol/begin", { body: { ...input, client: kind }, anonymous: true }),
+    /** Confirms the enrolment with a code from the new authenticator. Both modes end in a NEW session like a login (a new cookie or bearer token; the previous session is revoked). */
+    async confirmEnrolment(input: { challenge: string; code: string } | { code: string }): Promise<LoginResult> {
+      return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/enrol/confirm", { body: { ...input, client: kind }, anonymous: true }));
     },
     async logout(): Promise<void> {
       try {
@@ -1087,6 +1120,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** The same list with the exact `total` of the documents matching every filter (what a paged picker needs). */
     searchCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`),
     getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
+    getCommercialApprovals: (id: string) => get<CommercialApprovals>(`/api/v1/company/commercial-documents/${enc(id)}/approvals`),
     createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
     updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/submit`, { ifMatch: revision }),
@@ -1305,7 +1339,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listLegalHolds: (includeReleased = false) => get<{ holds: LegalHold[] }>(`/api/v1/company/attachment-retention/holds${includeReleased ? "?includeReleased=true" : ""}`),
     placeLegalHold: (input: LegalHoldInput) => request<LegalHold>("POST", "/api/v1/company/attachment-retention/holds", { body: input }),
     releaseLegalHold: (id: string, revision: number, reason: string) => request<LegalHold>("POST", `/api/v1/company/attachment-retention/holds/${enc(id)}/release`, { body: { reason }, ifMatch: revision }),
-    previewRetention: (offset = 0, limit = 50) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}`),
+    previewRetention: (offset = 0, limit = 50, filter?: { subjectKind?: string; subjectId?: string }) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}${filter?.subjectKind ? `&subjectKind=${enc(filter.subjectKind)}` : ""}${filter?.subjectId ? `&subjectId=${enc(filter.subjectId)}` : ""}`),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
     /**
