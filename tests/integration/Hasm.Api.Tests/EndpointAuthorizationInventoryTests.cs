@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Claims;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using Hasm.Api.Auth;
@@ -36,12 +37,23 @@ public class EndpointAuthorizationInventoryTests(WebApplicationFactory<Program> 
         public string Key => $"{Method} {Pattern}";
     }
 
+    private static readonly string[] AllMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+    /// <summary>
+    /// EVERY routed endpoint (not only /api/): the pattern is normalised with a leading slash so "api/v1/x" and "/api/v1/x" are one
+    /// thing, and an endpoint with no HTTP-method metadata is probed with every method, never assumed to be GET only.
+    /// </summary>
     private IReadOnlyList<Route> ApiRoutes() =>
         factory.Services.GetServices<EndpointDataSource>().SelectMany(s => s.Endpoints).OfType<RouteEndpoint>()
-            .Where(e => e.RoutePattern.RawText?.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) == true)
-            .SelectMany(e => (e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["GET"]).Select(m => new Route(m, e.RoutePattern.RawText!, e)))
+            .SelectMany(e => (e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? AllMethods)
+                .Select(m => new Route(m.ToUpperInvariant(), "/" + (e.RoutePattern.RawText ?? "").TrimStart('/'), e)))
             .OrderBy(r => r.Key, StringComparer.Ordinal).ToList();
 
+    /// <summary>
+    /// Protected means: carries authorization data and no AllowAnonymous. Any IAuthorizeData counts (a plain RequireAuthorization or a
+    /// named policy); whether the endpoint truly refuses anonymous callers is proven separately by the 401 probe below, and that the
+    /// admin policy really rejects a non-administrator by the policy evaluation test.
+    /// </summary>
     private static bool IsProtected(RouteEndpoint e) =>
         e.Metadata.GetOrderedMetadata<IAuthorizeData>().Count > 0 && e.Metadata.GetMetadata<IAllowAnonymous>() is null;
 
@@ -81,6 +93,20 @@ public class EndpointAuthorizationInventoryTests(WebApplicationFactory<Program> 
         Assert.NotEmpty(admin);
         foreach (var r in admin)
             Assert.True(r.Endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>().Any(a => a.Policy == AuthDefaults.AdministratorPolicy), r.Key);
+    }
+
+    [Fact]
+    public async Task The_administrator_policy_rejects_an_authenticated_non_administrator_and_accepts_an_administrator()
+    {
+        var authz = factory.Services.GetRequiredService<IAuthorizationService>();
+        static ClaimsPrincipal User(params Claim[] claims) => new(new ClaimsIdentity(claims, AuthDefaults.Scheme));
+        var plain = User(new Claim(ClaimTypes.NameIdentifier, "u1"));
+        var notAdmin = User(new Claim(ClaimTypes.NameIdentifier, "u1"), new Claim(AuthDefaults.AdministratorClaim, "false"));
+        var admin = User(new Claim(ClaimTypes.NameIdentifier, "u1"), new Claim(AuthDefaults.AdministratorClaim, "true"));
+        Assert.False((await authz.AuthorizeAsync(plain, null, AuthDefaults.AdministratorPolicy)).Succeeded);
+        Assert.False((await authz.AuthorizeAsync(notAdmin, null, AuthDefaults.AdministratorPolicy)).Succeeded);
+        Assert.False((await authz.AuthorizeAsync(new ClaimsPrincipal(new ClaimsIdentity()), null, AuthDefaults.AdministratorPolicy)).Succeeded);
+        Assert.True((await authz.AuthorizeAsync(admin, null, AuthDefaults.AdministratorPolicy)).Succeeded);
     }
 
     [Fact]
