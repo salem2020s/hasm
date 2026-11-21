@@ -38,7 +38,7 @@ public static class MfaStateGraph
     public static MfaState InitialState(bool subjectToRequirement) => subjectToRequirement ? MfaState.EnrolmentRequired : MfaState.None;
 }
 
-/// <summary>Throttle keys of the second factor (<see cref="ThrottleScope.Mfa"/>): SHA-256 of a domain-separated string, never the raw user id or address.</summary>
+/// <summary>Throttle keys of the second factor (stored under <see cref="ThrottleScope.Login"/>, domain-separated from every login key): SHA-256 of a domain-separated string, never the raw user id or address.</summary>
 public static class MfaThrottleKeys
 {
     public static byte[] UserAndSource(Guid userId, string source) => SessionToken.HashKey("mfa-pair:" + userId.ToString("N") + "|" + source);

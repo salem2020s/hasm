@@ -83,11 +83,11 @@ public class MfaAttemptLimiterTests
     }
 
     [Fact]
-    public async Task All_counters_use_the_Mfa_scope_and_other_users_are_independent()
+    public async Task All_counters_use_the_login_scope_with_mfa_domain_keys_and_other_users_are_independent()
     {
         var (l, s, _) = Make();
         for (var i = 0; i < 5; i++) await l.RecordFailureAsync(User, "a", default);
-        Assert.All(s.Scopes, sc => Assert.Equal(ThrottleScope.Mfa, sc));
+        Assert.All(s.Scopes, sc => Assert.Equal(ThrottleScope.Login, sc));
         Assert.Null(await l.BlockedForAsync(Guid.NewGuid(), "a", default));
     }
 }

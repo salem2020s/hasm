@@ -11,7 +11,7 @@ namespace Hasm.Infrastructure.Identity;
 public enum UserState : short { Active = 0, Disabled = 1, Locked = 2 }
 public enum SessionClient : short { Web = 0, Desktop = 1 }
 public enum SessionRevocation : short { Logout = 0, Administrative = 1, PasswordChanged = 2 }
-public enum ThrottleScope : short { Login = 0, Source = 1, /* Phase 4.1: second factor; storage accepts it only after the slice migration widens the scope check */ Mfa = 2 }
+public enum ThrottleScope : short { Login = 0, Source = 1 }
 
 public enum SetStateOutcome { Changed, NotFound, LastCompanyAdministrator, LastIdentityAdministrator, ActorNotActive }
 

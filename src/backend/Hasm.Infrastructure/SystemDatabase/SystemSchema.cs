@@ -270,12 +270,12 @@ public static partial class SystemSchema
     /// Their DATA never reaches an unencrypted backup set: <c>BackupRunService.SystemDumpExclusions</c> must exclude exactly these tables (pinned by a unit test in both directions). A new secret-store table
     /// (for example the Phase 4.1 TOTP secrets) is added HERE and to the exclusions in the same change.
     /// </summary>
-    public static IReadOnlySet<string> SecretStoreTables { get; } = new HashSet<string>(StringComparer.Ordinal) { "Session.Table", "LoginThrottle.Table" };
+    public static IReadOnlySet<string> SecretStoreTables { get; } = new HashSet<string>(StringComparer.Ordinal) { "Session.Table", "LoginThrottle.Table", "UserTotp.Table" };
 
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 
-    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).Concat(MfaMap).ToDictionary(kv => kv.Key, kv => kv.Value));
 
     private static IReadOnlyDictionary<string, string> CoreMap { get; } = new Dictionary<string, string>
     {

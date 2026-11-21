@@ -30,7 +30,7 @@ public interface IMfaSecretStore
     Task<bool> TryAdvanceLastStepAsync(Guid secretId, long matchedStep, CancellationToken ct);
 }
 
-/// <summary>Failure counters of the second factor (<see cref="ThrottleScope.Mfa"/>): bounded per (user, source) and per user, time-based blocks only.</summary>
+/// <summary>Failure counters of the second factor (login throttle table, domain-separated keys): bounded per (user, source) and per user, time-based blocks only.</summary>
 public interface IMfaAttemptLimiter
 {
     /// <summary>The remaining block for this user from this source, or null when not blocked.</summary>
