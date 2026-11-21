@@ -35,6 +35,12 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
 
     private static string Context(Guid companyId, Guid batchId) => $"hasm-import:{companyId:N}:{batchId:N}";
 
+    /// <summary>
+    /// Test hook only (never set in production; internal, visible to the test assemblies only): runs inside the settings write's transaction AFTER the revision was read and checked and
+    /// BEFORE the write, so a race test can hold every writer at that point and make the race deterministic (#165 G L1, #168 H L1).
+    /// </summary>
+    internal Func<CancellationToken, Task>? AfterSettingsReadForTests { get; set; }
+
     // ------------------------------------------------------------------------------------------------------------------------- reads
 
     private const string Columns =
@@ -407,6 +413,7 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
         {
             var cur = await ReadSettingsAsync(work.Connection, work.Transaction, ct);
             if (cur.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", cur.Revision);
+            if (AfterSettingsReadForTests is { } hook) await hook(ct);
             var now = clock.GetUtcNow().UtcDateTime;
             // race-safe against concurrent writers with the same If-Match (C2 matrix part 2): the first write inserts the singleton with ON CONFLICT DO NOTHING and an update applies only at the
             // expected revision; the loser writes nothing and gets 412 revision_conflict with the current revision. Any other database error still propagates.
