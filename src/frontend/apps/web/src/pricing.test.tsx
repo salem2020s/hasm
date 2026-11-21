@@ -265,7 +265,8 @@ describe("pricing administration screen", () => {
   it("keeps an inactive CURRENT group selectable in the membership row but never offers it for a new list, and shows an id when the names cannot be read", async () => {
     const oldGroup = { ...vipGroup, id: "cg2", code: "OLD", nameAr: "قديمة", nameEn: "Old", isActive: false };
     render({
-      listCustomerGroups: vi.fn().mockResolvedValue({ customerGroups: [vipGroup, oldGroup], can: { configure: true } }),
+      // the full master list for the table and names (no query), the server-side ACTIVE filter for the picker (active=true)
+      listCustomerGroups: vi.fn().mockImplementation((q?: { active?: boolean }) => Promise.resolve({ customerGroups: [vipGroup, oldGroup].filter((g) => !q?.active || g.isActive), can: { configure: true } })),
       listCustomerGroupAssignments: vi.fn().mockResolvedValue({ assignments: [{ ...assignment, customerGroupId: "cg2", customerGroupCode: "OLD", revision: 4 }, { partyId: "zz-unknown-party", customerGroupId: null, customerGroupCode: null, revision: 0 }], can: { configure: true } }),
     });
     await go("#/company/pricing");
@@ -674,19 +675,25 @@ describe("pricing administration screen", () => {
       await waitFor(() => expect(createDiscountRule).toHaveBeenCalledWith(expect.objectContaining({ itemGroupId: "g1", itemId: null })));
     });
 
-    it("searches customer groups on the server, offers only active groups, and sends the chosen group", async () => {
-      const oldGroup = { ...vipGroup, id: "cg2", code: "OLD", isActive: false };
-      const list = vi.fn().mockImplementation((q?: { search?: string }) => Promise.resolve(q?.search ? { customerGroups: [oldGroup, { ...vipGroup, id: "cg3", code: "VIP3" }], total: 2 } : { customerGroups: [vipGroup], total: 600 }));
+    it("asks the server for ACTIVE customer groups only (active=true), so N of M counts only active rows, and sends the chosen group", async () => {
+      const everyone = [vipGroup, { ...vipGroup, id: "cg2", code: "OLD", isActive: false }, { ...vipGroup, id: "cg3", code: "VIP3" }];
+      // emulates the server: the active filter applies BEFORE paging and total
+      const list = vi.fn().mockImplementation((q?: { search?: string; active?: boolean }) => {
+        const rows = everyone.filter((g) => (q?.active ? g.isActive : true) && (!q?.search || g.code.toLowerCase().includes(q.search.toLowerCase())));
+        return Promise.resolve({ customerGroups: rows, total: q?.search ? rows.length : 600 });
+      });
       const client = render({ listCustomerGroups: list, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
       await go("#/company/pricing");
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
       const panel = within(await screen.findByTestId("pricing-list-create"));
-      const box = await pickFrom(panel, "pricing.customer_group", /VIP/, "cg1");
-      expect(await panel.findByText(/600/)).toBeInTheDocument();
+      const box = await pickFrom(panel, "pricing.customer_group", /^VIP —/, "cg1");
+      expect(await panel.findByText(new RegExp(A("picker.showing").replace("{shown}", "2").replace("{total}", "600")))).toBeInTheDocument();                       // N is the number of ACTIVE rows on the page, M the server's active total
+      expect(list).toHaveBeenCalledWith({ limit: 50, active: true });
       await userEvent.type(panel.getByRole("searchbox", { name: label("pricing.customer_group") }), "vip");
-      await waitFor(() => expect(list).toHaveBeenCalledWith({ search: "vip", limit: 50 }));
+      await waitFor(() => expect(list).toHaveBeenCalledWith({ search: "vip", limit: 50, active: true }));
       await waitFor(() => expect(within(box).getByRole("option", { name: /VIP3/ })).toBeInTheDocument());
       expect(within(box).queryByRole("option", { name: /OLD/ })).not.toBeInTheDocument();                  // an inactive group is never offered
+      expect(list.mock.calls.filter((c) => c[0] !== undefined && c[0].active !== true && !("ids" in c[0]))).toEqual([]);   // every picker request carries active=true (the unparameterized master-table load has no query)
       await userEvent.type(panel.getByLabelText(label("pricing.code")), "g");
       await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "غ");
       await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
