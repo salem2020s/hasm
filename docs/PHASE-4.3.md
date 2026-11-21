@@ -1347,9 +1347,54 @@ D-143 scope (single company; full-installation restore is a later slice bound by
 ### Owner decisions this slice relies on (not re-asked)
 D-081, D-080(6), D-118, D-099, D-102, D-106/D-107/D-119 (bounded out: no system restore here), D-085..D-088.
 
+## Import-file key coverage and the encryption-key retirement report (D-179..D-181; register item K follow-up)
+Sources: SRS 14.4 and 16; owner decisions D-080(6) (independent approval for key retirement), D-082 (register item K, keys of retained data are never retired), D-085 and D-087 (encrypted backups, separate key-directory backup); D-114 (a purged attachment row still counts); D-138 (the key inventory of the retained runs). It closes the UNFINISHED Release 1 item "import-file rewrap retirability report and import-file key coverage".
+
+* **The facts (D-179).**
+  * A company backup set holds the company database dump and the company's ATTACHMENT folder only. Encrypted import-file originals (`Hasm__Imports__StorageDirectory`) are NOT part of any set.
+  * No decision ever ruled on that. Including them would keep originals in backups beyond the company's own import retention period (default 30 days, then purged), which is a data-retention policy choice. It is recorded once for the owner as IMPORT-ORIGINALS-BACKUP-SCOPE.
+  * Default under D-048 (conservative): the backup content scope is NOT changed here. Import originals are excluded, as today. Consequently a restore brings back the batch rows but not their originals; such a batch reports its original as unavailable and needs a new upload (fail closed, nothing is guessed).
+  * Because no retained backup contains an import original, retained backups never need a key FOR import originals. Only the LIVE originals do, and they are what this work covers.
+* **Import rewrap retirability (D-180).**
+  * `ImportService.RewrapAsync` now returns `ImportRewrapOutcome`, like the attachments' `RewrapOutcome`:
+    * `rewrapped`, `skipped` (purged or already current meanwhile) and `failed`;
+    * the key usage of every not-yet-purged original, read after the run: `keyIdsInUse`, `remainingUnderOtherKeys` and `unknownKeys`;
+    * `oldKeysMayBeRetired` = nothing failed AND nothing left under another key AND nothing unknown.
+  * A failure is never silent:
+    * a missing original, or an old key that is unavailable or invalid, is counted, and the other files go on;
+    * the no-op cases abort their transaction with a code. Before this change, a missing original made the whole rewrap fail, because a company mutation must append an audit event.
+  * The API response of `POST /api/v1/company/imports/maintenance/rewrap` gains these fields additively (no UI uses this endpoint).
+  * **Key usage of stored items** (`EncryptionKeyUsageBuilder`; `ImportService.KeyUsageAsync` and `AttachmentService.KeyUsageAsync`; read-only, nothing is decrypted):
+    * The key ids are those named by the ROW and by the envelope HEADER on disk. A crash between a file replacement and the row update of a rewrap can leave them different, so both are kept.
+    * A file that cannot be read, a malformed envelope, an invalid row key id, or a row with neither key is `unknown`.
+    * A missing file still counts its row's key.
+    * Attachments: every SENSITIVE row (active, removed and purged; D-114). Imports: every original not yet purged.
+* **The encryption-key retirement report (D-181):** `Hasm.Admin encryption-key-retirement-report <backup-root> [<backup-root> ...] [--json <file>]`.
+  * A master key in `Hasm__Encryption__KeyDirectory` is retirable ONLY when:
+    * it is not the active key;
+    * no live sensitive attachment needs it;
+    * no live import original needs it;
+    * no retained run of ANY given backup root lists it (the slice 6 key inventory).
+  * Fail closed: ANY unknown makes the report incomplete, and then no key is retirable. Unknowns are:
+    * a registered company that is not Ready (a Pending company has no database and therefore no data), cannot be read, or has no configured attachment or import storage;
+    * any `unknown` key usage;
+    * no backup root given;
+    * a backup root whose inventory is incomplete or cannot be read;
+    * no active key configured.
+  * A key that data or a retained run needs but that is MISSING from the key directory is reported (`missing_from_key_directory`).
+  * Read-only, and no audit event: retirement itself is a separate, independently approved operation (D-080(6)) and is not built. Exit codes: 0 complete, 8 incomplete, 3 configuration.
+  * With the multiple-destinations slice (#176), every destination root must be given.
+* **Tests:**
+  * Unit (`EncryptionKeyRetirementTests`): the rule per source; every blocker; a missing needed key; the usage scan (row and header kept, a missing file counted, unreadable, malformed and invalid items unknown).
+  * PostgreSQL (`ImportServiceTests`, +2): a rewrap with a missing original and an unavailable old key (counted, old keys must be kept); the report end to end (a key only an import original needs is kept until a complete rewrap, then retirable; no backup root means incomplete); the existing rotation drill asserts the new signal.
+  * Mutation proofs (isolated runner):
+    * import originals dropped from the rule: the unit and PostgreSQL report tests fail;
+    * failures counted as skipped: the rewrap test fails.
+* **Not built here:** key retirement itself (D-080(6)); including import originals in backups (owner question IMPORT-ORIGINALS-BACKUP-SCOPE); the audit and recovery keys (unchanged; slice 6 lists them).
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
-* `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
+* `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and are not part of any set (D-179; owner question IMPORT-ORIGINALS-BACKUP-SCOPE). Their LIVE key coverage is the import rewrap outcome and the encryption-key retirement report (D-180, D-181).
 * Restore into a NEW database only; replacing a live company database (cutover) and full-installation restore are not built. Scheduling (by the operating system), monitoring and measured durations: slice 4 (implemented). Set encryption and retention: owner package 4.3-2.
 
 ## BLOCKED / owner decisions

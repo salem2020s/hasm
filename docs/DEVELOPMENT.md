@@ -690,6 +690,22 @@ dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
 
   An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
 
+### Encryption-key retirement report (D-179..D-181)
+```
+dotnet run --project src/backend/Hasm.Admin -- encryption-key-retirement-report <backup-root> [<backup-root> ...] [--json <file>]
+```
+* Run it before retiring an encryption master key (the attachment and import-file key ring). Give EVERY backup root (and, with multiple destinations, every destination).
+* A key is listed `RETIRABLE` only when:
+  * it is not the active key;
+  * no live sensitive attachment needs it (active, removed or purged);
+  * no live import original needs it;
+  * no retained run of any given root lists it.
+* Anything unknown makes the report INCOMPLETE (exit 8) and lists the blockers: a company that is not Ready, cannot be read, or has no configured attachment or import storage; an unreadable file or key; a missing backup root; an incomplete key inventory. Then no key may be retired.
+* `missing_from_key_directory` means data or a retained run needs a key that is not in the key directory: restore it from the key backup (`backup-keys`) before anything else.
+* The command is read-only and writes no audit event. Retiring the key is a separate step that needs independent approval (D-080(6)). Keep every retired key with the older recovery kits.
+* After a key rotation, run the attachments' and the imports' rewrap (`POST .../attachments/maintenance/rewrap`, `POST .../imports/maintenance/rewrap`). Each reports `oldKeysMayBeRetired`; the report combines them with the retained backups.
+* Import originals are not part of backup sets (D-179; owner question IMPORT-ORIGINALS-BACKUP-SCOPE). A restore brings back the batch rows without their originals; such a batch needs a new upload.
+
 ## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
 
 `tools/loadtest/` is tooling only: no migration, no change to the PostgreSQL registry. It talks to the REAL HTTP API as ordinary users, so every server rule (validation, RBAC, numbering, audit, period and approval rules, optimistic concurrency) applies. Stage 2 (the 60-minute, 50-session runner) is separate and later.
