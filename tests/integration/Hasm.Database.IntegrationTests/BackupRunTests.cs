@@ -111,6 +111,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal("ok", report.Verdict);
         Assert.Equal(1, report.Skipped);
         Assert.False(report.Encrypted);
+        Assert.Null(report.Warnings);                                                                            // the run lock was confirmed before the verdict
         Assert.Equal(new[] { "session", "login_throttle" }, report.Excluded);
         Assert.Equal(new[] { a.Id, b.Id }.OrderBy(x => x), report.Companies.Select(c => c.CompanyId).OrderBy(x => x));
         Assert.All(report.Companies, c => { Assert.Equal("ok", c.Outcome); Assert.True(c.DumpBytes > 0); Assert.True(c.FinishedUtc >= c.StartedUtc); });
@@ -166,6 +167,14 @@ public class BackupRunTests : PostgresTestBase
         var runsBefore = Directory.GetDirectories(Root).Length;
         Assert.Equal("run_in_progress", (await Assert.ThrowsAsync<BackupException>(() => Service().RunAsync(Root))).Code);
         Assert.Equal(runsBefore, Directory.GetDirectories(Root).Length);                                         // nothing was written
+
+        // review L6: the synchronous lock check sees the granted run lock of THIS session only, and any failure counts as not held
+        Assert.True(await BackupRunService.IsRunLockHeldAsync(runHolder));
+        await using (var other = new NpgsqlConnection(SystemConnection)) { await other.OpenAsync(); Assert.False(await BackupRunService.IsRunLockHeldAsync(other)); }
+        await using (var unlock = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", runHolder)) await unlock.ExecuteNonQueryAsync();
+        Assert.False(await BackupRunService.IsRunLockHeldAsync(runHolder));
+        await runHolder.CloseAsync();
+        Assert.False(await BackupRunService.IsRunLockHeldAsync(runHolder));
     }
 
     [PostgresFact]

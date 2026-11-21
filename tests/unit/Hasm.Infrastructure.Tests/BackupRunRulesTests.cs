@@ -92,6 +92,36 @@ public sealed class BackupRunRulesTests : IDisposable
     }
 
     [Fact]
+    public async Task An_unexpected_exception_in_the_keep_alive_marks_it_failed_and_dispose_never_throws()
+    {
+        var keepAlive = new SessionKeepAlive(() => throw new ArgumentException("unexpected type"), TimeSpan.FromMilliseconds(5));   // review L7
+        for (var i = 0; i < 200 && !keepAlive.Failed; i++) await Task.Delay(10);
+        Assert.True(keepAlive.Failed);
+        await keepAlive.DisposeAsync();
+        await keepAlive.DisposeAsync();                                                                               // idempotent, never throws
+        var faultingAsync = new SessionKeepAlive(async () => { await Task.Yield(); throw new NotSupportedException(); }, TimeSpan.FromMilliseconds(5));
+        for (var i = 0; i < 200 && !faultingAsync.Failed; i++) await Task.Delay(10);
+        Assert.True(faultingAsync.Failed);
+        await faultingAsync.DisposeAsync();
+    }
+
+    [Fact]
+    public void The_verdict_is_partial_with_run_lock_lost_whenever_the_lock_is_not_confirmed()
+    {
+        var ok = new RunDump("ok", null, T0, T0, 1, 10);
+        var failed = new RunDump("failed", "dump_failed", T0, T0, 1, 0);
+        RunCompany[] fine = [C(Guid.NewGuid(), "ok")];
+        Assert.Equal(("ok", (IReadOnlyList<string>?)null), BackupRunService.ComputeVerdict(ok, fine, lockHeld: true));
+        var lost = BackupRunService.ComputeVerdict(ok, fine, lockHeld: false);                                        // review L6: never ok without the synchronous lock check
+        Assert.Equal("partial", lost.Verdict);
+        Assert.Equal(new[] { "run_lock_lost" }, lost.Warnings);
+        Assert.Equal("partial", BackupRunService.ComputeVerdict(ok, [C(Guid.NewGuid(), "busy")], true).Verdict);
+        Assert.Equal("failed", BackupRunService.ComputeVerdict(failed, fine, true).Verdict);
+        Assert.Equal("partial", BackupRunService.ComputeVerdict(ok, [C(Guid.NewGuid(), "failed")], true).Verdict);     // a failed company with the system ok is partial
+        Assert.Equal("failed", BackupRunService.ComputeVerdict(failed, [], false).Verdict);
+    }
+
+    [Fact]
     public async Task The_keep_alive_reports_a_lost_session_and_stops_when_disposed()
     {
         await using (var lost = new Npgsql.NpgsqlConnection("Host=127.0.0.1;Port=1"))                                // never opened: every no-op fails

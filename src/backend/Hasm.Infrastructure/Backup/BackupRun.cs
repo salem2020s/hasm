@@ -198,7 +198,7 @@ public sealed class BackupRunService
         }
         // review L3: the run lock is a SESSION lock; a periodic no-op keeps the idle lock connection from being closed by idle_session_timeout or an idle network path while the dumps run
         var keepAlive = new SessionKeepAlive(lockConn, KeepAliveInterval);
-        try { return await RunLockedAsync(resolved, keepAlive, ct); }
+        try { return await RunLockedAsync(resolved, lockConn, keepAlive, ct); }
         finally
         {
             await keepAlive.DisposeAsync();
@@ -210,7 +210,7 @@ public sealed class BackupRunService
     /// <summary>Interval of the no-op on the lock connection (review L3); <c>idle_session_timeout</c> of the admin role must be 0 or longer than twice this.</summary>
     internal static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(30);
 
-    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, SessionKeepAlive keepAlive, CancellationToken ct)
+    private async Task<(BackupRunReport, string)> RunLockedAsync(string root, NpgsqlConnection lockConn, SessionKeepAlive keepAlive, CancellationToken ct)
     {
         var started = clock.GetUtcNow();
         var watch = clock.GetTimestamp();
@@ -234,16 +234,40 @@ public sealed class BackupRunService
             outcomes.Add(await BackupCompanyAsync(company.Id, Path.Combine(companiesDir, company.Id.ToString("N")), missing, ct));
         }
 
-        var anySet = system.Outcome == "ok" || outcomes.Any(o => o.Outcome is "ok" or "ok_missing_keys");
-        // a lost lock connection means another run could have started meanwhile: the sets stay valid, but the run is reported partial with run_lock_lost (monitoring exit 8)
-        var lockLost = keepAlive.Failed;
-        var verdict = system.Outcome != "ok" || !anySet ? "failed"
-            : outcomes.Any(o => o.Outcome is not "ok") || lockLost ? "partial" : "ok";
+        // review L6: stop the keep-alive, then check SYNCHRONOUSLY that this session still holds the run lock before the verdict (a loss in the last keep-alive interval is not missed)
+        await keepAlive.DisposeAsync();
+        var lockHeld = !keepAlive.Failed && await IsRunLockHeldAsync(lockConn);
+        var (verdict, warnings) = ComputeVerdict(system, outcomes, lockHeld);
         var finished = clock.GetUtcNow();
         var report = new BackupRunReport(BackupRunFiles.ReportVersion, runId, started, finished, (long)clock.GetElapsedTime(watch).TotalMilliseconds, system, outcomes, skipped, verdict, [.. missing], excluded, clientMajor, false,
-            lockLost ? ["run_lock_lost"] : null);
+            warnings);
         BackupRunFiles.WriteReport(runDir, report);
         return (report, runDir);
+    }
+
+    /// <summary>
+    /// The verdict: <c>failed</c> when the system dump failed or no set was written; <c>partial</c> when a company was not <c>ok</c> or the run lock was lost (a lost lock means another run could have
+    /// started meanwhile: the sets stay valid, the warning <c>run_lock_lost</c> is recorded and monitoring exits 8); otherwise <c>ok</c>.
+    /// </summary>
+    internal static (string Verdict, IReadOnlyList<string>? Warnings) ComputeVerdict(RunDump system, IReadOnlyList<RunCompany> companies, bool lockHeld)
+    {
+        var anySet = system.Outcome == "ok" || companies.Any(o => o.Outcome is "ok" or "ok_missing_keys");
+        var verdict = system.Outcome != "ok" || !anySet ? "failed"
+            : companies.Any(o => o.Outcome is not "ok") || !lockHeld ? "partial" : "ok";
+        return (verdict, lockHeld ? null : ["run_lock_lost"]);
+    }
+
+    /// <summary>True when THIS session (<paramref name="lockConn"/>) still holds the granted run advisory lock (namespace <see cref="RunLockNamespace"/>, object 0); any failure counts as not held.</summary>
+    internal static async Task<bool> IsRunLockHeldAsync(NpgsqlConnection lockConn)
+    {
+        try
+        {
+            await using var cmd = new NpgsqlCommand(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND classid::bigint = @ns AND objid::bigint = 0 AND objsubid = 2 AND granted)", lockConn);
+            cmd.Parameters.AddWithValue("ns", (long)RunLockNamespace);
+            return await cmd.ExecuteScalarAsync(CancellationToken.None) is true;
+        }
+        catch (Exception) { return false; }   // the session, and with it the lock, may be gone
     }
 
     private async Task<RunDump> BackupSystemAsync(string runDir, CancellationToken ct)
@@ -396,29 +420,35 @@ internal sealed class SessionKeepAlive : IAsyncDisposable
     private readonly CancellationTokenSource stop = new();
     private readonly Task loop;
     private volatile bool failed;
+    private int disposed;
 
-    public SessionKeepAlive(NpgsqlConnection connection, TimeSpan interval) => loop = RunAsync(connection, interval);
+    public SessionKeepAlive(NpgsqlConnection connection, TimeSpan interval) : this(async () =>
+    {
+        await using var cmd = new NpgsqlCommand("SELECT 1", connection);
+        await cmd.ExecuteNonQueryAsync(CancellationToken.None);               // instantaneous; never cancelled half-way, so the connection stays usable for the lock check and the unlock
+    }, interval) { }
+
+    /// <summary>Test seam: <paramref name="ping"/> replaces the no-op query.</summary>
+    internal SessionKeepAlive(Func<Task> ping, TimeSpan interval) => loop = RunAsync(ping, interval);
 
     public bool Failed => failed;
 
-    private async Task RunAsync(NpgsqlConnection connection, TimeSpan interval)
+    private async Task RunAsync(Func<Task> ping, TimeSpan interval)
     {
         while (true)
         {
-            try { await Task.Delay(interval, stop.Token); } catch (OperationCanceledException) { return; }
-            try
-            {
-                await using var cmd = new NpgsqlCommand("SELECT 1", connection);
-                await cmd.ExecuteNonQueryAsync(CancellationToken.None);       // instantaneous; never cancelled half-way, so the connection stays usable for the unlock
-            }
-            catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { failed = true; return; }
+            try { await Task.Delay(interval, stop.Token); } catch (OperationCanceledException) { return; }   // only the stop requested by DisposeAsync
+            try { await ping(); }
+            catch (Exception) { failed = true; return; }                       // review L7: ANY failure means the session may be gone; never rethrown
         }
     }
 
+    /// <summary>Stops the loop (idempotent) and waits for it; never throws, so it is safe inside a finally.</summary>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         stop.Cancel();
-        await loop;
+        try { await loop; } catch (Exception) { failed = true; }
         stop.Dispose();
     }
 }
