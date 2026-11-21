@@ -27,6 +27,8 @@ public interface ICompanyMfaPolicyEvaluator
 /// </summary>
 public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, AccessService access, IdentityStore identity) : ICompanyMfaPolicyEvaluator, IAsyncDisposable
 {
+    public MfaPolicyService(string connectionString, TimeProvider clock, AuditTrail audit, AccessService access, IdentityStore identity) : this(() => connectionString, clock, audit, access, identity) { }
+
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
     public ValueTask DisposeAsync() => dataSource.IsValueCreated ? dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
 
