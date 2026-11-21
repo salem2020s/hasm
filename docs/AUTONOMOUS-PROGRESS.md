@@ -1,5 +1,11 @@
 # HASM — Autonomous execution progress
 
+## Sprint 2 of the cloud team: merges and handoff refresh (2026-11-21, recovered from GitHub REST at `main` = `0aeeab7`)
+
+Merged on `main` since the sprint-1 refresh (#124), each by pull request with its merge commit from GitHub: #108 (`cb7bd12`), #117 (`b4bb408`), #121 (`453fa5b`), #122 (`7c060ee`), #130 (`c0edc8b`), #126 (`631361a`), #107 (`9d54229`), #131 (`89f8ffe`), #132 (`b65b93b`), #119 (`364a519`), #138 (`ae65f9b`), #135 (`38096b5`), #140 (`649fbc9`), #129 (`2c86052`), #139 (`67450de`), #141 (`5b9fe04`), #128 (`0aeeab7`).
+
+PostgreSQL registry on `main`: 1149 (parsed from `.github/workflows/backend.yml`). Migrations on `main`: company 0001-0031, system 0001-0030. Allocation: system 0031 #133, 0032 #134, 0033 D's S2; company 0032 S5a (#136). Merge queue (registry serial): #125, #133, #127, #136, #137, #134; #142 and the slice 7 plan #143 (docs only) are outside the queue. Open owner items are in the register of `docs/INTEGRATION-STATUS.md` (4.3-ACT, slice 6 Q1-Q7, slice 7 Q1-Q6, S5a Reject-and-stage-role, S5a digit-type limit, S5b, the stock-period database guard proposal, M2 of #133, release acceptance per owner item 11). This entry records no result that GitHub does not show; hosted CI and the review status of each open pull request were NOT VERIFIED by this refresh and must be read from GitHub before any merge.
+
 ## Sprint 1 of the cloud team: merges and handoff refresh (2026-11-21, recovered from GitHub REST at `main` = `045dd2a`)
 
 Merged on `main` since the previous refresh (each by pull request, merge commit from GitHub): #110 owner decisions 1-11 (`e31c823`); #111 PostgreSQL client/server major-version assertion (`3e5a3eb`); #104 4.3 slice 4, backup run of the whole installation (`db2a55e`); #114 plan for attachment retention, decision R (`b676f5f`); #113 4.1 MFA and identity security plan (`002ffa3`); #120 D-120, `user_totp` always excluded from S1 (`039ad58`); #112 AuditTrail first-touch state scoped to one PostgreSQL transaction (`7f65b32`); #115 endpoint authorization inventory (`bdb63f8`); #118 frontend i18n parity, permission/session states and Arabic-digit input (`b8f551e`); #116 4.3 slice 5 plan (`045dd2a`); and, recorded for completeness from the previous refresh, #105 (`d3bee74`), #99 (`98c3a0a`), #106 (`61ee7be`) and #82 (`0c4661d`).

@@ -470,6 +470,23 @@ export interface TaxRuleInput {
 export type AttachmentSubjectKind = "local_party" | "inventory_item";
 export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string | null; isSensitive: boolean; revision: number; createdAtUtc: string }
 export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
+/** Retention of removed attachments (Phase R, owner decision D-082): policy versions, legal holds and a read-only eligibility preview. Nothing here deletes anything. */
+export interface RetentionCapabilities { view: boolean; configure: boolean; hold: boolean; approve: boolean; execute: boolean; /** false while the owner has not answered D-109: no item is eligible and purge stays disabled */ basisConfirmed: boolean }
+/** status: 1 draft, 2 approved, 3 revoked, 4 superseded */
+export interface RetentionRuleInfo { subjectKind: string; sensitivity: number; months: number | null; indefinite: boolean }
+export interface RetentionPolicyVersion {
+  id: string; version: number; status: 1 | 2 | 3 | 4; effectiveFrom: string; shortensAnyPeriod: boolean; shorteningAcknowledgement: string | null; note: string | null; draftedBy: string; draftedAtUtc: string;
+  approvedBy: string | null; approvedAtUtc: string | null; revokedBy: string | null; revokedAtUtc: string | null; revokeReason: string | null; endedAtUtc: string | null; revision: number; rules: RetentionRuleInfo[];
+}
+export interface RetentionPolicyInput { effectiveFrom: string; note: string | null; rules: RetentionRuleInfo[] }
+/** scope: 1 company, 2 one record (subjectKind + subjectId), 3 one attachment (attachmentId) */
+export interface LegalHold {
+  id: string; scope: 1 | 2 | 3; subjectKind: string | null; subjectId: string | null; attachmentId: string | null; reason: string; reference: string | null; placedBy: string; placedAtUtc: string;
+  releasedBy: string | null; releasedAtUtc: string | null; releaseReason: string | null; isActive: boolean; revision: number;
+}
+export interface LegalHoldInput { scope: 1 | 2 | 3; subjectKind?: string | null; subjectId?: string | null; attachmentId?: string | null; reason: string; reference?: string | null }
+export interface RetentionPreviewItem { attachmentId: string; subjectKind: string; subjectId: string; isSensitive: boolean; removedAtUtc: string; reason: string; eligibleAtUtc: string | null; holdId: string | null; policyVersion: number | null }
+export interface RetentionPreview { total: number; basisConfirmed: boolean; reasonCounts: Record<string, number>; items: RetentionPreviewItem[] }
 export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
 
 // ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
@@ -1285,6 +1302,15 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       return (await response.json()) as Attachment;
     },
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
+    getRetentionCapabilities: () => get<RetentionCapabilities>("/api/v1/company/attachment-retention/capabilities"),
+    listRetentionPolicies: () => get<{ policies: RetentionPolicyVersion[] }>("/api/v1/company/attachment-retention/policies"),
+    draftRetentionPolicy: (input: RetentionPolicyInput) => request<RetentionPolicyVersion>("POST", "/api/v1/company/attachment-retention/policies", { body: input }),
+    approveRetentionPolicy: (id: string, revision: number, shorteningAcknowledgement: string | null) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/approve`, { body: { shorteningAcknowledgement }, ifMatch: revision }),
+    revokeRetentionPolicy: (id: string, revision: number, reason: string) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/revoke`, { body: { reason }, ifMatch: revision }),
+    listLegalHolds: (includeReleased = false) => get<{ holds: LegalHold[] }>(`/api/v1/company/attachment-retention/holds${includeReleased ? "?includeReleased=true" : ""}`),
+    placeLegalHold: (input: LegalHoldInput) => request<LegalHold>("POST", "/api/v1/company/attachment-retention/holds", { body: input }),
+    releaseLegalHold: (id: string, revision: number, reason: string) => request<LegalHold>("POST", `/api/v1/company/attachment-retention/holds/${enc(id)}/release`, { body: { reason }, ifMatch: revision }),
+    previewRetention: (offset = 0, limit = 50) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}`),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
     /**

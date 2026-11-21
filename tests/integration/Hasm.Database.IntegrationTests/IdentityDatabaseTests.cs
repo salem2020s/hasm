@@ -6,6 +6,7 @@ using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using A = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserCompanyAccess;
+using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -94,7 +95,7 @@ public class IdentityMigrationTests : IdentityTestBase
         await Start();
         var expected = new Dictionary<string, string[]>
         {
-            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc],
+            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc, M.State, M.StateChangedAtUtc, M.EnrolmentCodeHash, M.EnrolmentCodeExpiresAtUtc, M.EnrolmentCodeConsumedAtUtc],
             [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind, S.SelectedCompanyId],
             [T.Table] = [T.Scope, T.KeyHash, T.Failures, T.WindowStartedAtUtc, T.BlockedUntilUtc],
             [A.Table] = [A.UserId, A.CompanyId, A.GrantedAtUtc, A.GrantedBy, A.RevokedAtUtc, A.RevokedBy],

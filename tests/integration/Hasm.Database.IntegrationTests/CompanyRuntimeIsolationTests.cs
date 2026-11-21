@@ -433,7 +433,10 @@ public static class AdminTool
 
     public static Task<Result> Run(HasmDatabaseOptions o, params string[] args) => RunWith(o, null, args);
 
-    public static async Task<Result> RunWith(HasmDatabaseOptions o, IDictionary<string, string?>? extra, params string[] args)
+    public static Task<Result> RunWith(HasmDatabaseOptions o, IDictionary<string, string?>? extra, params string[] args) => RunWithInput(o, extra, null, args);
+
+    /// <summary>As <see cref="RunWith"/>, writing <paramref name="stdin"/> to the tool's standard input first (slice 5: a passphrase with <c>--passphrase-stdin</c>).</summary>
+    public static async Task<Result> RunWithInput(HasmDatabaseOptions o, IDictionary<string, string?>? extra, string? stdin, params string[] args)
     {
         var info = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, UseShellExecute = false };
         info.ArgumentList.Add(AdminDll());
@@ -451,10 +454,11 @@ public static class AdminTool
         foreach (var (k, v) in extra ?? new Dictionary<string, string?>()) env[k] = v;
         foreach (var (k, v) in env) if (v is null) info.Environment.Remove(k); else info.Environment[k] = v;
         using var process = Process.Start(info)!;
+        if (stdin is not null) await process.StandardInput.WriteAsync(stdin);
         process.StandardInput.Close();
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(300));
         await process.WaitForExitAsync(timeout.Token);
         return new Result(process.ExitCode, await stdout, await stderr);
     }

@@ -43,9 +43,9 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         var rawKey = validLogin ? normalized : (login ?? "").Trim().ToLowerInvariant();
         if (rawKey.Length > 128) rawKey = rawKey[..128];
         var source = string.IsNullOrWhiteSpace(sourceAddress) ? SourceAddress.Unknown : sourceAddress;
-        var globalKey = SessionToken.HashKey("login:" + rawKey);
-        var pairKey = SessionToken.HashKey("pair:" + rawKey + "|" + source);
-        var sourceKey = SessionToken.HashKey("source:" + source);
+        var globalKey = SessionToken.HashKey(ThrottleKeyDomains.LoginIdentifier + rawKey);
+        var pairKey = SessionToken.HashKey(ThrottleKeyDomains.LoginPair + rawKey + "|" + source);
+        var sourceKey = SessionToken.HashKey(ThrottleKeyDomains.LoginSource + source);
         var keys = new[] { (ThrottleScope.Login, pairKey), (ThrottleScope.Login, globalKey), (ThrottleScope.Source, sourceKey) };
 
         var now = store.UtcNow;
@@ -125,7 +125,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
 
         // A stolen session must not be able to brute-force the current password. Its counter is per user and separate from the
         // sign-in counters, so failed sign-in attempts by others can never block a legitimate password change.
-        var key = SessionToken.HashKey("chpw:" + user.Id.ToString("N"));
+        var key = SessionToken.HashKey(ThrottleKeyDomains.ChangePassword + user.Id.ToString("N"));
         if (await store.GetBlockedUntilAsync([(ThrottleScope.Login, key)], ct) is not null)
             return new ChangePasswordResult(ChangePasswordStatus.Throttled);
 
