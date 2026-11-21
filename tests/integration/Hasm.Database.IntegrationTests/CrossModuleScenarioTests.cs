@@ -23,7 +23,7 @@ namespace Hasm.Database.IntegrationTests;
 // per-module suites test one at a time, and asserts business outcomes (refusals, balances, values), never audit-trail internals. Disposable cluster only.
 
 /// <summary>
-/// Scenario (a), company isolation over real HTTP across every read family (SRS 4.3, scenario 21.3): two REAL companies, built with the same fixtures (same codes, different ids) and sharing one global party identity.
+/// Scenario (a), company isolation over real HTTP across every read family (SRS 4.3, scenario 21.3): two REAL companies, built with the same fixtures (same codes, different ids), with the same global party id value on both local parties (no registry identity; the registry path is covered by the party-registry suites).
 /// A user of company A who presents company B's ids gets a refusal for every by-id read and never sees B's rows, values or totals in a list, report, balance or reconciliation; the same ids work for B's own user.
 /// </summary>
 public class CrossModuleIsolationScenarioTests : StockReversalTestBase
@@ -34,7 +34,7 @@ public class CrossModuleIsolationScenarioTests : StockReversalTestBase
 
     private sealed record Seeded(CompanyRecord Company, UserRecord Admin, string Cookie, Guid Year, Guid Account, Guid Journal, Guid Warehouse, Guid Item, Guid PriceList, Guid Party, Guid Commercial, Guid Attachment)
     {
-        /// <summary>Every id that exists only in this company (the shared global party identity is deliberately not here).</summary>
+        /// <summary>Every id that exists only in this company (the global party id value written on both companies' customers is deliberately not here).</summary>
         public Guid[] Own => [Company.Id, Year, Account, Journal, Warehouse, Item, PriceList, Party, Commercial, Attachment];
     }
 
@@ -72,7 +72,7 @@ public class CrossModuleIsolationScenarioTests : StockReversalTestBase
         var list = Ok(await pricing.CreatePriceListAsync(Admin.Id, Company.Id, new PriceListInput("PL-" + tag, "قائمة", "List " + tag, 10, "USD", new DateOnly(2026, 1, 1), null, true, null)));
         Ok(await pricing.CreateEntryAsync(Admin.Id, Company.Id, list.Id, new PriceEntryInput(Fifo.Id, null, Pcs.Id, 0m, 10m, null)));
         Ok(await tax.AddPolicyAsync(Admin.Id, Company.Id, new TaxPolicyInput(2, TaxRoundingMode.HalfAwayFromZero, TaxRoundingLevel.PerLine)));
-        var party = Guid.NewGuid();   // created pending, then linked to the shared global identity (link state 2 exactly when a global id is set)
+        var party = Guid.NewGuid();   // created pending, then given the same global party id VALUE in both companies by SQL (link state 2 exactly when a global id is set); no registry identity is created here
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.GlobalPartyId}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CUST', 'Customer {tag}', NULL, true, 1, 1, '{Admin.Id}', now(), now())");
         await Sql($"UPDATE {LP.Table} SET {LP.GlobalPartyId} = '{globalParty}', {LP.LinkState} = 2, {LP.Revision} = {LP.Revision} + 1 WHERE {LP.Id} = '{party}'");
         Ok(await roles.CreateRoleAsync(Admin.Id, Company.Id, new PartyRoleInput(party, PartyRoleKind.Customer, PartyPaymentMode.Cash, null, null, null, null)));
@@ -90,7 +90,7 @@ public class CrossModuleIsolationScenarioTests : StockReversalTestBase
     }
 
     [PostgresFact]
-    public async Task A_user_of_company_A_reaches_nothing_of_company_B_through_any_read_family_even_with_a_shared_party_identity()
+    public async Task A_user_of_company_A_reaches_nothing_of_company_B_through_any_read_family_even_with_the_same_global_party_id_value()
     {
         dir = Path.Combine(Path.GetTempPath(), "hasm-xmod-att-" + Guid.NewGuid().ToString("N"));
         await StartApi(configure: b =>
@@ -150,6 +150,8 @@ public class CrossModuleIsolationScenarioTests : StockReversalTestBase
             var r = await Send(HttpMethod.Get, path, cookie: a.Cookie);
             Assert.True(r.Status is HttpStatusCode.OK or HttpStatusCode.NotFound or HttpStatusCode.Forbidden or HttpStatusCode.BadRequest, $"{path} answered {r.Status}");
             NoTrace(r, b, path);
+            if (path.StartsWith($"{C}/stock-balances?", StringComparison.Ordinal) && r.Status == HttpStatusCode.OK)
+                Assert.Equal((0m, 0), (r.Json.GetProperty("totalValue").GetDecimal(), r.Json.GetProperty("balances").GetArrayLength()));   // empty VALUES too, not only no foreign ids
         }
 
         // Totals: A's stock value and A's ledger value are A's alone (100), B's are B's alone (777); costing and ledger agree inside each company.
