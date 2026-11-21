@@ -31,6 +31,9 @@ public enum BarcodeKind : short { Ean13 = 1, Ean8 = 2, UpcA = 3, Internal = 4 }
 
 // ---- units
 public sealed record UnitInput(string? Code, string? NameAr, string? NameEn, int? Decimals);
+/// <summary>One page of a searched or paged master-data list with the number of matching rows (before paging).</summary>
+public sealed record UnitPage(IReadOnlyList<UnitView> Items, long Total);
+public sealed record ItemGroupPage(IReadOnlyList<ItemGroupView> Items, long Total);
 public sealed record UnitView(Guid Id, string Code, string? NameAr, string? NameEn, int Decimals, bool IsActive, long Revision, DateTimeOffset CreatedAtUtc, DateTimeOffset UpdatedAtUtc);
 
 // ---- item groups

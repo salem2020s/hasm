@@ -62,6 +62,36 @@ public class CustomerGroupTests : InventoryTestBase
         new(code, "خصم", null, priority, Jan, null, null, percent, 0m, customer, null, null, group);
 
     [PostgresFact]
+    public async Task The_customer_group_search_pages_by_code_with_a_total_matches_literally_and_keeps_the_pricing_view_permission()
+    {
+        await Prepare();
+        foreach (var (code, name) in new[] { ("CG1", "Gold 100%"), ("CG2", "Silver_plus"), ("CG3", "SilverXplus"), ("CG4", "Bronze") })
+            Ok(await Pricing.CreateCustomerGroupAsync(Admin.Id, Company.Id, new CustomerGroupInput(code, "مجموعة", name, null)));
+        static string[] Codes(CustomerGroupPage p) => [.. p.Items.Select(g => g.Code)];
+        CustomerGroupPage Groups(string? q, int? offset = null, int? limit = null) => Ok(PricingMgmt.SearchCustomerGroupsAsync(Admin.Id, Company.Id, q, offset, limit).Result);
+
+        Assert.Equal(["CG2", "CG3"], Codes(Groups("silver")));
+        Assert.Equal(2L, Groups("SILVER").Total);
+        Assert.Equal(["CG4"], Codes(Groups("cg4")));
+        Assert.Equal(["CG1"], Codes(Groups("%")));                                  // the wildcards are literal
+        Assert.Equal(["CG2"], Codes(Groups("_")));
+        Assert.Empty(Groups("x'; DROP TABLE t; --").Items);
+        Assert.Equal(["CG1", "CG2"], Codes(Groups(null, 0, 2)));
+        Assert.Equal(4L, Groups(null, 0, 2).Total);
+        Assert.Equal(["CG4"], Codes(Groups(null, 3, 2)));
+        Assert.Empty(Groups(null, 99, 5).Items);
+        Assert.Equal(4L, Groups(null, 99, 5).Total);                                // an offset beyond the last row still reports the total
+        Assert.Single(Groups(null, 0, 0).Items);                                    // a limit below 1 is clamped to 1
+        Assert.Equal(4, Groups(null, 0, 100000).Items.Count);
+        Assert.Equal(Ok(await PricingMgmt.ListCustomerGroupsAsync(Admin.Id, Company.Id)).Select(g => g.Code), Enumerable.Range(0, 4).Select(i => Codes(Groups(null, i, 1)).Single()));   // pages of one reproduce the unpaged order
+
+        var outsider = await NewUser("cgsearchoutsider");
+        Fails(await PricingMgmt.SearchCustomerGroupsAsync(outsider.Id, Company.Id, "silver", null, null), ConfigStatus.Forbidden, "forbidden");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PricingView], ScopeKind.Company, null);
+        Assert.Equal(["CG2", "CG3"], Codes(Ok(await PricingMgmt.SearchCustomerGroupsAsync(viewer.Id, Company.Id, "silver", null, null))));
+    }
+
+    [PostgresFact]
     public async Task The_customer_group_master_is_validated_revision_fenced_audited_never_removed_and_guarded_in_postgresql()
     {
         await Prepare();

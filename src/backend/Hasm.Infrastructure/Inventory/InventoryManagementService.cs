@@ -40,6 +40,11 @@ public sealed class InventoryManagementService(AccessService access, CompanyInve
         await Can(user, company, PermissionCatalog.Codes.UnitsView, ct) || await Can(user, company, PermissionCatalog.Codes.ItemsView, ct)   // the item editor needs the unit list
             ? ConfigResult<IReadOnlyList<UnitView>>.Ok(await inventory.ListUnitsAsync(company, ct)) : Denied<IReadOnlyList<UnitView>>();
 
+    /// <summary>The same permission and company scoping as <see cref="ListUnitsAsync"/>; only an optional search and paging are added.</summary>
+    public async Task<ConfigResult<UnitPage>> SearchUnitsAsync(Guid user, Guid company, string? search, int? offset, int? limit, CancellationToken ct = default) =>
+        await Can(user, company, PermissionCatalog.Codes.UnitsView, ct) || await Can(user, company, PermissionCatalog.Codes.ItemsView, ct)
+            ? ConfigResult<UnitPage>.Ok(await inventory.SearchUnitsAsync(company, search, offset, limit, ct)) : Denied<UnitPage>();
+
     public async Task<ConfigResult<UnitView>> CreateUnitAsync(Guid user, Guid company, UnitInput? input, CancellationToken ct = default) =>
         await Can(user, company, PermissionCatalog.Codes.UnitsCreate, ct) ? await inventory.CreateUnitAsync(user, company, input, ct) : Denied<UnitView>();
 
@@ -53,6 +58,11 @@ public sealed class InventoryManagementService(AccessService access, CompanyInve
     public async Task<ConfigResult<IReadOnlyList<ItemGroupView>>> ListGroupsAsync(Guid user, Guid company, CancellationToken ct = default) =>
         await Can(user, company, PermissionCatalog.Codes.ItemGroupsView, ct) || await Can(user, company, PermissionCatalog.Codes.ItemsView, ct)
             ? ConfigResult<IReadOnlyList<ItemGroupView>>.Ok(await inventory.ListGroupsAsync(company, ct)) : Denied<IReadOnlyList<ItemGroupView>>();
+
+    /// <summary>The same permission and company scoping as <see cref="ListGroupsAsync"/>; only an optional search and paging are added.</summary>
+    public async Task<ConfigResult<ItemGroupPage>> SearchGroupsAsync(Guid user, Guid company, string? search, int? offset, int? limit, CancellationToken ct = default) =>
+        await Can(user, company, PermissionCatalog.Codes.ItemGroupsView, ct) || await Can(user, company, PermissionCatalog.Codes.ItemsView, ct)
+            ? ConfigResult<ItemGroupPage>.Ok(await inventory.SearchGroupsAsync(company, search, offset, limit, ct)) : Denied<ItemGroupPage>();
 
     public async Task<ConfigResult<ItemGroupView>> CreateGroupAsync(Guid user, Guid company, ItemGroupInput? input, CancellationToken ct = default) =>
         await Can(user, company, PermissionCatalog.Codes.ItemGroupsCreate, ct) ? await inventory.CreateGroupAsync(user, company, input, ct) : Denied<ItemGroupView>();

@@ -273,6 +273,50 @@ public sealed class CompanyInventoryService(CompanyDatabaseResolver resolver, Co
 
     private sealed record RawGroup(Guid Id, string Code, string? NameAr, string? NameEn, Guid? ParentId, int? Valuation, bool IsActive, long Revision, DateTimeOffset Created, DateTimeOffset Updated);
 
+    /// <summary>
+    /// One page of units for an optional search (code or either name, literal and case-insensitive through PostgreSQL's <c>upper()</c>), ordered by code, with the total of matching rows from the same statement.
+    /// All values are parameters; the limit is clamped (default 50, at most 500).
+    /// </summary>
+    public async Task<UnitPage> SearchUnitsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    {
+        ListPaging.TryCleanSearch(search, out var cleaned);
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var cmd = new NpgsqlCommand { Connection = conn };
+        var w = "";
+        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", U.Code, U.NameAr, U.NameEn); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var off = ListPaging.ClampOffset(offset);
+        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
+        cmd.Parameters.AddWithValue("off", off);
+        cmd.CommandText = $"SELECT {UnitCols}, count(*) OVER () FROM {U.Table}{w} ORDER BY {U.Code} LIMIT @lim OFFSET @off";
+        var list = new List<UnitView>(); long total = 0;
+        await using (var r = await cmd.ExecuteReaderAsync(ct)) while (await r.ReadAsync(ct)) { list.Add(ReadUnit(r)); total = r.GetInt64(9); }
+        if (list.Count == 0 && off > 0) total = await PagedSql.TotalAsync(conn, $"FROM {U.Table}{w}", cmd.Parameters, ct);
+        return new UnitPage(list, total);
+    }
+
+    /// <summary>
+    /// One page of item groups for an optional search (code or either name), ordered by code, with the total from the same statement. The effective valuation of each group still resolves through
+    /// its ancestors, so the (small) full group list is read for that, but only the requested page is returned.
+    /// </summary>
+    public async Task<ItemGroupPage> SearchGroupsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    {
+        ListPaging.TryCleanSearch(search, out var cleaned);
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var cmd = new NpgsqlCommand { Connection = conn };
+        var w = "";
+        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", G.Code, G.NameAr, G.NameEn); cmd.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var off = ListPaging.ClampOffset(offset);
+        cmd.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
+        cmd.Parameters.AddWithValue("off", off);
+        cmd.CommandText = $"SELECT {GroupCols}, count(*) OVER () FROM {G.Table}{w} ORDER BY {G.Code} LIMIT @lim OFFSET @off";
+        var page = new List<RawGroup>(); long total = 0;
+        await using (var r = await cmd.ExecuteReaderAsync(ct)) while (await r.ReadAsync(ct)) { page.Add(ReadGroup(r)); total = r.GetInt64(10); }
+        if (page.Count == 0 && off > 0) total = await PagedSql.TotalAsync(conn, $"FROM {G.Table}{w}", cmd.Parameters, ct);
+        var byId = (await LoadGroups(conn, null, ct)).ToDictionary(g => g.Id);
+        var def = (await ReadSettings(conn, null, ct)).DefaultValuation;
+        return new ItemGroupPage([.. page.Select(g => ToView(g, byId, def))], total);
+    }
+
     private static RawGroup ReadGroup(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3),
         r.IsDBNull(4) ? null : r.GetGuid(4), r.IsDBNull(5) ? null : r.GetInt16(5), r.GetBoolean(6), r.GetInt64(7), r.GetFieldValue<DateTimeOffset>(8), r.GetFieldValue<DateTimeOffset>(9));
 

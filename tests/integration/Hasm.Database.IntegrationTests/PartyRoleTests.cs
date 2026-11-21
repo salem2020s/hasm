@@ -244,6 +244,33 @@ public class PartyRoleTests : InventoryTestBase
     }
 
     [PostgresFact]
+    public async Task The_role_lookup_by_party_ids_returns_only_those_parties_in_the_same_permission_and_order()
+    {
+        await Prepare();
+        var p1 = await NewParty("L01"); var p2 = await NewParty("L02"); var p3 = await NewParty("L03"); var p4 = await NewParty("L04");
+        foreach (var p in new[] { p1, p2, p3 }) Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, Customer(p)));
+        Ok(await Roles.CreateRoleAsync(Admin.Id, Company.Id, new PartyRoleInput(p2, PartyRoleKind.Supplier, PartyPaymentMode.Credit, 10, null, null, null)));   // L02 is customer AND supplier
+        static string[] Codes(PartyRolePage p) => [.. p.Items.Select(i => i.PartyCode + ":" + (short)i.Role)];
+        PartyRolePage Lookup(IReadOnlyCollection<Guid>? ids, PartyRoleKind? kind = null, int? limit = null) => Ok(RolesMgmt.SearchRolesAsync(Admin.Id, Company.Id, kind, null, null, limit, ids).Result);
+
+        Assert.Equal(["L01:1", "L03:1"], Codes(Lookup([p3, p1])));                  // only those parties, ordered by code, not by the order asked
+        Assert.Equal(2L, Lookup([p3, p1]).Total);
+        Assert.Equal(["L02:1", "L02:2"], Codes(Lookup([p2])));                      // a party's every role unless a kind is given
+        Assert.Equal(["L02:1"], Codes(Lookup([p2], PartyRoleKind.Customer)));
+        Assert.Empty(Lookup([p4]).Items);                                           // a party without a role, an unknown id: nothing, no error
+        Assert.Empty(Lookup([Guid.NewGuid()]).Items);
+        Assert.Empty(Lookup([]).Items);                                             // an empty id list names no rows (never "all")
+        Assert.Equal(["L01:1", "L03:1"], Codes(Lookup([p1, p1, p3, p3])));          // duplicates are harmless
+        Assert.Equal(["L01:1"], Codes(Lookup([p1, p2, p3], limit: 1)));             // an explicit limit still applies
+        Assert.Equal(4L, Lookup([p1, p2, p3], limit: 1).Total);
+        // the same permission as the unpaged list
+        var outsider = await NewUser("lookupoutsider");
+        Fails(await RolesMgmt.SearchRolesAsync(outsider.Id, Company.Id, null, null, null, null, [p1]), ConfigStatus.Forbidden, "forbidden");
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PartyRolesView], ScopeKind.Company, null);
+        Assert.Equal(["L01:1"], Codes(Ok(await RolesMgmt.SearchRolesAsync(viewer.Id, Company.Id, null, null, null, null, [p1]))));
+    }
+
+    [PostgresFact]
     public async Task Without_the_permissions_nothing_is_read_or_written_and_nothing_is_audited()
     {
         await Prepare();
