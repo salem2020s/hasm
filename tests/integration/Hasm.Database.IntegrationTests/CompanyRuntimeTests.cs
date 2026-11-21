@@ -15,7 +15,7 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 {
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0030_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0032_extra.sql", sql);
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
 
     [PostgresFact]
@@ -225,7 +225,7 @@ public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 public class CompanyMigrationTests : CompanyRuntimeTestBase
 {
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0030_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0032_extra.sql", sql);
 
     private async Task<long> JournalRows(CompanyRecord c) =>
         await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}");

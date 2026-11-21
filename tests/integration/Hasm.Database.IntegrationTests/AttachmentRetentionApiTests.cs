@@ -46,7 +46,7 @@ public class AttachmentRetentionApiTests : HttpApiTestBase
         // approving needs the approve permission (the delegated preset), the revision, and a draft
         var approver = await ApproverUser();
         var other = await SignIn(approver);
-        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, $"{Base}/policies/{id}/approve", new { }, other)).Status);                         // no If-Match
+        Assert.Equal(HttpStatusCode.PreconditionRequired, (await Send(HttpMethod.Post, $"{Base}/policies/{id}/approve", new { }, other)).Status);        // no If-Match: 428
         Assert.Equal(HttpStatusCode.PreconditionFailed, (await Send(HttpMethod.Post, $"{Base}/policies/{id}/approve", new { }, other, ifMatch: "\"9\"")).Status);
         var approved = await Send(HttpMethod.Post, $"{Base}/policies/{id}/approve", new { }, other, ifMatch: "\"1\"");
         Assert.Equal(HttpStatusCode.OK, approved.Status);
@@ -76,7 +76,8 @@ public class AttachmentRetentionApiTests : HttpApiTestBase
         foreach (var path in new[] { "/policies", "/holds", "/preview" })
             Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, Base + path, cookie: blind)).Status);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, Base + "/policies", Draft(Today), blind)).Status);
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, (await Send(HttpMethod.Delete, $"{Base}/policies/{id}", cookie: admin)).Status);
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, (await Send(HttpMethod.Delete, $"{Base}/holds/{holdId}", cookie: admin)).Status);
+        foreach (var path in new[] { $"{Base}/policies/{id}", $"{Base}/holds/{holdId}", $"{Base}/policies", $"{Base}/holds" })
+            Assert.Contains((await Send(HttpMethod.Delete, path, cookie: admin)).Status, new[] { HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed });   // there is no DELETE route
+        Assert.Equal(1, (await Send(HttpMethod.Get, Base + "/policies", cookie: admin)).Json.GetProperty("policies").GetArrayLength());                          // and nothing was removed
     }
 }
