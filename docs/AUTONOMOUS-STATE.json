@@ -282,6 +282,30 @@
       "phase": "constraint matrix part 2, 3 pending routes probed (tests only, registry +0)",
       "mergeCommit": "69c2916461fb9c1c174c8db1af91eb81b43fac55",
       "headMerged": "b01e497cf7e5240473006774f8bdb311549eb3af"
+    },
+    {
+      "pr": 169,
+      "phase": "DECISIONS.md D-130..D-139 dedupe and #168 handoff (docs only)",
+      "mergeCommit": "86e3ce88f0bd1b2457aa3b600dc490151642a358",
+      "headMerged": "5c24b1e5277be3bd48a459000d2bbd3c822092d7"
+    },
+    {
+      "pr": 170,
+      "phase": "review Lows bundle (#164 L1, #151, #153 F-L1..F-L3)",
+      "mergeCommit": "db85ae8e27f61ec0174de638b8f8838c7e355b4b",
+      "headMerged": "c6ef81c6678027b11a001366561338c8403e4d96"
+    },
+    {
+      "pr": 173,
+      "phase": "deterministic import-settings race tests (#165 L1, #168 H L1)",
+      "mergeCommit": "41489c2f0a75a108aa05933e2b6e99ae741218d2",
+      "headMerged": "9b761543c6d96887694dd9a5ea9aef2392404905"
+    },
+    {
+      "pr": 171,
+      "phase": "3.8D resume review of #48 (docs, inert analysis)",
+      "mergeCommit": "785181b56b141c6caebc5b0dba7e19d09c40c5a7",
+      "headMerged": "2b75e11d51aa247d3d6cf0fe80415de0d5e4301a"
     }
   ],
   "active": {
@@ -296,7 +320,6 @@
   },
   "next": [
     "Next: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165).",
-    "DECISIONS.md D-130..D-139 duplicate rows: deduplicated on the Draft docs/decisions-dedupe-and-168 (not merged).",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
