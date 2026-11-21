@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const MIGRATION_FILE = "0032_mfa_login_challenges.sql";   // PROVISIONAL number: renamed at merge time (see above)
+const MIGRATION_FILE = "0033_mfa_login_challenges.sql";   // PROVISIONAL number: renamed at merge time (see above)
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
 const outSql = path.join(infra, "SystemDatabase", "Migrations", MIGRATION_FILE);
