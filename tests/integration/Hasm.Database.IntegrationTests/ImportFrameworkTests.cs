@@ -487,10 +487,16 @@ public class ImportServiceTests : ImportTestBase
         await AssertAuditIntact();
     }
 
+    private EncryptionKeyRetirementService RetirementReport() => new(Options, new RetentionOptions { InstallationTimeZone = "UTC" },
+        new Hasm.Infrastructure.Attachments.AttachmentOptions { StorageDirectory = Path.Combine(StorageDir, "attachments") }, ImportOpts, TestEncryption);
+    private static KeyRetirementEntry KeyOf(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
+
     [PostgresFact]
-    public async Task The_key_retirement_report_keeps_every_key_a_live_import_original_needs_and_is_incomplete_without_a_backup_root()
+    public async Task The_key_retirement_report_keeps_every_key_a_live_import_original_needs_and_is_incomplete_without_a_real_backup_root()
     {
-        // D-181: a key that only an import original still needs is NOT retirable; after a complete rewrap it is (backups do not contain import originals, D-179)
+        // D-181: a key that only an import original still needs is NOT retirable; after a complete rewrap no import original needs it (backups do not contain import originals, D-179).
+        // Review H1 of PR 182: an EMPTY folder is not a backup root (it proves nothing about the retained runs), so the report stays incomplete and nothing is retirable; the complete
+        // report over a real, verified run is BackupRetentionTests.The_key_retirement_report_is_complete_only_over_a_real_complete_verified_run_and_with_the_scope_attested.
         await PrepareImports();
         var a = await Upload();
         Ring.Add("k2", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k2");
@@ -498,22 +504,81 @@ public class ImportServiceTests : ImportTestBase
         Directory.CreateDirectory(backups);
         try
         {
-            var service = new EncryptionKeyRetirementService(Options, new RetentionOptions { InstallationTimeZone = "UTC" },
-                new Hasm.Infrastructure.Attachments.AttachmentOptions { StorageDirectory = Path.Combine(StorageDir, "attachments") }, ImportOpts, TestEncryption);
-            var before = await service.ReportAsync(["k1", "k2"], "k2", [backups], null);
-            Assert.True(before.Complete, string.Join("; ", before.Blockers));
-            Assert.Equal((false, "needed_by_import_originals"), (before.Keys.Single(k => k.KeyId == "k1").Retirable, before.Keys.Single(k => k.KeyId == "k1").Reasons.Single()));
-            Assert.Equal(["active_key"], before.Keys.Single(k => k.KeyId == "k2").Reasons);
+            var service = RetirementReport();
+            var before = await service.ReportAsync(["k1", "k2"], "k2", [backups], null, backupScopeAttested: true);
+            Assert.Equal(["backup_inventory_incomplete:backup_root_no_complete_verified_run"], before.Blockers);              // the empty folder is the ONLY blocker
+            Assert.False(before.Complete);
+            Assert.All(before.Keys, k => Assert.False(k.Retirable));
+            Assert.Equal(["needed_by_import_originals", "report_incomplete"], KeyOf(before, "k1").Reasons);
+            Assert.Equal(["active_key", "report_incomplete"], KeyOf(before, "k2").Reasons);
             Assert.True((await Imports.RewrapAsync(Admin.Id, Company.Id)).OldKeysMayBeRetired);
-            var after = await service.ReportAsync(["k1", "k2"], "k2", [backups], null);
-            Assert.True(after.Complete, string.Join("; ", after.Blockers));
-            Assert.True(after.Keys.Single(k => k.KeyId == "k1").Retirable);
-            // without a backup root nothing is known about the retained runs: incomplete, nothing retirable
-            var noRoot = await service.ReportAsync(["k1", "k2"], "k2", [], null);
-            Assert.False(noRoot.Complete);
+            var after = await service.ReportAsync(["k1", "k2"], "k2", [backups], null, backupScopeAttested: true);
+            Assert.Equal(["report_incomplete"], KeyOf(after, "k1").Reasons);                                                    // no import original needs k1 any more
+            Assert.All(after.Keys, k => Assert.False(k.Retirable));                                                             // still nothing retirable: no real backup root
+            // a root that does not exist (a typo, an unmounted share) is a blocker of its own, and so is giving no root at all
+            var typo = await service.ReportAsync(["k1", "k2"], "k2", [backups + "-typo"], null, backupScopeAttested: true);
+            Assert.Equal(["backup_inventory_incomplete:backup_root_missing"], typo.Blockers);
+            Assert.All(typo.Keys, k => Assert.False(k.Retirable));
+            var noRoot = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+            Assert.Equal(["no_backup_root"], noRoot.Blockers);
             Assert.All(noRoot.Keys, k => Assert.False(k.Retirable));
+            Assert.Empty(Directory.GetFileSystemEntries(backups));                                                              // read-only: nothing was written into the root
+            Assert.False(Directory.Exists(Path.Combine(StorageDir, "attachments")));                                            // and no storage folder was created (review L2)
         }
         finally { Directory.Delete(backups, true); }
+    }
+
+    [PostgresFact]
+    public async Task A_corrupt_import_original_or_a_missing_storage_folder_makes_the_key_retirement_report_incomplete()
+    {
+        // review M1 of PR 182: the wiring of the envelope read (ImportService.KeyUsageAsync through the report service), not only the builder's rule
+        await PrepareImports();
+        var good = await Upload(); var bad = await Upload("x,y\n1,2\n", "bad.csv");
+        Ring.Add("k2", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k2");
+        var service = RetirementReport();
+        var blocker = $"import_original_key_unknown:{Company.Id:N}:1";
+        Assert.DoesNotContain(blocker, (await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true)).Blockers);
+        File.WriteAllBytes(Path.Combine(CompanyDir, bad.Id.ToString("N") + ".enc"), [1, 2, 3]);                               // not an envelope: its key cannot be determined
+        var r = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+        Assert.False(r.Complete);
+        Assert.Contains(blocker, r.Blockers);
+        Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        Assert.Contains("needed_by_import_originals", KeyOf(r, "k1").Reasons);                                                // the rows still name k1
+        Assert.Equal(1, (await Imports.RewrapAsync(Admin.Id, Company.Id)).Usage.Unknown);                                      // the rewrap signal sees the same file
+        Assert.Equal("k2", (await Reload(good.Id)).KeyId);
+
+        // the whole company folder gone (an unmounted or misconfigured storage) is NOT "no files": every original is unknown, and the read-only scan does not create the folder
+        var moved = CompanyDir + ".moved";
+        Directory.Move(CompanyDir, moved);
+        try
+        {
+            var gone = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+            Assert.Contains($"import_original_key_unknown:{Company.Id:N}:2", gone.Blockers);
+            Assert.False(Directory.Exists(CompanyDir));
+        }
+        finally { Directory.Move(moved, CompanyDir); }
+    }
+
+    [PostgresFact]
+    public async Task An_import_original_whose_envelope_names_another_key_than_its_row_keeps_both_keys_non_retirable()
+    {
+        // review M1 of PR 182: a rewrap that crashed between the file replacement and the row update leaves the file under the new key and the row naming the old one; BOTH stay needed
+        await PrepareImports();
+        var a = await Upload();
+        Ring.Add("k2", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k2");
+        Ring.Add("k3", RandomNumberGenerator.GetBytes(32)); Ring.Activate("k3");
+        var service = RetirementReport();
+        var before = await service.ReportAsync(["k1", "k2", "k3"], "k3", [], null, backupScopeAttested: true);
+        Assert.Contains("needed_by_import_originals", KeyOf(before, "k1").Reasons);
+        Assert.DoesNotContain("needed_by_import_originals", KeyOf(before, "k2").Reasons);
+        var underK2 = new EnvelopeEncryptor(new InMemoryKekRing("k2")).Encrypt(Bytes(Csv2), "any");                            // only the header is read: the key id is k2
+        File.WriteAllBytes(Path.Combine(CompanyDir, a.Id.ToString("N") + ".enc"), underK2);
+        Assert.Equal("k1", (await Reload(a.Id)).KeyId);                                                                        // the row still names k1
+        var r = await service.ReportAsync(["k1", "k2", "k3"], "k3", [], null, backupScopeAttested: true);
+        Assert.Contains("needed_by_import_originals", KeyOf(r, "k1").Reasons);                                                 // the row's key
+        Assert.Contains("needed_by_import_originals", KeyOf(r, "k2").Reasons);                                                 // the file's key
+        Assert.DoesNotContain(r.Blockers, b => b.StartsWith("import_original_key_unknown", StringComparison.Ordinal));
+        Assert.All(r.Keys, k => Assert.False(k.Retirable));
     }
 
     [PostgresFact]

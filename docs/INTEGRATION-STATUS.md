@@ -40,7 +40,7 @@ Migrations on `main`: see the cloud-team handoff section below (current values a
 | D-108..D-115 | E and R | allocated; R's plan text is in `docs/PHASE-R-attachment-retention.md`; D-109 and D-113 are owner-pending |
 | D-122..D-129 | D | allocated, not yet on `main` (D-121 is on `main`) |
 | D-167..D-169 | D (4.1 S3b-1b) | on the WIP branch `feature/phase-4-1-s3b-1b` (`71b15e2`), no PR yet |
-| D-179..D-181 | B (import-file key coverage and key-retirement report) | on the `feature/phase-4-3-import-key-coverage` branch (Draft PR, G reviews), not on `main` |
+| D-179..D-181 | B (import-file key coverage and key-retirement report) | on the `feature/phase-4-3-import-key-coverage` branch (Draft PR 182; R requested changes, the findings H1, M1, L1 and L2 are addressed on the branch and await R's confirmation), not on `main` |
 | D-182..D-189 | F2 (4.3 slice 8 plan, multiple backup destinations, #176; audit block 2040-2049) | on #176, not merged |
 
 **Next free decision ID: D-190** (D-164..D-166 on `main`, D-167..D-169 D's S3b-1b, D-170..D-178 Phase 4.4, D-179..D-181 B's, D-182..D-189 #176). Audit-event codes 1336 and 1337 (4.1 S3a step-up) are on `main` via #166; 1338 is allocated to S3b-1b (WIP). Audit-event blocks (lead allocation): **2000-2009** R (attachment retention), **2010-2013** 4.3 slice 5, **2014-2019** 4.3 slice 6, **2020-2029** 4.3 slice 7, **2030-2039** Phase 4.4 (signed manual updates, #152), **2040-2049** 4.3 slice 8 (multiple backup destinations, #176; not on `main`), **2100-2199** Phase 3.14 (cash and bank, #148; no 21xx code exists on `main`); the highest code in use on `main` outside these is 1908.

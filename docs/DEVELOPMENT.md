@@ -692,17 +692,20 @@ dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
 
 ### Encryption-key retirement report (D-179..D-181)
 ```
-dotnet run --project src/backend/Hasm.Admin -- encryption-key-retirement-report <backup-root> [<backup-root> ...] [--json <file>]
+dotnet run --project src/backend/Hasm.Admin -- encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>]
 ```
 * Run it before retiring an encryption master key (the attachment and import-file key ring). Give EVERY backup root (and, with multiple destinations, every destination).
-* A key is listed `RETIRABLE` only when:
+* **What it does not see.** It reads only the roots you give. It cannot see another disk, an off-site or offline copy, a second destination, or a standalone `backup-company` set (which can hold attachments under an older key). It also cannot see an upload in flight or an orphan file.
+* **`--all-backup-copies-listed`** is your attestation that the roots you gave are every place a backup of this installation is kept, and that no standalone set or copy under an older key is kept elsewhere. Without it the report is INCOMPLETE and no key is retirable, because the tool cannot know. Give it only when it is true.
+* Each backup root must exist, be a real directory (not a symbolic link) and hold at least one complete run whose signed status verifies. A mistyped path, a share that is not mounted or an empty folder is a blocker, never "nothing needs the key".
+* A key is listed `RETIRABLE WITHIN THE SCANNED SCOPE` only when:
   * it is not the active key;
   * no live sensitive attachment needs it (active, removed or purged);
   * no live import original needs it;
   * no retained run of any given root lists it.
-* Anything unknown makes the report INCOMPLETE (exit 8) and lists the blockers: a company that is not Ready, cannot be read, or has no configured attachment or import storage; an unreadable file or key; a missing backup root; an incomplete key inventory. Then no key may be retired.
+* Anything unknown makes the report INCOMPLETE (exit 8) and lists the blockers: a company that is not Ready, cannot be read, or has no configured attachment or import storage; an unreadable file or key, or a missing company storage folder; a backup root that is missing, not a directory, a symbolic link or without a complete, verified run; an incomplete key inventory; no attestation. Then no key may be retired.
 * `missing_from_key_directory` means data or a retained run needs a key that is not in the key directory: restore it from the key backup (`backup-keys`) before anything else.
-* The command is read-only and writes no audit event. Retiring the key is a separate step that needs independent approval (D-080(6)). Keep every retired key with the older recovery kits.
+* The command is read-only: it writes no audit event and creates no folder (only the optional `--json` file). Retiring the key is a separate step that needs independent approval (D-080(6)). Keep every retired key with the older recovery kits.
 * After a key rotation, run the attachments' and the imports' rewrap (`POST .../attachments/maintenance/rewrap`, `POST .../imports/maintenance/rewrap`). Each reports `oldKeysMayBeRetired`; the report combines them with the retained backups.
 * Import originals are not part of backup sets (D-179; owner question IMPORT-ORIGINALS-BACKUP-SCOPE). A restore brings back the batch rows without their originals; such a batch needs a new upload.
 

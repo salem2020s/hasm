@@ -48,24 +48,43 @@ public sealed class EncryptionKeyUsageBuilder(string? activeKeyId)
 /// <summary>The live key usage of one registered company (<see cref="Readable"/> false: not Ready, not reachable or its storage not configured; then nothing is known and no key may be retired).</summary>
 public sealed record CompanyKeyUsage(Guid CompanyId, bool Readable, string? Problem, EncryptionKeyUsage Attachments, EncryptionKeyUsage ImportOriginals);
 
-/// <summary>The encryption keys the RETAINED backup runs of one backup root need (D-138 key inventory); <see cref="InventoryComplete"/> false makes every non-active key non-retirable.</summary>
+/// <summary>
+/// The encryption keys the RETAINED backup runs of one backup root need (D-138 key inventory); <see cref="InventoryComplete"/> false makes every non-active key non-retirable. It is false, with a
+/// <see cref="Problem"/> code, when the root is missing, not a directory or a symbolic link, when it holds no complete, verified run (an empty or wrong folder proves nothing), or when a retained
+/// run's key needs are unknown.
+/// </summary>
 public sealed record BackupRootKeyNeeds(string Root, bool InventoryComplete, string? Problem, IReadOnlyList<string> EncryptionKeysNeeded);
 
 /// <summary>One key of the report. <see cref="Present"/> false: a key that data or a retained backup needs is NOT in the key directory (reported, never retirable).</summary>
 public sealed record KeyRetirementEntry(string KeyId, bool Present, bool Retirable, IReadOnlyList<string> Reasons);
 
-/// <summary>The encryption-key retirement report (D-181). <see cref="Complete"/> false: at least one blocker; then NO key is retirable.</summary>
-public sealed record KeyRetirementReport(IReadOnlyList<KeyRetirementEntry> Keys, IReadOnlyList<string> Blockers, bool Complete);
+/// <summary>
+/// The encryption-key retirement report (D-181). <see cref="Complete"/> false: at least one blocker; then NO key is retirable. <see cref="ScopeLimits"/> always lists what the report cannot see
+/// (<see cref="EncryptionKeyRetirement.ScopeLimits"/>): "retirable" is a statement about the scanned scope only, made under the operator's attestation that no other backup copy exists.
+/// </summary>
+public sealed record KeyRetirementReport(IReadOnlyList<KeyRetirementEntry> Keys, IReadOnlyList<string> Blockers, bool Complete, IReadOnlyList<string> ScopeLimits);
 
 /// <summary>
 /// The retirement rule for encryption master keys (D-181; D-138 extended to live attachments and import originals; register item K). A key is retirable ONLY when:
 /// it is not the active key; no live attachment (active, removed or purged row, D-114) and no live import original (not yet purged) needs it; no RETAINED backup run lists it;
-/// and nothing is unknown anywhere: every registered company was read, every file's key determined, at least one backup root was evaluated and every root's key inventory is complete.
+/// and nothing is unknown anywhere: every registered company was read, every file's key determined, at least one backup root was evaluated, every root exists, is a real directory, holds at least
+/// one complete, verified run and has a complete key inventory, AND the operator attested that the given roots are every place a backup of this installation is kept
+/// (<paramref name="backupScopeAttested"/>; the report cannot discover other destinations, copies or standalone sets, so without the attestation it cannot know and nothing is retirable).
 /// A report only: retiring a key needs independent approval (D-080(6)) and is not built here.
 /// </summary>
 public static class EncryptionKeyRetirement
 {
-    public static KeyRetirementReport Evaluate(IReadOnlyCollection<string> presentKeyIds, string? activeKeyId, IReadOnlyList<CompanyKeyUsage> companies, IReadOnlyList<BackupRootKeyNeeds> backups)
+    /// <summary>What the report never sees (codes; printed with every report and written into its JSON). The first two are covered only by the operator's attestation; the third by the re-check the
+    /// future retirement operation must make under a lock that excludes uploads and rewraps.</summary>
+    public static IReadOnlyList<string> ScopeLimits { get; } =
+    [
+        "backup_roots_not_given_are_not_scanned",
+        "standalone_backup_company_sets_and_copies_are_not_scanned",
+        "uploads_in_flight_and_orphan_files_are_not_scanned",
+    ];
+
+    public static KeyRetirementReport Evaluate(IReadOnlyCollection<string> presentKeyIds, string? activeKeyId, IReadOnlyList<CompanyKeyUsage> companies, IReadOnlyList<BackupRootKeyNeeds> backups,
+        bool backupScopeAttested)
     {
         var blockers = new List<string>();
         if (activeKeyId is null) blockers.Add("active_key_not_configured");
@@ -74,6 +93,7 @@ public static class EncryptionKeyRetirement
         foreach (var c in companies.Where(c => c.Readable && c.ImportOriginals.Unknown > 0)) blockers.Add($"import_original_key_unknown:{c.CompanyId:N}:{c.ImportOriginals.Unknown}");
         if (backups.Count == 0) blockers.Add("no_backup_root");
         foreach (var b in backups.Where(b => !b.InventoryComplete)) blockers.Add($"backup_inventory_incomplete:{b.Problem ?? "unknown"}");
+        if (!backupScopeAttested) blockers.Add("backup_scope_not_attested");
 
         var attachments = companies.Where(c => c.Readable).SelectMany(c => c.Attachments.KeyIdsInUse).ToHashSet(StringComparer.Ordinal);
         var imports = companies.Where(c => c.Readable).SelectMany(c => c.ImportOriginals.KeyIdsInUse).ToHashSet(StringComparer.Ordinal);
@@ -95,6 +115,6 @@ public static class EncryptionKeyRetirement
             if (blockers.Count > 0) reasons.Add("report_incomplete");
             entries.Add(new KeyRetirementEntry(id, present.Contains(id), reasons.Count == 0, reasons));
         }
-        return new KeyRetirementReport(entries, blockers, blockers.Count == 0);
+        return new KeyRetirementReport(entries, blockers, blockers.Count == 0, ScopeLimits);
     }
 }

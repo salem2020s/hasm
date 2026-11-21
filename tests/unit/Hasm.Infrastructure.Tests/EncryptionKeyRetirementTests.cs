@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Backup;
 using Hasm.Infrastructure.Security;
 
 namespace Hasm.Infrastructure.Tests;
@@ -18,7 +19,7 @@ public sealed class EncryptionKeyRetirementTests
     public void A_key_is_retirable_only_when_it_is_not_active_and_nothing_live_or_retained_needs_it()
     {
         var r = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3", "k4", "k5"], "k5",
-            [Company(attachments: U("k2"), imports: U("k3"))], [Root("k4")]);
+            [Company(attachments: U("k2"), imports: U("k3"))], [Root("k4")], backupScopeAttested: true);
         Assert.True(r.Complete);
         Assert.Empty(r.Blockers);
         Assert.True(Key(r, "k1").Retirable);
@@ -32,7 +33,7 @@ public sealed class EncryptionKeyRetirementTests
     [Fact]
     public void A_needed_key_missing_from_the_key_directory_is_reported_and_never_retirable()
     {
-        var r = EncryptionKeyRetirement.Evaluate(["k2"], "k2", [Company(imports: U("k0"))], [Root()]);
+        var r = EncryptionKeyRetirement.Evaluate(["k2"], "k2", [Company(imports: U("k0"))], [Root()], backupScopeAttested: true);
         var missing = Key(r, "k0");
         Assert.False(missing.Present);
         Assert.False(missing.Retirable);
@@ -46,6 +47,9 @@ public sealed class EncryptionKeyRetirementTests
         { "import_original_key_unknown", [Company(imports: new EncryptionKeyUsage([], 1, 0))], [Root()], "k9" },
         { "no_backup_root", [Company()], [], "k9" },
         { "backup_inventory_incomplete", [Company()], [new BackupRootKeyNeeds("/backups", false, "inventory_incomplete", [])], "k9" },
+        // review H1 of PR 182: a root that proves nothing blocks, also next to a good root
+        { "backup_inventory_incomplete:backup_root_missing", [Company()], [Root(), new BackupRootKeyNeeds("/typo", false, "backup_root_missing", [])], "k9" },
+        { "backup_inventory_incomplete:backup_root_no_complete_verified_run", [Company()], [new BackupRootKeyNeeds("/empty", false, "backup_root_no_complete_verified_run", [])], "k9" },
         { "active_key_not_configured", [Company()], [Root()], null },
     };
 
@@ -53,11 +57,67 @@ public sealed class EncryptionKeyRetirementTests
     [MemberData(nameof(Incomplete))]
     public void Anything_unknown_makes_the_report_incomplete_and_no_key_retirable(string blocker, CompanyKeyUsage[] companies, BackupRootKeyNeeds[] backups, string? active)
     {
-        var r = EncryptionKeyRetirement.Evaluate(["k1", "k9"], active, companies, backups);
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k9"], active, companies, backups, backupScopeAttested: true);
         Assert.False(r.Complete);
         Assert.Contains(r.Blockers, b => b.StartsWith(blocker, StringComparison.Ordinal));
         Assert.All(r.Keys, k => Assert.False(k.Retirable));
         Assert.Contains("report_incomplete", Key(r, "k1").Reasons);
+    }
+
+    [Fact]
+    public void Without_the_operators_attestation_of_the_backup_scope_nothing_is_retirable_and_the_scope_limits_are_always_stated()
+    {
+        // review H1 of PR 182: the report sees only the given roots; other destinations, copies and standalone backup-company sets are invisible, so it cannot know without the attestation
+        var unattested = EncryptionKeyRetirement.Evaluate(["k1", "k9"], "k9", [Company()], [Root()], backupScopeAttested: false);
+        Assert.False(unattested.Complete);
+        Assert.Equal(["backup_scope_not_attested"], unattested.Blockers);
+        Assert.All(unattested.Keys, k => Assert.False(k.Retirable));
+        var attested = EncryptionKeyRetirement.Evaluate(["k1", "k9"], "k9", [Company()], [Root()], backupScopeAttested: true);
+        Assert.True(attested.Complete);
+        Assert.True(Key(attested, "k1").Retirable);
+        Assert.All(new[] { unattested, attested }, r => Assert.Equal(
+            ["backup_roots_not_given_are_not_scanned", "standalone_backup_company_sets_and_copies_are_not_scanned", "uploads_in_flight_and_orphan_files_are_not_scanned"], r.ScopeLimits));
+    }
+
+    [Fact]
+    public void A_backup_root_must_be_an_existing_real_directory()
+    {
+        var work = Path.Combine(Path.GetTempPath(), "hasm-krr-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try
+        {
+            var real = Path.Combine(work, "runs"); Directory.CreateDirectory(real);
+            var file = Path.Combine(work, "a-file"); File.WriteAllText(file, "x");
+            Assert.Null(EncryptionKeyRetirementService.RootProblem(real));
+            Assert.Null(EncryptionKeyRetirementService.RootProblem(real + Path.DirectorySeparatorChar));
+            Assert.Equal("backup_root_missing", EncryptionKeyRetirementService.RootProblem(Path.Combine(work, "typo")));
+            Assert.Equal("backup_root_not_a_directory", EncryptionKeyRetirementService.RootProblem(file));
+            Assert.Equal("backup_root_not_absolute", EncryptionKeyRetirementService.RootProblem("runs"));
+            if (OperatingSystem.IsWindows()) return;   // creating a link needs a privilege there; the rule is the same
+            var link = Path.Combine(work, "link"); Directory.CreateSymbolicLink(link, real);
+            var fileLink = Path.Combine(work, "file-link"); File.CreateSymbolicLink(fileLink, file);
+            var dangling = Path.Combine(work, "dangling"); Directory.CreateSymbolicLink(dangling, Path.Combine(work, "gone"));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(link));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(link + Path.DirectorySeparatorChar));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(fileLink));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(dangling));
+        }
+        finally { Directory.Delete(work, true); }
+    }
+
+    [Fact]
+    public void Only_a_finished_verified_encrypted_run_with_known_key_needs_and_a_verdict_of_ok_or_partial_proves_a_backup_root()
+    {
+        var at = new DateTimeOffset(2026, 3, 1, 2, 0, 0, TimeSpan.Zero);
+        var good = new RetentionRun("20260301T020000Z-0a0b0c0d", at, at, Complete: true, Verified: true, Encrypted: true, "ok", "r1", false, [], "hash", true, false, new RunKeyNeeds([], []));
+        Assert.True(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good));
+        Assert.True(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = "partial" }));
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = "failed" }));      // a failed run wrote no usable set
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = null }));
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Complete = false }));        // no status: the run never finished
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verified = false }));        // unsigned, forged or signed by an untrusted key
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Keys = null }));             // a version 1 status: key needs unknown
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Encrypted = false }));       // an unencrypted DEV/TEST run
     }
 
     private static byte[] EnvelopeUnder(string keyId)

@@ -553,8 +553,8 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
     }
 
     /// <summary>
-    /// The encryption keys the not-yet-purged import originals of one company need (D-180): the key id of each row AND of its envelope header on disk. Read-only (the store may create the empty,
-    /// owner-only company folder). A purged original needs no key: its file is gone and import originals are not part of backup sets (D-179).
+    /// The encryption keys the not-yet-purged import originals of one company need (D-180): the key id of each row AND of its envelope header on disk. Strictly read-only: it reads through
+    /// <see cref="EncryptedFileStore.ReadWithoutCreating"/>, which creates no folder (the ordinary read path does create the owner-only company folder). A purged original needs no key: its file is gone and import originals are not part of backup sets (D-179).
     /// </summary>
     public static async Task<EncryptionKeyUsage> KeyUsageAsync(NpgsqlConnection conn, EncryptedFileStore store, Guid companyId, string? activeKeyId, CancellationToken ct)
     {
@@ -568,7 +568,7 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
         foreach (var (storage, keyId) in rows)
         {
             ct.ThrowIfCancellationRequested();
-            usage.Add(keyId?.Trim(), () => store.Read(companyId, storage));
+            usage.Add(keyId?.Trim(), () => store.ReadWithoutCreating(companyId, storage));
         }
         return usage.Build();
     }

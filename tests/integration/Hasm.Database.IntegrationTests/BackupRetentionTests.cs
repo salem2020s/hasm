@@ -181,6 +181,124 @@ public class BackupRetentionTests : PostgresTestBase
         Assert.Contains("retention_below_minimum", below.Err);
     }
 
+    private EncryptionKeyRetirementService RetirementReport(Clock clock) =>
+        new(Options, Retention, Attachments, new Hasm.Infrastructure.Imports.ImportOptions { StorageDirectory = Path.Combine(work, "imports") }, Encryption, clock);
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_fails_closed_on_a_backup_root_that_is_missing_empty_a_link_or_without_a_complete_verified_run()
+    {
+        // review H1 of PR 182: a typo, an unmounted share or the wrong folder used to read as "no retained run needs any key" (complete, keys retirable)
+        await Init();
+        await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");                                                                             // an older key that nothing needs
+        var clock = new Clock();
+        var service = RetirementReport(clock);
+        async Task Blocked(string root, SigningTrust? trust, string problem)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [root], trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:{problem}"], r.Blockers);
+            Assert.False(r.Complete);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+            Assert.Equal(["report_incomplete"], r.Keys.Single(k => k.KeyId == "k0").Reasons);                         // nothing else keeps k0: only the root does
+        }
+        await Blocked(Path.Combine(work, "does-not-exist"), Trust, "backup_root_missing");
+        var empty = Path.Combine(work, "empty"); Directory.CreateDirectory(empty);
+        await Blocked(empty, Trust, "backup_root_no_complete_verified_run");
+        var file = Path.Combine(work, "a-file"); File.WriteAllText(file, "x");
+        await Blocked(file, Trust, "backup_root_not_a_directory");
+
+        // only an incomplete run (a folder without its signed status): nothing proves the root
+        var incomplete = Path.Combine(work, "incomplete"); Directory.CreateDirectory(Path.Combine(incomplete, "20260301T020000Z-0a0b0c0d"));
+        await Blocked(incomplete, Trust, "backup_root_no_complete_verified_run");
+
+        // a REAL run that cannot be verified is not a verified run: no trusted signing key, or a trust list without the run's key
+        var run = await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        await Blocked(Root, null, "backup_root_no_complete_verified_run");
+        var (otherId, otherPem) = BackupSigningKeys.Generate(Path.Combine(work, "other-signing"));
+        await Blocked(Root, new SigningTrust([new TrustedSigningKey(otherId, otherPem, SigningKeyStatus.Active)]), "backup_root_no_complete_verified_run");
+        // a tampered status (a "failed" run cannot be forged into shape either): the signature no longer verifies
+        var tampered = Path.Combine(work, "tampered"); CopyTree(Root, tampered);
+        var status = Path.Combine(tampered, run, SignedDocuments.RunStatusFileName);
+        File.WriteAllText(status, File.ReadAllText(status).Replace("\"ok\"", "\"failed\""));
+        await Blocked(tampered, Trust, "backup_root_no_complete_verified_run");
+
+        // a symbolic link to the real, good root is refused as a root (the link can be re-pointed); so is a link next to a good root
+        if (!OperatingSystem.IsWindows())
+        {
+            var link = Path.Combine(work, "runs-link"); Directory.CreateSymbolicLink(link, Root);
+            await Blocked(link, Trust, "backup_root_symbolic_link");
+            var mixed = await service.ReportAsync(["k0", "k1"], "k1", [Root, link], Trust, backupScopeAttested: true);
+            Assert.Equal(["backup_inventory_incomplete:backup_root_symbolic_link"], mixed.Blockers);
+            Assert.All(mixed.Keys, k => Assert.False(k.Retirable));
+        }
+        // one good root does not excuse a bad one
+        var withTypo = await service.ReportAsync(["k0", "k1"], "k1", [Root, Path.Combine(work, "does-not-exist")], Trust, backupScopeAttested: true);
+        Assert.Equal(["backup_inventory_incomplete:backup_root_missing"], withTypo.Blockers);
+        Assert.All(withTypo.Keys, k => Assert.False(k.Retirable));
+        Assert.False(Directory.Exists(Path.Combine(work, "does-not-exist")));                                         // read-only: nothing was created
+        Assert.Empty(Directory.GetFileSystemEntries(empty));
+    }
+
+    private static void CopyTree(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var d in Directory.GetDirectories(from, "*", SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, d)));
+        foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories)) File.Copy(f, Path.Combine(to, Path.GetRelativePath(from, f)));
+    }
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_is_complete_only_over_a_real_complete_verified_run_and_with_the_scope_attested()
+    {
+        // D-181 positive case (review H1 of PR 182): a real encrypted run whose signed status verifies, every company readable, the scope attested
+        await Init();
+        await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");                                                                             // an older key that nothing needs
+        var clock = new Clock();
+        await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        var service = RetirementReport(clock);
+        var present = FileKekRing.ListKeyIds(Keys);
+        Assert.Equal(["k0", "k1"], present);
+
+        var report = await service.ReportAsync(present, "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(report.Complete, string.Join("; ", report.Blockers));
+        Assert.Equal(["k0"], report.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+        Assert.Equal(["active_key"], report.Keys.Single(k => k.KeyId == "k1").Reasons);
+        Assert.Equal(EncryptionKeyRetirement.ScopeLimits, report.ScopeLimits);
+
+        // without the attestation the SAME facts are incomplete: other destinations, copies and standalone backup-company sets are invisible to the report
+        var unattested = await service.ReportAsync(present, "k1", [Root], Trust, backupScopeAttested: false);
+        Assert.Equal(["backup_scope_not_attested"], unattested.Blockers);
+        Assert.All(unattested.Keys, k => Assert.False(k.Retirable));
+
+        // the command end to end: exit 0 only with a real root AND the attestation; the scope limits are printed every time; read-only (no audit event, nothing written but --json)
+        var eventsBefore = await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table}");
+        var json = Path.Combine(work, "keys.json");
+        var ok = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed", "--json", json);
+        Assert.True(ok.Exit == 0, ok.All);
+        Assert.Contains("k0 RETIRABLE WITHIN THE SCANNED SCOPE", ok.Out);
+        Assert.Contains("k1 keep: active_key", ok.Out);
+        Assert.Contains("NOT seen: any other backup destination or copy", ok.Out);
+        Assert.Contains("standalone backup-company sets", ok.Out);
+        Assert.Contains("\"scopeLimits\"", File.ReadAllText(json));
+        var plain = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root);
+        Assert.Equal(8, plain.Exit);
+        Assert.Contains("[BLOCKER] backup_scope_not_attested", plain.Out);
+        Assert.Contains("NOT seen: any other backup destination or copy", plain.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", plain.Out);
+        var typo = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root + "-typo", "--all-backup-copies-listed");
+        Assert.Equal(8, typo.Exit);
+        Assert.Contains("[BLOCKER] backup_inventory_incomplete:backup_root_missing", typo.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", typo.Out);
+        var emptyRoot = Path.Combine(work, "empty"); Directory.CreateDirectory(emptyRoot);
+        var empty = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, emptyRoot, "--all-backup-copies-listed");
+        Assert.Equal(8, empty.Exit);
+        Assert.Contains("[BLOCKER] backup_inventory_incomplete:backup_root_no_complete_verified_run", empty.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", empty.Out);
+        Assert.Equal(2, (await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", "--all-backup-copies-listed")).Exit);   // no root at all: usage
+        Assert.Equal(eventsBefore, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table}"));
+        Assert.False(Directory.Exists(Path.Combine(work, "imports")));                                                // no storage folder was created (review L2)
+    }
+
     [PostgresFact]
     public async Task Backup_legal_holds_are_audited_append_only_never_released_by_the_tool_and_honoured()
     {

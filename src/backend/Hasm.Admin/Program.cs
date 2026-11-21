@@ -38,9 +38,11 @@ using Npgsql;
 //   Hasm.Admin backup-retention-apply <root>  (Phase 4.3 slice 6: automatic deletion, INACTIVE (D-137): refuses with retention_deletion_inactive, audited 2017)
 //   Hasm.Admin backup-hold-place (--run <run-id> | --company <id> [--from <date>] [--to <date>]) --reason <text>  (a backup legal hold; never released by this tool; audited 2018)
 //   Hasm.Admin backup-hold-list
-//   Hasm.Admin encryption-key-retirement-report <backup-root> [<backup-root> ...] [--json <file>]
+//   Hasm.Admin encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>]
 //              (D-181: which encryption master keys may be retired: none that is active, that a live attachment or import original needs, or that a retained run of ANY given backup root lists;
-//               read-only; retires nothing (D-080(6)); exit 0 complete, 8 incomplete (then no key is retirable), 3 configuration)
+//               read-only; retires nothing (D-080(6)); exit 0 complete, 8 incomplete (then no key is retirable), 3 configuration. Fail closed: a root that is missing, not a directory, a
+//               symbolic link or without a complete, verified run is a blocker. It reads ONLY the given roots: other destinations, copies and standalone backup-company sets are not seen, so
+//               without --all-backup-copies-listed (the operator's attestation that the given roots are every place a backup is kept) the report is incomplete)
 //   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
@@ -59,6 +61,7 @@ var maxAgeHours = 26;
 string? recoveryKeyFile = null, signingTrustFile = null, signingPublicKeyFile = null, keysExportDir = null;
 string? holdRun = null, holdReason = null, planJson = null;
 List<string> retirementRoots = [];
+var retirementScopeAttested = false;
 Guid? holdCompany = null;
 DateOnly? holdFrom = null, holdTo = null;
 var passphraseStdin = false;
@@ -104,7 +107,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -381,7 +384,7 @@ try
         case "backup-keys":
             return await BackupKeyCommandAsync(command!, args, options, configuration, auditOptions);
         case "encryption-key-retirement-report":
-            return await KeyRetirementCommandAsync(retirementRoots, options, configuration, planJson);
+            return await KeyRetirementCommandAsync(retirementRoots, retirementScopeAttested, options, configuration, planJson);
         case "backup-retention-plan":
         case "backup-retention-apply":
         case "backup-hold-place":
@@ -666,11 +669,12 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
     }
 }
 
-// encryption-key-retirement-report: one or more absolute backup roots, then an optional --json <file>.
+// encryption-key-retirement-report: one or more absolute backup roots, then the optional attestation --all-backup-copies-listed, then an optional --json <file>.
 bool ParseRetirementArgs()
 {
     var end = args.Length;
     if (end >= 4 && args[end - 2] == "--json" && Path.IsPathFullyQualified(args[end - 1])) { planJson = args[end - 1]; end -= 2; }
+    if (end >= 3 && args[end - 1] == "--all-backup-copies-listed") { retirementScopeAttested = true; end--; }
     for (var i = 1; i < end; i++)
         if (!Path.IsPathFullyQualified(args[i]) || args[i].StartsWith("--", StringComparison.Ordinal)) return false;
     retirementRoots = [.. args[1..end].Distinct(StringComparer.Ordinal)];
@@ -697,7 +701,7 @@ bool ParseHoldFlags()
 }
 
 // The encryption-key retirement report (D-179..D-181). Read-only; no audit event (it changes nothing; retiring a key is a separate, independently approved operation, D-080(6)).
-static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, HasmDatabaseOptions options, IConfiguration configuration, string? json)
+static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bool scopeAttested, HasmDatabaseOptions options, IConfiguration configuration, string? json)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, Incomplete = 8;
     var encryption = EncryptionOptions.FromConfiguration(configuration);
@@ -707,13 +711,23 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, Ha
     catch (BackupException ex) { Console.Error.WriteLine($"encryption-key-retirement-report stopped ({ex.Code}): the retention configuration is needed to read the retained runs."); return BadConfig; }
     var service = new EncryptionKeyRetirementService(options, retention, AttachmentOptions.FromConfiguration(configuration), Hasm.Infrastructure.Imports.ImportOptions.FromConfiguration(configuration), encryption);
     KeyRetirementReport report;
-    try { report = await service.ReportAsync(FileKekRing.ListKeyIds(encryption.KeyDirectory), encryption.ActiveKeyId, roots, BackupMaterialLoader.ServerTrust(BackupOptions.FromConfiguration(configuration))); }
+    try { report = await service.ReportAsync(FileKekRing.ListKeyIds(encryption.KeyDirectory), encryption.ActiveKeyId, roots, BackupMaterialLoader.ServerTrust(BackupOptions.FromConfiguration(configuration)), scopeAttested); }
     catch (Exception ex) when (ex is Npgsql.NpgsqlException or IOException or UnauthorizedAccessException) { Console.Error.WriteLine("encryption-key-retirement-report stopped: the system database or a key directory could not be read."); return Failed; }
     foreach (var k in report.Keys)
-        Console.WriteLine(k.Retirable ? $"  {k.KeyId} RETIRABLE (retiring it needs independent approval, D-080(6); keep it with every older backup kit)" : $"  {k.KeyId} keep: {string.Join(", ", k.Reasons)}");
+        Console.WriteLine(k.Retirable
+            ? $"  {k.KeyId} RETIRABLE WITHIN THE SCANNED SCOPE (retiring it needs independent approval, D-080(6); keep it with every older backup kit)"
+            : $"  {k.KeyId} keep: {string.Join(", ", k.Reasons)}");
     foreach (var b in report.Blockers) Console.WriteLine($"  [BLOCKER] {b}");
+    // the scope, printed with EVERY report (review H1 of PR 182): what was read and what the tool cannot see
+    Console.WriteLine($"Scope: the live sensitive attachments and import originals of every registered company, and the retained runs of ONLY these {roots.Count} backup root(s):");
+    foreach (var root in roots) Console.WriteLine($"  {root}");
+    Console.WriteLine("NOT seen: any other backup destination or copy (another disk, an off-site or offline copy), standalone backup-company sets (they can hold attachment envelopes under a key), "
+        + "uploads in flight and orphan files.");
+    Console.WriteLine(scopeAttested
+        ? "The operator attested (--all-backup-copies-listed) that the roots above are every place a backup of this installation is kept. If that is not true, do not retire any key."
+        : "No attestation (--all-backup-copies-listed) was given that the roots above are every place a backup is kept: the tool cannot know, so no key is reported retirable.");
     Console.WriteLine(report.Complete
-        ? $"Encryption-key retirement report (D-181): {report.Keys.Count} key(s), {report.Keys.Count(k => k.Retirable)} retirable."
+        ? $"Encryption-key retirement report (D-181): {report.Keys.Count} key(s), {report.Keys.Count(k => k.Retirable)} retirable within the scanned scope."
         : $"Encryption-key retirement report (D-181) INCOMPLETE ({report.Blockers.Count} blocker(s)): no key may be retired.");
     if (json is not null)
     {

@@ -97,6 +97,21 @@ public sealed partial class AttachmentFileStore(AttachmentOptions options, Encry
     }
 
     public byte[]? Read(Guid companyId, string name) { var p = PathOf(companyId, name); return File.Exists(p) ? File.ReadAllBytes(p) : null; }
+    /// <summary>
+    /// The stored bytes for the READ-ONLY key-usage scan (D-180, D-181), or null when the file does not exist. Unlike every other member it never creates a directory and changes no permission
+    /// (review L2 of PR 182). A company folder that does not exist is NOT "no file": the storage may be unmounted or misconfigured, so it throws and the scan counts the item as unknown.
+    /// </summary>
+    public byte[]? ReadWithoutCreating(Guid companyId, string name)
+    {
+        if (!NamePattern().IsMatch(name)) throw new ArgumentException("Invalid stored file name.", nameof(name));
+        if (options.StorageDirectory is not { } root || !Path.IsPathFullyQualified(root))
+            throw new EncryptionUnavailableException("attachment_storage_not_configured", $"{AttachmentOptions.SectionName}:StorageDirectory (an absolute path) is required.");
+        var dir = Path.Combine(root, companyId.ToString("N"));
+        if (!System.IO.Directory.Exists(dir)) throw new DirectoryNotFoundException("The company storage folder does not exist.");
+        var path = Path.Combine(dir, name);
+        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
     public bool Exists(Guid companyId, string name) => File.Exists(PathOf(companyId, name));
     public bool Delete(Guid companyId, string name) { var p = PathOf(companyId, name); if (!File.Exists(p)) return false; File.Delete(p); return true; }
 
@@ -464,7 +479,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
     /// </summary>
     /// <summary>
     /// The encryption keys the sensitive attachments of one company need (D-180, for the key-retirement report D-181): every sensitive row, active, removed (bytes retained) or purged (the row's key
-    /// still counts, D-114), by the key id of the row AND of its envelope header on disk. Read-only; decrypts nothing.
+    /// still counts, D-114), by the key id of the row AND of its envelope header on disk. Strictly read-only (it creates no folder and changes no permission); decrypts nothing.
     /// </summary>
     public static async Task<EncryptionKeyUsage> KeyUsageAsync(NpgsqlConnection conn, AttachmentFileStore store, Guid companyId, string? activeKeyId, CancellationToken ct)
     {
@@ -478,7 +493,7 @@ public sealed partial class AttachmentService(CompanyDatabaseResolver resolver, 
         foreach (var (storage, keyId) in rows)
         {
             ct.ThrowIfCancellationRequested();
-            usage.Add(keyId, () => store.Read(companyId, storage));
+            usage.Add(keyId, () => store.ReadWithoutCreating(companyId, storage));
         }
         return usage.Build();
     }
