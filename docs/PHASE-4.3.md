@@ -1096,7 +1096,11 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
       * **Mechanism (review M5 of #143; lead decision under D-048: no new migration, no trigger bypass, since a bypass would weaken a database safeguard and is the owner's call).**
         * The company triggers allow an epoch to change only by +1, together with a change of the active flag (branches, company migration 0004; warehouses, 0005). Cost-center epochs are maintained by the database and bumped on reactivation (0009).
         * So, before the switch, for EVERY branch, warehouse and cost center, the engine reads the live and the restored epoch. It then runs ADMINISTRATIVE deactivate/reactivate cycles on the copy until the restored epoch is at least `max(live, restored) + 1`: a branch or warehouse cycle adds 2, a cost-center cycle adds 1.
-        * The original active state is restored EXACTLY, including the deferred "exactly one active main branch" check. Each entity's cycles run in one transaction, or the whole copy's in one transaction where feasible.
+        * The original active state is restored EXACTLY. Two transaction rules follow from the company triggers (review M6 of #143):
+          * **The main branch:** the CHECK `NOT is_main OR is_active` (company migration 0004) is IMMEDIATE, so the main branch cannot simply be deactivated. Its cycle clears `is_main`, deactivates, reactivates and sets `is_main` again, all in ONE transaction, so the deferred "exactly one active main branch" check passes at commit.
+          * **Cost centers with active children:** the deferred cost-center tree trigger (0008) evaluates each row as it was at event time. So a subtree is deactivated BOTTOM-UP in one transaction and reactivated TOP-DOWN in a SECOND transaction, on the unregistered copy.
+          * Resume and verification restore the exact active states of every entity BEFORE the switch. A copy whose states cannot be restored exactly refuses the cutover (`epoch_advance_failed`).
+        * The cycles bump each entity's revision WITHOUT writing revision-history rows (they write no business-stream events). The system event 2029 is their provenance (review Low of #143).
         * **These cycles write NO business-stream events.** The copy's business stream must keep its restored head seq_r, and a write before the epoch rotation would be refused (`audit_stream_truncated`) and would move the head.
         * They are recorded in the SYSTEM stream as ONE event per cutover, **2029 `RestoreCompanyEpochsAdvanced`**, with the entity ids and their epochs before and after (ids and numbers only).
         * **Any failure refuses the cutover** (`epoch_advance_failed`, audit 2027): a cycle that fails, a state that cannot be restored exactly, and **a live epoch that cannot be read** (`live_epoch_unreadable`). A live database that cannot be read never yields "no grants to protect".
@@ -1162,7 +1166,7 @@ Decision ids D-143..D-153 (allocated by the lead; D-152 and D-153 added after re
    * `restore-cutover-rollback <cutover-id>` is a restore operation with its own `restore.execute` approval, and it runs the FULL procedure (review M3 of #143):
      * live verification;
      * a safety backup of the outgoing (restored) company with its non-expiring evidence pin;
-     * the company-scope epoch advance (D-152) and the numbering check (D-153);
+     * the company-scope epoch advance (D-152) and the D-153 checks (lost-tail accounting events, numbering including voided numbers, fiscal state), after quiescing (review R1 by Agent F);
      * the journaled switch, KEEPING the outgoing database and folder as retained;
      * runtime grants and post-checks;
      * ANOTHER epoch whose parent is the epoch the retained database belongs to.
@@ -1246,7 +1250,7 @@ Today a restored company database rolls its business stream back while the exter
   * concurrent backup, retention, trial restore, migration and runtime grant are blocked while `Restoring`;
   * nothing in the user, session or credential tables changes;
   * H1: grant a branch-scoped role, deactivate the branch, cut over to a pre-deactivation set; the grant stays ineffective (and a warehouse and cost-center variant);
-  * M5: the deactivate/reactivate cycles reach at least max(live, restored)+1 for each entity, restore every active flag exactly (including the active main branch), write no business-stream event (the copy's head stays seq_r) and one system event 2029; a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
+  * M5/M6: the deactivate/reactivate cycles reach at least max(live, restored)+1 for each entity, restore every active flag exactly, write no business-stream event (the copy's head stays seq_r) and one system event 2029; the MAIN branch is cycled in one transaction (main flag cleared and restored); a PARENT cost center with active children is deactivated bottom-up and reactivated top-down in two transactions; a live epoch that cannot be read refuses the cutover (`live_epoch_unreadable`);
   * H2/F3: issue a document number after the backup, request a cutover; it is refused (`numbers_issued_after_restore_point`), and the post-check fails on a forced bypass through the seam. Likewise for a number VOIDED after the backup, and for a series key that exists only in live;
   * F1: post (stock posting of an already approved document) after the backup; the request is refused (`accounting_events_after_restore_point`) and shows the per-type inventory; an unknown business event type counts as accounting;
   * F2: soft-close a period after the backup; the request is refused (`fiscal_state_differs`);
@@ -1269,6 +1273,7 @@ D-143 scope (single company; full-installation restore is a later slice bound by
   * **PRESERVING DEFAULT: nothing of accounting.** The cutover is REFUSED whenever the lost tail contains any accounting event, or any numbering series (counter, issued or voided number) differs from live.
   * The option for numbering: advance and void, ONLY under conditions 1-6 of step 3.6.
   * **Note for the owner:** while Q7 refuses, ANY company that has done accounting work (for example issued a document number) since its backup point cannot be cut over at all. Its lost work must be re-entered or recovered under a separate policy.
+  * **Accounting configuration counts as accounting** (review Low of #143). The preserving default classifies configuration that drives accounting as an accounting event, so its loss refuses the cutover. This covers: chart and account settings, tax configuration, inventory-accounting versions, statement mappings, numbering rules, closing settings and approval policies. The owner may narrow this list.
 * **Q8. Company-scope revocations after the backup point** (review H1 of #143). **Default: every restored branch, warehouse and cost-center epoch is advanced above both the live and the restored value, so no scoped grant from before the cutover is effective** (D-106's principle at company scope). The option for the owner: a narrower re-validation that keeps grants still valid in live.
 * **Q9. Fiscal state after the backup point** (accounting review F2). **PRESERVING DEFAULT: REFUSE the cutover when any fiscal period or year state, its revision, the year-close state or a pending reopen request differs between live and the copy.** The option for the owner: re-apply the live closures to the copy before the switch; never reopen anything.
 
