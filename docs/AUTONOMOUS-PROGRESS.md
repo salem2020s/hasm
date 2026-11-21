@@ -1,5 +1,11 @@
 # HASM — Autonomous execution progress
 
+## End of sprint 3 of the cloud team: merges and handoff refresh (2026-11-21, recovered from git and GitHub REST at `main` = `afbf5f3`)
+
+Merged on `main` since the sprint-3 refresh (#160), each by pull request, merge commit read from `git log --first-parent origin/main` and confirmed with `gh api repos/salem2020s/hasm/pulls/<n>` (merged = true): #137 (`d607cfb`), #160 (`ee5bf02`), #147 (`d69ea21`), #162 (`97953a1`), #149 (`1aaaaf0`), #163 (`532c91a`), #151 (`be35050`), #164 (`55054fb`), #157 (`a20b925`), #165 (`ce8bed3`), #153 (`83ce5d8`), #155 (`a040894`), #158 (`4c44ad3`), #156 (`b84f75a`), #159 (`903742a`), #161 (`394148a`), #166 (`afbf5f3`).
+
+PostgreSQL registry on `main`: 1255 (step title of `.github/workflows/backend.yml`). Migrations on `main`: company 0001-0032, system 0001-0033 (0033 from #157); nothing allocated ahead. D-142 reached `main` with #157, and D-160..D-163 with audit codes 1336/1337 with #166; the next free decision ID is D-164. The only open queue item is the Draft #168 (pending-3 constraint matrix, awaiting review). 4.1 S3 is not complete (S3a merged in #166; the rest goes to S3b, the next session's task). The register in `docs/INTEGRATION-STATUS.md` now also lists OD-1, OD-2, OD-12, T-2, SESSION-EXPIRY-UNSAVED and APPROVAL-POLICY-DUPLICATES (the L3 of #160's review), and the Lows of #156, #158, #161, #163, #164 and #165 and #157's L3 (fixed in #166) are recorded as follow-ups. Release acceptance stays blocked per D-088: #149 merged evidence, not acceptance. This entry records no result that GitHub does not show; hosted CI of each open pull request was NOT VERIFIED by this refresh.
+
 ## Sprint 3 of the cloud team: merges and handoff refresh (2026-11-21, recovered from git and GitHub REST at `main` = `70f1695`)
 
 Merged on `main` since the sprint-2 refresh (#144), each by pull request, merge commit read from `git log --first-parent origin/main` and confirmed with `gh api repos/salem2020s/hasm/pulls/<n>` (merged = true): #142 (`daebeea`), #144 (`75c871a`), #125 (`4e02d2f`), #145 (`6733f2d`), #146 (`ee09a60`), #143 (`8b9d49f`), #133 (`ff0fcca`), #148 (`09261b2`), #127 (`456eb38`), #134 (`b17cc67`), #152 (`0009bd2`), #150 (`112a153`), #154 (`24c66f2`), #136 (`70f1695`).

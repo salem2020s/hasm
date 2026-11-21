@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "70f1695ed3227d9dd0e2cad2f52338926cf02157",
-    "note": "main = 70f1695 (merge of #136), read from git and GitHub REST on 2026-11-21 (sprint 3 handoff refresh). PostgreSQL registry 1184 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0032 (counted in the migration folders of origin/main); allocation: system 0033 #157 (4.1 S2); no company number allocated ahead."
+    "verifiedHead": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
+    "note": "main = afbf5f3 (merge of #166), read from git and GitHub REST on 2026-11-21 (end-of-sprint-3 handoff refresh). PostgreSQL registry 1255 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033, counted in the migration folders of origin/main; no number allocated ahead."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -168,21 +168,123 @@
       "phase": "3.13 S5a approval policies (company 0032, D-140/D-141)",
       "mergeCommit": "70f1695ed3227d9dd0e2cad2f52338926cf02157",
       "headMerged": "fc5736675cbf44711e4bd333516b31d2735855aa"
+    },
+    {
+      "pr": 137,
+      "phase": "S5a approval progress UI",
+      "mergeCommit": "d607cfb9601fcff07e7ffb303266aec29cbc7bac",
+      "headMerged": "f74e9a6935ff4562250c8a33fd40e7e968d7170b"
+    },
+    {
+      "pr": 160,
+      "phase": "sprint-3 handoff refresh",
+      "mergeCommit": "ee5bf02c232c0e2b6e00a7d804fc4baef8d2da35",
+      "headMerged": "1e963f062b31c96f1b7d9cc8f1e8f2e882caf3d1"
+    },
+    {
+      "pr": 147,
+      "phase": "retention ids-only preview filters and attachment-hold picker",
+      "mergeCommit": "d69ea218b679b080bca7fd17adf759871e8e2449",
+      "headMerged": "16068e9ca63431f4cf204f5383f745ad9e715ef8"
+    },
+    {
+      "pr": 162,
+      "phase": "commercial Approve/Reject gated by the document's branch",
+      "mergeCommit": "97953a12adea22aed60268f2ccd470ef3a23a866",
+      "headMerged": "a7c4999bdada8798ee1e45edb0d8e67796e39cc2"
+    },
+    {
+      "pr": 149,
+      "phase": "backup encryption acceptance evidence (D-088; item 11 not met)",
+      "mergeCommit": "1aaaaf0c84be4f192189d169cd882393c48da1e3",
+      "headMerged": "28221bc6a2fa71bed3ee0e04b242cca7343551b8"
+    },
+    {
+      "pr": 163,
+      "phase": "E2E parity deterministic readiness",
+      "mergeCommit": "532c91a9cc3e98c67073b3dbe18d52d6bf6e944e",
+      "headMerged": "ef54d8335e8d3f9691cb10edc876a7794ef71757"
+    },
+    {
+      "pr": 151,
+      "phase": "scenario 21.10 opaque physical names",
+      "mergeCommit": "be35050653cbb6c1d96dfede4de2314a14290a3d",
+      "headMerged": "86f178ae194ce1c7a5eb22095c0ab457a19ba44f"
+    },
+    {
+      "pr": 164,
+      "phase": "document-link idempotency re-check",
+      "mergeCommit": "55054fb5c1664c1e1bbc875baf1f01efae5496a7",
+      "headMerged": "fe5b9b10c551e5a022f29c0379858b8d6b7d2e6d"
+    },
+    {
+      "pr": 157,
+      "phase": "4.1 S2 MFA login and enrolment (system 0033, D-142)",
+      "mergeCommit": "a20b92581d48b516f77dc4727ffdf460d224ab75",
+      "headMerged": "44cd0c98f8a45c8a4a1ac2a6ad66d9e38a0d7e08"
+    },
+    {
+      "pr": 165,
+      "phase": "import settings and upload replay races",
+      "mergeCommit": "ce8bed333d9fc487ff61809cc29fadb7f4f48de0",
+      "headMerged": "b75bbd8ab4a1ac07f51e70c6eabab22bbea72fc9"
+    },
+    {
+      "pr": 153,
+      "phase": "scenario 21.8 isolation proof",
+      "mergeCommit": "83ce5d8a380f5401e0120f4849bfce324d242faf",
+      "headMerged": "28fdb1d3485febb2b0f18bf9ec04728f228675ba"
+    },
+    {
+      "pr": 155,
+      "phase": "constraint-violation matrix part 1",
+      "mergeCommit": "a0408949ae3f75044ee2f441c51de03cf715d7b4",
+      "headMerged": "111c03e8539748da8db8f12d0eab9854da7da3aa"
+    },
+    {
+      "pr": 158,
+      "phase": "hostile-input sweep (NUL, 22021 to 400)",
+      "mergeCommit": "4c44ad384bb16ef5210c2eb24861b448a2e130e3",
+      "headMerged": "02e2d2e4fa9bad4584dba6d1c2bbf6a5bb8e9c22"
+    },
+    {
+      "pr": 156,
+      "phase": "retention activation prerequisites L1, L2, L6 (deletion inactive)",
+      "mergeCommit": "b84f75a6fa34e9cbb6c83f638627a0bd48dae11c",
+      "headMerged": "1959c54b831205815a4641ea365619ca65ee4511"
+    },
+    {
+      "pr": 159,
+      "phase": "approval-policy threshold rounding-mode pin (registry +2)",
+      "mergeCommit": "903742a8486db9a481439c5b1ae76660ff345749",
+      "headMerged": "d8aa671214a10ef3a23a7049b313a0e247c118ce"
+    },
+    {
+      "pr": 161,
+      "phase": "constraint-violation matrix part 2 (103 probed, 3 pending)",
+      "mergeCommit": "394148ad7d93119d9d549162f6a87dc11573fc0e",
+      "headMerged": "96de98c4a095a3a41b1285ff1ccb8eeb564a6179"
+    },
+    {
+      "pr": 166,
+      "phase": "4.1 S3a MFA freshness policies and step-up (D-160..D-163, audit 1336/1337; S3 not complete)",
+      "mergeCommit": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
+      "headMerged": "2b00bcf99d7d2f5e2b2f66b93a63628f83d13fbc"
     }
   ],
   "active": {
-    "phase": "Release 1 sprint 3 (cloud team)",
-    "state": "Open Draft PRs, the merge queue, the follow-ups and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI and review status of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
+    "phase": "Release 1 sprint 3 (cloud team), end of sprint",
+    "state": "Open Draft PRs, the merge queue, the follow-ups and the owner items are recorded in docs/INTEGRATION-STATUS.md; hosted CI of each open PR must be read from GitHub before any merge (NOT VERIFIED by this refresh).",
     "knownIssues": [
-      "Decisions: next free ID D-160 (D-160..D-169 free; D-170..D-178 on main via #152; next after them D-179). D-142 is on #157 (not merged); D-108..D-115 and D-122..D-129 allocated and not on main.",
+      "Decisions: next free ID D-164 (D-164..D-169 free; next after D-178 is D-179). D-160..D-163 and audit codes 1336/1337 are on main via #166; D-108..D-115 and D-122..D-129 allocated and not on main.",
       "Audit-event blocks: 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2100-2199 Phase 3.14.",
-      "Release acceptance stays blocked per owner item 11 (D-088): unencrypted backup sets are DEV/TEST only, and release acceptance stays blocked until encryption and authenticated manifests are tested; the acceptance evidence #149 is not merged."
+      "4.1 S3 is NOT complete: S3a (#166, merged) covers access and user administration only; company administration, approvals, backup/restore groups, the requirement model, company-selection step-up and the remaining UI go to S3b.",
+      "Release acceptance stays blocked per owner item 11 (D-088); #149's evidence is merged as evidence, not acceptance."
     ]
   },
   "next": [
-    "Merge in the recorded queue order (#137, #147, #149, #151, #153, #155, #158, #157), re-reconciling the registry, migration numbers, decision and audit ranges and the exact head at each step.",
-    "#156 stays outside the queue until its independent security review is recorded.",
-    "Follow-ups: session expiry with unsaved input; #150 Low (fixed 0.8 s quiet period); #137 gate Approve and Reject by can for the document's branch; the 10.2585 rounding-pin test; constraint matrix part 2 (in progress); load test stage 2.",
+    "Next session: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165; dedupe of DECISIONS.md D-130..D-139, duplicated since a20b925, in a dedicated reviewed PR).",
+    "#168 (pending-3 constraint matrix, Draft awaiting review) takes the next registry turn unless merged earlier; re-reconcile the registry, migration numbers, decision and audit ranges and the exact head at merge.",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
@@ -215,7 +317,13 @@
     "CUTOVER-ACT",
     "3.14-Q1..Q11",
     "4.4-Q1..Q4",
-    "T-1"
+    "T-1",
+    "OD-1",
+    "OD-2",
+    "OD-12",
+    "T-2",
+    "SESSION-EXPIRY-UNSAVED",
+    "APPROVAL-POLICY-DUPLICATES"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
@@ -234,60 +342,10 @@
   },
   "openPullRequests": [
     {
-      "pr": 137,
-      "branch": "feature/phase-3-13-s5a-ui",
-      "head": "f74e9a6935ff4562250c8a33fd40e7e968d7170b",
-      "owner": "A (Sonnet)",
-      "state": "S5a approval-progress panel (base #136 merged); registry +0; queue 1"
-    },
-    {
-      "pr": 147,
-      "branch": "feat/retention-preview-filter",
-      "head": "556c65782bd15d4e27fccda603ab87cc3380cc79",
-      "state": "retention ids-only preview filters and attachment-hold picker; registry +1; queue 2"
-    },
-    {
-      "pr": 149,
-      "branch": "test/backup-acceptance-evidence",
-      "head": "e93b83d672de03943b87cda5c54448ee76e14e8d",
-      "state": "backup encryption acceptance evidence for owner item 11 (D-088); registry +5; queue 3"
-    },
-    {
-      "pr": 151,
-      "branch": "test/acceptance-21-10-physical-names",
-      "head": "8d74e9d969962aca62a71f816b665d10e9e98456",
-      "state": "scenario 21.10 and schema upgrade, opaque physical names; registry +3; queue 4"
-    },
-    {
-      "pr": 153,
-      "branch": "test/scenario-218-isolation",
-      "head": "9d76476f8bd84baae8767dd0d5e7af64414b1656",
-      "state": "scenario 21.8 isolation proof on the trial restore path; registry +2; queue 5"
-    },
-    {
-      "pr": 155,
-      "branch": "test/constraint-violation-matrix",
-      "head": "f7bcc78a48d39f70beb6939ee493d688d185694b",
-      "state": "constraint-violation matrix part 1; registry +4; queue 6"
-    },
-    {
-      "pr": 158,
-      "branch": "test/api-hardening-matrix",
-      "head": "c18ce97081730c567b5e3832b26e25004e1cdb88",
-      "state": "hostile-input sweep over every endpoint; registry +3; queue 7"
-    },
-    {
-      "pr": 157,
-      "branch": "feature/phase-4-1-s2",
-      "head": "c945fb95b64086b80e84a80ec040efe29e024bee",
-      "owner": "D (Sonnet)",
-      "state": "4.1 S2 MFA login and enrolment (system 0033, D-142); registry +27; queue 8"
-    },
-    {
-      "pr": 156,
-      "branch": "fix/phase-4-3-retention-activation-prereqs",
-      "head": "39782e71f3256276fe6dbd1db8a35bccccd155d0",
-      "state": "clears retention activation prerequisites L1, L2 and L6 of #134 (deletion stays inactive); awaiting independent security review; outside the queue"
+      "pr": 168,
+      "branch": "test/constraint-matrix-pending-3",
+      "head": "3c6fde47fc070c13e8c9b7a89a0a4b5114f829ce",
+      "state": "constraint matrix part 2: 3 pending routes moved to probed (tests only); Draft awaiting independent review; registry +0 on its base"
     }
   ],
   "inertPullRequests": [
@@ -318,14 +376,7 @@
     }
   ],
   "mergeSequence": [
-    137,
-    147,
-    149,
-    151,
-    153,
-    155,
-    158,
-    157
+    168
   ],
   "agents": {
     "lead": "Claude Opus",
@@ -342,7 +393,5 @@
       "G"
     ]
   },
-  "outsideQueue": [
-    156
-  ]
+  "outsideQueue": []
 }
