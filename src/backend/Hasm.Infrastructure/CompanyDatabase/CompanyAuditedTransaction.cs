@@ -28,6 +28,10 @@ public sealed class CompanyAuditedWork
     internal int ReceiptMark => receipts.Count;
     /// <summary>Forgets the receipts added since <paramref name="mark"/>: used after a ROLLBACK TO SAVEPOINT, because the events they describe no longer exist and must not be committed or anchored.</summary>
     internal void DiscardReceiptsSince(int mark) { if (receipts.Count > mark) receipts.RemoveRange(mark, receipts.Count - mark); }
+    /// <summary>The audit streams this transaction has touched so far: the second half of a savepoint's mark.</summary>
+    internal string[] TouchedMark() => trail.TouchedMark(Transaction);
+    /// <summary>Forgets the streams first touched after <paramref name="mark"/> (after ROLLBACK TO SAVEPOINT), so the caller's next append re-takes the stream lock and re-runs the first-touch head and anchor checks.</summary>
+    internal void RestoreTouched(string[] mark) => trail.RestoreTouched(Transaction, mark);
 
     /// <summary>
     /// Appends one authenticated event to the company's business stream INSIDE the transaction. Take every business lock first: the

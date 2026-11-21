@@ -41,6 +41,20 @@ public sealed class AuditTrail
     // first touched the stream and must never be anchored before it commits (a rollback would leave a checkpoint for a record that never existed).
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<NpgsqlTransaction, HashSet<string>> touched = new();
 
+    /// <summary>The streams <paramref name="tx"/> has touched so far: a savepoint's mark (see <see cref="RestoreTouched"/>).</summary>
+    internal string[] TouchedMark(NpgsqlTransaction tx) => touched.TryGetValue(tx, out var set) ? [.. set] : [];
+
+    /// <summary>
+    /// After a ROLLBACK TO SAVEPOINT: forgets the streams first touched after <paramref name="mark"/>. The rollback undid their events and released their advisory locks, so
+    /// the next append must re-take the lock and re-run the first-touch head and anchor checks instead of trusting a head that may since have changed.
+    /// </summary>
+    internal void RestoreTouched(NpgsqlTransaction tx, string[] mark)
+    {
+        var set = touched.GetOrCreateValue(tx);
+        set.Clear();
+        foreach (var k in mark) set.Add(k);
+    }
+
     public AuditTrail(Func<AuditServices> factory, TimeProvider clock, ILogger? logger = null)
     {
         services = new Lazy<AuditServices>(factory, LazyThreadSafetyMode.PublicationOnly);

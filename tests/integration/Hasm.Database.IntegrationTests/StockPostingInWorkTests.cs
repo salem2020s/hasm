@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.Costing;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -23,6 +24,18 @@ public class StockPostingInWorkTests : StockPostingTestBase
         (await Sql<long>($"SELECT count(*) FROM {OP.Table}"), await Sql<long>($"SELECT count(*) FROM {EN.Table}"), await Sql<long>($"SELECT count(*) FROM {SP.Table}"),
          await Sql<long>($"SELECT count(*) FROM {CompanySchema.JournalEntry.Table}"), await Sql<long>($"SELECT count(*) FROM {CompanySchema.StockPostingEvent.Table}"),
          await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {StockPostingAuditEvents.Posted}"));
+
+    /// <summary>The company business audit stream verifies (chain, keyed MAC and external anchor) and is complete: the strongest check that no rolled-back event was kept, committed or anchored.</summary>
+    private async Task AssertBusinessAuditSound()
+    {
+        var report = await new AuditVerifier(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName), AuditKeys, AuditCheckpoints).VerifyAsync(AuditStream.ForBusiness(Company.Id));
+        Assert.True(report.Verdict == AuditVerdict.Verified || report.Findings.All(f => f.Severity == FindingSeverity.Note),
+            $"business audit stream: {report.Verdict}: {string.Join(", ", report.Findings.Select(f => $"{f.Code}@{f.Seq}"))}");
+        Assert.Equal(await Sql<long>($"SELECT count(*) FROM {Audit_.Table}"), report.Events);
+        Assert.Equal(report.Events, report.VerifiedThroughSeq);
+    }
+
+    private const string FailFunction = "CREATE FUNCTION zz_forced_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced failure' USING ERRCODE = 'P0001'; END $$;";
 
     [PostgresFact]
     public async Task The_public_PostAsync_keeps_exactly_its_behaviour_effects_replay_and_refusal_codes()
@@ -203,5 +216,85 @@ public class StockPostingInWorkTests : StockPostingTestBase
         Assert.Equal(32m, posted.TotalValue);
         Assert.Equal((6m, 48m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo)).Value));
         Assert.Equal(1L, (await Everything()).Postings);
+        await AssertBusinessAuditSound();                                                                         // chain, MAC and anchor of the business stream after the commit
+    }
+
+    [PostgresFact]
+    public async Task A_PostgreSQL_error_mid_posting_aborts_the_transaction_but_the_savepoint_restores_it_so_the_caller_commits_its_own_work_and_the_document_then_posts_once()
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        var before = await Everything();
+        const short CallerEvent = 1999;
+        // the posting row insert fails AFTER the cost operation, entries and draft journal were written
+        await Sql(FailFunction + $" CREATE TRIGGER zz_forced_failure BEFORE INSERT ON {SP.Table} FOR EACH ROW EXECUTE FUNCTION zz_forced_failure();");
+
+        await Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            var ex = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m)));
+            Assert.Equal("P0001", ex.SqlState);                                                                   // the error propagated unchanged
+            async Task<long> Inside(string sql) { await using var q = new Npgsql.NpgsqlCommand(sql, work.Connection, work.Transaction); return Convert.ToInt64(await q.ExecuteScalarAsync()); }
+            // the aborted-transaction state was cleared by ROLLBACK TO: queries work and nothing of the attempt remains
+            Assert.Equal(before.Operations, await Inside($"SELECT count(*) FROM {OP.Table}"));
+            Assert.Equal(before.Entries, await Inside($"SELECT count(*) FROM {EN.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {SP.Table}"));
+            Assert.Equal(before.Journals, await Inside($"SELECT count(*) FROM {CompanySchema.JournalEntry.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {CompanySchema.StockPostingEvent.Table}"));
+            Assert.Equal(0L, await Inside($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {StockPostingAuditEvents.Posted}"));
+            await work.AppendAuditAsync(new AuditEventData(CallerEvent, ActorUserId: Admin.Id, Detail: "caller work after a PostgreSQL error"));
+        });
+
+        Assert.Equal(before, await Everything());
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {CallerEvent}"));
+        await AssertBusinessAuditSound();
+
+        // the error condition is gone: the same document posts once, and replays
+        await Sql($"DROP TRIGGER zz_forced_failure ON {SP.Table}; DROP FUNCTION zz_forced_failure();");
+        var posted = Ok(await Post(doc, Amounts(100m)));
+        Assert.False(posted.Replayed);
+        var done = await Everything();
+        Assert.Equal((1L, 1L, 1L), (done.Postings, done.Events, done.Audit));
+        Assert.True(Ok(await Post(doc, Amounts(100m))).Replayed);
+        Assert.Equal(done, await Everything());
+        Assert.Empty(await Cost.ReconcileAsync(Company.Id));
+        await AssertBusinessAuditSound();
+    }
+
+    /// <summary>
+    /// The caller has not touched the business audit stream yet; the posting's own audit append (the stream's first touch in this transaction) fails and is rolled back to the savepoint, which also releases the
+    /// stream lock. Whatever happens to the stream head afterwards (a forgery, or a legitimate advance by another writer), the caller's next append must re-take the lock and re-run the first-touch check.
+    /// </summary>
+    private async Task AfterRefusedFirstTouch(Func<Task> betweenRollbackAndAppend)
+    {
+        await PreparePosting();
+        var doc = await Approved(Receipt(W1, "2026-03-10", L(Fifo, Pcs, 10)));
+        await Sql(FailFunction + $" CREATE TRIGGER zz_forced_failure BEFORE INSERT ON {Audit_.Table} FOR EACH ROW WHEN (NEW.{Audit_.EventType} = {StockPostingAuditEvents.Posted}) EXECUTE FUNCTION zz_forced_failure();");
+        await Tx.ExecuteAsync(Company.Id, async work =>
+        {
+            await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Posting.PostInWorkAsync(work, Admin.Id, doc.Id, doc.Revision, Amounts(100m)));
+            await betweenRollbackAndAppend();                                                                      // another connection acts on the stream
+            await work.AppendAuditAsync(new AuditEventData(1999, ActorUserId: Admin.Id, Detail: "caller append"));
+        });
+    }
+
+    [PostgresFact]
+    public async Task After_a_rolled_back_first_touch_a_forged_head_is_refused_by_the_callers_next_audit_append()
+    {
+        var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => AfterRefusedFirstTouch(
+            () => Sql($"INSERT INTO {Audit_.Table} ({Audit_.StreamKey}, {Audit_.Seq}, {Audit_.EventId}, {Audit_.OccurredAtUtc}, {Audit_.EventType}, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, {Audit_.Detail}, {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac}) " +
+                      $"SELECT {Audit_.StreamKey}, {Audit_.Seq} + 1, gen_random_uuid(), {Audit_.OccurredAtUtc}, 1998, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, 'forged', {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac} " +
+                      $"FROM {Audit_.Table} ORDER BY {Audit_.Seq} DESC LIMIT 1")));
+        Assert.Equal("audit_head_corrupt", ex.Code);                                                              // the full first-touch check ran again
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
+    }
+
+    [PostgresFact]
+    public async Task After_a_rolled_back_first_touch_the_callers_next_audit_append_chains_correctly_onto_a_head_another_writer_advanced()
+    {
+        await AfterRefusedFirstTouch(() => Tx.ExecuteAsync(Company.Id, w => w.AppendAuditAsync(new AuditEventData(1998, ActorUserId: Admin.Id, Detail: "another writer"))));   // a legitimate, committed and anchored advance
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1998"));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = 1999"));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {StockPostingAuditEvents.Posted}"));
+        await AssertBusinessAuditSound();                                                                         // chained onto the advanced head, anchored, no gap
     }
 }

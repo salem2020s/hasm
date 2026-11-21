@@ -163,6 +163,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
     {
         var savepoint = "hasm_post_inwork_" + Guid.NewGuid().ToString("N");            // unique, so nested or repeated calls in one transaction never clash
         var mark = work.ReceiptMark;
+        var touchedMark = work.TouchedMark();
         await work.Transaction.SaveAsync(savepoint, ct);
         try
         {
@@ -179,7 +180,7 @@ public sealed partial class StockPostingService(CompanyDatabaseResolver resolver
         catch
         {
             // undo every write of the failed attempt (also clears an aborted state after a database error), forget its audit receipts, and let the exception reach the caller
-            try { await work.Transaction.RollbackAsync(savepoint, CancellationToken.None); work.DiscardReceiptsSince(mark); }
+            try { await work.Transaction.RollbackAsync(savepoint, CancellationToken.None); work.DiscardReceiptsSince(mark); work.RestoreTouched(touchedMark); }
             catch (Exception) { /* the connection is unusable: the original exception still propagates and the caller's transaction ends without a commit */ }
             throw;
         }
