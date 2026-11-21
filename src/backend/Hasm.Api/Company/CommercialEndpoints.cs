@@ -73,7 +73,7 @@ public static class CommercialEndpoints
         Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, new CommercialDocumentFilter(status is >= 1 and <= 5 ? (CommercialStatus)status : null, docType, branchId, null, limit ?? 50, offset ?? 0), http.RequestAborted),
             v => new { documents = v.Select(Body) }, null);
     private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
-        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v }, null);
+        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }) }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.GetAsync(u, c, id, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Create(CommercialDocumentInput? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>

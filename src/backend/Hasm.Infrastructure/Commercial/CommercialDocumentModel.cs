@@ -31,7 +31,15 @@ public interface ICommercialDocumentTypeRegistry
     IReadOnlyCollection<string> Types { get; }
     /// <summary>Whether a document of <paramref name="fromType"/> may be linked to a document of <paramref name="toType"/> with this kind (S2, D-075). Fail-closed: only an explicitly registered (source type, target type, kind) pair is allowed.</summary>
     bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind);
+    /// <summary>The registered link pairs whose two types are both registered (static registry data; the screen offers link creation only for a target type that appears here).</summary>
+    IReadOnlyList<LinkPairView> LinkPairs { get; }
 }
+
+/// <summary>One registered link pair as the API shows it: documents of <c>Source</c> may be linked into documents of <c>Target</c> with <c>Kind</c> (1 fulfils, 2 invoices, 3 returns, 4 amends).</summary>
+public sealed record LinkPairView(string Source, string Target, short Kind);
+
+/// <summary>The answer of the types route: the registered type names and the registered link pairs. Production registers neither (3.15/3.16).</summary>
+public sealed record CommercialTypesView(IReadOnlyList<string> Types, IReadOnlyList<LinkPairView> LinkPairs);
 
 /// <summary>The registered types and, separately, the permitted link pairs. Production registers neither until the concrete sales and purchase types (3.15/3.16); only the test composition registers pairs.</summary>
 public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types, IEnumerable<(string From, string To, CommercialLinkKind Kind)>? linkPairs = null) : ICommercialDocumentTypeRegistry
@@ -41,6 +49,7 @@ public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types, IE
     public bool IsRegistered(string docType) => set.Contains(docType);
     public IReadOnlyCollection<string> Types => set;
     public bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind) => set.Contains(fromType) && set.Contains(toType) && pairs.Contains((fromType, toType, kind));
+    public IReadOnlyList<LinkPairView> LinkPairs => [.. pairs.Where(p => set.Contains(p.Item1) && set.Contains(p.Item2)).OrderBy(p => p.Item1, StringComparer.Ordinal).ThenBy(p => p.Item2, StringComparer.Ordinal).ThenBy(p => p.Item3).Select(p => new LinkPairView(p.Item1, p.Item2, (short)p.Item3))];
 }
 
 /// <summary>The kind of a link between two documents (S2): the source line is fulfilled, invoiced, returned or amended by the target line. Only the first three have a derived quantity.</summary>

@@ -111,6 +111,7 @@ public class CommercialApiTests : CommercialTestBase
         var admin = await Send(HttpMethod.Get, path, cookie: await SignIn(Admin));
         Assert.Equal(HttpStatusCode.OK, admin.Status);
         Assert.Equal(0, admin.Json.GetProperty("types").GetArrayLength());
+        Assert.Equal(0, admin.Json.GetProperty("linkPairs").GetArrayLength());                                           // no link pair is registered in production either
         var branch = await NewBranchId("BA");
         var (viewer, _) = await Member([PermissionCatalog.Codes.CommercialView], ScopeKind.Branch, branch);                // a branch grant is enough ("in any branch")
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, path, cookie: await SignIn(viewer))).Status);

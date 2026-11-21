@@ -30,12 +30,12 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
         return await CoversAsync(user, company, code, view.BranchId, ct) ? ConfigResult<CommercialDocumentView>.Ok(view) : Denied<CommercialDocumentView>();
     }
 
-    /// <summary>The registered document types (names only). Allowed when the caller holds <c>view</c> or <c>create</c> on any scope, otherwise the same refusal as every other call.</summary>
-    public async Task<ConfigResult<IReadOnlyList<string>>> TypesAsync(Guid user, Guid company, CancellationToken ct = default)
+    /// <summary>The registered document types and link pairs (names and kinds only, static registry data). Allowed when the caller holds <c>view</c> or <c>create</c> on any scope, otherwise the same refusal as every other call.</summary>
+    public async Task<ConfigResult<CommercialTypesView>> TypesAsync(Guid user, Guid company, CancellationToken ct = default)
     {
         var eff = await access.GetEffectivePermissionsAsync(user, company, ct);
         return HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialView) || HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialCreate)
-            ? ConfigResult<IReadOnlyList<string>>.Ok(documents.RegisteredTypes) : Denied<IReadOnlyList<string>>();
+            ? ConfigResult<CommercialTypesView>.Ok(new CommercialTypesView(documents.RegisteredTypes, documents.RegisteredLinkPairs)) : Denied<CommercialTypesView>();
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> GetAsync(Guid user, Guid company, Guid id, CancellationToken ct = default) =>

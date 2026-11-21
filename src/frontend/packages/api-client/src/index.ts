@@ -694,6 +694,8 @@ export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: 
 // ordered / fulfilled / invoiced / returned are DERIVED by the server from the links. Linking needs the update permission on the target and is append-only.
 export type DocumentLinkKind = 1 | 2 | 3 | 4;
 export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; createdBy: string; createdAtUtc: string; replayed: boolean }
+/** A registered link pair: documents of `source` may be linked into documents of `target` with `kind`. Static registry data; empty in production until the concrete types are activated. */
+export interface CommercialLinkPair { source: string; target: string; kind: DocumentLinkKind }
 export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
 export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
 
@@ -1067,6 +1069,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
     rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
     cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    /** The registered link pairs (the same route as the types; static registry data). The screen offers link creation only for a document whose type is the target of a pair. */
+    listCommercialLinkPairs: () => get<{ types: string[]; linkPairs: CommercialLinkPair[] }>("/api/v1/company/commercial-documents/types").then((r) => r.linkPairs ?? []),
     createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
     listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
     getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),

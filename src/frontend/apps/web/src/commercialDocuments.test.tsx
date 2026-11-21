@@ -45,6 +45,7 @@ function setup(over: Record<string, unknown> = {}, perms = PERMS, types = ["comm
     getInventoryItem: vi.fn().mockResolvedValue(apple),
     lookupInventoryUnits: vi.fn().mockResolvedValue(unitRows),
     listDocumentLinks: vi.fn().mockResolvedValue([]), getLineQuantities: vi.fn().mockResolvedValue([]), createDocumentLink: vi.fn(),
+    listCommercialLinkPairs: vi.fn().mockResolvedValue([1, 2, 3, 4].map((kind) => ({ source: "commercial_test", target: "commercial_test", kind }))),
     createCommercialDocument: vi.fn(), updateCommercialDocument: vi.fn(),
     ...over,
   }, perms);
@@ -357,6 +358,8 @@ describe("commercial document links (S2 API on the screen)", () => {
   it("creates a link with this document as the target, offers only valid sources, sends no creator or total, and starts a new idempotency key after a success", async () => {
     const create = vi.fn().mockResolvedValue(link());
     const client = await openLinks({ createDocumentLink: create });
+    expect(within(await screen.findByLabelText(/^نوع الرابط/)).getAllByRole("option").map((o) => o.textContent)).toEqual(["— اختر —", "ينفّذ", "يفوتر", "يُرجع", "يعدّل"]);   // only the kinds of the registered pairs
+    await userEvent.selectOptions(screen.getByLabelText(/^نوع الرابط/), "2");
     const sources = within(await screen.findByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent);
     expect(sources.join("|")).toContain("2026-000002");
     expect(sources.join("|")).not.toContain("2026-000003");                                              // another party
@@ -365,7 +368,6 @@ describe("commercial document links (S2 API on the screen)", () => {
     await userEvent.selectOptions(screen.getByLabelText(/^المستند المصدر/), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
-    await userEvent.selectOptions(screen.getByLabelText(/^نوع الرابط/), "2");
     await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "٣");
     await userEvent.click(screen.getByTestId("create-link"));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -383,6 +385,7 @@ describe("commercial document links (S2 API on the screen)", () => {
   it("keeps the same idempotency key when the same attempt is retried after a failure, and refuses a bad quantity before sending", async () => {
     const create = vi.fn().mockRejectedValueOnce(apiError(409, "over_fulfilment")).mockResolvedValueOnce(link());
     await openLinks({ createDocumentLink: create });
+    await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
     await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
@@ -404,6 +407,7 @@ describe("commercial document links (S2 API on the screen)", () => {
       .mockRejectedValueOnce(apiError(400, "invalid_request", { fields: [{ field: "kind", code: "link_not_allowed" }] }))
       .mockRejectedValueOnce(apiError(409, "party_mismatch")).mockRejectedValueOnce(apiError(409, "link_exists")).mockRejectedValueOnce(apiError(409, "document_not_approved"));
     await openLinks({ createDocumentLink: create });
+    await userEvent.selectOptions(await screen.findByLabelText(/^نوع الرابط/), "1");
     await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
     await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
     await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
@@ -422,6 +426,33 @@ describe("commercial document links (S2 API on the screen)", () => {
     expect(screen.queryByTestId("create-link")).toBeNull();
   });
 
+  it("hides the link form and shows the informative empty state when no registered pair has this document's type as its target (production registers none)", async () => {
+    for (const pairs of [[], [{ source: "commercial_test", target: "another_type", kind: 1 }]]) {
+      const client = await openLinks({ listCommercialLinkPairs: vi.fn().mockResolvedValue(pairs) });
+      expect(await screen.findByTestId("no-link-pairs")).toHaveTextContent("لا يُعرض نموذج الربط");
+      expect(screen.queryByTestId("create-link")).toBeNull();
+      expect(client.listCommercialLinkPairs).toHaveBeenCalled();
+      document.body.innerHTML = "";
+      window.location.hash = "";
+    }
+  });
+
+  it("offers only the sources whose type is registered for the chosen kind", async () => {
+    await openLinks({
+      listCommercialLinkPairs: vi.fn().mockResolvedValue([{ source: "commercial_test", target: "commercial_test", kind: 1 }, { source: "special_source", target: "commercial_test", kind: 3 }]),
+      listCommercialDocuments: vi.fn().mockResolvedValue([approved(), source, approved({ id: "sp", docType: "special_source", officialNumber: "2026-000009" })]),
+    });
+    const kindSelect = await screen.findByLabelText(/^نوع الرابط/);
+    expect(within(kindSelect).getAllByRole("option").map((o) => o.textContent)).toEqual(["— اختر —", "ينفّذ", "يُرجع"]);
+    await userEvent.selectOptions(kindSelect, "1");
+    expect(within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|")).toContain("2026-000002");
+    expect(within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|")).not.toContain("2026-000009");
+    await userEvent.selectOptions(kindSelect, "3");
+    const options = within(screen.getByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent).join("|");
+    expect(options).toContain("2026-000009");
+    expect(options).not.toContain("2026-000002");
+  });
+
   it("works in English (LTR)", async () => {
     localStorage.setItem("hasm.locale", "en");
     setup({ listDocumentLinks: vi.fn().mockResolvedValue([link()]), getLineQuantities: vi.fn().mockResolvedValue([qty()]) }, PERMS, ["commercial_test"], [approved()], approved());
@@ -430,7 +461,7 @@ describe("commercial document links (S2 API on the screen)", () => {
     await userEvent.click(await screen.findByRole("tab", { name: /^Links/ }));
     expect(await screen.findByTestId("line-quantities")).toBeInTheDocument();
     expect(within(screen.getByTestId("link-l1")).getByText("Into this document")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Link to another document" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Link to another document" })).toBeInTheDocument();
     expect(document.documentElement.dir).toBe("ltr");
   });
 });

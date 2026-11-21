@@ -651,4 +651,12 @@ describe("api client: document links (S6 follow-up)", () => {
     expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents/d/links");
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/d/line-quantities");
   });
+
+  it("reads the registered link pairs from the types route and treats an absent field as none", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ types: ["a"], linkPairs: [{ source: "a", target: "a", kind: 1 }] })).mockResolvedValueOnce(json({ types: [] }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listCommercialLinkPairs()).toEqual([{ source: "a", target: "a", kind: 1 }]);
+    expect(await client.listCommercialLinkPairs()).toEqual([]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/types");
+  });
 });

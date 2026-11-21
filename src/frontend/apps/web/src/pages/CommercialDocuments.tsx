@@ -1,4 +1,4 @@
-import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
+import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -477,12 +477,13 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   const [links, setLinks] = useState<DocumentLink[] | null>(null);
   const [quantities, setQuantities] = useState<LineQuantity[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [pairs, setPairs] = useState<CommercialLinkPair[] | null>(null);
   const [candidates, setCandidates] = useState<CommercialDocument[]>([]);
   const [sourceId, setSourceId] = useState("");
   const [source, setSource] = useState<CommercialDocument | null>(null);
   const [sourceLine, setSourceLine] = useState("");
   const [targetLine, setTargetLine] = useState("");
-  const [kind, setKind] = useState<DocumentLinkKind>(1);
+  const [kind, setKind] = useState<DocumentLinkKind | 0>(0);
   const [quantity, setQuantity] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -499,6 +500,15 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
   }, [auth.api, auth.handleError, doc.id, approved, t]);
   useEffect(() => { void reload(); }, [reload]);
 
+  // the registered link pairs decide whether this document can be a link TARGET at all (production registers none, so the form is hidden and the empty state is shown)
+  useEffect(() => {
+    if (!approved || !canLink) return;
+    void auth.api.listCommercialLinkPairs().then(setPairs).catch((e) => { if (!auth.handleError(e)) setPairs([]); });
+  }, [auth.api, auth.handleError, approved, canLink]);
+  const targetPairs = (pairs ?? []).filter((p) => p.target === doc.docType);
+  const kinds = [...new Set(targetPairs.map((p) => p.kind))].sort();
+  const sourceTypes = new Set(targetPairs.filter((p) => p.kind === kind).map((p) => p.source));
+
   // the candidate sources: approved documents of the same branch, party and currency (the server checks the same rules again)
   useEffect(() => {
     if (!approved || !canLink) return;
@@ -513,6 +523,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
 
   async function create() {
     const v: Record<string, string> = {};
+    if (!kind) v.kind = t("commdoc.links.field.required");
     if (!sourceId) v.fromDocumentId = t("commdoc.links.field.required");
     if (!sourceLine) v.fromLineNo = t("commdoc.links.field.required");
     if (!targetLine) v.toLineNo = t("commdoc.links.field.required");
@@ -521,7 +532,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
     if (Object.keys(v).length > 0) { setError(t("commdoc.links.fix")); return; }
     setBusy(true); setError(null); setNotice(null);
     try {
-      await auth.api.createDocumentLink({ fromDocumentId: sourceId, fromLineNo: Number(sourceLine), toDocumentId: doc.id, toLineNo: Number(targetLine), kind, quantity: parsePositiveDecimal(quantity), idempotencyKey: key });
+      await auth.api.createDocumentLink({ fromDocumentId: sourceId, fromLineNo: Number(sourceLine), toDocumentId: doc.id, toLineNo: Number(targetLine), kind: kind as DocumentLinkKind, quantity: parsePositiveDecimal(quantity), idempotencyKey: key });
       setNotice(t("commdoc.links.created")); setKey(newKey()); setQuantity(""); setErrors({});
       await reload();
     } catch (err) {
@@ -574,14 +585,15 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
           </table>
         </div>
       </Card>
-      {approved && canLink && (
+      {approved && canLink && pairs !== null && targetPairs.length === 0 && <Banner kind="info" testId="no-link-pairs">{t("commdoc.links.no_pairs")}</Banner>}
+      {approved && canLink && targetPairs.length > 0 && (
         <Card title={t("commdoc.links.create")} hint={t("commdoc.links.create_hint")}>
           {notice && <Banner kind="success" testId="link-created">{notice}</Banner>}
           {error && <Banner kind="error" testId="link-error">{error}</Banner>}
-          {candidates.length === 0 && <p className="hint" data-testid="no-sources">{t("commdoc.links.source_none")}</p>}
+          {candidates.filter((c) => sourceTypes.has(c.docType)).length === 0 && <p className="hint" data-testid="no-sources">{t("commdoc.links.source_none")}</p>}
           <div className="fields">
             <Field id="cl-source" label={t("commdoc.links.source")} error={clean(errors, "fromDocumentId")} required>
-              {(aria) => <select {...aria} value={sourceId} onChange={(e) => void chooseSource(e.target.value)}><option value="">{t("form.select")}</option>{candidates.map((c) => <option key={c.id} value={c.id}>{c.officialNumber ?? shortId(c.id)} — {c.docType}</option>)}</select>}
+              {(aria) => <select {...aria} value={sourceId} onChange={(e) => void chooseSource(e.target.value)}><option value="">{t("form.select")}</option>{candidates.filter((c) => sourceTypes.has(c.docType)).map((c) => <option key={c.id} value={c.id}>{c.officialNumber ?? shortId(c.id)} — {c.docType}</option>)}</select>}
             </Field>
             <Field id="cl-source-line" label={t("commdoc.links.source_line")} error={clean(errors, "fromLineNo")} required>
               {(aria) => <select {...aria} value={sourceLine} disabled={!source} onChange={(e) => setSourceLine(e.target.value)}><option value="">{t("form.select")}</option>{(source?.lines ?? []).map((l) => <option key={l.lineNo} value={l.lineNo}>#{l.lineNo} — {l.quantity}</option>)}</select>}
@@ -590,7 +602,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
               {(aria) => <select {...aria} value={targetLine} onChange={(e) => setTargetLine(e.target.value)}><option value="">{t("form.select")}</option>{doc.lines.map((l) => <option key={l.lineNo} value={l.lineNo}>#{l.lineNo} — {l.quantity}</option>)}</select>}
             </Field>
             <Field id="cl-kind" label={t("commdoc.links.kind")} error={clean(errors, "kind")} required>
-              {(aria) => <select {...aria} value={kind} onChange={(e) => setKind(Number(e.target.value) as DocumentLinkKind)}>{LINK_KINDS.map((k) => <option key={k} value={k}>{t(`commdoc.links.kind.${k}`)}</option>)}</select>}
+              {(aria) => <select {...aria} value={kind} onChange={(e) => { setKind(Number(e.target.value) as DocumentLinkKind | 0); setSourceId(""); setSource(null); setSourceLine(""); }}><option value={0}>{t("form.select")}</option>{LINK_KINDS.filter((k) => kinds.includes(k)).map((k) => <option key={k} value={k}>{t(`commdoc.links.kind.${k}`)}</option>)}</select>}
             </Field>
             <Field id="cl-quantity" label={t("commdoc.links.quantity")} error={clean(errors, "quantity")} required>
               {(aria) => <input {...aria} value={quantity} inputMode="decimal" dir="ltr" autoComplete="off" onChange={(e) => setQuantity(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} />}

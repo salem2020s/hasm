@@ -51,6 +51,9 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
     private const int MaxLines = 5000;
 
     /// <summary>The names of the registered document types (empty in production until 3.15/3.16, the test type only in the test composition). Names only: the screen offers Create only when this is not empty.</summary>
+    /// <summary>The registered link pairs (both types registered): static registry data.</summary>
+    public IReadOnlyList<LinkPairView> RegisteredLinkPairs => types.LinkPairs;
+
     public IReadOnlyList<string> RegisteredTypes => [.. types.Types.Order(StringComparer.Ordinal)];
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static NpgsqlParameter Uuid(string name, Guid? v) => new(name, NpgsqlDbType.Uuid) { Value = v is { } g ? g : DBNull.Value };
