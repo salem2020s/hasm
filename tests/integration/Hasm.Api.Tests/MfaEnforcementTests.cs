@@ -69,6 +69,30 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
             Assert.Contains(Routes(), r => UnderPrefix(Pattern(r), candidate));                                                   // no stale candidate
     }
 
+    [Fact]
+    public async Task Every_protected_route_in_the_whole_table_is_gated_by_the_MfaVerified_requirement()
+    {
+        // S3b-1 (D-166): the plan says "every privileged endpoint requires MfaVerified/MfaFresh"; the strongest form is EVERY authenticated route, so a new route cannot skip it whatever prefix it uses.
+        var provider = factory.Services.GetRequiredService<IAuthorizationPolicyProvider>();
+        var offenders = new List<string>();
+        var protectedRoutes = 0;
+        foreach (var e in Routes())
+        {
+            var data = e.Metadata.GetOrderedMetadata<IAuthorizeData>();
+            if (data.Count == 0 || e.Metadata.GetMetadata<IAllowAnonymous>() is not null) continue;
+            protectedRoutes++;
+            var gated = false;
+            foreach (var d in data)
+            {
+                var policy = string.IsNullOrEmpty(d.Policy) ? await provider.GetDefaultPolicyAsync() : await provider.GetPolicyAsync(d.Policy);
+                if (policy is not null && policy.Requirements.Any(r => r is MfaVerifiedRequirement)) gated = true;
+            }
+            if (!gated) offenders.Add($"{string.Join("/", Methods(e))} {Pattern(e)}");
+        }
+        Assert.True(protectedRoutes > 100, $"only {protectedRoutes} protected routes were found; the enumeration is broken");
+        Assert.True(offenders.Count == 0, "protected routes without the MfaVerified requirement: " + string.Join(", ", offenders));
+    }
+
     // ---- handlers
 
     private static (AuthorizationHandlerContext Context, HttpContext Http) Context(IAuthorizationRequirement requirement, AuthenticatedSession? session)
