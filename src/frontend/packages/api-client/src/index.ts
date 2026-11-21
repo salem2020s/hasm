@@ -8,6 +8,8 @@ export interface ApiErrorDetails {
   fields?: { field: string; code: string }[];
   currentRevision?: number;
   retryAfterSeconds?: number;
+  /** Password-policy violations of a weak_password refusal: short codes only, never the password. */
+  problems?: string[];
 }
 
 /** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
@@ -830,7 +832,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
     if (!response.ok) {
-      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number } = {};
+      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number; problems?: unknown } = {};
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
@@ -841,6 +843,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
+        problems: Array.isArray(payload.problems) ? payload.problems.filter((x): x is string => typeof x === "string") : undefined,
         retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
       });
     }
