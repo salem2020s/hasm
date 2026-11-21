@@ -24,6 +24,18 @@
 
 Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "adversarial review of Draft PR #171 (head d372001, base 86e3ce8): factual claims, X1-A against Agent G's threat model, X2-X8 revalidation, revaluation scope gap, Q1-Q4; list what the doc lacks from Agent G's X1 report"; Head SHA reviewed d3720017729bb5bd5f07ba7f8f32e487003c4adc; executed: full diff read, every cited migration, trigger, CHECK, test and register line verified on 86e3ce8 and 1e8f477, #48 distance and registry counts recomputed; verdict request changes; findings M1 (migration-guard gap: CREATE OR REPLACE and DISABLE TRIGGER undetected, relevant to Q1 and Q4), L1 (F2 naming clash), L2 (SECURITY DEFINER hardening missing), L3 (restore/COPY missing), L4 (prefer a trigger-assigned xid8 over the xmin binding), L5 (audit binding and before/after catalog test missing), L6 (FIFO revaluation as out/in pair loses layer structure).
 
+## Resolution by the author (Agent P; model family Claude Opus)
+
+Applied in `docs/PHASE-3.8D-RESUME-REVIEW.md` on top of `c6dd72d` (one commit). It stays inert; nothing is executed or approved.
+* **M1 fixed.** Section c.1 adds Agent G's F2 (the guard misses `CREATE OR REPLACE` of an existing guard function and `DISABLE TRIGGER`). It requires that X1-A's migration redefines no existing guard function and disables no trigger (pinned by the new N17). For Q4, the replacement is a safeguard change, reviewed and pinned by a before/after catalog test. A follow-up guard extension is recorded that tells a first creation apart from a replacement, and it is added as owner hardening question **Q5**. Count correction: on `86e3ce8`, `CREATE OR REPLACE` appears in 3 company migration files (0009, 0027, 0029; 10 matching lines) and in no system migration, not in 28 migrations. The guard extension must keep all of them loadable either way.
+* **L1 fixed.** The document's "no new operation kind" finding is renamed **F3**; F2 now means Agent G's guard gap.
+* **L2 fixed.** c.4 item 6 adds the optional SECURITY DEFINER single writer before production: owner-owned and not a superuser, pinned `search_path`, EXECUTE only for the runtime role, `current_user` check for back-dated rows, grants re-applied after restore.
+* **L3 fixed.** Threat T11 covers restore/COPY: triggers are created post-data, the new tables are in the backup scope, and the deferred checks stay silent. New test N18 is a trial restore with epochs.
+* **L4 fixed.** c.4 item 1 uses a trigger-assigned `xid8` column (`pg_current_xact_id()`, never client-supplied) instead of the `xmin` low-32-bit binding. Execution stays unique per plan.
+* **L5 fixed.** c.4 item 5 adds a deferred check that the plan's business audit event (`t_2db8cf1f`) is written in the same transaction (new test N19). N17 is the before/after catalog test of every existing guard function, constraint and trigger.
+* **L6 fixed.** Section (e) item 3 and Q3 state that a FIFO revaluation as an out/in pair collapses the layers. The per-layer alternative keeps granularity but not the arrival ranks.
+* **Open for the reviewer:** confirmation of this delta.
+
 ---
 
 ## Appendix: Agent G's independent X1 review (written before reading PR #171; unchanged)
