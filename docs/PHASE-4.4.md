@@ -146,7 +146,14 @@ The result is a human-readable report plus a JSON report. `update-apply` re-runs
 1. **Verify and preflight:** the package, the trust rules (M3), then checks 1-3 and 5-7 again.
 2. **Quiesce (review M2 of #152):**
    * every API instance must be stopped (`api_still_running` otherwise). Stopping and starting the API service belongs to the installation model's service adapter (4.5). Until 4.5, the operator stops and starts it when the command asks;
-   * **every runtime role is blocked for the WHOLE window:** the system runtime role and every company runtime role are switched to `NOLOGIN`. Their prior attributes are recorded in the journal, and their remaining sessions are terminated. Then `pg_stat_activity` must show no session of any of them.
+   * **an update-in-progress guard (review L-a of #152):** every MUTATING `Hasm.Admin` command refuses (`update_in_progress`) while an update is open. The guard has two parts:
+     * the updater holds an exclusive advisory lock in a dedicated namespace on the system database, and every mutating command takes it shared, with a try;
+     * an `update.open` marker in the update state directory, checked by every mutating command on the same host. It covers the moments when the system database is renamed during a rollback.
+
+     The read-only commands (`backup-status`, `audit-verify`, `update-status`) stay available.
+   * **every runtime role is blocked for the WHOLE window:** the system runtime role and every company runtime role are switched to `NOLOGIN`.
+     * **The snapshot is journaled first (review L-b of #152):** every role's attributes (`LOGIN`, connection limit, the others) are written to the journal as the step's `intent` and flushed to disk (fsync of the file and its directory) BEFORE the first `ALTER ROLE`. Resume and rollback restore from that record, so a crash between two `ALTER ROLE`s never loses an original attribute.
+     * Then their remaining sessions are terminated, and `pg_stat_activity` must show no session of any of them.
      * An automatic restart, a second API instance or a forgotten service therefore cannot reconnect during the migration.
      * Access is restored ONLY at reopen (step 10) or at the end of a rollback, from the journal.
    * the backup run, retention, restore and provisioning locks are taken on the system database and held until the outcome. So no backup, retention, restore or provisioning can run meanwhile.
@@ -155,10 +162,17 @@ The result is a human-readable report plus a JSON report. `update-apply` re-runs
 5. **Pre-update copies (review M1 of #152):**
    * **System database:** copied by a streamed `pg_dump | pg_restore` into a new database (no file). A TEMPLATE copy is impossible here, because the update's own sessions hold the advisory locks on that database.
      * `pg_dump` reads one consistent snapshot. Nothing writes meanwhile: the API is stopped, every runtime role is `NOLOGIN`, and the locks are held.
-     * Privileges are restored with the data, so the copy keeps exactly the live grants.
+     * **The update's own copy invocation dumps and restores WITH object privileges** (review M4 of #152). It does not use the `--no-owner --no-privileges` defaults of the backup tool (`PgBackupTool`), which are right for backups but not for this copy.
    * **Each company database:** `CREATE DATABASE <copy> TEMPLATE <live>`. The update holds no session there. `ALLOW_CONNECTIONS false` and the termination of any remaining session come first, because TEMPLATE needs a source without sessions; connections are re-allowed right after the copy.
    * Generated opaque names are used, and only database TAGS appear in logs and events.
-   * **The copies KEEP the live grants**, so a rollback (which renames them back) needs no re-grant. They are unreachable meanwhile, because every runtime role is `NOLOGIN`. At reopen, the runtime roles' `CONNECT` on the copies is revoked (step 10).
+   * **Database-level properties are re-applied to EVERY copy (M4).** Neither a per-database dump nor a TEMPLATE copy carries them, because the `pg_database` row of a copy is new. They are read from live:
+     * the database ACL (`CONNECT` for the runtime role, `PUBLIC` revoked);
+     * the owner;
+     * the connection limit;
+     * the per-database settings (`ALTER DATABASE ... SET`).
+   * **Grant equality is verified before a copy is accepted (M4).** For each copy, the following are compared with live: the database ACL, owner, connection limit and settings, and every schema, table, sequence, function and default-privilege ACL (`pg_namespace`, `pg_class`, `pg_proc`, `pg_default_acl`; with the owner of every object). Any difference refuses the update before migration (`copy_grants_differ`), and the copies are dropped.
+   * So a rollback that renames a copy back restores the live privileges exactly. The rollback also re-verifies them after the rename (step 3 of the rollback).
+   * The copies are unreachable meanwhile, because every runtime role is `NOLOGIN`. At reopen, the runtime roles' `CONNECT` on the copies is revoked (step 10).
 6. **Install side by side:**
    * The verified payload is moved into `versions/<version>/`, and the active-version pointer is switched atomically (a rename of a pointer file, or a symbolic link where the platform allows one).
    * The previous version's directory stays.
@@ -194,7 +208,9 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
 * **Automatic, before step 9:** any failure in steps 5-8, or a failure to write `UpdateApplied`, rolls back from the journal:
   1. the pointer is switched back to the previous version;
   2. **every database to be renamed** first gets `ALLOW_CONNECTIONS false`, then its remaining sessions are terminated, the updater's own included. That releases the update's locks, and nobody can reconnect to take them (review L6 of #152);
-  3. each migrated database is renamed to a RETAINED name, and its copy is renamed back to the live name (the D-145 rename switch). The physical names, registry rows and credentials stay valid, and the copies carry the live grants (M1), so nothing is re-granted;
+  3. each migrated database is renamed to a RETAINED name, and its copy is renamed back to the live name (the D-145 rename switch). The physical names, registry rows and credentials stay valid.
+     * Each restored database's privileges are compared again with the snapshot taken at step 5 (M4).
+     * On any difference, the privileges are re-applied from that snapshot: for the system database, the system runtime role's grants; for a company, `grant-company-runtime` of the OLD version. They are then verified, and a failure stops the rollback for the operator (`rollback_grants_failed`, audited) with the roles still `NOLOGIN`;
   4. the retained failed databases lose every runtime privilege, `CONNECT` included;
   5. connections are re-allowed, the runtime roles get their recorded attributes back (M2), and the old version starts and passes its own health check;
   6. audit `UpdateRolledBack`, with the failed step and code.
@@ -271,7 +287,10 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
   * The trial migration failing on real data refuses before any downtime.
   * A running API (a session of a runtime role) refuses the apply.
   * M2: during the window every runtime role is `NOLOGIN`, so a login attempt by a restarted API fails. Access returns only at reopen or at the end of a rollback, with the recorded attributes.
-  * M1: the system database copy is made by streaming while the update holds its locks, and the company copies by TEMPLATE. The pre-update backup runs inside the held run lock without `run_in_progress`. A rollback renames the copies back with their grants intact, after terminating every session (L6).
+  * M1: the system database copy is made by streaming while the update holds its locks, and the company copies by TEMPLATE. The pre-update backup runs inside the held run lock without `run_in_progress`. A rollback renames the copies back after terminating every session (L6).
+  * M4: after a rollback, the system runtime role logs in and reads and writes exactly as before, and every company runtime role does the same. The catalog comparison catches a copy with a missing table ACL, a missing database `CONNECT`, a different owner, a different connection limit or a missing database setting, and refuses before migration. A rollback whose restored database lost a grant re-applies it and verifies it.
+  * L-a: a mutating `Hasm.Admin` command run during the window refuses (`update_in_progress`), and a read-only one works.
+  * L-b: a crash after the first `ALTER ROLE ... NOLOGIN` resumes and restores every role's original attributes from the journaled snapshot.
   * L3: a migration that alters a role fails the trial migration (`role_changed_by_update`).
   * L4: `UpdateApplied` precedes reopening, and a failure after it does not roll back.
   * The pre-update backup is required: no encryption configured means refused.
