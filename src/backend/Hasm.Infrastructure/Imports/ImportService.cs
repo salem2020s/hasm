@@ -196,20 +196,7 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
         catch (ImportRejectedException ex) { return ConfigResult<ImportBatchView>.Invalid([new("file", ex.Code)]); }
         var sha = Sha(data);
 
-        if (key is not null)
-        {
-            await using var conn = await resolver.OpenAsync(companyId, ct);
-            await using var q = new NpgsqlCommand($"SELECT {IB.Id}, {IB.CreatedBy}, {IB.FileSha256}, {IB.AdapterCode} FROM {IB.Table} WHERE {IB.IdempotencyKey} = @k", conn);
-            q.Parameters.AddWithValue("k", key);
-            await using var r = await q.ExecuteReaderAsync(ct);
-            if (await r.ReadAsync(ct))
-            {
-                var existing = r.GetGuid(0); var same = r.GetGuid(1) == actor && r.GetString(2).Trim() == sha && r.GetString(3) == adapter.Code;
-                await r.CloseAsync();
-                if (!same) return ConfigResult<ImportBatchView>.Fail(ConfigStatus.Conflict, "idempotency_key_reused");
-                return ConfigResult<ImportBatchView>.Ok((await LoadAsync(conn, null, existing, false, ct))!);
-            }
-        }
+        if (key is not null && await ReplayAsync(actor, companyId, key, sha, adapter.Code, ct) is { } replay) return replay;
 
         var id = Guid.NewGuid();
         var storageName = id.ToString("N") + ".enc";
@@ -241,7 +228,27 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
         }
         catch { store.Delete(companyId, storageName); throw; }
         if (!result.IsOk) store.Delete(companyId, storageName);      // nothing was recorded: the orphaned ciphertext must not stay
+        // a concurrent upload with the same key won the race (its unique key was committed first): the documented contract is a replay of that batch when the request is the same (same user,
+        // same file SHA-256, same adapter), and 409 idempotency_key_reused otherwise (C2 matrix part 2)
+        if (!result.IsOk && result.Code == "idempotency_key_reused" && key is not null && await ReplayAsync(actor, companyId, key, sha, adapter.Code, ct) is { } winner) return winner;
         return result;
+    }
+
+    /// <summary>
+    /// The batch already recorded under <paramref name="key"/>: a replay (200, the first batch) when it was uploaded by the same user with the same file SHA-256 and adapter, otherwise
+    /// 409 <c>idempotency_key_reused</c>; null when no batch carries the key.
+    /// </summary>
+    private async Task<ConfigResult<ImportBatchView>?> ReplayAsync(Guid actor, Guid companyId, string key, string sha, string adapterCode, CancellationToken ct)
+    {
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var q = new NpgsqlCommand($"SELECT {IB.Id}, {IB.CreatedBy}, {IB.FileSha256}, {IB.AdapterCode} FROM {IB.Table} WHERE {IB.IdempotencyKey} = @k", conn);
+        q.Parameters.AddWithValue("k", key);
+        await using var r = await q.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        var existing = r.GetGuid(0); var same = r.GetGuid(1) == actor && r.GetString(2).Trim() == sha && r.GetString(3) == adapterCode;
+        await r.CloseAsync();
+        if (!same) return ConfigResult<ImportBatchView>.Fail(ConfigStatus.Conflict, "idempotency_key_reused");
+        return ConfigResult<ImportBatchView>.Ok((await LoadAsync(conn, null, existing, false, ct))!);
     }
 
     private static string HashRow(int rowNo, string rawJson) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{rowNo}|{rawJson}"))).ToLowerInvariant();
@@ -401,12 +408,16 @@ public sealed partial class ImportService(CompanyDatabaseResolver resolver, Comp
             var cur = await ReadSettingsAsync(work.Connection, work.Transaction, ct);
             if (cur.Revision != expectedRevision.Value) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", cur.Revision);
             var now = clock.GetUtcNow().UtcDateTime;
+            // race-safe against concurrent writers with the same If-Match (C2 matrix part 2): the first write inserts the singleton with ON CONFLICT DO NOTHING and an update applies only at the
+            // expected revision; the loser writes nothing and gets 412 revision_conflict with the current revision. Any other database error still propagates.
             await using (var w = new NpgsqlCommand(cur.Configured
-                ? $"UPDATE {IMS.Table} SET {IMS.RetentionDays} = @r, {IMS.PendingExpiryDays} = @p, {IMS.Revision} = {IMS.Revision} + 1, {IMS.UpdatedAtUtc} = @t"
-                : $"INSERT INTO {IMS.Table} ({IMS.RetentionDays}, {IMS.PendingExpiryDays}, {IMS.Revision}, {IMS.UpdatedAtUtc}) VALUES (@r, @p, 1, @t)", work.Connection, work.Transaction))
+                ? $"UPDATE {IMS.Table} SET {IMS.RetentionDays} = @r, {IMS.PendingExpiryDays} = @p, {IMS.Revision} = {IMS.Revision} + 1, {IMS.UpdatedAtUtc} = @t WHERE {IMS.Revision} = @e"
+                : $"INSERT INTO {IMS.Table} ({IMS.RetentionDays}, {IMS.PendingExpiryDays}, {IMS.Revision}, {IMS.UpdatedAtUtc}) VALUES (@r, @p, 1, @t) ON CONFLICT DO NOTHING", work.Connection, work.Transaction))
             {
                 w.Parameters.AddWithValue("r", input!.RetentionDays!.Value); w.Parameters.AddWithValue("p", input.PendingExpiryDays!.Value); w.Parameters.AddWithValue("t", now);
-                await w.ExecuteNonQueryAsync(ct);
+                w.Parameters.AddWithValue("e", cur.Revision);
+                if (await w.ExecuteNonQueryAsync(ct) != 1)
+                    throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict", (await ReadSettingsAsync(work.Connection, work.Transaction, ct)).Revision);
             }
             var revision = cur.Revision + 1;
             var changes = new JsonObject { ["retentionDays"] = new JsonObject { ["old"] = cur.Configured ? cur.Retention : null, ["new"] = input.RetentionDays }, ["pendingExpiryDays"] = new JsonObject { ["old"] = cur.Configured ? cur.Pending : null, ["new"] = input.PendingExpiryDays } };
