@@ -6,6 +6,7 @@ using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
+using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -23,7 +24,7 @@ public sealed record UserRecord(
 /// <summary>An active session joined with the current state of its user.</summary>
 public sealed record ActiveSession(
     Guid SessionId, Guid UserId, SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset LastSeenAtUtc,
-    string Login, string DisplayName, bool IsIdentityAdministrator);
+    string Login, string DisplayName, bool IsIdentityAdministrator, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
 
 public sealed class DuplicateLoginException() : Exception("The login identifier is already in use.");
 
@@ -280,7 +281,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator} " +
+            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator}, s.{SM.VerifiedAtUtc}, u.{M.State} " +
             $"FROM {S.Table} s JOIN {U.Table} u ON u.{U.Id} = s.{S.UserId} " +
             $"WHERE s.{S.TokenHash} = @t AND s.{S.RevokedAtUtc} IS NULL AND s.{S.IdleExpiresAtUtc} > @n AND s.{S.AbsoluteExpiresAtUtc} > @n AND u.{U.State} = 0", conn);
         cmd.Parameters.AddWithValue("t", tokenHash);
@@ -290,7 +291,17 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return new ActiveSession(
             r.GetGuid(0), r.GetGuid(1), (SessionClient)r.GetInt16(2),
             r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetFieldValue<DateTimeOffset>(5),
-            r.GetString(6), r.GetString(7), r.GetBoolean(8));
+            r.GetString(6), r.GetString(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), (MfaState)r.GetInt16(10));
+    }
+
+    /// <summary>Records that the session has now passed the second factor (an enrolment confirmed in a live session): auth_methods password + totp with the verification time. Returns false when the session is not live.</summary>
+    public async Task<bool> MarkSessionMfaVerifiedAsync(Guid sessionId, DateTimeOffset at, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand($"UPDATE {S.Table} SET {SM.AuthMethods} = 3, {SM.VerifiedAtUtc} = @t WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn);
+        cmd.Parameters.AddWithValue("t", at);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
     /// <summary>Records activity and extends the idle expiry (capped at the absolute expiry) of a live session.</summary>

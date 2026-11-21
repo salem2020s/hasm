@@ -21,8 +21,9 @@ public class MfaLoginTests : IdentityTestBase
         var connection = Options.BuildSystemConnectionString(admin: true);
         Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring));
         var challenges = new MfaChallengeStore(connection, Clock);
-        var verifier = new MfaVerifier(Mfa, new MfaAttemptLimiter(Store, Clock), Clock);
-        MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(challenges, verifier, Mfa));
+        var limiter = new MfaAttemptLimiter(Store, Clock);
+        var verifier = new MfaVerifier(Mfa, limiter, Clock);
+        MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(challenges, verifier, Mfa, limiter));
     }
 
     private long Step => Totp.StepFor(Clock.GetUtcNow());

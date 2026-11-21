@@ -17,11 +17,22 @@ public abstract record LoginOutcome
 }
 
 /// <summary>The second-factor services the login uses. When absent (no encryption key ring configured, or a test that does not use MFA) the login behaves exactly as before and issues sessions after the password.</summary>
-public sealed record MfaLoginServices(MfaChallengeStore Challenges, MfaVerifier Verifier, MfaStore State);
+public sealed record MfaLoginServices(MfaChallengeStore Challenges, MfaVerifier Verifier, MfaStore State, IMfaAttemptLimiter Limiter);
+
+/// <summary>The answers of the enrolment steps. Every refusal is the same <see cref="Refused"/> (no oracle).</summary>
+public abstract record MfaEnrolOutcome
+{
+    /// <summary>The new secret, to be shown ONCE (QR code from the provisioning URI, the Base32 text as a fallback).</summary>
+    public sealed record Started(string OtpauthUri, string SecretBase32) : MfaEnrolOutcome;
+    /// <summary>The enrolment is complete. <see cref="NewSession"/> is set for an enrolment that came from a challenge (a session is created now); null when the caller's own session was upgraded.</summary>
+    public sealed record Confirmed(LoginOutcome.Success? NewSession) : MfaEnrolOutcome;
+    public sealed record Refused : MfaEnrolOutcome;
+    public sealed record Throttled(TimeSpan RetryAfter) : MfaEnrolOutcome;
+}
 
 public sealed record AuthenticatedSession(
     Guid SessionId, Guid UserId, string Login, string DisplayName, bool IsIdentityAdministrator,
-    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc);
+    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
 
 public enum CreateUserStatus { Created, InvalidLogin, WeakPassword, InvalidDisplayName, LoginTaken }
 public sealed record CreateUserResult(CreateUserStatus Status, UserRecord? User = null, IReadOnlyList<string>? PasswordProblems = null);
@@ -163,6 +174,126 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         return await CreateSessionAsync(user, client, store.UtcNow, ct);
     }
 
+    // ---- Enrolment (Phase 4.1 section 4; D-142) ----
+
+    private static (byte[] Pair, byte[] Global, byte[] Source) LoginKeys(string normalizedLogin, string source) =>
+        (SessionToken.HashKey(ThrottleKeyDomains.LoginPair + normalizedLogin + "|" + source), SessionToken.HashKey(ThrottleKeyDomains.LoginIdentifier + normalizedLogin), SessionToken.HashKey(ThrottleKeyDomains.LoginSource + source));
+
+    private async Task RecordLoginFailureAsync(byte[] pairKey, byte[] globalKey, byte[] sourceKey, CancellationToken ct)
+    {
+        await store.RecordFailureAsync(ThrottleScope.Login, pairKey, options.MaxFailuresPerLoginSource, options.FailureWindow, options.Block, ct);
+        await store.RecordFailureAsync(ThrottleScope.Login, globalKey, options.MaxFailuresPerLoginGlobal, options.FailureWindow, options.Block, ct);
+        await store.RecordFailureAsync(ThrottleScope.Source, sourceKey, options.MaxFailuresPerSource, options.FailureWindow, options.Block, ct);
+    }
+
+    private const string Issuer = "HASM";
+
+    private async Task<MfaEnrolOutcome> StartEnrolmentAsync(UserRecord user, CancellationToken ct)
+    {
+        var secret = Totp.GenerateSecret();
+        try
+        {
+            await mfa!.State.CreatePendingAsync(user.Id, secret, null, ct);
+            return new MfaEnrolOutcome.Started(Totp.ProvisioningUri(Issuer, user.Login, secret), Totp.ToBase32(secret));
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(secret); }
+    }
+
+    /// <summary>
+    /// Begins an enrolment that came from the password step (an <c>enrol</c> challenge): the user is EnrolmentRequired and presents the one-time enrolment code that was given to them out of band. With no stored code (anyone who is not a
+    /// bootstrap administrator before S4/S5) nothing can start: the user stays without a session (fail closed, D-142 b). Wrong codes count against the second-factor throttle.
+    /// </summary>
+    public async Task<MfaEnrolOutcome> BeginEnrolmentWithChallengeAsync(string? challengeToken, string? enrolmentCode, SessionClient client, string? source, CancellationToken ct = default)
+    {
+        if (mfa is null) return new MfaEnrolOutcome.Refused();
+        var attempt = await mfa.Challenges.TryBeginAttemptAsync(challengeToken, MfaChallengePurpose.Enrol, client, source, ct);
+        if (attempt is null) return new MfaEnrolOutcome.Refused();
+        var src = string.IsNullOrWhiteSpace(source) ? SourceAddress.Unknown : source;
+        if (await mfa.Limiter.BlockedForAsync(attempt.UserId, src, ct) is { } retry) return new MfaEnrolOutcome.Throttled(retry);
+        var user = await store.FindUserByIdAsync(attempt.UserId, ct);
+        if (user is null || user.State != UserState.Active || await mfa.State.GetStateAsync(user.Id, ct) != MfaState.EnrolmentRequired) return new MfaEnrolOutcome.Refused();
+        if (!await mfa.State.CheckEnrolmentCodeAsync(user.Id, enrolmentCode, ct))
+        {
+            await mfa.Limiter.RecordFailureAsync(user.Id, src, ct);
+            return new MfaEnrolOutcome.Refused();
+        }
+        return await StartEnrolmentAsync(user, ct);
+    }
+
+    /// <summary>
+    /// Begins a VOLUNTARY enrolment of a user who has a session and no MFA yet (D-142 c). Because a hijacked session must not be able to bind an attacker's authenticator, the request re-confirms the PASSWORD, checked through the login
+    /// throttle path: a blocked login is throttled, and a wrong password counts as a login failure. A user who is Enrolled (a change of device needs step-up, slice S3), EnrolmentRequired or RecoveryRequired cannot use this path.
+    /// </summary>
+    public async Task<MfaEnrolOutcome> BeginEnrolmentWithSessionAsync(AuthenticatedSession session, string? password, string? sourceAddress, CancellationToken ct = default)
+    {
+        if (mfa is null) return new MfaEnrolOutcome.Refused();
+        var user = await store.FindUserByIdAsync(session.UserId, ct);
+        if (user is null || user.State != UserState.Active || await mfa.State.GetStateAsync(user.Id, ct) != MfaState.None) return new MfaEnrolOutcome.Refused();
+        password ??= "";
+        if (password.Length > MaxPasswordInput) password = password[..MaxPasswordInput];
+        var source = string.IsNullOrWhiteSpace(sourceAddress) ? SourceAddress.Unknown : sourceAddress;
+        var (pairKey, globalKey, sourceKey) = LoginKeys(user.Login, source);
+        if (await store.GetBlockedUntilAsync([(ThrottleScope.Login, pairKey), (ThrottleScope.Login, globalKey), (ThrottleScope.Source, sourceKey)], ct) is { } blockedUntil)
+            return new MfaEnrolOutcome.Throttled(Max(blockedUntil - store.UtcNow, TimeSpan.FromSeconds(1)));
+        if (password.Length == 0 || passwords.Verify(user.PasswordHash, password) == PasswordVerification.Failed)
+        {
+            await RecordLoginFailureAsync(pairKey, globalKey, sourceKey, ct);                                    // counts as a login failure
+            logger?.LogWarning("auth.mfa_enrol outcome=bad_password user={UserId}", user.Id);
+            return new MfaEnrolOutcome.Refused();
+        }
+        return await StartEnrolmentAsync(user, ct);
+    }
+
+    /// <summary>
+    /// Confirms an enrolment that came from a challenge: the code is verified against the PENDING secret through the single <see cref="MfaVerifier"/>, the challenge is consumed, the secret is activated (spending the one-time enrolment code
+    /// in the same transaction), every session the user had is revoked, and a new session is created as password + totp.
+    /// </summary>
+    public async Task<MfaEnrolOutcome> ConfirmEnrolmentWithChallengeAsync(string? challengeToken, string? code, SessionClient client, string? source, CancellationToken ct = default)
+    {
+        if (mfa is null) return new MfaEnrolOutcome.Refused();
+        var attempt = await mfa.Challenges.TryBeginAttemptAsync(challengeToken, MfaChallengePurpose.Enrol, client, source, ct);
+        if (attempt is null) return new MfaEnrolOutcome.Refused();
+        var outcome = await ConfirmCoreAsync(attempt.UserId, code, source, consumeEnrolmentCode: true, ct);
+        if (outcome is not null) return outcome;
+        if (!await mfa.Challenges.ConsumeAsync(attempt.Id, ct)) return new MfaEnrolOutcome.Refused();
+        var user = await store.FindUserByIdAsync(attempt.UserId, ct);
+        if (user is null || user.State != UserState.Active) return new MfaEnrolOutcome.Refused();
+        await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative, exceptSessionId: null, ct);   // the new factor invalidates every earlier session
+        return new MfaEnrolOutcome.Confirmed(await CreateSessionAsync(user, client, store.UtcNow, ct));
+    }
+
+    /// <summary>Confirms a voluntary enrolment in a live session: the secret becomes active, every OTHER session of the user is revoked, and the confirming session is re-issued as password + totp (D-142 d).</summary>
+    public async Task<MfaEnrolOutcome> ConfirmEnrolmentWithSessionAsync(AuthenticatedSession session, string? code, string? source, CancellationToken ct = default)
+    {
+        if (mfa is null) return new MfaEnrolOutcome.Refused();
+        if (await mfa.State.GetStateAsync(session.UserId, ct) != MfaState.None) return new MfaEnrolOutcome.Refused();
+        var outcome = await ConfirmCoreAsync(session.UserId, code, source, consumeEnrolmentCode: false, ct);
+        if (outcome is not null) return outcome;
+        await store.RevokeUserSessionsAsync(session.UserId, SessionRevocation.Administrative, session.SessionId, ct);
+        await store.MarkSessionMfaVerifiedAsync(session.SessionId, store.UtcNow, ct);
+        return new MfaEnrolOutcome.Confirmed(null);
+    }
+
+    /// <summary>The shared part of both confirmations: verify the code against the pending secret and activate it. Null when the enrolment is now active, otherwise the refusal to return.</summary>
+    private async Task<MfaEnrolOutcome?> ConfirmCoreAsync(Guid userId, string? code, string? source, bool consumeEnrolmentCode, CancellationToken ct)
+    {
+        MfaSecret? pending;
+        try { pending = await mfa!.State.FindPendingSecretAsync(userId, ct); }
+        catch (MfaUnavailableException) { return new MfaEnrolOutcome.Refused(); }
+        if (pending is null) return new MfaEnrolOutcome.Refused();
+        var secretId = pending.SecretId;
+        pending.Dispose();
+        switch (await mfa.Verifier.VerifyPendingAsync(userId, code, source, ct))
+        {
+            case MfaResult.Throttled t: return new MfaEnrolOutcome.Throttled(t.RetryAfter);
+            case MfaResult.Verified v:
+                if (!await mfa.State.ActivatePendingAsync(userId, secretId, v.Step, null, ct, consumeEnrolmentCode)) return new MfaEnrolOutcome.Refused();
+                logger?.LogInformation("auth.mfa_enrol outcome=confirmed user={UserId}", userId);
+                return null;
+            default: return new MfaEnrolOutcome.Refused();
+        }
+    }
+
     /// <summary>Validates a presented token; null when malformed, unknown, revoked, expired or the user is not Active.</summary>
     public async Task<AuthenticatedSession?> AuthenticateAsync(string? token, CancellationToken ct = default)
     {
@@ -177,7 +308,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
             idle = Min(now + options.SessionIdle, s.AbsoluteExpiresAtUtc);
             await store.TouchSessionAsync(s.SessionId, idle, ct);
         }
-        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc);
+        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc, s.MfaVerifiedAtUtc, s.MfaState);
     }
 
     public async Task LogoutAsync(Guid sessionId, CancellationToken ct = default)

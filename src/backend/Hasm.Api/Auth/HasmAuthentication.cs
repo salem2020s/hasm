@@ -91,8 +91,9 @@ public static class AuthenticationSetup
         string SystemConnection() { var options = HasmDatabaseOptions.FromConfiguration(configuration); options.EnsureValid(requireAdmin: false); return options.BuildSystemConnectionString(admin: false); }
         services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing())));
         services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton(sp => new MfaVerifier(sp.GetRequiredService<MfaStore>(), new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()), sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton(sp => new MfaLoginServices(sp.GetRequiredService<MfaChallengeStore>(), sp.GetRequiredService<MfaVerifier>(), sp.GetRequiredService<MfaStore>()));
+        services.AddSingleton<IMfaAttemptLimiter>(sp => new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new MfaVerifier(sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new MfaLoginServices(sp.GetRequiredService<MfaChallengeStore>(), sp.GetRequiredService<MfaVerifier>(), sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>()));
         services.AddSingleton<AuthService>();
         services.AddHostedService<IdentityHousekeepingService>();
 
