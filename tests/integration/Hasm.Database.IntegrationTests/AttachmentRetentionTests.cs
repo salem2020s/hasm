@@ -71,6 +71,47 @@ public class AttachmentRetentionDatabaseTests : InventoryTestBase
         return Ok(await Store.ApprovePolicyAsync((await Approver()).Id, Company.Id, draft.Id, draft.Revision, null));
     }
 
+    // ---------------------------------------------------------------------------------------------------------------- preview filter
+
+    [PostgresFact]
+    public async Task The_preview_can_be_filtered_by_record_kind_and_record_returns_ids_only_and_keeps_the_permission_and_paging()
+    {
+        await Prepare();
+        var other = Guid.NewGuid();
+        await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{other}', 'RT2', 'q', true, 1, 1, '{Admin.Id}', now(), now())");
+        var a1 = await UpAndRemove();
+        var a2 = await UpAndRemove(sensitive: true);
+        var live = Ok(await Attachments.UploadAsync(Admin.Id, Company.Id, "local_party", party, "live.pdf", "application/pdf", Pdf, false));                 // active: never listed
+        var upB = Ok(await Attachments.UploadAsync(Admin.Id, Company.Id, "local_party", other, "other.pdf", "application/pdf", Pdf, false));
+        var b1 = Ok(await Attachments.RemoveAsync(Admin.Id, Company.Id, upB.Id, upB.Revision, "obsolete", allowSensitive: true));
+
+        // no filter: every removed attachment; the record filter: only that record's removed attachments, with the TOTAL of the filtered set
+        Assert.Equal(3L, (await Store.PreviewAsync(Company.Id, null, null)).Total);
+        var ofA = await Store.PreviewAsync(Company.Id, null, null, "local_party", party);
+        Assert.Equal(2L, ofA.Total);
+        Assert.Equal(new[] { a1.Id, a2.Id }.Order(), ofA.Items.Select(i => i.AttachmentId).Order());
+        Assert.All(ofA.Items, i => Assert.Equal((party, "local_party"), (i.SubjectId, i.SubjectKind)));
+        Assert.DoesNotContain(live.Id, ofA.Items.Select(i => i.AttachmentId));
+        var ofB = await Store.PreviewAsync(Company.Id, null, null, "local_party", other);
+        Assert.Equal((1L, b1.Id), (ofB.Total, Assert.Single(ofB.Items).AttachmentId));
+        // the kind alone filters by kind; another kind or an unknown record is simply empty
+        Assert.Equal(3L, (await Store.PreviewAsync(Company.Id, null, null, "local_party", null)).Total);
+        Assert.Equal(0L, (await Store.PreviewAsync(Company.Id, null, null, "inventory_item", null)).Total);
+        Assert.Empty((await Store.PreviewAsync(Company.Id, null, null, "local_party", Guid.NewGuid())).Items);
+        // paging applies inside the filtered set
+        var second = await Store.PreviewAsync(Company.Id, 1, 1, "local_party", party);
+        Assert.Equal((2L, 1), (second.Total, second.Items.Count));
+        Assert.Single((await Store.PreviewAsync(Company.Id, 0, 5, "local_party", party)).Items, i => i.AttachmentId == ofA.Items[0].AttachmentId);
+        // ids only: the page type carries no file name, content type or digest at all
+        Assert.DoesNotContain(typeof(RetentionPreviewItem).GetProperties(), p => p.Name.Contains("FileName", StringComparison.Ordinal) || p.Name.Contains("Sha256", StringComparison.Ordinal) || p.Name.Contains("ContentType", StringComparison.Ordinal));
+
+        // the permission is unchanged: retention view reads the filtered preview, an outsider is refused whatever the filter says
+        var viewer = (await Member([PermissionCatalog.Codes.RetentionView], ScopeKind.Company, null)).User;
+        Assert.Equal(2L, Ok(await Mgmt.PreviewAsync(viewer.Id, Company.Id, null, null, "local_party", party)).Total);
+        var outsider = await NewUser("previewfilteroutsider");
+        Fails(await Mgmt.PreviewAsync(outsider.Id, Company.Id, null, null, "local_party", party), ConfigStatus.Forbidden, "forbidden");
+    }
+
     // ---------------------------------------------------------------------------------------------------------------- policy
 
     [PostgresFact]

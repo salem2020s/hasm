@@ -200,6 +200,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   const stageRoleMissing = !!openStage?.roleId && !auth.hasRole(openStage.roleId);
   const planComplete = plan.length > 0 && !openStage;
   const notEligible: "decided" | "role" | "complete" | null = decidedByMe ? "decided" : planComplete ? "complete" : stageRoleMissing ? "role" : null;
+  // Approve and Reject are scoped to the DOCUMENT'S branch on the server (a company-wide grant, or a grant for that very branch): a grant for another branch must not show them.
+  const canDecide = !!doc && auth.canOnBranch("company.commercialdocs.approve", doc.branchId);
   const mine = !!doc && [doc.createdBy, doc.lastEditedBy, doc.submittedBy].some((u) => u !== null && u === auth.user?.id);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const activeBranches = branches.filter((b) => b.isActive || b.id === form.branchId);
@@ -380,13 +382,13 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
           {canEdit && <button type="submit" className="primary" disabled={busy}>{busy ? t("loading") : t("inv.save")}</button>}
           {doc && status === 1 && can("company.commercialdocs.submit") && <button type="button" disabled={busy || dirty} title={dirty ? t("commdoc.save_first") : undefined} onClick={() => setConfirmSubmit(true)}>{t("commdoc.submit")}</button>}
           {doc && status === 2 && can("company.commercialdocs.submit") && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawCommercialDocument(doc.id, rev), t("commdoc.withdrawn"))}>{t("commdoc.withdraw")}</button>}
-          {doc && status === 2 && can("company.commercialdocs.approve") && !notEligible && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined}
+          {doc && status === 2 && canDecide && !notEligible && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined}
             onClick={() => void act(() => auth.api.approveCommercialDocument(doc.id, rev), (r) => ((r as CommercialDocument).status === 3 ? t("commdoc.approved") : t("commdoc.decision_recorded")))}>{t("commdoc.approve")}</button>}
-          {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
+          {doc && status === 2 && canDecide && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
           {doc && status !== 5 && can("company.commercialdocs.cancel") && <button type="button" className="danger" data-testid="cancel-document" disabled={busy} onClick={() => { setReason(""); setReasonError(null); setDialog("cancel"); }}>{t("commdoc.cancel_document")}</button>}
         </div>
-        {doc && status === 2 && mine && can("company.commercialdocs.approve") && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
-        {doc && status === 2 && !mine && can("company.commercialdocs.approve") && notEligible && <p className="hint" data-testid="approve-not-eligible">{t(`commdoc.approval.not_eligible.${notEligible}`)}</p>}
+        {doc && status === 2 && mine && canDecide && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
+        {doc && status === 2 && !mine && canDecide && notEligible && <p className="hint" data-testid="approve-not-eligible">{t(`commdoc.approval.not_eligible.${notEligible}`)}</p>}
       </form>
       {confirmSubmit && doc && <ConfirmDialog title={t("commdoc.submit")} message={t("commdoc.submit_message")} confirmLabel={t("form.confirm")} onCancel={() => setConfirmSubmit(false)} onConfirm={() => void act(() => auth.api.submitCommercialDocument(doc.id, rev), t("commdoc.submitted"))} />}
       {dialog && doc && (

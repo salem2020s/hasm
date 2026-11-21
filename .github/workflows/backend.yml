@@ -143,7 +143,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1186 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1192 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -240,7 +240,7 @@ jobs:
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
-                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 3, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
+                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 4, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
@@ -261,5 +261,7 @@ jobs:
                 "InventoryPeriodInvariantTests": 3,
                 # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
                 "BackupRetentionTests": 6,
+                # Release 1 acceptance evidence for owner item 11 (D-088): real encrypted backup, trial restore with the recovery key, tampering and downgrade refusals, key rotation, key-export round trip (no migration).
+                "BackupAcceptanceEvidenceTests": 5,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
