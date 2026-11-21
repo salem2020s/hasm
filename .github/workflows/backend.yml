@@ -143,7 +143,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1185 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1187 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -197,7 +197,7 @@ jobs:
                 # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
                 "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
                 # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
-                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 9, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
+                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 11, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
                 # Phase 3.3 financial reporting: S1 reporting foundation.
                 "ReportingFoundationTests": 6, "ReportingComparisonTests": 8, "FinancialStatementTests": 13, "ExcelExportTests": 4,
                 # Phase 3.4 inventory master data (company migration 0012, system migration 0015).
