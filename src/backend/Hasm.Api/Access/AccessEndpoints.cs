@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http.Metadata;
 namespace Hasm.Api.Access;
 
 public sealed record SelectCompanyRequest(Guid? CompanyId);
+public sealed record SetMfaPolicyRequest(string? Policy, Guid[]? RoleIds);
 public sealed record CreateRoleRequest(string? Name, string[]? Permissions);
 public sealed record SetPermissionsRequest(string[]? Permissions);
 public sealed record GrantMembershipRequest(string? Login);
@@ -19,6 +20,16 @@ public static class AccessSetup
     public static IServiceCollection AddHasmAccess(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton(PermissionCatalog.Default);
+        // Phase 4.1 S3b-1b: the company MFA policy (same runtime connection; the service asks the access service for permissions and the identity store for the actor's MFA state)
+        services.AddSingleton(sp => new MfaPolicyService(
+            () =>
+            {
+                var options = HasmDatabaseOptions.FromConfiguration(configuration);
+                options.EnsureValid(requireAdmin: false);
+                return options.BuildSystemConnectionString(admin: false);
+            },
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), sp.GetRequiredService<AccessService>(), sp.GetRequiredService<IdentityStore>()));
+        services.AddSingleton<ICompanyMfaPolicyEvaluator>(sp => sp.GetRequiredService<MfaPolicyService>());
         // Runtime (least-privilege) database account; never the provisioning administrator. Connection string is built lazily.
         services.AddSingleton(sp => new AccessService(
             () =>
@@ -47,11 +58,13 @@ public static class AccessEndpoints
 
     public static void MapAccessEndpoints(this WebApplication app)
     {
-        var api = app.MapGroup("/api/v1").RequireAuthorization();
+        // company list and selection stay reachable whatever the selected company's MFA policy says (a user must always be able to leave or change company)
+        var open = app.MapGroup("/api/v1").RequireAuthorization(AuthDefaults.AuthenticatedPolicy);
+        open.MapGet("/companies", ListCompanies);
+        open.MapPost("/session/company", SelectCompany).WithMetadata(new BodyLimit());
+        open.MapDelete("/session/company", ClearCompany);
 
-        api.MapGet("/companies", ListCompanies);
-        api.MapPost("/session/company", SelectCompany).WithMetadata(new BodyLimit());
-        api.MapDelete("/session/company", ClearCompany);
+        var api = app.MapGroup("/api/v1").RequireAuthorization();
 
         var access = api.MapGroup("/access").RequireAuthorization(AuthDefaults.MfaVerifiedPolicy);
         access.MapGet("/me", Me);
@@ -67,6 +80,8 @@ public static class AccessEndpoints
         access.MapPost("/assignments", AssignRole).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
         access.MapDelete("/assignments/{id:guid}", RevokeAssignment);
         access.MapGet("/audit", ListAudit);
+        access.MapGet("/mfa-policy", GetMfaPolicy);
+        access.MapPut("/mfa-policy", SetMfaPolicy).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
     }
 
     internal static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);
@@ -101,6 +116,31 @@ public static class AccessEndpoints
         return Enum.IsDefined(kind);
     }
 
+    // ---- company MFA policy (Phase 4.1 S3b-1b, D-167)
+
+    private static object PolicyView(CompanyMfaPolicy p) => new
+    {
+        policy = p.Kind switch { CompanyMfaPolicyKind.RequiredForRoles => "roles", CompanyMfaPolicyKind.RequiredForAll => "all", _ => "off" },
+        roleIds = p.RoleIds,
+        updatedAtUtc = p.UpdatedAtUtc,
+    };
+
+    private static async Task<IResult> GetMfaPolicy(HttpContext http, AccessService access, MfaPolicyService policies)
+    {
+        var (actor, failure) = await ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return Map(await policies.GetAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), p => Results.Json(PolicyView(p)));
+    }
+
+    private static async Task<IResult> SetMfaPolicy(SetMfaPolicyRequest? body, HttpContext http, AccessService access, MfaPolicyService policies)
+    {
+        var kind = body?.Policy?.ToLowerInvariant() switch { "off" => (CompanyMfaPolicyKind?)CompanyMfaPolicyKind.Off, "roles" => CompanyMfaPolicyKind.RequiredForRoles, "all" => CompanyMfaPolicyKind.RequiredForAll, _ => null };
+        if (kind is null) return Error(400, "invalid_request");
+        var (actor, failure) = await ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return Map(await policies.SetAsync(actor!.UserId, actor.CompanyId, kind.Value, body!.RoleIds, http.RequestAborted), p => Results.Json(PolicyView(p)));
+    }
+
     // ---- company selection
 
     private static async Task<IResult> ListCompanies(HttpContext http, AccessService access)
@@ -110,14 +150,28 @@ public static class AccessEndpoints
         return Results.Json(new { companies = companies.Select(c => new { id = c.Id, nameAr = c.NameAr, nameEn = c.NameEn }) });
     }
 
-    private static async Task<IResult> SelectCompany(SelectCompanyRequest? body, HttpContext http, AccessService access)
+    private static async Task<IResult> SelectCompany(SelectCompanyRequest? body, HttpContext http, AccessService access, ICompanyMfaPolicyEvaluator policies)
     {
         if (body?.CompanyId is not { } companyId || companyId == Guid.Empty) return Error(400, "invalid_request");
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession s) return Error(401, "unauthenticated");
         // Unknown company, no membership, revoked membership and unavailable company are indistinguishable.
-        return await access.SelectCompanyAsync(s.SessionId, s.UserId, companyId, http.RequestAborted)
-            ? Results.Json(new { companyId })
-            : Error(403, "forbidden");
+        if (!await access.SelectCompanyAsync(s.SessionId, s.UserId, companyId, http.RequestAborted)) return Error(403, "forbidden");
+        // S3b-1b (D-167): the selected company's MFA policy. Asked only AFTER the membership check, so a company the caller cannot enter reveals nothing about its policy. No company data is served first:
+        // a user without an authenticator is refused (403 mfa_enrolment_required) and the selection is undone; the per-request policy refuses company routes in any case.
+        if (await policies.RequiresMfaAsync(s.UserId, companyId, http.RequestAborted))
+        {
+            if (s.MfaState == MfaState.None)
+            {
+                await access.SelectCompanyAsync(s.SessionId, s.UserId, null, http.RequestAborted);
+                return Error(403, "mfa_enrolment_required");
+            }
+            if (s.MfaVerifiedAtUtc is null)
+            {
+                await access.SelectCompanyAsync(s.SessionId, s.UserId, null, http.RequestAborted);
+                return Error(401, "mfa_step_up_required");
+            }
+        }
+        return Results.Json(new { companyId });
     }
 
     private static async Task<IResult> ClearCompany(HttpContext http, AccessService access)

@@ -25,10 +25,10 @@ public static class AuthEndpoints
         auth.MapPost("/mfa/verify", MfaVerify).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/enrol/begin", MfaEnrolBegin).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/enrol/confirm", MfaEnrolConfirm).WithMetadata(new BodyLimit());
-        auth.MapPost("/mfa/step-up", MfaStepUp).RequireAuthorization().WithMetadata(new BodyLimit());
+        auth.MapPost("/mfa/step-up", MfaStepUp).RequireAuthorization(AuthDefaults.AuthenticatedPolicy).WithMetadata(new BodyLimit());
         auth.MapPost("/logout", Logout);
         auth.MapGet("/status", Status);
-        auth.MapPost("/change-password", ChangePassword).RequireAuthorization().WithMetadata(new BodyLimit());
+        auth.MapPost("/change-password", ChangePassword).RequireAuthorization(AuthDefaults.AuthenticatedPolicy).WithMetadata(new BodyLimit());
 
         var admin = app.MapGroup("/api/v1/admin/users").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.MfaVerifiedPolicy);
         admin.MapPost("", CreateUser).WithMetadata(new BodyLimit());

@@ -27,7 +27,7 @@ public sealed record UserRecord(
 /// <summary>An active session joined with the current state of its user.</summary>
 public sealed record ActiveSession(
     Guid SessionId, Guid UserId, SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset LastSeenAtUtc,
-    string Login, string DisplayName, bool IsIdentityAdministrator, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
+    string Login, string DisplayName, bool IsIdentityAdministrator, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None, Guid? SelectedCompanyId = null);
 
 /// <summary>A session to create: its id, the hash of its token, the client, its expiries and (after the second factor) the verification time.</summary>
 public sealed record SessionIssue(Guid SessionId, byte[] TokenHash, SessionClient Client, DateTimeOffset IdleExpires, DateTimeOffset AbsoluteExpires, DateTimeOffset? MfaVerifiedAt);
@@ -337,7 +337,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator}, s.{SM.VerifiedAtUtc}, u.{M.State} " +
+            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator}, s.{SM.VerifiedAtUtc}, u.{M.State}, s.{S.SelectedCompanyId} " +
             $"FROM {S.Table} s JOIN {U.Table} u ON u.{U.Id} = s.{S.UserId} " +
             $"WHERE s.{S.TokenHash} = @t AND s.{S.RevokedAtUtc} IS NULL AND s.{S.IdleExpiresAtUtc} > @n AND s.{S.AbsoluteExpiresAtUtc} > @n AND u.{U.State} = 0", conn);
         cmd.Parameters.AddWithValue("t", tokenHash);
@@ -347,7 +347,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return new ActiveSession(
             r.GetGuid(0), r.GetGuid(1), (SessionClient)r.GetInt16(2),
             r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetFieldValue<DateTimeOffset>(5),
-            r.GetString(6), r.GetString(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), (MfaState)r.GetInt16(10));
+            r.GetString(6), r.GetString(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), (MfaState)r.GetInt16(10), r.IsDBNull(11) ? null : r.GetGuid(11));
     }
 
     /// <summary>Records activity and extends the idle expiry (capped at the absolute expiry) of a live session.</summary>

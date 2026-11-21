@@ -33,6 +33,7 @@ public static class MfaClassification
         ["access.roles"] = true,
         ["access.assignments"] = true,
         ["access.audit"] = true,
+        ["access.mfapolicy"] = true,
         // company settings and the configuration of approvals and retention change who may do what or how long data is kept (D-096: "security settings"); in doubt they count
         ["company.settings"] = true,
         ["company.approvalpolicies"] = true,
