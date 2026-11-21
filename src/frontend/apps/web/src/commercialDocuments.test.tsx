@@ -419,14 +419,23 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
       expect(screen.queryByTestId("reject")).toBeNull();
     });
 
-    it("the grants of the previous session do not survive a sign-out (the next user starts with none)", async () => {
-      await open([
+    it("user A with a branch approve grant signs out and user B, with only a view grant, signs in: B sees no Approve or Reject", async () => {
+      const gA = [
         { roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE },
         { roleId: "approver", scope: "branch", scopeId: "b1", permissions: ["company.commercialdocs.approve"] },
-      ]);
-      expect(screen.getByTestId("approve")).toBeEnabled();
+      ];
+      const gB = [{ roleId: "viewer", scope: "company", scopeId: null, permissions: NO_APPROVE }];            // the same company-wide view/edit rights, but no approve anywhere
+      const accessMe = vi.fn().mockResolvedValueOnce({ companyId: "c1", grants: gA }).mockResolvedValue({ companyId: "c1", grants: gB });
+      await openSubmitted({ plan: [], decisions: [] }, { accessMe, login: vi.fn().mockResolvedValue({ user: { id: "u2", login: "b", displayName: "B", isIdentityAdministrator: false } }) });
+      expect(screen.getByTestId("approve")).toBeEnabled();                                                     // user A may decide on branch b1
       await userEvent.click(screen.getByRole("button", { name: "تسجيل الخروج" }));
-      expect(await screen.findByRole("button", { name: "دخول" })).toBeInTheDocument();
+      await userEvent.type(await screen.findByLabelText(/اسم المستخدم/), "b");
+      await userEvent.type(screen.getByLabelText(/كلمة المرور/), "pw");
+      await userEvent.click(screen.getByRole("button", { name: "دخول" }));
+      await openDoc();                                                                                        // user B opens the same submitted document
+      expect(screen.queryByTestId("approve")).toBeNull();
+      expect(screen.queryByTestId("reject")).toBeNull();
+      expect(accessMe).toHaveBeenCalledTimes(2);                                                              // B's own grants were read, A's were not reused
     });
   });
 
