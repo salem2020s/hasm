@@ -667,6 +667,50 @@ node --test tools/loadtest/tests/smoke.test.js                                  
 **Results and the verdict.** A results file records the tool, seed, data counts, load shape, the load generator's host facts and the operator-declared reference environment (`--environment`: `vcpu`, `ramGb`, `diskGb`, `ssd`, `backendAndPostgresTogether`, `companies`; the tool cannot verify it). Samples are measured, never estimated; a scenario without samples shows `null`. The data counts in the verdict are MEASURED from the API at run start (the declared counts are recorded beside them but never used). Only the six documented keys of `--environment` reach the results file. A scenario is within target when p95 is at most (inclusive) its target. The verdict is **NOT VERIFIED** unless every reference condition (8 vCPU/32 GB/500 GB SSD declared, 5 companies, 20,000 items, 10,000 parties, 100,000 invoices, 500,000 entries and stock movements, 50 sessions, 3,600 s, every scenario implemented) is met; the file lists each unmet reason. Stage 1 cannot meet them, so its output is mechanics validation and never acceptance evidence. `loadtest-results/` is git-ignored.
 
 **Validation.** `tools/loadtest/tests/smoke.test.js` (Node, no database): determinism, the guard, the verdict rule, a contract check of every route, request field, query parameter, enum value and response key against the backend sources, and a seed plus short run against an in-process stub. It runs in the hosted `backend-build-test` job of `.github/workflows/backend.yml` (an added step; the workflow's path filter is mirrored by the protected `required-checks.json`, so it runs when `src/backend/**` or `tests/**` change, which is when the contract can break, and on every push to `main`, not on a change that only touches `tools/loadtest/`; the self-hosted twin is unchanged). Beyond the smoke test, the harness was run once end to end against the real API in-process on the isolated runner (60 items, 30 parties, 15 journal entries posted, 10 stock documents approved by two users, 80 scenario iterations, 0 errors); those numbers are meaningless and not recorded.
+### Retention of backup runs and backup legal holds (Phase 4.3 slice 6)
+Owner decision D-086; decisions D-130..D-139; the design is in `docs/PHASE-4.3.md` slice 6.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-plan <root> [--json <file>]
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-apply <root>          (INACTIVE: refuses, see below)
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text>
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
+```
+* **Configuration (`Hasm__Backup__Retention__*`):**
+  * `InstallationTimeZone` (required; an IANA id such as `Asia/Riyadh`). It classifies the system part. The server's local time zone is never used.
+  * `DailyKeep` (default 7) and `WeeklyKeep` (default 4). These are the D-086 minimums: they can be raised, never lowered. A lower or unreadable value stops the command with exit 3 (`retention_below_minimum`, `retention_config_invalid`); it is never clamped.
+  * `WeekStart` (default `Monday`, ISO 8601).
+  * `MaxDeletionsPerRun` (default 7, at most 31).
+* **`backup-retention-plan <root>`** classifies every run of the root and prints, per run, either its keep reasons or `ELIGIBLE`. Nothing is deleted.
+  * It reads each run's signed `run.status.json` with the server's signing public keys and never decrypts anything.
+  * It also reads each company's configured time zone and fiscal calendar, and the backup legal holds and pins.
+  * It ends with the plan hash and the key inventory of the retained runs (D-138). While the inventory is incomplete, no key may be retired.
+  * It writes system audit event 2014. With `--json` it writes the plan to a new file.
+* **Keep reasons:**
+  * `minimum_daily`, `minimum_weekly`: the newest recoverable run of each of the latest 7 days and 4 weeks that HAVE a run.
+  * `last_recoverable`, `newest`, `recovery_test_proof`: always kept.
+  * `period_end`, `year_end`: the last run before and the first run after every fiscal period end, calendar month end and fiscal year end. They are never deleted automatically until the owner decides the legal policy.
+  * `classification_unknown`: a company whose time zone is not configured or unknown, a run outside every fiscal year, or a company that is not Ready or cannot be read.
+  * `legal_hold`, `attachment_hold`, `d114_hold`, `hold_check_failed`: a hold on the run.
+  * `recovery_chain`: a pin, or a kept trial restore inside the run.
+  * `incomplete`, `status_unverifiable`, `unencrypted`, `recovery_key_untested`: the run is not recoverable. It never counts toward a minimum and is never deleted automatically.
+  * `run_not_clean`: the run holds an unexpected file or a symbolic link.
+* **Backup legal holds.** `backup-hold-place` takes effect at once and writes system audit event 2018 (the reason is stored in the hold, not in the event). A hold covers either one run, or one company's runs started within the given local dates.
+  * **A hold cannot be released with this tool.** Release needs a named administrator and independent approval (Phase 4.1). The database refuses every change to a hold except a single release.
+* **Automatic deletion is INACTIVE (D-137).** `backup-retention-apply` writes audit event 2017 and stops with exit 3 (`retention_deletion_inactive`); nothing is deleted. Three independent layers enforce this:
+  1. a code gate that is `false` in this release;
+  2. runtime prerequisites checked on every execution;
+  3. an exact opt-in, `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups`, that no shipped configuration sets.
+
+  Only an activation PR merged on an explicit owner instruction can change the gate. **Until then backups accumulate:** watch the free space of the backup root. Never delete a run folder by hand while a trial restore, recovery test or backup runs. Never delete a run that the plan shows with a keep reason.
+* **Trial restores and recovery tests** hold a shared restore lock for their duration. A deletion, once activated, takes that lock exclusively, so the two never overlap. A restore started during a deletion stops with `retention_in_progress`.
+* **What a deletion will do once activated** (D-136):
+  * it runs only when `backup-status` is `ok`, the clock is consistent, and no more than `MaxDeletionsPerRun` runs, and never more than half of the complete runs, are eligible;
+  * it re-validates every run just before touching it;
+  * it writes audit event 2015 first;
+  * it keeps a tombstone (the run's signed status and signature, plus `deleted.json`) under `<root>/.retention/tombstones/`;
+  * it renames the run to `<run id>.deleting-<hex>`, deletes it without following links, and writes audit event 2016.
+
+  An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
 
 ## Checks
 ```
