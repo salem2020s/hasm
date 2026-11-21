@@ -40,6 +40,28 @@ public sealed partial class PricingConfigService
         return await LoadGroups(conn, null, null, false, ct);
     }
 
+    /// <summary>
+    /// One page of customer groups for an optional search (code or either name, literal and case-insensitive through PostgreSQL's <c>upper()</c>), ordered by code, with the total from the same statement.
+    /// All values are parameters; the limit is clamped (default 50, at most 500).
+    /// </summary>
+    public async Task<CustomerGroupPage> SearchCustomerGroupsAsync(Guid companyId, string? search, int? offset, int? limit, CancellationToken ct = default)
+    {
+        ListPaging.TryCleanSearch(search, out var cleaned);
+        await using var conn = await resolver.OpenAsync(companyId, ct);
+        await using var q = new NpgsqlCommand { Connection = conn };
+        var w = "";
+        if (cleaned is not null) { w = " WHERE " + ListPaging.LikeClause("like", CG.Code, CG.NameAr, CG.NameEn); q.Parameters.AddWithValue("like", ListPaging.LikePattern(cleaned)); }
+        var off = ListPaging.ClampOffset(offset);
+        q.Parameters.AddWithValue("lim", ListPaging.ClampLimit(limit));
+        q.Parameters.AddWithValue("off", off);
+        q.CommandText = $"SELECT {GroupCols}, count(*) OVER () FROM {CG.Table}{w} ORDER BY {CG.Code} LIMIT @lim OFFSET @off";
+        var rows = new List<CustomerGroupView>(); long total = 0;
+        await using (var r = await q.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct)) { rows.Add(new CustomerGroupView(r.GetGuid(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetBoolean(4), r.GetInt64(5), r.GetFieldValue<DateTimeOffset>(6))); total = r.GetInt64(7); }
+        if (rows.Count == 0 && off > 0) total = await PagedSql.TotalAsync(conn, $"FROM {CG.Table}{w}", q.Parameters, ct);
+        return new CustomerGroupPage(rows, total);
+    }
+
     public async Task<CustomerGroupView?> GetCustomerGroupAsync(Guid companyId, Guid id, CancellationToken ct = default)
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);

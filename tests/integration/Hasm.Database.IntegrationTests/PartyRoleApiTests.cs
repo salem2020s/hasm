@@ -141,6 +141,36 @@ public class PartyRoleApiTests : HttpApiTestBase
     }
 
     [PostgresFact]
+    public async Task The_role_list_can_be_looked_up_by_party_ids_with_a_bound_and_the_same_permission()
+    {
+        await StartApi();
+        var cookie = await SignIn(Admin);
+        var parties = new Dictionary<string, Guid>();
+        foreach (var code in new[] { "K1", "K2", "K3" })
+        {
+            parties[code] = await NewParty(code);
+            Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, Roles, new { partyId = parties[code], role = 1, paymentMode = 2, termDays = 30 }, cookie)).Status);
+        }
+        string Ids(params Guid[] ids) => string.Join("&", ids.Select(i => "ids=" + i));
+        var two = await Send(HttpMethod.Get, $"{Roles}?{Ids(parties["K3"], parties["K1"])}", cookie: cookie);
+        Assert.Equal(HttpStatusCode.OK, two.Status);
+        Assert.Equal(2L, two.Json.GetProperty("total").GetInt64());
+        Assert.Equal(["K1", "K3"], two.Json.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("partyCode").GetString()).ToArray());
+        Assert.Equal(0, (await Send(HttpMethod.Get, $"{Roles}?{Ids(Guid.NewGuid())}", cookie: cookie)).Json.GetProperty("items").GetArrayLength());
+        Assert.Equal(1, (await Send(HttpMethod.Get, $"{Roles}?kind=1&limit=1&{Ids(parties["K1"], parties["K2"])}", cookie: cookie)).Json.GetProperty("items").GetArrayLength());
+        // the bound: at most 100 ids; a malformed id is refused
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Roles}?{string.Join("&", Enumerable.Range(0, 100).Select(_ => "ids=" + Guid.NewGuid()))}", cookie: cookie)).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{Roles}?{string.Join("&", Enumerable.Range(0, 101).Select(_ => "ids=" + Guid.NewGuid()))}", cookie: cookie)).Status);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Get, $"{Roles}?ids=not-a-guid", cookie: cookie)).Status);
+        // the same permission: a viewer may look up, a user without it may not, and nothing is exposed that the unpaged list does not show
+        var (viewer, _) = await Member([PermissionCatalog.Codes.PartyRolesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Roles}?{Ids(parties["K1"])}", cookie: await SignIn(viewer))).Status);
+        var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, $"{Roles}?{Ids(parties["K1"])}", cookie: await SignIn(outsider))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Get, $"{Roles}?{Ids(parties["K1"])}")).Status);
+    }
+
+    [PostgresFact]
     public async Task A_user_without_the_permissions_reads_and_writes_nothing_and_a_viewer_cannot_configure()
     {
         await StartApi();

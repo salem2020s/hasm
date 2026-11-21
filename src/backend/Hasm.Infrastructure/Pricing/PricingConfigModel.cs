@@ -41,6 +41,8 @@ public sealed record PricingCapabilities(bool View, bool Configure, bool Overrid
 
 /// <summary>Customer-group master: the code is fixed at creation; names and the active flag change by revision-fenced updates. Groups are never removed.</summary>
 public sealed record CustomerGroupInput(string? Code, string? NameAr, string? NameEn, bool? IsActive);
+/// <summary>One page of customer groups with the number of matching rows (before paging).</summary>
+public sealed record CustomerGroupPage(IReadOnlyList<CustomerGroupView> Items, long Total);
 public sealed record CustomerGroupView(Guid Id, string Code, string NameAr, string? NameEn, bool IsActive, long Revision, DateTimeOffset UpdatedAtUtc);
 
 /// <summary>Sets the group of one customer party (null group = none). A customer belongs to at most one group at a time.</summary>

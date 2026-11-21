@@ -94,8 +94,14 @@ public static class PricingEndpoints
     private static Task<IResult> ListDiscounts(HttpContext http, AccessService access, PricingManagementService svc) =>
         Read(http, access, svc, (u, c) => svc.ListDiscountsAsync(u, c, http.RequestAborted), (v, can) => new { discounts = v.Select(DiscountBody), can = new { configure = can } });
 
-    private static Task<IResult> ListGroups(HttpContext http, AccessService access, PricingManagementService svc) =>
-        Read(http, access, svc, (u, c) => svc.ListCustomerGroupsAsync(u, c, http.RequestAborted), (v, can) => new { customerGroups = v.Select(GroupBody), can = new { configure = can } });
+    /// <summary>Without <c>search</c>, <c>offset</c> or <c>limit</c> exactly the unpaged list (no <c>total</c>); with any of them one bounded page (default 50, at most 500, ordered by code) plus <c>total</c>. Same permission in both forms.</summary>
+    private static Task<IResult> ListGroups(string? search, int? offset, int? limit, HttpContext http, AccessService access, PricingManagementService svc)
+    {
+        if (!ListPaging.IsRequested(search, offset, limit))
+            return Read(http, access, svc, (u, c) => svc.ListCustomerGroupsAsync(u, c, http.RequestAborted), (v, can) => new { customerGroups = v.Select(GroupBody), can = new { configure = can } });
+        if (offset is < 0 || limit is < 1 || !ListPaging.TryCleanSearch(search, out _)) return Task.FromResult(CompanyConfigurationEndpoints.Error(400, "invalid_request"));
+        return Read(http, access, svc, (u, c) => svc.SearchCustomerGroupsAsync(u, c, search, offset, limit, http.RequestAborted), (v, can) => new { customerGroups = v.Items.Select(GroupBody), total = v.Total, can = new { configure = can } });
+    }
     private static Task<IResult> ListAssignments(HttpContext http, AccessService access, PricingManagementService svc) =>
         Read(http, access, svc, (u, c) => svc.ListAssignmentsAsync(u, c, http.RequestAborted), (v, can) => new { assignments = v.Select(AssignmentBody), can = new { configure = can } });
 
