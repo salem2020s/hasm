@@ -1374,14 +1374,15 @@ Sources: SRS 14.4 and 16; owner decisions D-080(6) (independent approval for key
     * it is not the active key;
     * no live sensitive attachment needs it;
     * no live import original needs it;
-    * no retained run of ANY given backup root lists it (the slice 6 key inventory).
+    * no backup run PRESENT in ANY given backup root lists it (the key ids in each run's signed status, slice 6).
   * Fail closed: ANY unknown makes the report incomplete, and then no key is retirable. Unknowns are:
     * a registered company that is not Ready (a Pending company has no database and therefore no data), cannot be read, or has no configured attachment or import storage;
     * any `unknown` key usage;
     * no backup root given;
     * a backup root that does not exist, is not a directory, or is itself a symbolic link (`backup_root_missing`, `backup_root_not_a_directory`, `backup_root_symbolic_link`);
     * a backup root without at least one complete, verified run (`backup_root_no_complete_verified_run`);
-    * a backup root whose inventory is incomplete or cannot be read;
+    * a present run whose key needs are unknown (`backup_run_key_needs_unknown`), or an unfinished deletion, a `.deleting-*` folder (`backup_root_deletion_incomplete`);
+    * a backup root that cannot be read;
     * no attestation of the backup scope (`backup_scope_not_attested`, see the scope limits below);
     * no active key configured.
   * **A backup root must prove itself** (review H1 of PR 182). The retention scan returns no runs for a folder that does not exist, and "every retained run's key needs are known" is true over no runs. A typo, a share that is not mounted or the wrong folder would therefore read as "no retained run needs any key". So:
@@ -1390,7 +1391,7 @@ Sources: SRS 14.4 and 16; owner decisions D-080(6) (independent approval for key
     * the root must hold at least one run that is finished, whose signed status VERIFIES against the trusted signing keys, whose key needs are known (run status version 2), and whose verdict is `ok` or `partial`. An incomplete, failed, unverifiable or unencrypted DEV/TEST run does not count. Without a trusted signing key nothing verifies, so the report is incomplete;
     * one good root never excuses a bad one: every given root must pass.
   * **No configured backup root exists.** `backup-run`, `backup-status` and the retention commands all take the root as an argument, and no `Hasm__Backup__*` setting names a root or a destination (the multiple-destinations slice 8, D-182..D-189, is planned below and not built). The report therefore cannot require "the configured root" today. When slice 8 adds configured destinations (D-183), the report must require the primary root and every configured destination to be among the roots it scans.
-  * **Scope limits, stated in every output and in the JSON (`scopeLimits`).** The report reads the live data of every registered company and the retained runs of ONLY the roots it is given. It does NOT see:
+  * **Scope limits, stated in every output and in the JSON (`scopeLimits`).** The report reads the live data of every registered company and every run present in ONLY the roots it is given. It does NOT see:
     * a backup root that is not given: another disk, an off-site or offline copy, a second destination;
     * standalone `backup-company` sets and copies of sets. They are not runs, are not inventoried, and can hold attachment envelopes under a key;
     * an upload in flight and orphan files (see the race below).
@@ -1400,19 +1401,29 @@ Sources: SRS 14.4 and 16; owner decisions D-080(6) (independent approval for key
     * A file with no row (an orphan left by a crash, before the orphan sweep) is never inventoried, whatever key it is under.
     * The report cannot close this window: it takes no lock and changes nothing. The future retirement operation MUST re-run this check under a lock that excludes uploads and rewraps of attachments and import originals for every company (or scan the storage folders for files without rows), and must refuse when the result differs from the approved report.
   * **Strictly read-only on the file system (review L2 of PR 182).** The ordinary read path of both file stores creates the owner-only storage root and company folder (`PathOf`). The key-usage scan uses `ReadWithoutCreating` instead: it creates nothing and changes no permission. A company folder that does not exist while a row names a file in it is NOT "no file" (the storage may be unmounted or misconfigured): the item is `unknown`.
-  * A key that data or a retained run needs but that is MISSING from the key directory is reported (`missing_from_key_directory`).
+  * **Every run on disk counts, not only the runs retention would keep (review M-FH1 of PR 182).**
+    * The retention preview's key inventory (D-138) lists the keys of the runs the plan KEEPS. That definition is right for the preview and is not changed here.
+    * It is wrong for this report: a run the plan would delete is still on disk, complete, verified and restorable, and it stays there, because automatic deletion is inactive (D-137). A key that only such a run needs would be printed as retirable while a present backup needs it, against D-082.
+    * So the report does not use the plan. It reads the signed status of EVERY run folder in the root and takes the union of their key ids (reason `needed_by_present_backups`). It never asks whether a run is eligible for deletion, and it needs no retention configuration.
+    * Any present run whose key needs are unknown (unfinished, unverifiable, a version 1 status, an unencrypted DEV/TEST run) makes the root's inventory incomplete. So does a `.deleting-*` folder: what is left of that run cannot be read as a run. The known keys are still listed.
+    * A key stops being needed by a run only when that run is really gone from every scanned root.
+  * **The JSON names its own scope (review L-FH1 of PR 182):** `backupRootsScanned`, `backupScopeAttested` and `generatedUtc` (UTC), next to the keys, the blockers and `scopeLimits`. It is the artefact an independent approver is shown; it describes that moment only.
+  * **A stored file name that the store refuses** (it does not match the store's name pattern) is an item whose key cannot be determined: `attachment_key_unknown` or `import_original_key_unknown`, not an unhandled error (review L-FH2 of PR 182).
+  * A key that data or a present run needs but that is MISSING from the key directory is reported (`missing_from_key_directory`).
   * Read-only, and no audit event: retirement itself is a separate, independently approved operation (D-080(6)) and is not built. Exit codes: 0 complete, 8 incomplete, 3 configuration.
   * With the multiple-destinations slice 8 (planned below, not built), every destination root must be given.
 * **Tests:**
-  * Unit (`EncryptionKeyRetirementTests`): the rule per source; every blocker, including a bad root next to a good one; the attestation and the scope limits; the root check (missing, a file, relative, a link to a directory, a link to a file, a dangling link); which run proves a root (not a failed, incomplete, unverified, version 1 or unencrypted one); a missing needed key; the usage scan (row and header kept, a missing file counted, unreadable, malformed and invalid items unknown).
-  * PostgreSQL, 8 tests in all:
+  * Unit (`EncryptionKeyRetirementTests`): the rule per source; every blocker, including a bad root next to a good one; the attestation and the scope limits; the root check (missing, a file, relative, a link to a directory, a link to a file, a dangling link); which run proves a root (not a failed, incomplete, unverified, version 1 or unencrypted one); the inventory of present runs (the union of every run's keys, an unknown run, a `.deleting-*` folder); the scope fields of the report; a missing needed key; the usage scan (row and header kept, a missing file counted, unreadable, malformed and invalid items and a refused stored name unknown).
+  * PostgreSQL, 9 tests in all:
     * `ImportServiceTests` (+4): a rewrap with a missing original and an unavailable old key (counted, old keys must be kept); the report over an EMPTY folder and over a missing root (incomplete, nothing retirable; a key only an import original needs is named until a complete rewrap); a corrupt original, and a missing company storage folder (`import_original_key_unknown`, incomplete, no folder created); an original whose envelope header names another key than its row (both kept). The existing rotation drill asserts the new signal.
     * `AttachmentTests` (+2): the same two cases for a sensitive attachment (`attachment_key_unknown`; row key and header key both kept).
-    * `BackupRetentionTests` (+2): every bad root over real data (missing; empty; a file; only an incomplete run; a real run with no trust, with a foreign trust list, and with a tampered status; a symbolic link to the good root; a bad root next to the good one); and the positive case over a real, complete, verified run, with and without the attestation, including the `Hasm.Admin` command end to end (exit 0 and 8, the scope lines, the JSON, no audit event, nothing created).
+    * `BackupRetentionTests` (+2): every bad root over real data (missing; empty; a file; only an incomplete run; a real run with no trust, with a foreign trust list, and with a tampered status; a symbolic link to the good root; a bad root next to the good one); and the positive case over a real, complete, verified run, with and without the attestation, including the `Hasm.Admin` command end to end (exit 0 and 8, the scope lines, the JSON with its roots, attestation and time, no audit event, nothing created).
+    * `BackupRetentionTests` (+1, review M-FH1): twelve real daily runs, of which only one, a run the retention plan marks eligible for deletion, holds an attachment envelope under an older key. The preview's inventory does not list that key (D-138, unchanged); the report keeps it (`needed_by_present_backups`), also through the command. An unfinished run folder and a `.deleting-*` folder make the report incomplete. Only after that run is really removed is the key retirable.
   * Mutation proofs (isolated runner):
     * import originals dropped from the rule: the unit and PostgreSQL report tests fail;
     * failures counted as skipped: the rewrap test fails;
     * the scans ignoring the file on disk (`() => null` in both `KeyUsageAsync`), together with the root checks switched off: exactly the 7 tests above that cover them fail (the 4 corrupt and header-key tests, the empty-folder report test and both `BackupRetentionTests`), 29 of 36 pass.
+    * the report taking the retention plan's inventory again (the keys of the runs the plan keeps), and the inventory ignoring an unknown run and a `.deleting-*` folder: the new PostgreSQL test fails at the key of the deletion-eligible run (no reason is left to keep it), 1 of 10 `BackupRetentionTests`; the new unit test fails, 1 of 16.
 * **Not built here:** key retirement itself (D-080(6)); including import originals in backups (owner question IMPORT-ORIGINALS-BACKUP-SCOPE); the audit and recovery keys (unchanged; slice 6 lists them).
 
 ## Slice 8: multiple backup destinations (local and network copies, SRS 16) - PLAN (docs only)

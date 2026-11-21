@@ -9,15 +9,16 @@ namespace Hasm.Infrastructure.Backup;
 
 /// <summary>
 /// Builds the encryption-key retirement report (D-181) from the live data of every registered company (sensitive attachments and not-yet-purged import originals, read over the administrative
-/// connection; D-180) and the key inventory of the retained backup runs of every given backup root (D-138). Read-only: it never retires, rewraps or deletes anything (retirement needs independent
+/// connection; D-180) and the key needs of EVERY backup run present in every given backup root (the signed run status of slice 6, D-138). Read-only: it never retires, rewraps or deletes anything (retirement needs independent
 /// approval, D-080(6)) and creates no directory. Fail closed: a company that is not Ready (except a Pending one, which has no database and therefore no data), cannot be read, or whose storage
 /// is not configured, and a backup root whose inventory cannot be evaluated, make the report incomplete, and then no key is retirable. A backup root that does not exist, is not a directory, is a
 /// symbolic link, or holds no complete, verified run is such a root (review H1 of PR 182: a typo, an unmounted share or the wrong folder must never read as "no retained run needs any key").
+/// Every run on disk counts, also one the retention plan would delete: it is still present and restorable, and automatic deletion is inactive (review M-FH1 of PR 182). The retention preview's own
+/// key inventory (D-138: the runs the plan keeps) is not used and not changed. A present run whose key needs are unknown, or an unfinished deletion, makes the root's inventory incomplete.
 /// Scope: only the given roots are read. Other destinations, copies and standalone <c>backup-company</c> sets are invisible, so the caller must pass the operator's attestation
 /// (<paramref name="backupScopeAttested"/> of <see cref="ReportAsync"/>); without it the report is incomplete.
 /// </summary>
-public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database, RetentionOptions retention, AttachmentOptions attachments, ImportOptions imports, EncryptionOptions encryption,
-    TimeProvider? clock = null)
+public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database, AttachmentOptions attachments, ImportOptions imports, EncryptionOptions encryption, TimeProvider? clock = null)
 {
     public async Task<KeyRetirementReport> ReportAsync(IReadOnlyCollection<string> presentKeyIds, string? activeKeyId, IReadOnlyList<string> backupRoots, SigningTrust? trust, bool backupScopeAttested,
         CancellationToken ct = default)
@@ -28,23 +29,38 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
             companies.Add(await CompanyUsageAsync(company, activeKeyId, ct));
 
         var backups = new List<BackupRootKeyNeeds>();
-        var service = new RetentionService(database, retention, clock);
         foreach (var root in backupRoots)
         {
             try
             {
                 if (RootProblem(root) is { } rootProblem) { backups.Add(new BackupRootKeyNeeds(root, false, rootProblem, [])); continue; }
-                var (plan, inputs) = await service.PlanAsync(root, trust, ct);
+                var (runs, deleting) = RetentionInventory.Scan(root, trust);
                 // checked AFTER the scan as well: a root that vanished meanwhile yields no runs and is refused here
-                var problem = RootProblem(root) ?? (!inputs.Runs.Any(IsCompleteVerifiedRun) ? "backup_root_no_complete_verified_run" : plan.KeyInventoryComplete ? null : "inventory_incomplete");
-                backups.Add(new BackupRootKeyNeeds(root, problem is null, problem, plan.EncryptionKeysNeeded));
+                var (problem, keys) = InventoryOfPresentRuns(runs, deleting);
+                problem = RootProblem(root) ?? problem;
+                backups.Add(new BackupRootKeyNeeds(root, problem is null, problem, keys));
             }
             catch (Exception ex) when (ex is BackupException or IOException or UnauthorizedAccessException or NpgsqlException or InvalidOperationException)
             {
                 backups.Add(new BackupRootKeyNeeds(root, false, ex is BackupException b ? b.Code : "backup_root_unreadable", []));
             }
         }
-        return EncryptionKeyRetirement.Evaluate(presentKeyIds, activeKeyId, companies, backups, backupScopeAttested);
+        return EncryptionKeyRetirement.Evaluate(presentKeyIds, activeKeyId, companies, backups, backupScopeAttested, (clock ?? TimeProvider.System).GetUtcNow());
+    }
+
+    /// <summary>
+    /// The encryption keys of EVERY run present in a root, and why the inventory is incomplete (or null). Not only the runs the retention plan would keep: a deletion-eligible run is still on disk and
+    /// restorable (review M-FH1 of PR 182). Incomplete when no run proves the root (<c>backup_root_no_complete_verified_run</c>), when a deletion started and did not finish
+    /// (<c>backup_root_deletion_incomplete</c>: what is left of that run cannot be read as a run), or when any present run's key needs are unknown (<c>backup_run_key_needs_unknown</c>: an
+    /// unfinished, unverifiable, version 1 or unencrypted DEV/TEST run). The known keys are returned in every case, so they are reported as needed.
+    /// </summary>
+    public static (string? Problem, IReadOnlyList<string> EncryptionKeysNeeded) InventoryOfPresentRuns(IReadOnlyList<RetentionRun> runs, IReadOnlyList<string> deletingFolders)
+    {
+        var problem = !runs.Any(IsCompleteVerifiedRun) ? "backup_root_no_complete_verified_run"
+            : deletingFolders.Count > 0 ? "backup_root_deletion_incomplete"
+            : runs.Any(r => !r.Complete || !r.Verified || r.Keys is null) ? "backup_run_key_needs_unknown"
+            : null;
+        return (problem, [.. runs.SelectMany(r => r.Keys?.EncryptionKeyIds ?? []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
     }
 
     /// <summary>

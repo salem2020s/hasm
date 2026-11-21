@@ -194,7 +194,7 @@ public class AttachmentTests : InventoryTestBase
         Assert.Equal("23514", await Fails($"UPDATE {AT.Table} SET {AT.KeyId} = 'k9', {AT.Revision} = {AT.Revision} + 1 WHERE {AT.Id} = '{b.Id}'"));            // a normal file has no key
     }
 
-    private Hasm.Infrastructure.Backup.EncryptionKeyRetirementService RetirementReport() => new(Options, new Hasm.Infrastructure.Backup.RetentionOptions { InstallationTimeZone = "UTC" },
+    private Hasm.Infrastructure.Backup.EncryptionKeyRetirementService RetirementReport() => new(Options,
         new AttachmentOptions { StorageDirectory = dir }, new Hasm.Infrastructure.Imports.ImportOptions { StorageDirectory = Path.Combine(dir, "imports") }, new EncryptionOptions { AllowInsecureFilePermissions = true });
     private static KeyRetirementEntry KeyOf(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
 

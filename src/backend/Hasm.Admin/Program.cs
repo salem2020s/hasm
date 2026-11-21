@@ -706,10 +706,7 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bo
     const int Ok = 0, Failed = 1, BadConfig = 3, Incomplete = 8;
     var encryption = EncryptionOptions.FromConfiguration(configuration);
     if (encryption.KeyDirectory is null) { Console.Error.WriteLine($"{EncryptionOptions.SectionName}:KeyDirectory is required."); return BadConfig; }
-    RetentionOptions retention;
-    try { retention = RetentionOptions.FromConfiguration(configuration); retention.Validate(); }
-    catch (BackupException ex) { Console.Error.WriteLine($"encryption-key-retirement-report stopped ({ex.Code}): the retention configuration is needed to read the retained runs."); return BadConfig; }
-    var service = new EncryptionKeyRetirementService(options, retention, AttachmentOptions.FromConfiguration(configuration), Hasm.Infrastructure.Imports.ImportOptions.FromConfiguration(configuration), encryption);
+    var service = new EncryptionKeyRetirementService(options, AttachmentOptions.FromConfiguration(configuration), Hasm.Infrastructure.Imports.ImportOptions.FromConfiguration(configuration), encryption);
     KeyRetirementReport report;
     try { report = await service.ReportAsync(FileKekRing.ListKeyIds(encryption.KeyDirectory), encryption.ActiveKeyId, roots, BackupMaterialLoader.ServerTrust(BackupOptions.FromConfiguration(configuration)), scopeAttested); }
     catch (Exception ex) when (ex is Npgsql.NpgsqlException or IOException or UnauthorizedAccessException) { Console.Error.WriteLine("encryption-key-retirement-report stopped: the system database or a key directory could not be read."); return Failed; }
@@ -719,13 +716,14 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bo
             : $"  {k.KeyId} keep: {string.Join(", ", k.Reasons)}");
     foreach (var b in report.Blockers) Console.WriteLine($"  [BLOCKER] {b}");
     // the scope, printed with EVERY report (review H1 of PR 182): what was read and what the tool cannot see
-    Console.WriteLine($"Scope: the live sensitive attachments and import originals of every registered company, and the retained runs of ONLY these {roots.Count} backup root(s):");
+    Console.WriteLine($"Scope: the live sensitive attachments and import originals of every registered company, and EVERY run present (also one that retention would delete) in ONLY these {roots.Count} backup root(s):");
     foreach (var root in roots) Console.WriteLine($"  {root}");
     Console.WriteLine("NOT seen: any other backup destination or copy (another disk, an off-site or offline copy), standalone backup-company sets (they can hold attachment envelopes under a key), "
         + "uploads in flight and orphan files.");
     Console.WriteLine(scopeAttested
         ? "The operator attested (--all-backup-copies-listed) that the roots above are every place a backup of this installation is kept. If that is not true, do not retire any key."
         : "No attestation (--all-backup-copies-listed) was given that the roots above are every place a backup is kept: the tool cannot know, so no key is reported retirable.");
+    Console.WriteLine($"Generated {report.GeneratedUtc:yyyy-MM-ddTHH:mm:ssZ} (UTC). The report describes that moment only.");
     Console.WriteLine(report.Complete
         ? $"Encryption-key retirement report (D-181): {report.Keys.Count} key(s), {report.Keys.Count(k => k.Retirable)} retirable within the scanned scope."
         : $"Encryption-key retirement report (D-181) INCOMPLETE ({report.Blockers.Count} blocker(s)): no key may be retired.");

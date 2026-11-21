@@ -487,7 +487,7 @@ public class ImportServiceTests : ImportTestBase
         await AssertAuditIntact();
     }
 
-    private EncryptionKeyRetirementService RetirementReport() => new(Options, new RetentionOptions { InstallationTimeZone = "UTC" },
+    private EncryptionKeyRetirementService RetirementReport() => new(Options,
         new Hasm.Infrastructure.Attachments.AttachmentOptions { StorageDirectory = Path.Combine(StorageDir, "attachments") }, ImportOpts, TestEncryption);
     private static KeyRetirementEntry KeyOf(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
 
