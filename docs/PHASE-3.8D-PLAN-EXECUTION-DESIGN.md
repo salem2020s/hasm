@@ -71,6 +71,7 @@ One new **company** migration and one **system** access migration. Both are forw
 ### 3.1 Plan tables
 
 * **`CompensationPlan`**: id, item, warehouse roots, the proposed event's stock document id and revision, the proposed event payload (canonical JSON), the fingerprints (plan, comparison, evidence, periods, position totals/layer hash, valuation policy, accounting version), status (1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale), revision, creator, approver and timestamps. A trigger makes the payload and fingerprints immutable; status moves only along allowed transitions; nothing is ever deleted. **SoD, X3 [P-Q2]:** a trigger refuses an approval when the approver is the creator, the last editor or the submitter of the plan, or the creator, last editor or submitter of the event's stock document. This is the D-066/D-158 pattern, enforced in both the service and PostgreSQL. The approval is bound to the plan revision and fingerprints.
+* **`CompensationPlanPosition`** (rev-3 review M1): the plan's **closure**, i.e. every (item, warehouse) position the replay may touch: the item and warehouse roots plus every downstream position reached through transfers. Written with the plan, immutable, and covered by the plan fingerprint.
 * **`CompensationPlanLine`**: line number, posting, date, period, branch, account, debit and credit (immutable).
 * **`CompensationPlanEvent`**: append-only history (created, approved, rejected, cancelled, executed, staled), with actor, time and note.
 * **`CompensationPlanExecution`**: `UNIQUE (plan)`. It records the event's stock posting and the compensation journal ids (append-only; the journal source key is plan id + bucket, so a repeat cannot create a second set; A6, TM-D12).
@@ -84,19 +85,21 @@ One new **company** migration and one **system** access migration. Both are forw
 * **`EpochMember`**: operation id (PK, FK to the operation), execution id (FK), role (1 storno, 2 event, 3 rebook), and the original operation (required for roles 1 and 3, NULL for 2). Append-only (UPDATE/DELETE/TRUNCATE refuse), `REVOKE ALL FROM PUBLIC`. The BEFORE INSERT trigger requires:
   * the execution exists with `created_xact = pg_current_xact_id()`, its plan is in status `approved`, and the plan's approver is not its creator;
   * the operation has **no entries yet**, and no obligation or settlement references it. This proves the operation is being built now. It cannot adopt an operation from an earlier transaction: an empty operation from an earlier transaction cannot exist outside obligations and settlements because of `r_d621465c`, 0020. No `xmin` check is needed on the existing operation table;
-  * for roles 1 and 3, the original operation is not itself an epoch member (no epoch on an epoch, X5).
+  * for roles 1 and 3, the original operation is not itself an epoch member (no epoch on an epoch, X5), and every entry of the original operation that will be stornoed lies on a position in the plan's closure (`CompensationPlanPosition`; rev-3 review M1);
+  * the operation's kind is not 4 and its `reverses_operation_id` is NULL. Epoch operations are never reversal operations (rev-3 review L1).
 * **`EpochEntryLineage`**: original entry → storno entry → rebook entry (each unique), with the execution id. Append-only. Insert is allowed only when all three entries belong to members of the same execution.
 
 ### 3.3 New entry-level guard (tightening) [P-Q1]
 
 A NEW BEFORE INSERT trigger on `t_bc727c1d`. It is a new function; no existing function is replaced. It reads the position row `FOR UPDATE`; the engine already holds that lock, so no new lock order arises (Agent G option (a)). It reads only table rows, **never a GUC or session variable**.
 1. If `NEW.c_12665ffb` < the position's current `c_3c880b93`, **refuse unless** `NEW.c_eb34b7d8` has an `EpochMember` row whose execution has `created_xact = pg_current_xact_id()`. The execution's plan must also be Approved, with an approval whose approver is not the creator and whose fingerprints equal the plan's. This closes F1 for every ordinary path. G's assessment: the new guard could also ship as its own strengthening slice, independent of 3.8D (owner choice).
-2. If `NEW.c_4f9e777a` is set and the operation's kind is not 4, refuse unless the operation is an epoch member with role 1 (storno).
+2. If `NEW.c_4f9e777a` is set and the operation's kind is not 4, refuse unless the operation is an epoch member with role 1 (storno) **and the reversed entry belongs to the same position as `NEW`** (rev-3 review M1).
+2a. **Closure binding (rev-3 review M1):** for any entry of an epoch member, back-dated or not, the entry's (item, warehouse) must be a position in the closure of the member's plan (`CompensationPlanPosition`). Inside one executing transaction, a member operation can therefore never touch an unrelated position, whether through an executor bug or a forged member row.
 3. For any entry of an epoch member:
-   * the entry date must lie in an **Open** fiscal period (Soft Closed, Final Closed or missing refuses). This gives epoch rows the database period guard that the open owner item STOCK-PERIOD-DB proposes for all stock effects;
+   * the entry date must lie in an **Open** fiscal period (Soft Closed, Final Closed or missing refuses). The guard reads the period row **`FOR SHARE`** (rev-3 review L2), so a concurrent close cannot commit between this check and the commit. The rule does not depend on the executor's step-2 locks. Lock order stays positions, then periods, as in section 5. This gives epoch rows the database period guard that the open owner item STOCK-PERIOD-DB proposes for all stock effects;
    * the position must hold no open obligation (TM-D10/TM-D13a);
    * the position must have no epoch member of ANOTHER plan (X5 as a database rule).
-4. **X6 as a database rule:** a NEW BEFORE INSERT trigger on the operation table refuses a kind-4 reversal whose reversed operation has stornoed entries (an epoch lineage row). This is a new trigger; `f_9c827423` is unchanged.
+4. **X6 as a database rule (rev-3 review M2):** a NEW BEFORE INSERT trigger on the operation table refuses a kind-4 reversal whose reversed operation **is an epoch member (any role: storno, the event's own operation, rebook) OR has stornoed entries** (an epoch lineage row). This covers reversal of the original documents, of the back-dated event's own document, and of a rebook operation by key. This is a new trigger; `f_9c827423` is unchanged.
 
 ### 3.4 Deferred checks (at commit) [P-Q1]
 
@@ -106,8 +109,8 @@ A deferred constraint trigger on `CompensationPlanExecution` (and on `EpochMembe
 * the plan is in status `executed`, set in this transaction;
 * **the plan's business audit event exists in `t_2db8cf1f` (0002, append-only, hash-chained) and was written in the same transaction** (resume review L5). The audit table (0002) has no transaction column and is not altered. The binding works like this:
   * the execution id is generated by the executor in this transaction;
-  * the audit event carries the execution id as its target reference (one of the uuid reference columns of `t_2db8cf1f`), and the execution row stores the audit event id;
-  * the deferred check requires that the referenced audit row exists and that its target is this execution, whose `created_xact` equals the current transaction.
+  * the audit event carries the execution id as its target reference (one of the uuid reference columns of `t_2db8cf1f`), and the execution row stores the audit event id, with **`UNIQUE (audit_event_id)`** (rev-3 review L3), so one audit event can never vouch for two executions;
+  * the deferred check requires that the referenced audit row exists, that its **event type is the plan-executed type and its subject is this plan** (rev-3 review L3), and that its target is this execution, whose `created_xact` equals the current transaction.
 
   Without it, the commit fails. Whether this is sufficient against a pre-chosen id is review question 2 in section 10;
 * no epoch member exists without an execution of this transaction, and every member operation has at least one entry.
@@ -172,7 +175,7 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 ## 6. Later effects and refusals (increment 1)
 
 * `plan_on_epoch_position` (X5): a plan whose closure contains any epoch member is refused. The snapshot readers refuse histories containing epoch members.
-* `operation_rewritten_by_epoch` (X6): reversal of a document whose cost operation has stornoed entries is refused in the service. The database backstop is `k_c8fdc6c0`.
+* `operation_rewritten_by_epoch` (X6, rev-3 review M2): reversal of a document whose cost operation **is an epoch member (storno, event or rebook) or has stornoed entries** is refused in the service. This includes the back-dated event's own stock document, and a reversal of a rebook operation by key. The database rule is 3.3(4); `k_c8fdc6c0` remains an additional backstop for stornoed entries.
 * `document_bound_to_plan` (X7), section 4.
 * Refusals unchanged: obligations and settlements (TM-D13a), open obligations (TM-D10), reversals in the history until M6 replay exists, adjustments and stocktakes (TM-D14), mixed-group provenance (TM-D6), unposted journals (TM-D3), closed or soft-closed periods (TM-D8), a closure with an executed plan (TM-D12).
 
@@ -231,6 +234,11 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 | N23 | The application path still answers `backdated_not_supported` before the database guard for ordinary requests | unchanged code |
 | N24 | Approval whose fingerprints differ from the plan's | refused |
 | N25 | (only with 3.6) direct runtime-role back-dated insert outside the definer; a `search_path` hijack attempt; EXECUTE not granted to PUBLIC | refused / not possible |
+| N26 | (rev-3 M1) A member operation whose entry lies on a position outside the plan's closure; a storno entry whose reversed entry belongs to another position; a member whose original operation's stornoed entries are outside the closure | refused |
+| N27 | (rev-3 M2) Reversal of the back-dated event's own stock document; reversal of a rebook operation by key; reversal of an original rewritten by the epoch | `operation_rewritten_by_epoch` in the service, and the database rule 3.3(4) refuses a direct kind-4 insert |
+| N28 | (rev-3 L1) Member row for a kind-4 operation, or for an operation with `reverses_operation_id` set | refused |
+| N29 | (rev-3 L2) A period close racing an execution with epoch entries in that period | exactly one wins: either the close waits and then refuses because of the epoch, or the execution refuses `period_not_open`; never an epoch entry in a closed period |
+| N30 | (rev-3 L3) Two executions referencing one audit event; an audit event of another type or another plan | refused |
 
 **Positive and invariant tests:**
 * E1 (132), E2 (120) and E6 (156) executed end to end;
@@ -241,7 +249,7 @@ One company transaction, READ COMMITTED with locks taken first (a RepeatableRead
 * fresh and upgrade migration; runtime-role grants;
 * masking and SoD;
 * FIFO and average;
-* a two-warehouse transfer chain;
+* a two-warehouse transfer chain, **in both directions (W1→W2 and W2→W1) with equal dates** (rev-3 review L4): the storno and rebook orderings of section 2 keep same-date transfer legs in their original sequence, and positions and values equal the replay;
 * single-period and two-period compensation;
 * the ordinary path writes the entry date (3.5).
 
@@ -260,6 +268,8 @@ Until Q1 and Q2 are decided, the planner stays read-only and the barrier stays a
 
 ## 10. Questions for the design review of revision 3
 
+The revision-3 review (`review-records/PR-48-plan-execution-design-rev3.md`) answered them: question 1 sufficient with the L1 addition; question 2 with L3; question 3 by test L4; question 4 narrow enough. Its findings M1, M2 and L1-L5 are applied in sections 3.1-3.4, 6, 8 and 11.
+
 1. Is the "no entries yet, not referenced by an obligation or settlement" condition (3.2) a sufficient proof that a member operation was created in this transaction, given `r_d621465c`?
 2. Is the audit binding of 3.4 sufficient without changing the business audit table? The audit row has no transaction column, so the binding rests on the execution id being generated in this transaction, the audit target reference and the execution's `xid8`. Can a runtime-role writer pre-insert an audit row for a guessed future execution id? (The id is a fresh random UUID, and audit rows are key-authenticated by the application.)
 3. Do the storno and rebook orderings of section 2 cover transfer chains in both directions with equal dates?
@@ -268,13 +278,22 @@ Until Q1 and Q2 are decided, the planner stays read-only and the barrier stays a
 ## 11. Revaluation: requirements for its separate contract (owner: within 3.8D scope; contract PENDING)
 
 This design does not define revaluation; its accounting contract is separately reviewed (D-045, Q3). The contract MUST satisfy:
-* **No silent layer collapse.** A FIFO revaluation must never consume all layers and re-create one layer, and must never discard layer history.
-* **Value-only entries are impossible** (`k_0b3e9de8`: quantity > 0), so any representation must use quantity-bearing entries or a new additive structure. The layer-preserving approach to evaluate: **one out/in pair PER LAYER**, typed by the epoch membership table with a new revaluation role:
+* **No silent layer collapse.** A FIFO revaluation must never consume all layers and re-create one layer, and must never discard layer history. **Owner-facing point for the Q3 contract (rev-3 review L5).**
+* **Value-only entries are impossible** (`k_0b3e9de8`: quantity > 0), so any representation must use quantity-bearing entries or a new additive structure. The **count- and order-preserving approach with lineage** to evaluate: **one out/in pair PER LAYER**, typed by the epoch membership table with a new revaluation role:
   * the out entry consumes exactly that layer's remaining quantity at its remaining value;
   * the in entry creates its successor layer at the revalued amount;
   * a lineage row links the old layer to the new one, keeping the original receipt date and the original arrival order as lineage data;
   * FIFO consumption order is preserved by creating the successors in the original layer order.
-* **The cost of that approach is stated:** new arrival ranks and layer ids (the original layers stay immutable and fully traceable through the lineage), and as many entries as layers. If the contract finds this insufficient (for example, original arrival ranks must stay authoritative), it must propose a different additive structure, such as a per-layer value-adjustment table read by the engine. That would be a reader change subject to its own review.
+* **What it does NOT preserve (stated plainly):**
+  * It preserves the NUMBER and ORDER of layers, and the original layers stay immutable and traceable.
+  * The successor layers carry the **revaluation date**. Layer identity, arrival rank and the engine-visible receipt date are therefore **NOT preserved, except through the lineage**.
+  * It relies on processing the pairs **oldest-first**, so that each out entry consumes exactly the oldest remaining layer.
+  * It needs as many entries as layers.
+* **The contract MUST choose one of two options:**
+  * (i) every FIFO reader (aging, as-of valuation, layer reports, later replay) reads the original receipt date and rank through the lineage; or
+  * (ii) the additive **per-layer value-adjustment** alternative: a new append-only table read by the engine, which keeps layer identity, rank and date. That is a reader change subject to its own review.
+
+  Neither may be chosen silently.
 * **Moving average:** one out/in pair at the carrying quantity.
 * **Accounting:** counter accounts, write-down only or also write-up, approval, and period and date rules are for the contract, not for this design.
 * **Same protections as epochs:** the same entry guard, the same same-transaction binding, the audit binding and the before/after catalog test. No existing safeguard is changed.

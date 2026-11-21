@@ -28,3 +28,20 @@
 * **Verdict:** request changes
 
 Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "independent design review of #48's plan-execution design revision 3 under the owner's binding constraints: fidelity, T9/N9 savepoint correction, section 10 questions, entry-guard lock order, X5/X6 triggers, N1-N25, section 11 layer preservation"; Head SHA reviewed 9f64f575cf0455096ac0381de2b6b65bedc4a0ef; executed: revision 3 and the merged resume review read, verified against the branch code (single entry insert site and position lock order, PostInWorkAsync savepoint, audit table chain columns, 0014/0020/0022 guards); verdict request changes; findings M1 (back-dated entries not bound to the plan's closure), M2 (X6 omits the event and rebook operations), L1 (member trigger must refuse kind-4/reversing operations), L2 (period FOR SHARE in the guard), L3 (unique audit event per execution, type and subject checked), L4 (two-way equal-date transfer chain test), L5 (section 11 preserves layer count and order, not identity or dates; readers must use the lineage).
+
+## Resolution by the author (Agent P; model family Claude Opus)
+
+Applied in `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` on top of `6b64eb3` (one commit). Design only; all owner constraints are unchanged. X1-A and X2-X8 stay pending owner decisions.
+* **M1 fixed.** A new immutable, fingerprinted `CompensationPlanPosition` table holds the plan's closure (roots plus transfer-reached positions).
+  * The member trigger requires that the original operation's stornoed entries lie in the closure.
+  * Entry guard 3.3(2) requires a storno's reversed entry to be on the same position.
+  * New 3.3(2a): every entry of a member operation must be on a closure position.
+  * Test N26.
+* **M2 fixed.** Database rule 3.3(4) and the service refusal (section 6) now cover a reversed operation that is an epoch member of any role (storno, event, rebook) OR has stornoed entries. This includes the event's own document and a rebook reversed by key. Test N27.
+* **L1 fixed.** The member trigger refuses kind-4 operations and operations with `reverses_operation_id` set. Test N28.
+* **L2 fixed.** The Open-period check reads the period row `FOR SHARE`; lock order stays positions, then periods. Concurrent-close test N29.
+* **L3 fixed.** `UNIQUE (audit_event_id)` on the execution, and the deferred check verifies the audit event's type and subject. Test N30.
+* **L4 fixed.** The invariant tests include a two-warehouse transfer chain in both directions with equal dates.
+* **L5 fixed.** Section 11 now says "count- and order-preserving with lineage". It states plainly that successor layers carry the revaluation date, so layer identity, arrival rank and the engine-visible receipt date are not preserved except through the lineage, and that the approach relies on oldest-first processing. The Q3 contract must choose either lineage-reading FIFO readers or the per-layer value-adjustment alternative. This is marked as an owner-facing point.
+* **Open for the reviewer:** confirmation of this delta.
+
