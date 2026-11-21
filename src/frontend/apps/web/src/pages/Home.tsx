@@ -107,7 +107,7 @@ export function HomePage() {
                     <li key={a.id}>
                       <span className="activity-what">
                         <strong>{t(`history.entity.${a.entity}`)}</strong>{a.key ? <> <bdi className="ltr-value">{a.key}</bdi></> : null}
-                        <span className="hint"> · {Object.keys(a.changes).map((f) => t(`history.field.${f}`)).join("، ")}</span>
+                        <span className="hint"> · {Object.keys(a.changes).map((f) => t(`history.field.${f}`)).join(t("list.separator"))}</span>
                       </span>
                       <time dateTime={a.changedAtUtc} className="ltr-value hint">{formatDateTime(a.changedAtUtc, format)}</time>
                     </li>

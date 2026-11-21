@@ -88,7 +88,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         return v is null ? null : await WithIdentity(companyId, v, ct);
     }
 
-    /// <summary>Filtered, paged list of this company's local parties (code or display name search, link state), with the legal names of the linked shared identities.</summary>
+    /// <summary>Filtered, paged list of this company's local parties (code or display name search, link state, active flag, parties without a role of a kind), with the legal names of the linked shared identities. Every filter is a bound parameter.</summary>
     public async Task<PartyPage> ListAsync(Guid companyId, PartyFilter f, CancellationToken ct = default)
     {
         var rows = new List<(Guid Id, string Code, string Name, bool Active, int State, Guid? Global, bool Open, long Rev, DateTimeOffset Updated)>();
@@ -98,6 +98,12 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             var where = new List<string>();
             await using var cmd = new NpgsqlCommand { Connection = conn };
             if (f.LinkState is { } st) { where.Add($"p.{LP.LinkState} = @st"); cmd.Parameters.AddWithValue("st", (short)st); }
+            if (f.Active is { } active) { where.Add($"p.{LP.IsActive} = @active"); cmd.Parameters.AddWithValue("active", active); }
+            if (f.WithoutRole is { } role)
+            {
+                where.Add($"NOT EXISTS (SELECT 1 FROM {CompanyDatabase.CompanySchema.PartyRole.Table} pr WHERE pr.{CompanyDatabase.CompanySchema.PartyRole.PartyId} = p.{LP.Id} AND pr.{CompanyDatabase.CompanySchema.PartyRole.Role} = @withoutRole)");
+                cmd.Parameters.AddWithValue("withoutRole", (short)role);
+            }
             if (!string.IsNullOrWhiteSpace(f.Search))
             {
                 where.Add($"(upper(p.{LP.Code}) LIKE @like OR upper(p.{LP.DisplayName}) LIKE @like)");
