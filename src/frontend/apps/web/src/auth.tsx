@@ -61,7 +61,13 @@ const AuthContext = createContext<AuthValue | null>(null);
 
 /** Lets the api client tell the provider that the server ended the session (401) without a circular import. */
 export function createSessionBridge() {
-  const bridge = { listener: null as null | (() => void), fire: () => bridge.listener?.(), enrolmentListener: null as null | (() => void), fireEnrolment: () => bridge.enrolmentListener?.() };
+  const bridge = {
+    listener: null as null | (() => void), fire: () => bridge.listener?.(),
+    /** 403 `mfa_enrolment_required` on any authenticated call; `scope` is what {@link scope} answered when that call STARTED. */
+    enrolmentListener: null as null | ((scope?: unknown) => void), fireEnrolment: (scope?: unknown) => bridge.enrolmentListener?.(scope),
+    /** The current company-selection attempt (a counter the provider owns). The api client reads it when a call starts, so an answer that arrives after the selection changed can be told apart. */
+    scopeListener: null as null | (() => unknown), scope: (): unknown => bridge.scopeListener?.(),
+  };
   return bridge;
 }
 export type SessionBridge = ReturnType<typeof createSessionBridge>;
@@ -88,40 +94,66 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const mounted = useRef(true);
   /** The company whose selection the server answered 403 mfa_enrolment_required: selected again after the enrolment. */
   const pendingCompany = useRef<string | null>(null);
+  /** The selected company as the callbacks below see it (the state value lags a render behind). */
+  const companyRef = useRef<string | null>(null);
+  /** Counts the company-selection attempts and clears: an enrolment-required answer of a call started under an older value belongs to a previous company and is ignored. */
+  const epoch = useRef(0);
+  /** A company selection (or the session restoration) is being answered by the server right now. */
+  const selecting = useRef(0);
+  const setCompany = useCallback((id: string | null) => { companyRef.current = id; setCompanyId(id); }, []);
 
   const endSession = useCallback((why: Notice) => {
     setUser(null);
     setCompanies([]);
-    setCompanyId(null);
+    setCompany(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
     pendingCompany.current = null;
+    epoch.current++;
     setNotice(why);
     setPhase("anonymous");
-  }, []);
+  }, [setCompany]);
 
   /** The company's MFA policy applies and the user has no authenticator: the enrolment prompt replaces the company screens. Idempotent (many calls may fail at once); the session stays and nothing is retried here. */
   const requireEnrolment = useCallback(() => setPhase((p) => (p === "anonymous" || p === "mfa" ? p : "needEnrolment")), []);
 
+  /**
+   * The same, for a signal that comes from OUTSIDE the provider's own selection flows (the api client's hook, or a page handing its error to `handleError`). It is honoured only when it belongs to the current selection attempt or
+   * company: a call that started before the selection changed (`scope` is older than the current attempt) is ignored, and so is any signal while no company is selected and no selection is being answered. A late refusal of a
+   * previous company's request therefore cannot raise the prompt from company selection or inside another company.
+   */
+  const signalEnrolment = useCallback((scope?: unknown) => {
+    if (scope !== undefined && scope !== epoch.current) return;
+    if (companyRef.current === null && selecting.current === 0) return;
+    requireEnrolment();
+  }, [requireEnrolment]);
+
   const handleError = useCallback((error: unknown) => {
-    if (isEnrolmentRequired(error)) { requireEnrolment(); return true; }
+    if (isEnrolmentRequired(error)) { signalEnrolment((error as ApiError).details.scope); return true; }   // handled either way: a stale refusal is not shown as a page error
     if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
       endSession("session_expired");
       return true;
     }
     return false;
-  }, [endSession, requireEnrolment]);
+  }, [endSession, signalEnrolment]);
 
   useEffect(() => {
-    if (bridge) { bridge.listener = () => endSession("session_expired"); bridge.enrolmentListener = requireEnrolment; }
-    return () => { if (bridge) { bridge.listener = null; bridge.enrolmentListener = null; } };
-  }, [bridge, endSession, requireEnrolment]);
+    if (bridge) { bridge.listener = () => endSession("session_expired"); bridge.enrolmentListener = signalEnrolment; bridge.scopeListener = () => epoch.current; }
+    return () => { if (bridge) { bridge.listener = null; bridge.enrolmentListener = null; bridge.scopeListener = null; } };
+  }, [bridge, endSession, signalEnrolment]);
+
+  /** Runs one company selection (or the restoration) as the current attempt: calls started before it no longer count, and its own refusal does. */
+  const attempt = useCallback(async <T,>(run: () => Promise<T>): Promise<T> => {
+    epoch.current++;
+    selecting.current++;
+    try { return await run(); } finally { selecting.current--; }
+  }, []);
 
   const enterCompany = useCallback(async () => {
     const me = await api.accessMe();
-    setCompanyId(me.companyId);
+    setCompany(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
     setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
     const perBranch = new Map<string, Set<string>>();
@@ -129,7 +161,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setBranchPermissions(perBranch);
     setRoleGrants(me.grants.map((g) => ({ roleId: g.roleId, scope: g.scope, scopeId: g.scopeId })));
     setPhase("ready");
-  }, [api]);
+  }, [api, setCompany]);
 
   const loadCompanies = useCallback(async () => {
     setCompanies((await api.listCompanies()).companies);
@@ -144,15 +176,14 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const autoEnterSole = useCallback(async (list: CompanySummary[]): Promise<boolean> => {
     if (list.length !== 1) return false;
     try {
-      await api.selectCompany(list[0].id);
-      await enterCompany();
+      await attempt(async () => { await api.selectCompany(list[0].id); await enterCompany(); });
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) throw e;
       if (isEnrolmentRequired(e)) { pendingCompany.current = list[0].id; requireEnrolment(); return true; }   // the company's policy needs an authenticator first: the prompt is shown, the screen is not "needCompany"
       return false;
     }
-  }, [api, enterCompany, requireEnrolment]);
+  }, [api, attempt, enterCompany, requireEnrolment]);
 
   // Session restoration: the server decides (cookie), the client keeps no session data of its own.
   useEffect(() => {
@@ -165,9 +196,9 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
         setUser(status.user);
         const list = (await api.listCompanies()).companies;
         setCompanies(list);
-        try { await enterCompany(); } catch (e) {
+        try { await attempt(enterCompany); } catch (e) {
           if (e instanceof ApiError && e.status === 401) throw e;
-          if (isEnrolmentRequired(e)) { requireEnrolment(); return; }     // a company is selected on the server and its policy needs an authenticator
+          if (isEnrolmentRequired(e)) { requireEnrolment(); return; }     // a company is selected on the server and its policy needs an authenticator (which company is not known here: see adoptEnrolledSession)
           // 409 company_not_selected (or no usable selection): enter the only company, otherwise ask.
           if (!(await autoEnterSole(list))) setPhase("needCompany");
         }
@@ -178,7 +209,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
       }
     })();
     return () => { mounted.current = false; };
-  }, [api, enterCompany, autoEnterSole, requireEnrolment]);
+  }, [api, attempt, enterCompany, autoEnterSole, requireEnrolment]);
 
   const finishLogin = useCallback(async (signedIn: SessionUser) => {
     setMfa(null);
@@ -223,15 +254,23 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
 
   const adoptEnrolledSession = useCallback(async (enrolled: SessionUser) => {
     setUser(enrolled);
-    const previous = pendingCompany.current ?? companyId;
+    let target = pendingCompany.current ?? companyRef.current;
     pendingCompany.current = null;
     try {
-      if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
+      if (!target) {
+        // The prompt came from a session restored with a company already selected on the server: the server refused before saying which one, so it is not known here. With exactly one accessible company it is that one (entered
+        // like after a login); with several the user chooses again.
+        const list = (await api.listCompanies()).companies;
+        setCompanies(list);
+        if (list.length === 1) target = list[0].id;
+      }
+      if (target) { const id = target; await attempt(async () => { await api.selectCompany(id); await enterCompany(); }); return; }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
-    setCompanyId(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
+    epoch.current++;
+    setCompany(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
     await loadCompanies();
     setPhase("needCompany");
-  }, [api, companyId, enterCompany, handleError, loadCompanies]);
+  }, [api, attempt, enterCompany, handleError, loadCompanies, setCompany]);
 
   const logout = useCallback(async () => {
     try { await api.logout(); } catch { /* the server session may already be gone; the local state is cleared regardless */ }
@@ -240,25 +279,25 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
 
   const chooseCompany = useCallback(async (id: string) => {
     try {
-      await api.selectCompany(id);
-      await enterCompany();
+      await attempt(async () => { await api.selectCompany(id); await enterCompany(); });
     } catch (e) {
       if (!isEnrolmentRequired(e)) throw e;
       pendingCompany.current = id;        // the server undid the selection; it is made again after the enrolment
       requireEnrolment();
     }
-  }, [api, enterCompany, requireEnrolment]);
+  }, [api, attempt, enterCompany, requireEnrolment]);
 
   const changeCompany = useCallback(async () => {
+    epoch.current++;                       // whatever is still in flight belongs to the company being left
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }
-    setCompanyId(null);
+    setCompany(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
     try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
     setPhase("needCompany");
-  }, [api, handleError, loadCompanies]);
+  }, [api, handleError, loadCompanies, setCompany]);
 
   const refreshCompanies = useCallback(async () => {
     try { await loadCompanies(); } catch (e) { handleError(e); }

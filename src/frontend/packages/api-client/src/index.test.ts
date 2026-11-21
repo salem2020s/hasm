@@ -132,16 +132,50 @@ describe("api client", () => {
     expect(onEnrolmentRequired).toHaveBeenCalledTimes(1);              // an ordinary 403 is not an enrolment prompt
   });
 
+  it("hands the enrolment hook and the ApiError the request scope read when the refused call STARTED, not the one current when it was answered", async () => {
+    let scope = 1;
+    const onEnrolmentRequired = vi.fn();
+    let answer!: (r: Response) => void;
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { onEnrolmentRequired, requestScope: () => scope });
+    const pending = client.getMfaPolicy();
+    scope = 2;                                                         // the selection changed while the call was in flight
+    answer(json({ error: "mfa_enrolment_required" }, { status: 403 }));
+    await expect(pending).rejects.toMatchObject({ status: 403, code: "mfa_enrolment_required", details: { scope: 1 } });
+    expect(onEnrolmentRequired).toHaveBeenCalledTimes(1);
+    expect(onEnrolmentRequired).toHaveBeenCalledWith(1);
+  });
+
   it("reads and changes the company MFA policy and lists the roles", async () => {
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ policy: "roles", roleIds: ["r1"], updatedAtUtc: null })));
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ policy: "roles", roleIds: ["r1"], updatedAtUtc: null, revision: 4 })));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
-    await client.getMfaPolicy();
+    const read = await client.getMfaPolicy();
     expect(call(fetchMock, 0).url).toBe("https://x/api/v1/access/mfa-policy");
-    await client.putMfaPolicy({ policy: "roles", roleIds: ["r1"] });
+    expect(read.revision).toBe(4);
+    expect((call(fetchMock, 0).init.headers as Record<string, string>)["If-Match"]).toBeUndefined();
+    await client.putMfaPolicy({ policy: "roles", roleIds: ["r1"] }, read.revision);
     expect(call(fetchMock, 1).init.method).toBe("PUT");
     expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ policy: "roles", roleIds: ["r1"] });
+    expect((call(fetchMock, 1).init.headers as Record<string, string>)["If-Match"]).toBe('"4"');      // the loaded revision, as a strong ETag
     await client.listAccessRoles();
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/access/roles");
+  });
+
+  it("the policy save: 412 carries the current revision, 428 is reported as it is, and the step-up retry repeats the SAME If-Match", async () => {
+    const conflict = vi.fn().mockResolvedValue(json({ error: "revision_conflict", currentRevision: 7 }, { status: 412 }));
+    await expect(createApiClient("https://x", conflict as unknown as typeof fetch).putMfaPolicy({ policy: "all" }, 4)).rejects.toMatchObject({ status: 412, code: "revision_conflict", details: { currentRevision: 7 } });
+    const missing = vi.fn().mockResolvedValue(json({ error: "precondition_required" }, { status: 428 }));
+    await expect(createApiClient("https://x", missing as unknown as typeof fetch).putMfaPolicy({ policy: "all" }, 4)).rejects.toMatchObject({ status: 428, code: "precondition_required" });
+    const stepped = vi.fn()
+      .mockResolvedValueOnce(json({ error: "mfa_step_up_required" }, { status: 401 }))
+      .mockResolvedValueOnce(json({ policy: "all", roleIds: [], updatedAtUtc: null, revision: 5 }));
+    const stepUp = vi.fn().mockResolvedValue(true);
+    const saved = await createApiClient("https://x", stepped as unknown as typeof fetch, { stepUp }).putMfaPolicy({ policy: "all" }, 4);
+    expect(saved.revision).toBe(5);
+    expect(stepUp).toHaveBeenCalledTimes(1);
+    expect(stepped).toHaveBeenCalledTimes(2);
+    expect([0, 1].map((n) => (call(stepped, n).init.headers as Record<string, string>)["If-Match"])).toEqual(['"4"', '"4"']);
+    expect(call(stepped, 1).init.body).toBe(call(stepped, 0).init.body);
   });
 
   it("carries the password-policy problems of a weak_password refusal (strings only)", async () => {

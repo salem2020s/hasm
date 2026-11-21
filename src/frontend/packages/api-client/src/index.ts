@@ -10,6 +10,8 @@ export interface ApiErrorDetails {
   retryAfterSeconds?: number;
   /** Password-policy violations of a weak_password refusal: short codes only, never the password. */
   problems?: string[];
+  /** Only on 403 `mfa_enrolment_required`: what `ApiClientOptions.requestScope` answered when the refused call STARTED (lets the app ignore a refusal that belongs to a previous company selection). Never sent by the server. */
+  scope?: unknown;
 }
 
 /** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
@@ -60,9 +62,9 @@ export interface Grant {
   scopeId: string | null;
   permissions: string[];
 }
-/** The company MFA policy (Phase 4.1 S3b-1b): `off`, `roles` (only the listed roles) or `all`. `roleIds` is empty unless the policy is `roles`. */
+/** The company MFA policy (Phase 4.1 S3b-1b): `off`, `roles` (only the listed roles) or `all`. `roleIds` is empty unless the policy is `roles`. `revision` is the optimistic-concurrency revision the save must send back as If-Match. */
 export type MfaPolicyKind = "off" | "roles" | "all";
-export interface MfaPolicy { policy: MfaPolicyKind; roleIds: string[]; updatedAtUtc: string | null }
+export interface MfaPolicy { policy: MfaPolicyKind; roleIds: string[]; updatedAtUtc: string | null; revision: number }
 export interface AccessRole { id: string; name: string; preset: boolean; presetKey: string | null; active: boolean; permissions: string[] }
 export interface AccessMe {
   companyId: string;
@@ -885,7 +887,9 @@ export interface ApiClientOptions {
    * Phase 4.1 S3b-2b: called when the server answers an authenticated call 403 `mfa_enrolment_required` (the selected company's MFA policy applies to the user and the user has no authenticator). One global hook for
    * every company route and for the company selection: the app shows the enrolment prompt. The session is NOT ended and nothing is retried here; the caller still gets the ApiError.
    */
-  onEnrolmentRequired?: () => void;
+  onEnrolmentRequired?: (scope?: unknown) => void;
+  /** Read once when each call starts; the value is handed back to `onEnrolmentRequired` and on the ApiError (`details.scope`) when that call is refused with 403 `mfa_enrolment_required`. The app uses it to tell which company selection a late answer belongs to. */
+  requestScope?: () => unknown;
 }
 
 /** Distinct ids in batches of {@link MAX_LOOKUP_IDS}; nothing to ask means NO request (never an empty `ids`). Results are concatenated in batch order. */
@@ -905,6 +909,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
 
   async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean; keepSessionOn?: readonly string[]; stepUpDone?: boolean } = {}): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
+    const scope = options.requestScope?.();                 // read BEFORE the call is sent: the selection may change while it is in flight
     if (method !== "GET") headers["X-Hasm-Request"] = "1"; // anti-CSRF header required by the API on every state-changing call
     if (opts.body !== undefined) headers["Content-Type"] = "application/json";
     if (opts.ifMatch !== undefined) headers["If-Match"] = `"${opts.ifMatch}"`;
@@ -930,7 +935,10 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
           if (await options.stepUp()) return request<T>(method, path, { ...opts, stepUpDone: true });
           throw new ApiError(401, "mfa_step_up_cancelled");
         }
-      } else if (response.status === 403 && payload.error === "mfa_enrolment_required" && !opts.anonymous) options.onEnrolmentRequired?.();
+      } else if (response.status === 403 && payload.error === "mfa_enrolment_required" && !opts.anonymous) {
+        options.onEnrolmentRequired?.(scope);
+        throw new ApiError(403, "mfa_enrolment_required", { scope });
+      }
       else if (response.status === 401 && !opts.anonymous && !opts.keepSessionOn?.includes(payload.error ?? "")) options.onUnauthenticated?.();
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
@@ -1012,8 +1020,10 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     accessMe: () => get<AccessMe>("/api/v1/access/me"),
     /** Needs `access.mfapolicy.view` and a selected company. */
     getMfaPolicy: () => get<MfaPolicy>("/api/v1/access/mfa-policy"),
-    /** Needs `access.mfapolicy.update`; a fresh second-factor proof (the step-up host handles 401 `mfa_step_up_required`). 409 `mfa_policy_requires_own_enrolment`: the caller has no authenticator and the change would require one of them. */
-    putMfaPolicy: (body: { policy: MfaPolicyKind; roleIds?: string[] }) => request<MfaPolicy>("PUT", "/api/v1/access/mfa-policy", { body }),
+    /** Needs `access.mfapolicy.update`; a fresh second-factor proof (the step-up host handles 401 `mfa_step_up_required`). 409 `mfa_policy_requires_own_enrolment`: the caller has no authenticator and the change would require one of them.
+     * `revision` (from the last GET or save answer) is sent as If-Match: 412 `revision_conflict` when the policy was changed meanwhile (the error carries `currentRevision`), 428 `precondition_required` without it. The step-up
+     * retry repeats the identical request, so the same If-Match. */
+    putMfaPolicy: (body: { policy: MfaPolicyKind; roleIds?: string[] }, revision: number) => request<MfaPolicy>("PUT", "/api/v1/access/mfa-policy", { body, ifMatch: revision }),
     listAccessRoles: () => get<{ roles: AccessRole[] }>("/api/v1/access/roles"),
 
     getProfile: () => get<ProfileResponse>("/api/v1/company/profile"),

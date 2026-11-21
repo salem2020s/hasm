@@ -10,61 +10,93 @@ import { useReportUnsaved } from "../unsaved";
  * who may read (`access.mfapolicy.view`) or change (`access.mfapolicy.update`) the policy, the fresh second-factor proof (the shared step-up dialog asks for it and repeats the save once), the lock-out guard (409
  * `mfa_policy_requires_own_enrolment`: the person saving must have an authenticator before the policy would apply to them) and the role check. This screen shows the policy and sends the change; it enforces nothing.
  * Saving `roles` or `all` first asks for confirmation, because every affected user without an authenticator is asked to enrol before reaching the company.
+ *
+ * An unsaved choice is never replaced behind the user's back: the policy is fetched once (the loader depends only on the stable api and error handler, not on the language or the rest of the auth context), and every later
+ * fetch (retry, the role refresh after `unknown_role`, the reload after a conflict) keeps a dirty edit. The save carries the loaded `revision` as If-Match; 412 `revision_conflict` (someone else changed the policy) keeps the
+ * edit, says so and offers to load the current policy; the step-up retry repeats the identical request, so the same If-Match; the next revision comes from the save answer.
  */
 const KINDS: MfaPolicyKind[] = ["off", "roles", "all"];
+const sameRoles = (a: string[], b: string[]) => [...a].sort().join() === [...b].sort().join();
 
 export function MfaPolicyPage() {
   const { t, locale } = useI18n();
   const auth = useAuth();
+  const { api, handleError } = auth;
   const canEdit = auth.can("access.mfapolicy.update");
   const [saved, setSaved] = useState<MfaPolicy | null | undefined>(undefined);        // undefined: loading
   const [roles, setRoles] = useState<AccessRole[] | null>(null);                      // null: not available (the role list is refused or failed)
   const [kind, setKind] = useState<MfaPolicyKind>("off");
   const [chosen, setChosen] = useState<string[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Failures are kept as the error itself and worded when shown, so a language switch re-words them without asking the server again.
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [error, setError] = useState<unknown>(null);
   const [needOwnEnrolment, setNeedOwnEnrolment] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [notice, setNotice] = useState<"saved" | "reloaded" | null>(null);
+  const [rolesRefreshed, setRolesRefreshed] = useState<number | null>(null);          // after `unknown_role`: how many chosen roles no longer exist and were removed from the choice
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
+  const dirtyRef = useRef(false);
 
-  const load = useCallback(async () => {
+  const rolesOrNull = useCallback(() => api.listAccessRoles().then((r) => r.roles, (e: unknown) => { if (e instanceof ApiError && (e.status === 401 || (e.status === 403 && e.code === "mfa_enrolment_required"))) throw e; return null; }), [api]);
+
+  /** Fetches the policy and the roles. A dirty edit is kept: only what the server has saved (and its revision) is replaced. Returns true when the policy was loaded. */
+  const load = useCallback(async (): Promise<boolean> => {
     const n = ++seq.current;
     try {
-      const [policy, roleList] = await Promise.all([
-        auth.api.getMfaPolicy(),
-        auth.api.listAccessRoles().then((r) => r.roles, (e: unknown) => { if (e instanceof ApiError && (e.status === 401 || (e.status === 403 && e.code === "mfa_enrolment_required"))) throw e; return null; }),
-      ]);
-      if (n !== seq.current) return;
-      setSaved(policy); setKind(policy.policy); setChosen(policy.roleIds); setRoles(roleList); setLoadError(null);
+      const [policy, roleList] = await Promise.all([api.getMfaPolicy(), rolesOrNull()]);
+      if (n !== seq.current) return false;
+      setSaved(policy); setRoles(roleList); setLoadError(null);
+      if (!dirtyRef.current) { setKind(policy.policy); setChosen(policy.roleIds); }
+      return true;
     } catch (e) {
-      if (n !== seq.current || auth.handleError(e)) return;
-      setLoadError(errorText(t, e, "mfapolicy.error."));
+      if (n !== seq.current || handleError(e)) return false;
+      setLoadError(e ?? new Error("load"));
       setSaved((s) => s ?? null);
+      return false;
     }
-  }, [auth, t]);
+  }, [api, handleError, rolesOrNull]);
   useEffect(() => { void load(); }, [load]);
 
-  const dirty = saved != null && (kind !== saved.policy || (kind === "roles" && [...chosen].sort().join() !== [...saved.roleIds].sort().join()));
+  const dirty = saved != null && (kind !== saved.policy || (kind === "roles" && !sameRoles(chosen, saved.roleIds)));
+  dirtyRef.current = dirty;
   useReportUnsaved("mfa-policy", dirty, t("mfapolicy.section"));
 
   function toggle(id: string) { setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id])); setNotice(null); }
 
+  /** After 400 `unknown_role`: the role list is stale. Only the LIST is refreshed; the choice stays, except role ids that no longer exist at all (they cannot be shown or saved), and that is said. An inactive role stays, marked as not available. */
+  async function refreshRoles() {
+    try {
+      const list = await rolesOrNull();
+      if (list === null) return;
+      const exists = new Set(list.map((r) => r.id));
+      setRoles(list);
+      setRolesRefreshed(chosen.filter((id) => !exists.has(id)).length);
+      setChosen((c) => c.filter((id) => exists.has(id)));
+    } catch (e) { handleError(e); }
+  }
+
+  /** After a conflict: loads what is saved now (and its revision). The edit is kept; the notice names the policy now in force so the user can decide to save over it or discard. */
+  async function reload() {
+    if (await load()) { setConflict(false); setError(null); setNotice("reloaded"); }
+  }
+
   async function save() {
     setConfirming(false);
-    if (busy) return;
-    setBusy(true); setError(null); setNotice(null); setNeedOwnEnrolment(false);
+    if (busy || !saved) return;
+    setBusy(true); setError(null); setNotice(null); setNeedOwnEnrolment(false); setConflict(false); setRolesRefreshed(null);
     try {
-      const result = await auth.api.putMfaPolicy({ policy: kind, roleIds: kind === "roles" ? chosen : [] });
+      const result = await api.putMfaPolicy({ policy: kind, roleIds: kind === "roles" ? chosen : [] }, saved.revision);
       setSaved(result); setKind(result.policy); setChosen(result.roleIds);
-      setNotice(t("mfapolicy.saved"));
+      setNotice("saved");
     } catch (e) {
-      if (auth.handleError(e)) return;
+      if (handleError(e)) return;
       if (e instanceof ApiError && e.status === 409 && e.code === "mfa_policy_requires_own_enrolment") setNeedOwnEnrolment(true);
+      else if (e instanceof ApiError && e.status === 412) setConflict(true);                  // someone else changed the policy: the edit stays, nothing is fetched until the user asks
       else {
-        setError(errorText(t, e, "mfapolicy.error."));
-        if (e instanceof ApiError && e.code === "unknown_role") void load();                 // the role list is stale: show the roles as they are now (the edit is kept by the user's own choice, not silently changed)
+        setError(e ?? new Error("save"));
+        if (e instanceof ApiError && e.code === "unknown_role") await refreshRoles();
       }
     } finally { setBusy(false); }
   }
@@ -75,16 +107,19 @@ export function MfaPolicyPage() {
 
   if (saved === undefined) return <Loading />;
   const rolesMissing = kind === "roles" && chosen.length === 0;
-  const known = new Set((roles ?? []).map((r) => r.id));
-  const roleLabel = (r: AccessRole) => r.name;
-  void locale;
+  const available = new Set((roles ?? []).filter((r) => r.active).map((r) => r.id));
 
   return (
     <div>
       <PageHeader title={t("mfapolicy.title")} description={t("mfapolicy.subtitle")} />
-      {loadError && <Banner kind="error" testId="mfapolicy-load-error">{loadError} <button type="button" className="link" onClick={() => void load()}>{t("picker.retry")}</button></Banner>}
-      {notice && <Banner kind="success" testId="mfapolicy-notice">{notice}</Banner>}
-      {error && <Banner kind="error" testId="mfapolicy-error">{error}</Banner>}
+      {loadError != null && <Banner kind="error" testId="mfapolicy-load-error">{errorText(t, loadError, "mfapolicy.error.")} <button type="button" className="link" onClick={() => void load()}>{t("picker.retry")}</button></Banner>}
+      {notice === "saved" && <Banner kind="success" testId="mfapolicy-notice">{t("mfapolicy.saved")}</Banner>}
+      {notice === "reloaded" && saved && <Banner kind="info" testId="mfapolicy-reloaded">{t("mfapolicy.reloaded", { policy: t(`mfapolicy.kind.${saved.policy}`) })}{dirty ? ` ${t("mfapolicy.reloaded.kept")}` : ""}</Banner>}
+      {conflict && (
+        <Banner kind="warning" testId="mfapolicy-conflict">{t("mfapolicy.conflict")} <button type="button" className="link" disabled={busy} onClick={() => void reload()} data-testid="mfapolicy-reload">{t("mfapolicy.conflict.reload")}</button></Banner>
+      )}
+      {error != null && <Banner kind="error" testId="mfapolicy-error">{errorText(t, error, "mfapolicy.error.")}</Banner>}
+      {rolesRefreshed !== null && <Banner kind="info" testId="mfapolicy-roles-refreshed">{t("mfapolicy.roles_refreshed")}{rolesRefreshed > 0 ? ` ${t("mfapolicy.roles_dropped", { count: rolesRefreshed })}` : ""}</Banner>}
       {needOwnEnrolment && (
         <Banner kind="warning" testId="mfapolicy-own-enrolment">{t("mfapolicy.error.mfa_policy_requires_own_enrolment")} <a href="#/account/security" data-testid="mfapolicy-security-link">{t("mfapolicy.open_security")}</a></Banner>
       )}
@@ -109,10 +144,10 @@ export function MfaPolicyPage() {
                 {(roles ?? []).filter((r) => r.active).map((r) => (
                   <label key={r.id} className="checkbox" data-testid={`mfapolicy-role-${r.id}`}>
                     <input type="checkbox" checked={chosen.includes(r.id)} onChange={() => toggle(r.id)} />
-                    <bdi>{roleLabel(r)}</bdi>
+                    <bdi>{r.name}</bdi>
                   </label>
                 ))}
-                {roles !== null && chosen.filter((id) => !known.has(id) || !roles.find((r) => r.id === id)?.active).map((id) => (
+                {roles !== null && chosen.filter((id) => !available.has(id)).map((id) => (
                   <label key={id} className="checkbox" data-testid={`mfapolicy-role-unavailable-${id}`}>
                     <input type="checkbox" checked onChange={() => toggle(id)} />
                     <span>{t("mfapolicy.role_unavailable")}</span>
@@ -126,7 +161,7 @@ export function MfaPolicyPage() {
             {canEdit && (
               <div className="actions">
                 <button type="submit" className="primary" disabled={busy || !dirty || rolesMissing} data-testid="mfapolicy-save">{busy ? t("loading") : t("mfapolicy.save")}</button>
-                <button type="button" className="ghost" disabled={busy || !dirty} onClick={() => { setKind(saved.policy); setChosen(saved.roleIds); setError(null); setNeedOwnEnrolment(false); }} data-testid="mfapolicy-cancel">{t("mfapolicy.cancel")}</button>
+                <button type="button" className="ghost" disabled={busy || !dirty} onClick={() => { setKind(saved.policy); setChosen(saved.roleIds); setError(null); setNeedOwnEnrolment(false); setRolesRefreshed(null); setNotice(null); }} data-testid="mfapolicy-cancel">{t("mfapolicy.cancel")}</button>
               </div>
             )}
           </Card>

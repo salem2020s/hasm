@@ -31,7 +31,7 @@ export function EnrolmentRequiredPage() {
       if (n !== seq.current || auth.handleError(e)) return;
       setLoadError(true);
     }
-  }, [auth]);
+  }, [auth.api, auth.handleError]);   // stable: the provider's state changes while the enrolment completes (new user, re-selection) must NOT ask again, or the answer "enrolled" would flash the administrator warning
   useEffect(() => { void load(); }, [load]);
 
   async function another() {

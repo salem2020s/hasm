@@ -302,7 +302,7 @@ export function App({ client, bridge, stepUpBridge }: { client?: ApiClient; brid
     const step = stepUpBridge ?? createStepUpBridge();
     if (client) return { api: client, bridge, step };
     const b = createSessionBridge();
-    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, onEnrolmentRequired: b.fireEnrolment, stepUp: step.request }), bridge: b, step };
+    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, onEnrolmentRequired: b.fireEnrolment, requestScope: b.scope, stepUp: step.request }), bridge: b, step };
   }, [client, bridge, stepUpBridge]);
   return (
     <AuthProvider api={own.api} bridge={own.bridge}>
