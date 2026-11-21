@@ -36,23 +36,23 @@ public static class InventoryEndpoints
         g.MapGet("/units", ListUnits);
         g.MapPost("/units", CreateUnit).WithMetadata(new BodyLimit());
         g.MapPut("/units/{id:guid}", UpdateUnit).WithMetadata(new BodyLimit());
-        g.MapPost("/units/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetUnit(id, false, h, a, s)).WithMetadata(new BodyLimit());
-        g.MapPost("/units/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetUnit(id, true, h, a, s)).WithMetadata(new BodyLimit());
+        g.MapPost("/units/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetUnit(id, false, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/units/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetUnit(id, true, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/groups", ListGroups);
         g.MapPost("/groups", CreateGroup).WithMetadata(new BodyLimit());
         g.MapPut("/groups/{id:guid}", UpdateGroup).WithMetadata(new BodyLimit());
-        g.MapPost("/groups/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetGroup(id, false, h, a, s)).WithMetadata(new BodyLimit());
-        g.MapPost("/groups/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetGroup(id, true, h, a, s)).WithMetadata(new BodyLimit());
+        g.MapPost("/groups/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetGroup(id, false, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/groups/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetGroup(id, true, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/items", ListItems);
         g.MapPost("/items", CreateItem).WithMetadata(new BodyLimit());
         g.MapGet("/items/{id:guid}", GetItem);
         g.MapPut("/items/{id:guid}", UpdateItem).WithMetadata(new BodyLimit());
-        g.MapPost("/items/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetItem(id, false, h, a, s)).WithMetadata(new BodyLimit());
-        g.MapPost("/items/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetItem(id, true, h, a, s)).WithMetadata(new BodyLimit());
+        g.MapPost("/items/{id:guid}/deactivate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetItem(id, false, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/items/{id:guid}/activate", (Guid id, HttpContext h, AccessService a, InventoryManagementService s) => SetItem(id, true, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/items/{id:guid}/barcodes", ListBarcodes);
         g.MapPost("/items/{id:guid}/barcodes", AddBarcode).WithMetadata(new BodyLimit());
-        g.MapPost("/items/{id:guid}/barcodes/{barcodeId:guid}/deactivate", (Guid id, Guid barcodeId, HttpContext h, AccessService a, InventoryManagementService s) => SetBarcode(id, barcodeId, false, h, a, s)).WithMetadata(new BodyLimit());
-        g.MapPost("/items/{id:guid}/barcodes/{barcodeId:guid}/activate", (Guid id, Guid barcodeId, HttpContext h, AccessService a, InventoryManagementService s) => SetBarcode(id, barcodeId, true, h, a, s)).WithMetadata(new BodyLimit());
+        g.MapPost("/items/{id:guid}/barcodes/{barcodeId:guid}/deactivate", (Guid id, Guid barcodeId, HttpContext h, AccessService a, InventoryManagementService s) => SetBarcode(id, barcodeId, false, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/items/{id:guid}/barcodes/{barcodeId:guid}/activate", (Guid id, Guid barcodeId, HttpContext h, AccessService a, InventoryManagementService s) => SetBarcode(id, barcodeId, true, h, a, s)).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/barcode-lookup", Lookup);
     }
 
