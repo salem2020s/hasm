@@ -33,126 +33,159 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
     private const int Parallel = 6;
     public enum Mode { One, Same, Append }
 
-    /// <summary>The routes part 2 probes (this class, <see cref="EndpointConstraintMatrixPart2StockTests"/>, <see cref="EndpointConstraintMatrixPart2CommercialTests"/> and <see cref="EndpointConstraintMatrixPart2ImportTests"/>), each with the kind of probe.</summary>
-    public static readonly IReadOnlyDictionary<string, string> Probed = new Dictionary<string, string>
+    /// <summary>
+    /// The routes part 2 probes, by the test that probes them (its SHARE), each with the kind of probe. Every probing test ends with <see cref="ConstraintRaces.AssertRan"/> on its share:
+    /// the routes it actually raced must equal its share exactly (review L1 of #161: a route is PROBED, not only classified). Literals and <c>nameof</c> only, so this field never
+    /// reads another class's static state while initializing (review H1 of #161).
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Shares = new Dictionary<string, IReadOnlyDictionary<string, string>>
     {
-        ["PUT /api/v1/company/accounts/settings"] = "stale-revision race",
-        ["POST /api/v1/company/accounts/apply-template"] = "duplicate (409 chart_not_empty)",
-        ["POST /api/v1/company/accounts/{id:guid}/move"] = "stale-revision race",
-        ["PUT /api/v1/company/profile"] = "stale-revision race",
-        ["POST /api/v1/company/profile/display-name-sync"] = "idempotent (same answer)",
-        ["PUT /api/v1/company/currencies/{code}"] = "stale-revision race",
-        ["PUT /api/v1/company/inventory/settings"] = "stale-revision race",
-        ["PUT /api/v1/company/ledger-settings/"] = "stale-revision race",
-        ["PUT /api/v1/company/negative-stock/settings"] = "stale-revision race",
-        ["PUT /api/v1/company/numbering/{docType}"] = "stale-revision race",
-        ["POST /api/v1/company/pricing/policy"] = "version race",
-        ["POST /api/v1/company/taxes/policy"] = "append race (409 version_conflict)",
-        ["POST /api/v1/company/branches/{id:guid}/make-main"] = "stale-revision race",
-        ["PUT /api/v1/company/cost-center-policies/accounts/{accountId:guid}"] = "stale-revision race",
-        ["PUT /api/v1/company/cost-center-policies/branches/{costCenterId:guid}"] = "stale-revision race",
-        ["PUT /api/v1/company/inventory/accounting/"] = "stale-revision race",
-        ["PUT /api/v1/company/negative-stock/items/{itemId:guid}"] = "idempotent (same answer)",
-        ["PUT /api/v1/company/taxes/item-classes/{itemId:guid}"] = "idempotent (same answer)",
-        ["PUT /api/v1/company/taxes/party-classes/{partyId:guid}"] = "idempotent (same answer)",
-        ["POST /api/v1/company/taxes/rules"] = "duplicate (409 rule_overlap)",
-        ["PUT /api/v1/company/taxes/rules/{id:guid}"] = "stale-revision race",
-        ["PUT /api/v1/company/pricing/customer-assignments/{partyId:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/pricing/quote"] = "read-only (same answer)",
-        ["PUT /api/v1/company/parties/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/parties/{id:guid}/propose"] = "open-request race (409 request_open)",
-        ["POST /api/v1/company/parties/sync"] = "idempotent (same answer)",
-        ["POST /api/v1/company/parties/reconcile"] = "read-only (same answer)",
-        ["PUT /api/v1/company/statements/mapping"] = "stale-revision race",
-        ["POST /api/v1/company/approval-policies/"] = "append (no uniqueness rule)",
-        ["PUT /api/v1/company/approval-policies/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/approval-policies/{id:guid}/deactivate"] = "stale-revision race",
-        ["POST /api/v1/company/approval-policies/{id:guid}/activate"] = "stale-revision race",
-        // batch 2: journal, fiscal calendar and closing, attachments and retention
-        ["POST /api/v1/company/journal/"] = "append (no uniqueness rule)",
-        ["PUT /api/v1/company/journal/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/journal/{id:guid}/decision"] = "decision race (409 entry_not_pending_approval)",
-        ["POST /api/v1/company/journal/{id:guid}/post"] = "idempotent retry (same answer, one number)",
-        ["POST /api/v1/company/journal/{id:guid}/reverse"] = "transition race (409 already_reversed)",
-        ["PUT /api/v1/company/fiscal-closing/settings"] = "stale-revision race",
-        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close"] = "transition race (409 closing_blocked)",
-        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward"] = "transition race (409 closing_blocked)",
-        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening"] = "transition race (409 already_reversed)",
-        ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing"] = "transition race (409 already_reversed)",
-        ["POST /api/v1/company/fiscal-periods/{id:guid}/final-close"] = "stale-revision race",
-        ["POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
-        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve"] = "decision race (409 request_not_pending)",
-        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel"] = "decision race (409 request_not_pending)",
-        ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny"] = "decision race (409 request_not_pending)",
-        ["POST /api/v1/company/fiscal-years/{id:guid}/close"] = "stale-revision race",
-        ["POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
-        ["POST /api/v1/company/attachments/"] = "append (503 upload_busy back-pressure pinned)",
-        ["POST /api/v1/company/attachments/{id:guid}/remove"] = "transition race (409 already_removed)",
-        ["POST /api/v1/company/attachments/maintenance/rewrap"] = "idempotent (same answer)",
-        ["POST /api/v1/company/attachments/maintenance/sweep"] = "idempotent (same answer)",
-        ["POST /api/v1/company/attachments/maintenance/verify"] = "read-only (same answer)",
-        ["POST /api/v1/company/attachment-retention/policies"] = "append (no uniqueness rule)",
-        ["POST /api/v1/company/attachment-retention/policies/{id:guid}/approve"] = "decision race (409 not_a_draft)",
-        ["POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke"] = "decision race (409 not_approved)",
-        ["POST /api/v1/company/attachment-retention/holds"] = "append (no uniqueness rule)",
-        ["POST /api/v1/company/attachment-retention/holds/{id:guid}/release"] = "decision race (409 already_released)",
-        // batch 3 (probed by EndpointConstraintMatrixPart2StockTests, on the stock fixture): stock documents, stocktakes, stock adjustments
-        ["POST /api/v1/company/stock-documents/"] = "append (no uniqueness rule)",
-        ["PUT /api/v1/company/stock-documents/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/submit"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/withdraw"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/cancel"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/approve"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/reject"] = "stale-revision race",
-        ["POST /api/v1/company/stock-documents/{id:guid}/posting/"] = "idempotent replay (same answer, one posting)",
-        ["POST /api/v1/company/stock-documents/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
-        ["POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals"] = "approval race (409 already_approved)",
-        ["POST /api/v1/company/stocktakes/"] = "append (no uniqueness rule)",
-        ["PUT /api/v1/company/stocktakes/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/generate-sheet"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/submit"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/withdraw"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/cancel"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/approve"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/reject"] = "stale-revision race",
-        ["POST /api/v1/company/stocktakes/{id:guid}/adjustment"] = "idempotent replay (same answer, one adjustment)",
-        ["POST /api/v1/company/stock-adjustments/{id:guid}/posting"] = "idempotent replay (same answer, one posting)",
-        ["POST /api/v1/company/stock-adjustments/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
-        // batch 4 (probed by EndpointConstraintMatrixPart2CommercialTests and EndpointConstraintMatrixPart2ImportTests): commercial documents, imports
-        ["POST /api/v1/company/commercial-documents/"] = "idempotent replay (same answer, one document)",
-        ["PUT /api/v1/company/commercial-documents/{id:guid}"] = "stale-revision race",
-        ["POST /api/v1/company/commercial-documents/{id:guid}/submit"] = "stale-revision race",
-        ["POST /api/v1/company/commercial-documents/{id:guid}/withdraw"] = "stale-revision race",
-        ["POST /api/v1/company/commercial-documents/{id:guid}/cancel"] = "stale-revision race",
-        ["POST /api/v1/company/commercial-documents/{id:guid}/approve"] = "stale-revision race",
-        ["POST /api/v1/company/commercial-documents/{id:guid}/reject"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/stage"] = "stale-revision race",
-        ["PUT /api/v1/company/imports/{id:guid}/mapping"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/dry-run"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/submit"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/withdraw"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/reject"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/approve"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/apply"] = "idempotent retry (same answer, applied once)",
-        ["POST /api/v1/company/imports/{id:guid}/renew"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/cancel"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/resolutions"] = "stale-revision race",
-        ["POST /api/v1/company/imports/{id:guid}/mapping/template"] = "version race (412 revision_conflict)",
-        ["POST /api/v1/company/imports/{id:guid}/mapping/apply-template"] = "read-only prefill (same answer)",
-        ["POST /api/v1/company/imports/templates/{adapter}/{name}/retire"] = "version race (412 revision_conflict)",
-        ["POST /api/v1/company/imports/maintenance/run"] = "idempotent (same answer)",
-        ["POST /api/v1/company/imports/maintenance/rewrap"] = "idempotent (same answer)",
-        // follow-up after #164 and #165: the three routes held pending by their findings
-        ["POST /api/v1/company/commercial-documents/links"] = "idempotent replay (same answer, one link)",
-        ["POST /api/v1/company/imports/"] = "idempotent replay (same answer, one batch)",
-        ["PUT /api/v1/company/imports/settings"] = "stale-revision race (first save included)",
+        [nameof(Configuration_singletons_policies_and_assignments_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["PUT /api/v1/company/accounts/settings"] = "stale-revision race",
+            ["POST /api/v1/company/accounts/apply-template"] = "duplicate (409 chart_not_empty)",
+            ["POST /api/v1/company/accounts/{id:guid}/move"] = "stale-revision race",
+            ["PUT /api/v1/company/profile"] = "stale-revision race",
+            ["POST /api/v1/company/profile/display-name-sync"] = "idempotent (same answer)",
+            ["PUT /api/v1/company/currencies/{code}"] = "stale-revision race",
+            ["PUT /api/v1/company/inventory/settings"] = "stale-revision race",
+            ["PUT /api/v1/company/ledger-settings/"] = "stale-revision race",
+            ["PUT /api/v1/company/negative-stock/settings"] = "stale-revision race",
+            ["PUT /api/v1/company/numbering/{docType}"] = "stale-revision race",
+            ["POST /api/v1/company/pricing/policy"] = "version race",
+            ["POST /api/v1/company/taxes/policy"] = "append race (409 version_conflict)",
+            ["POST /api/v1/company/branches/{id:guid}/make-main"] = "stale-revision race",
+            ["PUT /api/v1/company/cost-center-policies/accounts/{accountId:guid}"] = "stale-revision race",
+            ["PUT /api/v1/company/cost-center-policies/branches/{costCenterId:guid}"] = "stale-revision race",
+            ["PUT /api/v1/company/inventory/accounting/"] = "stale-revision race",
+            ["PUT /api/v1/company/negative-stock/items/{itemId:guid}"] = "idempotent (same answer)",
+            ["PUT /api/v1/company/taxes/item-classes/{itemId:guid}"] = "idempotent (same answer)",
+            ["PUT /api/v1/company/taxes/party-classes/{partyId:guid}"] = "idempotent (same answer)",
+            ["POST /api/v1/company/taxes/rules"] = "duplicate (409 rule_overlap)",
+            ["PUT /api/v1/company/taxes/rules/{id:guid}"] = "stale-revision race",
+            ["PUT /api/v1/company/pricing/customer-assignments/{partyId:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/pricing/quote"] = "read-only (same answer)",
+            ["PUT /api/v1/company/parties/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/parties/{id:guid}/propose"] = "open-request race (409 request_open)",
+            ["POST /api/v1/company/parties/sync"] = "idempotent (same answer)",
+            ["POST /api/v1/company/parties/reconcile"] = "read-only (same answer)",
+            ["PUT /api/v1/company/statements/mapping"] = "stale-revision race",
+            ["POST /api/v1/company/approval-policies/"] = "append (no uniqueness rule)",
+            ["PUT /api/v1/company/approval-policies/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/approval-policies/{id:guid}/deactivate"] = "stale-revision race",
+            ["POST /api/v1/company/approval-policies/{id:guid}/activate"] = "stale-revision race",
+        },
+        [nameof(Journal_entries_from_creation_to_reversal_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/journal/"] = "append (no uniqueness rule)",
+            ["PUT /api/v1/company/journal/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/journal/{id:guid}/decision"] = "decision race (409 entry_not_pending_approval)",
+            ["POST /api/v1/company/journal/{id:guid}/post"] = "idempotent retry (same answer, one number)",
+            ["POST /api/v1/company/journal/{id:guid}/reverse"] = "transition race (409 already_reversed)",
+        },
+        [nameof(The_fiscal_calendar_closing_and_reopening_requests_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/fiscal-periods/{id:guid}/final-close"] = "stale-revision race",
+            ["POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
+            ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve"] = "decision race (409 request_not_pending)",
+            ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel"] = "decision race (409 request_not_pending)",
+            ["POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny"] = "decision race (409 request_not_pending)",
+            ["POST /api/v1/company/fiscal-years/{id:guid}/close"] = "stale-revision race",
+            ["POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests"] = "open-request race (409 reopen_request_pending)",
+        },
+        [nameof(Year_end_closing_and_carry_forward_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["PUT /api/v1/company/fiscal-closing/settings"] = "stale-revision race",
+            ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close"] = "transition race (409 closing_blocked)",
+            ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward"] = "transition race (409 closing_blocked)",
+            ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening"] = "transition race (409 already_reversed)",
+            ["POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing"] = "transition race (409 already_reversed)",
+        },
+        [nameof(Attachments_and_their_retention_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/attachments/"] = "append (503 upload_busy back-pressure pinned)",
+            ["POST /api/v1/company/attachments/{id:guid}/remove"] = "transition race (409 already_removed)",
+            ["POST /api/v1/company/attachments/maintenance/rewrap"] = "idempotent (same answer)",
+            ["POST /api/v1/company/attachments/maintenance/sweep"] = "idempotent (same answer)",
+            ["POST /api/v1/company/attachments/maintenance/verify"] = "read-only (same answer)",
+            ["POST /api/v1/company/attachment-retention/policies"] = "append (no uniqueness rule)",
+            ["POST /api/v1/company/attachment-retention/policies/{id:guid}/approve"] = "decision race (409 not_a_draft)",
+            ["POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke"] = "decision race (409 not_approved)",
+            ["POST /api/v1/company/attachment-retention/holds"] = "append (no uniqueness rule)",
+            ["POST /api/v1/company/attachment-retention/holds/{id:guid}/release"] = "decision race (409 already_released)",
+        },
+        [nameof(EndpointConstraintMatrixPart2StockTests.Stock_documents_their_posting_reversal_and_negative_exception_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/stock-documents/"] = "append (no uniqueness rule)",
+            ["PUT /api/v1/company/stock-documents/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/submit"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/withdraw"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/cancel"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/approve"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/reject"] = "stale-revision race",
+            ["POST /api/v1/company/stock-documents/{id:guid}/posting/"] = "idempotent replay (same answer, one posting)",
+            ["POST /api/v1/company/stock-documents/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
+            ["POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals"] = "approval race (409 already_approved)",
+        },
+        [nameof(EndpointConstraintMatrixPart2StockTests.Stocktakes_and_stock_adjustments_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/stocktakes/"] = "append (no uniqueness rule)",
+            ["PUT /api/v1/company/stocktakes/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/generate-sheet"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/submit"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/withdraw"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/cancel"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/approve"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/reject"] = "stale-revision race",
+            ["POST /api/v1/company/stocktakes/{id:guid}/adjustment"] = "idempotent replay (same answer, one adjustment)",
+            ["POST /api/v1/company/stock-adjustments/{id:guid}/posting"] = "idempotent replay (same answer, one posting)",
+            ["POST /api/v1/company/stock-adjustments/{id:guid}/reversal"] = "idempotent replay (same answer, one reversal)",
+        },
+        [nameof(EndpointConstraintMatrixPart2CommercialTests.Commercial_documents_and_links_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/commercial-documents/"] = "idempotent replay (same answer, one document)",
+            ["PUT /api/v1/company/commercial-documents/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/submit"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/withdraw"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/cancel"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/approve"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/reject"] = "stale-revision race",
+            ["POST /api/v1/company/commercial-documents/links"] = "idempotent replay (same answer, one link)",
+        },
+        [nameof(EndpointConstraintMatrixPart2ImportTests.Imports_from_upload_to_application_with_templates_settings_and_maintenance_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/imports/{id:guid}/stage"] = "stale-revision race",
+            ["PUT /api/v1/company/imports/{id:guid}/mapping"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/dry-run"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/submit"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/withdraw"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/reject"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/approve"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/apply"] = "idempotent retry (same answer, applied once)",
+            ["POST /api/v1/company/imports/{id:guid}/renew"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/cancel"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/resolutions"] = "stale-revision race",
+            ["POST /api/v1/company/imports/{id:guid}/mapping/template"] = "version race (412 revision_conflict)",
+            ["POST /api/v1/company/imports/{id:guid}/mapping/apply-template"] = "read-only prefill (same answer)",
+            ["POST /api/v1/company/imports/templates/{adapter}/{name}/retire"] = "version race (412 revision_conflict)",
+            ["POST /api/v1/company/imports/maintenance/run"] = "idempotent (same answer)",
+            ["POST /api/v1/company/imports/maintenance/rewrap"] = "idempotent (same answer)",
+            ["POST /api/v1/company/imports/"] = "idempotent replay (same answer, one batch)",
+            ["PUT /api/v1/company/imports/settings"] = "stale-revision race (first save included)",
+        },
     };
+
+    /// <summary>The routes part 2 probes (the union of <see cref="Shares"/>), each with the kind of probe. A property: evaluated on use, never during type initialization.</summary>
+    public static IReadOnlyDictionary<string, string> Probed => Shares.Values.SelectMany(s => s).ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
 
     /// <summary>The routes part 1 (<see cref="EndpointConstraintMatrixTests"/>, #155) probes: its own list, so the two classes can never disagree.</summary>
     /// <remarks>A property, not a field initializer: the two classes refer to each other's lists, and static field initializers would depend on which type initializes first.</remarks>
     public static IReadOnlyList<string> CoveredByPart1 => [.. EndpointConstraintMatrixTests.Probed.Keys];
 
-    /// <summary>Mutating company routes not probed yet, listed EXPLICITLY by family: a new route must be classified here, in <see cref="Probed"/> or in part 1.</summary>
+    /// <summary>
+    /// The explicit place for any mutating company route that is NOT probed (by part 2's <see cref="Shares"/> or by part 1), listed by family with the reason. Empty today: every
+    /// one of the 166 routes is probed. A route the API adds must be put in a share (and probed there) or listed here, or the completeness test fails (review L2 of #168).
+    /// </summary>
     public static readonly IReadOnlyList<string> Pending =
     [
     ];
@@ -169,10 +202,10 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
 
     /// <summary>One probe (<see cref="ConstraintRaces.Run"/>) of the same request as <paramref name="caller"/> (the administrator by default).</summary>
     private Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One, string? caller = null) =>
-        races.Run(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
+        races.Run(what, expected, method, path, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
 
     /// <summary>One probe of any request (a multipart upload).</summary>
-    private Task<ApiResponse?> RaceWith(string what, string[] expected, Func<Task<ApiResponse>> send, Mode mode = Mode.One) => races.Run(what, expected, send, mode);
+    private Task<ApiResponse?> RaceWith(string what, string[] expected, HttpMethod method, string path, Func<Task<ApiResponse>> send, Mode mode = Mode.One) => races.Run(what, expected, method, path, send, mode);
 
     private async Task<ApiResponse> Create(string path, object body, string? ifMatch = null)
     {
@@ -215,12 +248,16 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
 
     // ------------------------------------------------------------------------------------------------------------------------------- completeness
 
+    private static string SamplePath(string template) =>
+        string.Join("/", template.Split('/').Select(seg => seg.StartsWith('{') ? (seg.EndsWith(":guid}", StringComparison.Ordinal) ? Guid.NewGuid().ToString() : "sample1") : seg));
+
     [PostgresFact]
     public async Task Every_mutating_company_endpoint_is_probed_here_in_part_1_or_listed_as_pending()
     {
         // the permission matrix (#119) pins its rows to the API's route table; each of them is in exactly one of: probed here, probed by part 1, pending
         var all = EndpointPermissionMatrixTests.Matrix.Select(r => r.Key).Concat(EndpointPermissionMatrixTests.Excluded.Keys).ToHashSet(StringComparer.Ordinal);
-        string[][] lists = [[.. Probed.Keys], [.. CoveredByPart1], [.. Pending]];
+        // the shares themselves (not their union) so that a route in two shares is reported as listed twice
+        string[][] lists = [[.. Shares.Values.SelectMany(share => share.Keys)], [.. CoveredByPart1], [.. Pending]];
         var listed = lists.SelectMany(l => l).ToList();
         var twice = listed.GroupBy(k => k, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         Assert.True(twice.Count == 0, "routes listed more than once:\n" + string.Join("\n", twice));
@@ -229,6 +266,10 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
         Assert.Equal((106, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 8, 18], Shares.Values.Select(share => share.Count));
+        // AssertRan resolves each probed request to its route through the route table: every route must be reachable by exactly one template (no ambiguity)
+        var ambiguous = all.Where(t => ConstraintRaces.TemplateOf(new HttpMethod(t[..t.IndexOf(' ')]), SamplePath(t[(t.IndexOf(' ') + 1)..]), all) != t).Order(StringComparer.Ordinal).ToList();
+        Assert.True(ambiguous.Count == 0, "routes the probe resolver cannot tell apart:\n" + string.Join("\n", ambiguous));
         await Task.CompletedTask;
     }
 
@@ -250,6 +291,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         // company configuration singletons
         await Race("profile", R, HttpMethod.Put, "/api/v1/company/profile",
             new ProfileInput("شركة", "Company", null, null, null, "SA", null, null, null, null, null, null, null, null), "\"0\"");
+        // documented idempotent: docs/DEVELOPMENT.md (company configuration endpoints: "recovery of a failed projection") and CompanyConfigurationService.SyncDisplayNameAsync
+        // ("re-projects the authoritative profile to the registry (idempotent, monotonic)") (review L2 of #161)
         await Race("display-name sync", ["2xx"], HttpMethod.Post, "/api/v1/company/profile/display-name-sync", null, mode: Mode.Same);
         await Race("currency disable", R, HttpMethod.Put, "/api/v1/company/currencies/USD", new { enabled = false, isBase = false }, "\"1\"");
         await Race("inventory settings", R, HttpMethod.Put, "/api/v1/company/inventory/settings", new InventorySettingsInput(1), "\"0\"");
@@ -280,14 +323,17 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             new InventoryAccountingInput(IdOf(stock), IdOf(leaf), IdOf(leaf), [], "matrix"), "\"0\"");
         var averaged = await Create("/api/v1/company/inventory/groups", new ItemGroupInput("CV2A", "مجموعة", "Average", null, (int)ValuationMethod.MovingAverage));
         var eligible = await Create("/api/v1/company/inventory/items", new ItemInput("CV2E", "صنف", "Eligible", 1, IdOf(averaged), IdOf(unit), null, null, false, false, false, null, []));
-        // the per-item eligibility is a SET without a revision: repeating it is idempotent
+        // the per-item eligibility is a SET without a revision. No phase document states its idempotency; the code contract does: NegativeStockService.SetItemFlagAsync answers
+        // the current flag unchanged when the requested value equals it (no new history row), so repeating it is idempotent. Pinned as observed (review L2 of #161).
         await Race("negative stock per item", ["2xx"], HttpMethod.Put, $"/api/v1/company/negative-stock/items/{IdOf(eligible)}", new { eligible = true, note = "matrix" }, mode: Mode.Same);
 
         // taxes: assignments and rules
         var tax = await Create("/api/v1/company/taxes", new TaxInput("CV2T", "ضريبة", "Tax", true));
         var itemClass = await Create("/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Item, "CV2K", "فئة", "Items", true));
         var partyClass = await Create("/api/v1/company/taxes/classes", new TaxClassInput(TaxClassKind.Party, "CV2Q", "فئة", "Parties", true));
-        // a class assignment is a SET without a revision: repeating it is idempotent
+        // a class assignment is a SET without a revision: docs/PHASE-3.10.md (API: "PUT item-classes/{itemId} and party-classes/{partyId} (body {classId}, null removes)") defines
+        // the SET but states no idempotency; the code contract is an upsert (TaxConfigService.Assign: INSERT ... ON CONFLICT DO UPDATE), so repeating the same class leaves the
+        // same state. Pinned as observed for both item and party classes (review L2 of #161).
         await Race("item tax class", ["2xx"], HttpMethod.Put, $"/api/v1/company/taxes/item-classes/{IdOf(item)}", new { classId = IdOf(itemClass) }, mode: Mode.Same);
         var party = Guid.NewGuid();
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CV2P', 'p', true, 1, 1, '{Admin.Id}', now(), now())");
@@ -330,6 +376,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         }
 
         AssertNoFindings();
+        races.AssertRan(Shares[nameof(Configuration_singletons_policies_and_assignments_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------- batch 2
@@ -384,6 +431,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             new ReversalInput(new DateOnly(2026, 3, 20), "matrix"), EtagOf(posted!));
 
         AssertNoFindings();
+        races.AssertRan(Shares[nameof(Journal_entries_from_creation_to_reversal_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 
     [PostgresFact]
@@ -424,6 +472,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         await Race("year reopen request", requestOpen, HttpMethod.Post, $"/api/v1/company/fiscal-years/{Year.Id}/reopen-requests", requestBody, EtagOf(closed!));
 
         AssertNoFindings();
+        races.AssertRan(Shares[nameof(The_fiscal_calendar_closing_and_reopening_requests_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 
     [PostgresFact]
@@ -451,6 +500,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         await Race("reverse closing", ["409:already_reversed"], HttpMethod.Post, $"{Base}/years/{Year.Id}/reverse-closing", new YearEndReversalInput(new DateOnly(2026, 12, 31)));
 
         AssertNoFindings();
+        races.AssertRan(Shares[nameof(Year_end_closing_and_carry_forward_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 
     private async Task<ApiResponse> Upload(Guid subject)
@@ -473,7 +523,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         await Sql($"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) VALUES ('{party}', 'CV2P', 'p', true, 1, 1, '{Admin.Id}', now(), now())");
 
         // uploads append one attachment each; the upload gate turns a parallel one away with its documented back-pressure answer (503 upload_busy, PHASE-3.12), pinned exactly
-        var uploaded = await RaceWith("attachment upload", ["503:upload_busy"], () => Upload(party), Mode.Append);
+        var uploaded = await RaceWith("attachment upload", ["503:upload_busy"], HttpMethod.Post, "/api/v1/company/attachments", () => Upload(party), Mode.Append);
         Won(uploaded);
         await Race("attachment remove", ["412:revision_conflict", "409:already_removed"], HttpMethod.Post, $"/api/v1/company/attachments/{IdOf(uploaded!)}/remove", new { reason = "matrix" }, EtagOf(uploaded!));
         foreach (var task in new[] { "rewrap", "sweep", "verify" })
@@ -494,6 +544,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         await Race("legal hold release", ["412:revision_conflict", "409:already_released"], HttpMethod.Post, $"{Base}/holds/{IdOf(hold!)}/release", new { reason = "closed" }, EtagOf(hold!), caller: approver);
 
         AssertNoFindings();
+        races.AssertRan(Shares[nameof(Attachments_and_their_retention_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 }
 
@@ -508,6 +559,7 @@ internal sealed class ConstraintRaces(int parallel)
 {
     private readonly List<string> findings = [];
     private readonly List<string> diagnostics = [];
+    private readonly List<(string What, HttpMethod Method, string Path)> executed = [];
 
     /// <summary>"status:code" of an answer; a 400 <c>validation_failed</c> is identified by its first field code (for example <c>400:code_taken</c>); a 2xx is "2xx".</summary>
     public static string Signature(ApiResponse r)
@@ -524,8 +576,9 @@ internal sealed class ConstraintRaces(int parallel)
     public static string EtagOf(ApiResponse r) => r.Headers.ETag!.Tag;
 
     /// <summary>Runs one probe; returns a winner or null.</summary>
-    public async Task<ApiResponse?> Run(string what, string[] expected, Func<Task<ApiResponse>> send, EndpointConstraintMatrixPart2Tests.Mode mode)
+    public async Task<ApiResponse?> Run(string what, string[] expected, HttpMethod method, string path, Func<Task<ApiResponse>> send, EndpointConstraintMatrixPart2Tests.Mode mode)
     {
+        executed.Add((what, method, path));
         var raced = await Task.WhenAll(Enumerable.Range(0, parallel).Select(_ => Task.Run(send)));
         var again = await send();
         var all = raced.Append(again).ToList();
@@ -537,6 +590,9 @@ internal sealed class ConstraintRaces(int parallel)
         {
             foreach (var s in all.Select(Signature).Distinct().Where(s => s != expected[0]))
                 findings.Add($"{what}: {s} where every answer must be {expected[0]}");
+            // review L3 of #161: where the answers carry an id, an idempotent repeat must answer the SAME resource, not a second one
+            var ids = winners.Select(IdentityOf).Distinct().ToList();
+            if (ids.Count > 1) findings.Add($"{what}: the idempotent answers name {ids.Count} different resources ({string.Join(", ", ids.Select(i => i ?? "no id"))})");
             return winners.FirstOrDefault();
         }
         foreach (var r in all.Where(r => Signature(r) != "2xx" && (int)r.Status < 500 && !expected.Contains(Signature(r))))
@@ -545,6 +601,55 @@ internal sealed class ConstraintRaces(int parallel)
         if (append ? winners.Count < 1 : winners.Count != 1)
             findings.Add($"{what}: {winners.Count} requests succeeded (expected {(append ? "at least one" : "exactly one")}): {string.Join(", ", all.Select(Signature))}");
         return winners.FirstOrDefault();
+    }
+
+    /// <summary>The id an answer names: its top-level <c>id</c>, else <c>entry.id</c> (journal answers), else null (an answer that names no resource).</summary>
+    private static string? IdentityOf(ApiResponse r)
+    {
+        try
+        {
+            var json = r.Json;
+            if (json.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            if (json.TryGetProperty("id", out var id)) return id.ToString();
+            if (json.TryGetProperty("entry", out var entry) && entry.ValueKind == System.Text.Json.JsonValueKind.Object && entry.TryGetProperty("id", out var entryId)) return entryId.ToString();
+            return null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    /// <summary>The route template (as the permission matrix names it, "METHOD /path/{param}") that a concrete request resolves to; null when none or more than one matches.</summary>
+    public static string? TemplateOf(HttpMethod method, string path, IEnumerable<string> templates)
+    {
+        var bare = path.Split('?')[0].TrimEnd('/');
+        var matches = templates.Where(t =>
+        {
+            var space = t.IndexOf(' ');
+            if (!string.Equals(t[..space], method.Method, StringComparison.Ordinal)) return false;
+            var pattern = "^" + string.Join("/", t[(space + 1)..].TrimEnd('/').Split('/').Select(seg =>
+                seg.StartsWith('{') && seg.EndsWith('}') ? (seg.EndsWith(":guid}", StringComparison.Ordinal) ? "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" : "[^/]+")
+                : System.Text.RegularExpressions.Regex.Escape(seg))) + "$";
+            return System.Text.RegularExpressions.Regex.IsMatch(bare, pattern);
+        }).ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    /// <summary>
+    /// Review L1 of #161: the routes this test actually raced (resolved to their templates through the permission matrix's route table) must equal its <paramref name="share"/> EXACTLY:
+    /// a share route without a probe fails, and so does a probe of a route outside the share or of a request that resolves to no single route.
+    /// </summary>
+    public void AssertRan(IReadOnlyDictionary<string, string> share)
+    {
+        var templates = EndpointPermissionMatrixTests.Matrix.Select(r => r.Key).Concat(EndpointPermissionMatrixTests.Excluded.Keys).ToList();
+        var ran = new HashSet<string>(StringComparer.Ordinal);
+        var problems = new List<string>();
+        foreach (var (what, method, path) in executed)
+        {
+            if (TemplateOf(method, path, templates) is { } t) ran.Add(t);
+            else problems.Add($"probe '{what}' ({method.Method} {path}) resolves to no single route of the route table");
+        }
+        problems.AddRange(share.Keys.Except(ran, StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(r => $"in the share but never raced: {r}"));
+        problems.AddRange(ran.Except(share.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(r => $"raced but not in the share: {r}"));
+        Assert.True(problems.Count == 0, "the probes this test ran do not match its share:\n" + string.Join("\n", problems));
     }
 
     /// <summary>A probe's winner the next step builds on; without one, every finding so far is reported (the probe recorded why nobody won).</summary>

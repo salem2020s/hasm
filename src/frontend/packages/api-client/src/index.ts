@@ -38,7 +38,7 @@ export interface AuthStatus {
   user?: SessionUser;
   session?: { client: string; idleExpiresAtUtc: string; absoluteExpiresAtUtc: string };
   /** Phase 4.1: the second-factor state of the signed-in user. The server decides; the client only shows it. */
-  mfa?: { state: "none" | "enrolmentrequired" | "enrolled" | "recoveryrequired"; verified: boolean; verifiedAtUtc: string | null };
+  mfa?: { state: "none" | "enrolmentrequired" | "enrolled" | "recoveryrequired"; verified: boolean; verifiedAtUtc: string | null; /** the user's roles or the company policy require a second factor (absent on a server that does not report it yet) */ required?: boolean };
 }
 /** What the password step answers when the account needs more than a password. NO session exists until the steps are completed. */
 export type LoginStep =

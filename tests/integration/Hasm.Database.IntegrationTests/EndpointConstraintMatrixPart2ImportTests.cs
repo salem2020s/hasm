@@ -25,7 +25,7 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
     private string cookie = "";
 
     private Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One, string? caller = null) =>
-        races.Run(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
+        races.Run(what, expected, method, path, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
 
     private static Guid IdOf(ApiResponse r) => ConstraintRaces.IdOf(r);
     private static string EtagOf(ApiResponse r) => ConstraintRaces.EtagOf(r);
@@ -92,7 +92,7 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
 
         // an upload with an idempotency key (the key race is resolved to the original batch, #165): every answer is that batch, and exactly ONE exists
         const string key = "cvm2-upload-0001";
-        var up = Won(await races.Run("import upload", ["2xx"], () => Upload("ccenters", "code,name\nM1,Matrix one\nM2,Matrix two\n", key), Mode.Same));
+        var up = Won(await races.Run("import upload", ["2xx"], HttpMethod.Post, Base, () => Upload("ccenters", "code,name\nM1,Matrix one\nM2,Matrix two\n", key), Mode.Same));
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Ib.Table} WHERE {Ib.IdempotencyKey} = '{key}'"));
         var id = IdOf(up);
 
@@ -143,5 +143,6 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
         await Race("import rewrap", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/rewrap", null, mode: Mode.Same);
 
         races.AssertNoFindings();
+        races.AssertRan(EndpointConstraintMatrixPart2Tests.Shares[nameof(Imports_from_upload_to_application_with_templates_settings_and_maintenance_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 }
