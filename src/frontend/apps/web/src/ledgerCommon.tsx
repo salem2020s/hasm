@@ -53,7 +53,7 @@ export function compareDecimal(a: string, b: string): number {
  * Runs one server action with the uniform handling: busy flag, translated error, field errors, optimistic-concurrency conflict (412 => the item changed elsewhere; the caller
  * reloads) and session expiry (handled centrally). `prefix` selects the screen's own error texts before the generic ones.
  */
-export function useRunner(prefix: string, reload: () => Promise<void>) {
+export function useRunner(prefix: string, reload: () => Promise<void>, fieldScope?: string) {
   const { t } = useI18n();
   const auth = useAuth();
   const tRef = useRef(t);
@@ -78,13 +78,13 @@ export function useRunner(prefix: string, reload: () => Promise<void>) {
       if (e instanceof ApiError && e.status === 412) { setConflict(true); await reload().catch(() => undefined); }
       else {
         setError(errorText(tRef.current, e, prefix));
-        setFields(fieldErrors(tRef.current, e));
+        setFields(fieldErrors(tRef.current, e, fieldScope));
       }
       return undefined;
     } finally {
       setBusy(false);
     }
-  }, [auth, prefix, reload]);
+  }, [auth, prefix, reload, fieldScope]);
 
   return { busy, error, notice, conflict, fields, run, clear, setError, setNotice };
 }

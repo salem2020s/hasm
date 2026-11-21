@@ -13,7 +13,7 @@ import { useReportUnsaved } from "../unsaved";
  * (revision fences, the policy version fence, append-only history, no deletion, ambiguity and customer-role checks); this screen only shows and submits. Nothing here ever deletes: lists, entries and rules are deactivated.
  * Customer GROUPS (migration 0027): a tab manages the group master and the one-group-per-customer assignment; a price list or discount rule is scoped to a customer OR a group (the two selects exclude each other).
  */
-interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; baseCurrency: string; currencyFailed: boolean; failed: boolean }
+interface Pickers { units: InventoryUnit[]; groups: InventoryGroup[]; items: InventoryItem[]; customers: PartyRole[]; customerGroups: CustomerGroup[]; assignments: CustomerGroupAssignment[]; baseCurrency: string; currencyFailed: boolean; itemsFailed: boolean; failed: boolean }
 const PICKER_LIMIT = 500;
 interface Data { policy: PricingPolicyResponse; lists: PriceListsResponse; discounts: DiscountRulesResponse; pickers: Pickers }
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -40,15 +40,16 @@ export function PricingPage() {
       // pickers need the inventory and party-role view permissions: a user without them still sees the configuration (the pickers are then empty)
       let failed = false;
       let currencyFailed = false;
+      let itemsFailed = false;
       const soft = <T,>(p: Promise<T[]>) => p.catch((e) => { if (!auth.handleError(e)) failed = true; return [] as T[]; });
       const [units, groups, items, customers, customerGroups, assignments, baseCurrency] = await Promise.all([
         soft(auth.api.listInventoryUnits().then((r) => r.units)), soft(auth.api.listInventoryGroups().then((r) => r.groups)),
-        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items)), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
+        soft(auth.api.listInventoryItems({ limit: PICKER_LIMIT }).then((r) => r.items).catch((e) => { itemsFailed = true; throw e; })), soft(auth.api.listPartyRoles(1).then((r) => r.items)),
         soft(auth.api.listCustomerGroups().then((r) => r.customerGroups)), soft(auth.api.listCustomerGroupAssignments().then((r) => r.assignments)),
         // the default currency of a new list/quote is the company base currency when the user may read it; otherwise it stays empty (never guessed). Not counted as a failed helper list: it needs its own permission.
         auth.api.getCurrencies().then((r) => r.baseCurrency ?? "").catch((e) => { if (!auth.handleError(e)) currencyFailed = true; return ""; }),
       ]);
-      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, baseCurrency, currencyFailed, failed } }); setLoadError(null);
+      setData({ policy, lists, discounts, pickers: { units, groups, items, customers, customerGroups, assignments, baseCurrency, currencyFailed, itemsFailed, failed } }); setLoadError(null);
     } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(tRef.current, e, "pricing.error.")); }
   }, [auth.api, auth.handleError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -99,25 +100,26 @@ function CustomerSelect({ id, value, onChange, pickers, error, disabled }: { id:
   );
 }
 
-/** "code — name" with each part isolated (FSI...PDI), so a Latin code next to an Arabic name (or the reverse) keeps its own direction in option labels and tables. */
-const codeName = (code: string, name: string) => `\u2068${code}\u2069 — \u2068${name}\u2069`;
+/** "code — name": the code stays FIRST and unwrapped (native-select type-ahead matches the start of the option text), only the name is isolated (FSI...PDI) so it keeps its own direction next to the code. */
+const codeName = (code: string, name: string) => `${code} — \u2068${name}\u2069`;
 const itemLabel = (i: InventoryItem, locale: "ar" | "en") => codeName(i.code, localName(i, locale));
 const shortId = (id: string) => id.slice(0, 8);
 
 /** Names of the items an entry/discount table mentions: the preloaded page, items picked on this screen, and (for the rest) ONE `getInventoryItem` call each; a short id is shown while unknown or when the item cannot be read. */
-function useItemNames(preloaded: InventoryItem[], ids: (string | null | undefined)[]) {
+function useItemNames(preloaded: InventoryItem[], ids: (string | null | undefined)[], enabled: boolean) {
   const auth = useAuth();
   const [extra, setExtra] = useState<Record<string, InventoryItem>>({});
   const tried = useRef(new Set<string>());
   const known = useMemo(() => new Map(preloaded.map((i) => [i.id, i])), [preloaded]);
   const key = ids.filter(Boolean).join(",");
   useEffect(() => {
+    if (!enabled) return;                       // the item list itself was refused: single reads would be refused too, so none are sent
     const missing = [...new Set(key === "" ? [] : key.split(","))].filter((id) => !known.has(id) && !tried.current.has(id)).slice(0, 50);
     for (const id of missing) {
       tried.current.add(id);
       auth.api.getInventoryItem(id).then((i) => setExtra((e) => ({ ...e, [i.id]: i })), (e) => { auth.handleError(e); });
     }
-  }, [key, known]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key, known, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
   const find = (id: string) => known.get(id) ?? extra[id];
   return {
     /** Remember an item the user picked here, so its name survives a reload that returns more than the preloaded page. */
@@ -311,7 +313,7 @@ function ListsTab({ data, configure, reload, onDirty }: TabProps) {
   const [entries, setEntries] = useState<PriceEntry[]>([]);
   const [entry, setEntry] = useState({ kind: "item", targetId: "", unitId: "", minQuantity: "0", unitPrice: "" });
   const [repricing, setRepricing] = useState<{ id: string; price: string } | null>(null);
-  const names = useItemNames(data.pickers.items, entries.map((e) => e.itemId));
+  const names = useItemNames(data.pickers.items, entries.map((e) => e.itemId), !data.pickers.itemsFailed);
   const list = data.lists.priceLists.find((x) => x.id === selected) ?? null;
   const isDirty = form.code !== "" || form.nameAr !== "" || form.nameEn !== "" || entry.unitPrice !== "" || repricing !== null;
   useReportUnsaved("pricing-lists", isDirty, t("pricing.tab.lists"));
@@ -446,7 +448,7 @@ function DiscountsTab({ data, configure, reload, onDirty }: TabProps) {
   const isDirty = form.code !== "" || form.nameAr !== "" || form.nameEn !== "" || form.percent !== "";
   useReportUnsaved("pricing-discounts", isDirty, t("pricing.tab.discounts"));
   useEffect(() => { onDirty(isDirty); }, [isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
-  const names = useItemNames(data.pickers.items, data.discounts.discounts.map((d) => d.itemId));
+  const names = useItemNames(data.pickers.items, data.discounts.discounts.map((d) => d.itemId), !data.pickers.itemsFailed);
   const scopeText = (d: DiscountRule) => {
     const parts = [d.customerId ? customerName(data.pickers, d.customerId, "") : "", d.customerGroupId ? `${t("pricing.scope_customer_group")} ${groupName(data.pickers, d.customerGroupId, "")}` : "", d.itemId ? names.code(d.itemId) : "", d.itemGroupId ? (data.pickers.groups.find((g) => g.id === d.itemGroupId)?.code ?? d.itemGroupId) : ""].filter(Boolean);
     return parts.length === 0 ? t("pricing.scope_all") : parts.join(" · ");

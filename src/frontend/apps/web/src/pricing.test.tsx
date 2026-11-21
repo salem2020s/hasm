@@ -2,8 +2,6 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { catalog } from "./messages";
-import { customerGroupsAr, customerGroupsEn } from "./messages.customerGroups";
-import { pricingAr, pricingEn } from "./messages.pricing";
 import { ALL_PERMISSIONS, apiError, renderApp, signedIn } from "./test-utils";
 
 const A = (k: string) => catalog.ar[k]!;
@@ -334,7 +332,7 @@ describe("pricing administration screen", () => {
       await go("#/company/pricing");
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.groups") }));
       const rows = within(await screen.findByTestId("pricing-assignments-table")).getAllByRole("row").slice(1);
-      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["\u2068C2\u2069 — \u2068اثنان\u2069", "\u2068C10\u2069 — \u2068عشرة\u2069", "aaaaaaaa", "zzzzzzzz"]);   // numeric-aware code order; ids last by their short form
+      expect(rows.map((r) => within(r).getAllByRole("cell")[0]!.textContent)).toEqual(["C2 — \u2068اثنان\u2069", "C10 — \u2068عشرة\u2069", "aaaaaaaa", "zzzzzzzz"]);   // numeric-aware code order; ids last by their short form
     });
 
     it("accepts a negative minimum margin and explains the range and meaning (ar and en)", async () => {
@@ -360,12 +358,38 @@ describe("pricing administration screen", () => {
       expect(await screen.findByText(A("pricing.scope_combine_hint"))).toBeInTheDocument();
     });
 
-    it("has a single source for every pricing message key (the customer-group wording of field.ambiguous_rule wins)", () => {
-      for (const [x, y] of [[pricingAr, customerGroupsAr], [pricingEn, customerGroupsEn]] as const) {
-        expect(Object.keys(x).filter((k) => k in y)).toEqual([]);
-      }
+    it("uses the customer-group wording for field.ambiguous_rule (single source; the catalog-wide duplicate check lives in messagesUnique.test.ts)", () => {
       expect(catalog.en["field.ambiguous_rule"]).toMatch(/group rules/);
       expect(catalog.ar["field.ambiguous_rule"]).toBeTruthy();
+    });
+
+    it("sends no single-item reads when the item list itself failed (they would be refused too) and shows short ids", async () => {
+      const getItem = vi.fn();
+      render({
+        getInventoryItem: getItem,
+        listInventoryItems: vi.fn().mockRejectedValue(apiError(403, "forbidden")),
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [{ ...entry, id: "e2", itemId: "denied-item-9999" }], can: { configure: true } }),
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      expect(within(await screen.findByTestId("pricing-entries-table")).getByText("denied-i")).toBeInTheDocument();
+      expect(getItem).not.toHaveBeenCalled();
+    });
+
+    it("does not read items that are already preloaded, and reads at most 50 unknown ids per render", async () => {
+      const getItem = vi.fn().mockImplementation((id: string) => Promise.resolve({ ...apple, id, code: `X${id}` }));
+      const many = Array.from({ length: 60 }, (_, n) => ({ ...entry, id: `e${n + 10}`, itemId: `unknown-${String(n).padStart(3, "0")}` }));
+      render({
+        getInventoryItem: getItem,
+        listPriceEntries: vi.fn().mockResolvedValue({ entries: [entry, ...many], can: { configure: true } }),   // entry e1 uses the preloaded item i1
+      });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
+      await screen.findByTestId("pricing-entries-table");
+      await waitFor(() => expect(getItem).toHaveBeenCalledTimes(50));
+      expect(getItem).not.toHaveBeenCalledWith("i1");                                                    // preloaded: no read
     });
     it("shows the name of an entry's item outside the preloaded page by one getInventoryItem call per id, and a short id when it cannot be read", async () => {
       const far = { ...apple, id: "far-item-0000-1111", code: "FAR1", nameAr: "بعيد", nameEn: "Far" };
@@ -378,7 +402,7 @@ describe("pricing administration screen", () => {
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
       await userEvent.click(within(await screen.findByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
       const table = await screen.findByTestId("pricing-entries-table");
-      await waitFor(() => expect(within(table).getAllByText("\u2068FAR1\u2069 — \u2068بعيد\u2069")).toHaveLength(2));
+      await waitFor(() => expect(within(table).getAllByText("FAR1 — \u2068بعيد\u2069")).toHaveLength(2));
       expect(within(table).getByText("denied-i")).toBeInTheDocument();                                  // short id, never the full UUID
       expect(getItem).toHaveBeenCalledTimes(2);                                                         // once per distinct id
     });
@@ -402,13 +426,15 @@ describe("pricing administration screen", () => {
       expect(document.querySelector(`label[for="${box.id}"]`)).not.toBeNull();                          // a real label names the list
     });
 
-    it("isolates code and name in option labels (Latin code beside an Arabic name)", async () => {
+    it("keeps the code first and unwrapped in option labels (type-ahead) and isolates only the name", async () => {
       render();
       await go("#/company/pricing");
       await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
       const form = within(await screen.findByTestId("pricing-quote-form"));
       const box = await pickItem(form, "pricing.kind_item");
-      expect(within(box).getByRole("option", { name: "\u2068APPLE\u2069 — \u2068تفاح\u2069" })).toBeInTheDocument();
+      const option = within(box).getByRole("option", { name: "APPLE — \u2068تفاح\u2069" });
+      expect(option).toBeInTheDocument();
+      expect(option.textContent!.startsWith("APPLE")).toBe(true);                                       // native-select type-ahead matches the start of the text
     });
 
     it("warns when the base currency cannot be read (non-401 failure) and not when it can or is simply unset", async () => {
