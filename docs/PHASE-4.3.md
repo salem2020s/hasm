@@ -412,6 +412,153 @@ Backup sets today are verified but NOT encrypted or authenticated, and nothing i
 
 The slice after this one implements whichever answer the owner gives. No migration is expected.
 
+## Slice 5: encrypted and signed backup sets, key export, DEV/TEST-only guard - PLAN (docs only; awaits independent review before any code)
+Sources: owner decisions D-085 (envelope encryption to an offline recovery key pair, authenticated encryption, signed manifests, key ids, rotation, recovery test), D-087 (`backup-keys`), D-088 (unencrypted sets DEV/TEST only); SRS 16, 17; RELEASE1-ACCEPTANCE G. Risk: Critical.
+Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 (allocated by the lead; autonomous under D-048).
+
+### Scope
+* Every backup artefact is encrypted to the offline recovery PUBLIC key (the private key never reaches the server) and every manifest is signed with a separate server-held signing key. This covers:
+  * the slice 3 company set;
+  * the slice 4 run, including the system dump and `run.json`;
+  * the `backup-keys` export.
+* Unattended runs need only public material and the signing key.
+* Restore, trial restore and the recovery test need the offline private key, brought in by the operator.
+* `backup-keys` (D-087).
+* `backup-recovery-test`. A recovery key is "production-ready" only after a recorded, successful recovery test (D-085).
+* The DEV/TEST-only guard for unencrypted sets (D-088).
+* Not in this slice:
+  * retention and deletion (slice 6, D-086, inactive by default);
+  * the live cutover (slice 7, D-081);
+  * multiple destinations.
+* **No migration** (keys and markers are files). **No API, no UI.**
+
+### Cryptographic design (routine technical choices under D-048; .NET built-in primitives only, no new dependency)
+1. **Recovery key pair (D-089).**
+   * The pair is ECDH on NIST P-256, generated OFFLINE by `Hasm.Admin backup-recovery-keygen <out-dir>`. That command needs no database configuration and refuses to run when any `Hasm__Database__*` variable is set, so it is not run on a configured server by accident.
+   * Outputs:
+     * the public key as PEM (SubjectPublicKeyInfo);
+     * the private key as passphrase-encrypted PKCS#8 (PBES2: AES-256-CBC with PBKDF2-HMAC-SHA256, 600 000 iterations), written TWICE (`copy-1`, `copy-2`) for two offline media, with instructions.
+   * The passphrase comes from a prompt only, never an argument.
+   * The key id is `rk-` plus the first 16 hex characters of SHA-256 over the SubjectPublicKeyInfo.
+   * The server is configured with the public key only: `Hasm__Backup__RecoveryPublicKeyFile`.
+   * Alternatives:
+     * X25519/Ed25519 via libsodium/NSec: rejected, a new native dependency under the dependency policy;
+     * RSA-OAEP-3072: acceptable, but larger keys and slower, with no advantage here;
+     * the external `age` tool: rejected, an external binary and process plus a key format we do not control;
+     * OpenSSL CMS: rejected, external tooling.
+2. **File encryption format `HBE1` (D-090).** Each file is encrypted independently (ECIES), so any one file can be recovered alone.
+   * **Header:**
+     * magic `HBE1`, format version 1;
+     * the recovery key id;
+     * an ephemeral P-256 public key;
+     * a 32-byte salt and a 7-byte nonce prefix;
+     * a purpose label (for example `company-dump`, `attachment`, `system-dump`, `run-report`, `key-export`) and the set-relative file name;
+     * a header MAC tag.
+   * **Key derivation:** ECDH(ephemeral, recovery public) gives a shared secret. HKDF-SHA256 (salt, info `hasm-backup/v1` + purpose + file name + key id) derives a 256-bit file key and a header key.
+   * **Body:** streaming AES-256-GCM in 1 MiB plaintext chunks. Each chunk nonce is the 7-byte prefix, a 4-byte big-endian chunk counter and a 1-byte last-chunk flag. The AAD is SHA-256 of the header plus the chunk index.
+   * **What this detects:** reordering, truncation (the last-chunk flag is required), extension, header tampering, and moving a file to another name or purpose (bound through HKDF info and the AAD).
+   * Nothing is decrypted or returned before its chunk tag verifies. Memory stays bounded for multi-GB dumps.
+   * Alternatives:
+     * the existing attachment envelope `HFE1`: rejected; it is whole-file in memory and wrapped by a SERVER key, which contradicts D-085;
+     * one key per run: rejected; any single file could not be recovered alone, and a key leak would affect the whole run.
+3. **No plaintext at rest, and what an encrypted run contains (D-091).**
+   * `pg_dump` writes to stdout (custom format), which is piped through the encryptor into `database.dump.hbe`. Attachments are read and encrypted file by file. `run.json` and the system manifest are encrypted as well; the run folder keeps only a small signed `run.status.json` (verdict, counts, times, key ids; no names) for `backup-status`.
+   * Restore and the recovery test decrypt in a streaming fashion into `pg_restore` stdin. Attachments are decrypted into the private (0700) staging folder of the restore target, as today.
+   * Alternative rejected: dump to a file, then encrypt. Plaintext would exist at rest, even if briefly and in a 0700 folder.
+   * **Secret-store data in an ENCRYPTED run.**
+     * The data of the session and login-throttle tables stays excluded: it is ephemeral and has no recovery value (slice 4).
+     * Once Phase 4.1 creates the TOTP-secret table, its data is INCLUDED in encrypted runs. Its rows are already ciphertext under the protected key ring (D-080(2)), and the run adds `HBE1` on top.
+     * Restoring TOTP secrets therefore needs the key-directory export (D-087), so MFA enrolment survives a full restore.
+     * Unencrypted DEV/TEST runs keep excluding the TOTP data.
+     * The slice 4 pinning test is extended so that every flagged table is either excluded, or included only in encrypted runs (a per-table rule in `SystemSchema`).
+4. **Signed manifests (D-092).**
+   * The signing key is ECDSA P-256 in its own owner-only directory, `Hasm__Backup__SigningKeyDirectory`, separate from the attachment key directory and from the backup root, with an active key id `sk-...`. It is generated by `backup-signing-keygen <key-id>` on the server.
+   * Every manifest (company `manifest.json`, the system manifest, `run.status.json`, the key-export manifest) gets a detached `*.sig`: base64 IEEE-P1363 signature over the exact file bytes, plus the signing key id.
+   * **Trust anchor for verification:** the signing PUBLIC key (`sk-*.pub.pem`), which the operator keeps in the recovery kit (exported by `backup-keys` and printed at keygen). Verification never trusts a key carried inside the set itself.
+   * Manifest versions:
+     * version 2 for encrypted sets; it lists ciphertext file names, sizes and SHA-256 hashes, and the recovery and signing key ids;
+     * version 1, the current format, stays readable for DEV/TEST sets only.
+   * Alternatives:
+     * HMAC: rejected; verification would need the secret;
+     * Ed25519: rejected, not built in;
+     * signing with the recovery key: rejected; its private key is offline by design.
+5. **Rotation and versioning (D-093).**
+   * Rotating the recovery key means a new pair, a new id and a new public key file. Older sets keep naming their old id, and the operator keeps every old private key offline for as long as those sets are retained (slice 6 retention).
+   * Rotating the signing key means a new key id. Old public keys stay in the recovery kit; `backup-keys` exports every public signing key.
+   * Every artefact names its format version and key ids. A reader refuses an unknown version or an unknown key id with a stable code.
+
+### Commands
+* `backup-recovery-keygen <out-dir>` (offline workstation; no database).
+* `backup-signing-keygen <key-id>` (server; owner-only; never overwrites).
+* `backup-run` and `backup-company`, unchanged arguments: encrypted and signed when the recovery public key and the signing key are configured; otherwise refused (`backup_encryption_not_configured`, exit 3), see the guard.
+* `trial-restore-company <set> <company> <target> --recovery-key <private-key-file> --signing-public-key <pem> [--keep]`.
+  * The passphrase comes from a prompt or from `HASM_RECOVERY_KEY_PASSPHRASE`; never an argument.
+  * The private key is loaded into memory only, and zeroed after use.
+* `backup-keys <destination>` (D-087, D-094):
+  * exports the attachment master-key directory (and, for completeness, every signing PUBLIC key) as one `HBE1`-encrypted, signed archive;
+  * the destination must not overlap the backup root, the attachment root or the key directories;
+  * the key ids are listed in the signed export manifest;
+  * key recovery (decrypt the export and verify the ids) is part of the recovery test.
+* `backup-recovery-test <run-dir> --recovery-key <file> --signing-public-key <pem> [--keys-export <dir>]` (D-085):
+  * verifies every signature;
+  * decrypts every file streaming, checking hashes and AEAD tags;
+  * restores the system dump and every company set into NEW disposable databases (trial-restore semantics; dropped afterwards);
+  * runs the slice 3 checks;
+  * decrypts the key export, when given, and checks that it contains every key id the sets need.
+  * On success it writes a signed `recovery-test.json` (recovery key id, signing key id, run id, time, counts) into the backup root.
+  * `backup-status` reports `recovery_untested` (exit 8) while no successful recovery test exists for the active recovery key id, so the key is "not production-ready" until it succeeds (D-085).
+
+### DEV/TEST-only guard for unencrypted sets (D-088, D-095)
+* **Default: refused.** Without a configured recovery public key AND signing key, every producing command refuses with `backup_encryption_not_configured` (exit 3): `backup-run`, `backup-company`, and `backup-keys`, which always needs the recovery key.
+* **The only way to get an unencrypted set** is an explicit acknowledgement value, `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production`. Any other value is a configuration error. It follows the disposable-cluster acknowledgement pattern of the test harness.
+* **Every unencrypted artefact is marked:**
+  * `encrypted: false`, `devTestOnly: true` in `run.json` and the manifests;
+  * a file `UNENCRYPTED-DEV-TEST-ONLY` in the set and run folders.
+* **Unencrypted sets stay visible:**
+  * `backup-status` reports `unencrypted_dev_test` (exit 8) for every such run, so it can never look green;
+  * `trial-restore-company` and `backup-recovery-test` refuse an unencrypted set unless the same acknowledgement is set.
+* **How production is prevented:**
+  1. Encryption is the default, and there is no silent fallback.
+  2. The override needs an exact acknowledgement string, and its use is printed in every output and recorded in the report.
+  3. Release acceptance stays blocked by D-088 until encryption and signed manifests are tested.
+  4. A unit test pins that no shipped configuration or installer template in the repository sets the acknowledgement variable. Installers come in 4.5, and that test then covers their templates.
+  5. The existing PostgreSQL tests set the acknowledgement explicitly, because they are DEV/TEST.
+  * Alternative rejected: detecting "production" from an environment name. HASM has no such concept; a name is easy to get wrong, and a positive acknowledgement is auditable.
+
+### Exact tests (to be detailed in the review round)
+* **Unit tests:**
+  * `HBE1` round trip: empty file, sizes around the 1 MiB chunk boundary, and multiple chunks.
+  * Detection of each kind of tampering: header byte, chunk swap, truncation at a chunk boundary, removed last chunk, appended data, wrong key, file renamed or used for another purpose.
+  * Key ids.
+  * Encrypted-PKCS#8 round trip, and refusal of a wrong passphrase.
+  * Signature verification: tampered manifest, wrong key, unknown key id.
+  * Manifest v2 validation, and v1 read as DEV/TEST only.
+  * Guard: refusal by default, the exact acknowledgement only, the markers, `backup-status` `unencrypted_dev_test`.
+  * Pin: no repository configuration sets the acknowledgement.
+  * `recovery_untested` status.
+* **PostgreSQL (new class, about 5 tests; the registry is raised at push time):**
+  * an encrypted run, with no plaintext dump at rest (the run folder holds only `.hbe`, `.sig` and the status files);
+  * trial restore with the private key;
+  * `backup-keys` export and recovery;
+  * `backup-recovery-test` end to end, writing `recovery-test.json` and turning `backup-status` green;
+  * refusal without encryption configured, and the DEV/TEST path.
+* **Existing suites:** `CompanyBackupServiceTests` and `BackupRunTests` run with the DEV/TEST acknowledgement (unencrypted, explicitly marked); their counts are unchanged.
+
+### Interaction with Phase 4.1 (planned in PR #113; referenced, not duplicated)
+* **Named administrator with MFA.**
+  * `backup-recovery-keygen`, `backup-signing-keygen` and `backup-keys` are privileged administrative operations.
+  * Under the Phase 4.1 plan they need a named administrator login with MFA (lead decision D-099 in that plan), applied through whatever mechanism 4.1 defines for administrative commands. This slice adds no separate authentication.
+  * Until 4.1 delivers that mechanism, these commands run under the existing administrative-tool model: operating-system access to the service account and its configuration. The 4.1 slice that introduces the admin-tool login must cover them.
+* **Independent approval of restores.** Restore operations need independent approval (D-080(6)).
+  * In this slice, trial restore and `backup-recovery-test` restore only into NEW disposable databases; they replace nothing and register nothing.
+  * The live restore cutover is slice 7 (D-081), and its plan applies D-080(6) and D-081 there.
+  * If the 4.1 plan classifies trial restores as restore operations needing approval too, slice 7 or the 4.1 implementation wires that approval in for them.
+* **TOTP secrets** (D-080(2)): see "Secret-store data in an ENCRYPTED run" above.
+* **Key retirement.** Retiring a recovery or signing key is an encryption-key retirement and needs independent approval (D-080(6)). This slice only creates and rotates keys; it never retires or deletes one.
+
+### Owner decisions this slice relies on (not re-asked)
+D-080(2) and D-080(6), D-085, D-087, D-088. D-081 (cutover) and D-086 (retention) belong to slices 7 and 6.
+
 ## Limitations (recorded)
 * The manifest detects corruption and loss; it is not a signature and the set is not encrypted (later slice).
 * `KeyIdsRequired` covers attachment envelopes only. Encrypted import-file originals are outside the attachment folder and need their own key coverage (the import-file rewrap retirability report, decision K follow-up, is not built yet).
