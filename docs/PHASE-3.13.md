@@ -162,3 +162,11 @@ The counting hook (`IPostedBusinessTransactionCounter`, section 7) is a no-op in
 ## 11. What is explicitly NOT assumed
 
 No document type is activated for users, no account mapping is seeded, no revenue/COGS/GRNI posting rule is chosen, no sales-return valuation, no tolerance, no credit-limit enforcement, no Trial counting unit, and no screen: each is OPEN in section 8 until the owner decides, and the system refuses or marks pending rather than guessing.
+
+## S1a as built (company migration 0028, system migration 0028)
+
+* **Schema** (`tools/schema/company-0028-commercial.cjs`, `--check` in CI): `CommercialDocument` (type, branch, party, currency, date, mode, status, note, idempotency key and payload hash, submitter, revision), `CommercialDocumentLine` (item, unit, quantity, optional warehouse; NO price, tax or cost) and the append-only `CommercialDocumentEvent` (one row per revision). The guard allows ONLY draft->submitted, submitted->draft and draft/submitted->cancelled; approval, rejection and cancel-of-approved are not in it (S1b adds them through a mandatory new migration). Submitted and cancelled documents are not editable; lines change only while the document is a draft; nothing is ever removed. Snapshot columns are deliberately NOT created now (D-053).
+* **Service and API:** `CommercialDocumentService` (one audited company transaction per write: row lock, revision fence, event row, audit events 1900-1904) and `CommercialDocumentManagementService` (branch-scoped `company.commercialdocs.*`); `/api/v1/company/commercial-documents` (list, get, create, update, submit, withdraw, cancel; If-Match revisions; no DELETE, no approval route). Create is idempotent per (type, creator, key): same payload returns the original (`replayed`), another payload is `idempotency_key_reused`, simultaneous creates produce one document. The production composition registers NO document type (D-049); the test composition registers `commercial_test`.
+* **Tests (8 PostgreSQL + 3 unit):** `CommercialStateMachineTests` 2, `CommercialIdempotencyTests` 2, `CommercialBranchScopeTests` 1, `CommercialIsolationTests` 2, `CommercialApiTests` 1; unit `CommercialSchemaDerivationTests` 3. Registry 1037 -> 1045.
+* **Not in S1a:** numbering, approval, re-approval, snapshots, links, stock, ledger, UI. See sections 5 and 9.
+
