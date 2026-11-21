@@ -108,35 +108,51 @@ describe("pricing administration screen", () => {
     expect(client.getPricingPolicy).toHaveBeenCalledTimes(2);                                                     // refreshed after the conflict
   });
 
-  it("creates a price list for a customer, adds an item entry with a tier, reprices with the revision it read and never offers a delete", async () => {
-    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+  // The former single test (create list, add entry, reprice) was split at its natural seams so that no test runs long enough to hit the 5 s limit on a loaded machine; long text is entered with fireEvent.change
+  // (one event, same React state) instead of typing key by key. Every assertion of the original is kept.
+  const openLists = async () => {
     await go("#/company/pricing");
     await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
     expect(await screen.findByTestId("pricing-list-RETAIL")).toBeInTheDocument();
-    const panel = within(screen.getByTestId("pricing-list-create"));
-    await userEvent.type(panel.getByLabelText(label("pricing.code")), "vip");
-    await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "قائمة كبار العملاء");
-    await pickCustomer(panel);
-    await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
-    await waitFor(() => expect(client.createPriceList).toHaveBeenCalledWith(expect.objectContaining({ code: "vip", nameAr: "قائمة كبار العملاء", priority: 10, currency: "JOD", customerId: "p1", nameEn: null, validTo: null })));
-
+  };
+  const openEntries = async (client: ReturnType<typeof render>) => {
     await userEvent.click(within(screen.getByTestId("pricing-list-RETAIL")).getByRole("button", { name: A("pricing.entries") }));
     expect(await screen.findByTestId("pricing-entries-table")).toBeInTheDocument();
     expect(client.listPriceEntries).toHaveBeenCalledWith("l1");
+  };
+
+  it("creates a price list for a customer", async () => {
+    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+    await openLists();
+    const panel = within(screen.getByTestId("pricing-list-create"));
+    fireEvent.change(panel.getByLabelText(label("pricing.code")), { target: { value: "vip" } });
+    fireEvent.change(panel.getByLabelText(label("pricing.name_ar")), { target: { value: "قائمة كبار العملاء" } });
+    await pickCustomer(panel);
+    await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
+    await waitFor(() => expect(client.createPriceList).toHaveBeenCalledWith(expect.objectContaining({ code: "vip", nameAr: "قائمة كبار العملاء", priority: 10, currency: "JOD", customerId: "p1", nameEn: null, validTo: null })));
+  });
+
+  it("adds an item entry with a tier", async () => {
+    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+    await openLists();
+    await openEntries(client);
     const add = within(screen.getByTestId("pricing-entry-create"));
     expect(add.getByRole("button", { name: A("pricing.add_entry") })).toBeDisabled();                             // target, unit and price are required
     await userEvent.selectOptions(await pickItem(add, "pricing.target"), "i1");
     await pickFrom(add, "pricing.unit", /PCS/, "u1");
-    await userEvent.clear(add.getByLabelText(label("pricing.min_quantity")));
-    await userEvent.type(add.getByLabelText(label("pricing.min_quantity")), "10");
-    await userEvent.type(add.getByLabelText(label("pricing.unit_price")), "8.5");
+    fireEvent.change(add.getByLabelText(label("pricing.min_quantity")), { target: { value: "10" } });
+    fireEvent.change(add.getByLabelText(label("pricing.unit_price")), { target: { value: "8.5" } });
     await userEvent.click(add.getByRole("button", { name: A("pricing.add_entry") }));
     await waitFor(() => expect(client.createPriceEntry).toHaveBeenCalledWith("l1", { itemId: "i1", itemGroupId: null, unitId: "u1", minQuantity: 10, unitPrice: 8.5 }));
+  });
 
+  it("reprices an entry with the revision it read and never offers a delete", async () => {
+    const client = render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+    await openLists();
+    await openEntries(client);
     await userEvent.click(within(screen.getByTestId("pricing-entry-e1")).getByRole("button", { name: A("pricing.edit_price") }));
     const price = within(screen.getByTestId("pricing-entry-e1")).getByLabelText(A("pricing.unit_price"));
-    await userEvent.clear(price);
-    await userEvent.type(price, "12");
+    fireEvent.change(price, { target: { value: "12" } });
     await userEvent.click(within(screen.getByTestId("pricing-entry-e1")).getByRole("button", { name: A("pricing.save") }));
     await waitFor(() => expect(client.updatePriceEntry).toHaveBeenCalledWith("e1", { unitPrice: 12, isActive: true }, 2));
     expect(screen.queryByRole("button", { name: /delete|حذف/i })).not.toBeInTheDocument();

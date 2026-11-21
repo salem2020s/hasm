@@ -73,12 +73,14 @@ interface ConfirmProps {
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Keeps the confirm button disabled until required input in `children` is complete (the server validates again). */
+  confirmDisabled?: boolean;
   /** Extra content between the message and the buttons (for example a choice). */
   children?: ReactNode;
 }
 
 /** Confirmation for sensitive actions. Focus starts on Cancel (the safe choice); Escape cancels. */
-export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, children }: ConfirmProps) {
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmDisabled, children }: ConfirmProps) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
@@ -91,7 +93,7 @@ export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onCon
         {children}
         <div className="actions">
           <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel ?? t("cancel")}</button>
-          <button type="button" className="danger" onClick={onConfirm}>{confirmLabel}</button>
+          <button type="button" className="danger" disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>
