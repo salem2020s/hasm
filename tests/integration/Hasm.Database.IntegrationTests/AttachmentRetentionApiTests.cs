@@ -69,6 +69,15 @@ public class AttachmentRetentionApiTests : HttpApiTestBase
         Assert.Equal((HttpStatusCode.OK, 0L, false), (preview.Status, preview.Json.GetProperty("total").GetInt64(), preview.Json.GetProperty("basisConfirmed").GetBoolean()));
         var malformed = await Send(HttpMethod.Get, Base + "/preview?limit=abc", cookie: admin);
         Assert.Equal((HttpStatusCode.BadRequest, "invalid_request"), (malformed.Status, malformed.Error));
+        // the optional filter: a registered kind (alone or with a record id) is accepted; everything else is the standard validation body naming the field
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, Base + "/preview?subjectKind=local_party", cookie: admin)).Status);
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, $"{Base}/preview?subjectKind=local_party&subjectId={Guid.NewGuid()}", cookie: admin)).Status);
+        foreach (var (query, field, code) in new[] { ("subjectKind=nope", "subjectKind", "subject_kind_invalid"), ("subjectKind=local_party&subjectId=not-a-guid", "subjectId", "invalid_value"), ($"subjectId={Guid.NewGuid()}", "subjectKind", "required") })
+        {
+            var rejected = await Send(HttpMethod.Get, $"{Base}/preview?{query}", cookie: admin);
+            Assert.Equal((HttpStatusCode.BadRequest, "invalid_request"), (rejected.Status, rejected.Error));
+            Assert.Contains(rejected.Json.GetProperty("fields").EnumerateArray(), f => f.GetProperty("field").GetString() == field && f.GetProperty("code").GetString() == code);
+        }
 
         // a user without the permission gets nothing; no DELETE route exists
         var (outsider, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
