@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #139 (Phase R slice R3: shared Web/Tauri attachment-retention screen; frontend only)
-* **Head SHA reviewed (full 40 characters):** 4b0cd0733455b92a76712aeedf9ded7f5d8164b7
+* **Head SHA reviewed (full 40 characters):** e3fe7cee1bb2a82abd7e399212a45b47a7c54d0d (the full review was at 4b0cd0733455b92a76712aeedf9ded7f5d8164b7; the delta 4b0cd07..e3fe7ce was confirmed at e3fe7ce)
 * **Reviewer context:** Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's independent full-diff review of draft PR #139 (R3, the shared attachment-retention screen, frontend only) against docs/PHASE-R-attachment-retention.md (D-108..D-115), R1's endpoints and permissions on main, and CLAUDE.md: the UI mirrors the server in both directions (approve, revoke, hold release, the two-person rules), no purge action and an accurate D-109 banner, the Tabs standard, ar/en key parity and RTL/LTR, keyboard access, shared frontend with Web/Tauri parity, server refusal codes mapped to messages, and the new tests covering the rules; Head SHA reviewed 4b0cd0733455b92a76712aeedf9ded7f5d8164b7; executed: git diff origin/main...head (6 files, +673), full read of `AttachmentRetention.tsx`, the message file and the test file, comparison with `AttachmentRetentionEndpoints.cs`, `AttachmentRetentionService.cs` and `PermissionCatalog.cs` on main, ar/en key-parity script, export of the head with `npm ci`, typecheck and the retention and catalog tests; Tauri compile not run; verdict request changes; findings 1 High, 2 Medium, 5 Low.
 * **Scope read:** the 6 changed files of the PR (page, messages, tests, api-client, App, messages registration) against the R1 endpoints, service and permission catalog on main.
 * **Checks run (commands and results):** by the reviewer: as listed above. By the author after the fixes: `npm run typecheck` clean; web suite 44 files, 899 tests passed (28 in `retention.test.tsx`); `npm run build` OK. The hosted checks on 4b0cd07 (including `desktop-build`) were green before the fixes; they are repeated on the new head.
@@ -18,6 +18,8 @@
 | L4 | Low | `.replace` instead of `t(key, params)` | Fixed in 338aa63: both places use the params form. |
 | L5 | Low | Arabic-Indic digits in the months field | Recorded as a follow-up (same shared numeric-input decision as the fiscal-year screen). |
 
-* **Blocker or High findings open:** none after 338aa63, pending H's confirmation and hosted CI on the new head.
+* **Blocker or High findings open:** none (fixed in 338aa63, confirmed by H at e3fe7ce).
 * **NOT VERIFIED:** the Tauri compile was not run locally (no webkit2gtk on the build host); the hosted `desktop-build` check is the arbiter and was green on 4b0cd07. Routine manual visual review is deferred to the final validation milestone.
-* **Verdict:** request changes
+* **Verdict:** approve
+
+Confirmation: Reviewer: Agent H (independent review, separate agent; not the author); model family Claude Sonnet; prompt: lead's confirmation of the #139 delta 4b0cd0733455b92a76712aeedf9ded7f5d8164b7..e3fe7cee1bb2a82abd7e399212a45b47a7c54d0d (338aa63 the fixes, e3fe7ce the record): the fixes are correct in both directions, the ConfirmDialog change leaves other callers unchanged, the tests pin the rules, nothing is weakened; Head SHA reviewed e3fe7cee1bb2a82abd7e399212a45b47a7c54d0d; executed: read-only git diff of 4b0cd07..338aa63 and 338aa63..e3fe7ce (components.tsx, AttachmentRetention.tsx, messages.retention.ts, retention.test.tsx, PHASE-R doc), export of the head with `npm ci`, typecheck (0 errors) and the retention, details, warehouses, fiscal and message-catalog tests (102 pass); Tauri compile not run, hosted CI on the new head not verified; verdict approve; the High and both Mediums are fixed, no new findings.
