@@ -32,6 +32,10 @@ export interface SearchPickerProps<T> {
   noneLabel?: string;
   /** Disable only the search box (the list stays usable), for a picker that cannot search at all. */
   searchDisabled?: boolean;
+  /** Do not render the search box at all (a list that cannot be searched: nothing disabled is shown). */
+  hideSearch?: boolean;
+  /** Replaces the catalog `picker.refine` text after "Showing n of N." (for example when the user cannot refine a search but can use another route). */
+  moreHint?: string;
   /** Allow choosing nothing (default true). */
   allowNone?: boolean;
   disabled?: boolean;
@@ -47,7 +51,7 @@ export interface SearchPickerProps<T> {
   testId?: string;
 }
 
-export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, noneLabel, searchDisabled, disabled, debounceMs = 250, reloadKey, testId, id, invalid, describedBy, required }: SearchPickerProps<T>) {
+export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel, selectedLabel, allowNone = true, noneLabel, searchDisabled, hideSearch, moreHint, disabled, debounceMs = 250, reloadKey, testId, id, invalid, describedBy, required }: SearchPickerProps<T>) {
   const { t } = useI18n();
   const generated = useId();
   const base = id ?? generated;
@@ -82,12 +86,12 @@ export function SearchPicker<T>({ label, value, onChange, load, getId, getLabel,
   const pinned = value !== "" && !selectedInList ? known.current.get(value) : undefined;
   const pinnedLabel = pinned ? getLabel(pinned) : selectedLabel;
   const more = page !== null && page.total > shown.length;
-  const status = loading ? "" : failed ? "" : page !== null && shown.length === 0 ? t("picker.no_results") : more ? `${t("picker.showing", { shown: shown.length, total: page.total })} ${t("picker.refine")}` : "";
+  const status = loading ? "" : failed ? "" : page !== null && shown.length === 0 ? t("picker.no_results") : more ? `${t("picker.showing", { shown: shown.length, total: page.total })} ${moreHint ?? t("picker.refine")}` : "";
 
   return (
     <div className="search-picker" data-testid={testId}>
-      <input type="search" dir="auto" aria-label={`${label} — ${t("picker.search")}`} aria-controls={id ?? `${base}-list`} value={search} disabled={disabled || searchDisabled}
-        onChange={(e) => setSearch(e.target.value)} />
+      {!hideSearch && <input type="search" dir="auto" aria-label={`${label} — ${t("picker.search")}`} aria-controls={id ?? `${base}-list`} value={search} disabled={disabled || searchDisabled}
+        onChange={(e) => setSearch(e.target.value)} />}
       <select id={id ?? `${base}-list`} aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy} aria-required={required || undefined} value={value} disabled={disabled}
         onChange={(e) => { const id = e.target.value; onChange(id, id === "" ? null : known.current.get(id) ?? null); }}>
         {allowNone && <option value="">{noneLabel ?? t("picker.none")}</option>}

@@ -60,6 +60,8 @@ function HoldRecordPicker({ kind, value, onChange, error }: { kind: string; valu
 interface RemovedChoice { id: string; label: string }
 
 /**
+ * Each option shows the attachment's eligibility reason (for example "Under a legal hold" or "Already purged"). A hold is accepted for ANY existing attachment (the server only checks that it exists, and a hold
+ * on an already purged attachment is meaningful for retained backups, D-114), so no row is hidden: the reason tells the user what the hold would change. The load runs only for a complete record id (GUID).
  * Picks ONE removed attachment of the chosen record from the filtered preview (ids and dates only, never a file name; gated by retention view like the preview). The preview has no text search, so the
  * list is the record's removed attachments (at most one bounded page) in a select; the shared SearchPicker still gives the load error with retry and the "more match" hint.
  */
@@ -68,20 +70,21 @@ function HoldAttachmentPicker({ kind, subjectId, value, onChange, error }: { kin
   const auth = useAuth();
   const load = useCallback((): Promise<{ items: RemovedChoice[]; total: number }> =>
     auth.api.previewRetention(0, RECORD_PAGE_LIMIT, { subjectKind: kind, subjectId })
-      .then((r) => ({ items: r.items.map((i) => ({ id: i.attachmentId, label: `${isolate(i.attachmentId.slice(0, 8))} \u2014 ${day(i.removedAtUtc)}${i.isSensitive ? ` (${t("ret.preview.sensitive")})` : ""}` })), total: r.total }))
+      .then((r) => ({ items: r.items.map((i) => ({ id: i.attachmentId, label: `${isolate(i.attachmentId.slice(0, 8))} \u2014 ${day(i.removedAtUtc)}${i.isSensitive ? ` (${t("ret.preview.sensitive")})` : ""} \u2014 ${t(`ret.reason.${i.reason}`)}` })), total: r.total }))
       .catch((e) => { auth.handleError(e); throw e; }), [auth.api, auth.handleError, kind, subjectId, t]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className={`field${error ? " field-invalid" : ""}`} data-testid="ret-hold-attachment-picker">
       <label htmlFor="ret-hatt-list">{t("ret.hold.attachment")}<span aria-hidden="true" className="required"> *</span></label>
-      {subjectId === ""
+      {!GUID.test(subjectId)   /* a partial or malformed typed record id sends no request: the server would answer 400 for every keystroke */
         ? <p className="hint">{t("ret.hold.attachment_pick_record")}</p>
         : <SearchPicker id="ret-hatt-list" label={t("ret.hold.attachment")} value={value} onChange={(id) => onChange(id)} load={load} getId={(r: RemovedChoice) => r.id} getLabel={(r) => r.label}
-            noneLabel={t("ret.hold.attachment_choose")} searchDisabled reloadKey={`${kind}:${subjectId}`} invalid={!!error} required describedBy={error ? "ret-hatt-error" : undefined} />}
+            noneLabel={t("ret.hold.attachment_choose")} hideSearch moreHint={t("ret.hold.attachment_more")} reloadKey={`${kind}:${subjectId}`} invalid={!!error} required describedBy={error ? "ret-hatt-error" : undefined} />}
       {error && <p id="ret-hatt-error" className="field-error">{error}</p>}
     </div>
   );
 }
 
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const day = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 export function AttachmentRetentionPage() {
