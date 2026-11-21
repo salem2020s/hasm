@@ -48,9 +48,12 @@ describe("api client", () => {
     await client.listInventoryGroups({ search: "a&b" });
     await client.listCustomerGroups();
     await client.listCustomerGroups({ limit: 5, offset: 0 });
+    await client.listCustomerGroups({ active: true });
+    await client.listCustomerGroups({ search: "v", active: false, limit: 10 });
     const I = "https://x/api/v1/company/inventory", P = "https://x/api/v1/company/pricing";
-    expect([0, 1, 2, 3, 4, 5].map((n) => call(fetchMock, n).url)).toEqual([
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((n) => call(fetchMock, n).url)).toEqual([
       I + "/units", I + "/units?search=pc+s&limit=20&offset=40", I + "/groups", I + "/groups?search=a%26b", P + "/customer-groups", P + "/customer-groups?limit=5&offset=0",
+      P + "/customer-groups?active=true", P + "/customer-groups?search=v&limit=10&active=false",
     ]);
   });
 

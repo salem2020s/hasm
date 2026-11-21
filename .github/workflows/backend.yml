@@ -217,7 +217,7 @@ jobs:
                 # Phase 3.11 slice 2b pricing configuration: policy versions with company-configurable precedences, price lists, entries, discount rules, quote and snapshot, authorization (company migration 0026, system migration 0027).
                 "PricingConfigTests": 6, "PricingApiTests": 5,
                 # Phase 3.11 customer groups (company migration 0027): group master, one-group-per-customer assignment, customer-or-group scope, regroup concurrency, server-derived quote group; HTTP API.
-                "CustomerGroupTests": 6, "CustomerGroupApiTests": 2,
+                "CustomerGroupTests": 7, "CustomerGroupApiTests": 3,
                 # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
                 "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 1,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).

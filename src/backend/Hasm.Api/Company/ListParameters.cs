@@ -41,6 +41,16 @@ public static class ListParameters
         return null;
     }
 
+    /// <summary>The optional <c>active</c> filter: absent, <c>true</c> or <c>false</c> (any case); anything else is bad.</summary>
+    public static string? TryParseActive(string? raw, out bool? active)
+    {
+        active = null;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (!bool.TryParse(raw.Trim(), out var a)) return "active";
+        active = a;
+        return null;
+    }
+
     /// <summary>The party-role <c>kind</c>: absent, 1 (customer) or 2 (supplier); anything else is bad.</summary>
     public static string? TryParseKind(string? raw, out short? kind)
     {
