@@ -36,6 +36,7 @@ export const baseAr: Record<string, string> = {
   "companies.none": "لا توجد شركات متاحة لحسابك. اطلب من مسؤول الشركة إضافتك.",
   "companies.unnamed": "شركة {n} (بدون اسم بعد)",
 
+  "list.separator": "، ",
   "error.forbidden": "ليست لديك صلاحية لهذا الإجراء.",
   "error.session_expired": "انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.",
   "error.company_unavailable": "قاعدة بيانات الشركة غير متاحة حالياً. حاول لاحقاً أو راجع المسؤول.",
@@ -642,6 +643,7 @@ export const baseEn: Record<string, string> = {
   "companies.none": "No companies are available to your account. Ask a company administrator to add you.",
   "companies.unnamed": "Company {n} (no name yet)",
 
+  "list.separator": ", ",
   "error.forbidden": "You do not have permission for this action.",
   "error.session_expired": "Your session has ended. Please sign in again.",
   "error.company_unavailable": "The company database is currently unavailable. Try again later or contact your administrator.",
