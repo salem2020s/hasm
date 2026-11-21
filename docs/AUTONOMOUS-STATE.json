@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-21",
   "main": {
-    "verifiedHead": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
-    "note": "main = afbf5f3 (merge of #166), read from git and GitHub REST on 2026-11-21 (end-of-sprint-3 handoff refresh). PostgreSQL registry 1255 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033, counted in the migration folders of origin/main; no number allocated ahead."
+    "verifiedHead": "69c2916461fb9c1c174c8db1af91eb81b43fac55",
+    "note": "main = 69c2916 (merge of #168), read from git and GitHub REST on 2026-11-21. PostgreSQL registry 1255 (step title of .github/workflows/backend.yml). Migrations: company 0001-0032, system 0001-0033; no number allocated ahead."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -270,6 +270,18 @@
       "phase": "4.1 S3a MFA freshness policies and step-up (D-160..D-163, audit 1336/1337; S3 not complete)",
       "mergeCommit": "afbf5f30cab87451fb28578bfb61de6d6d4faf27",
       "headMerged": "2b00bcf99d7d2f5e2b2f66b93a63628f83d13fbc"
+    },
+    {
+      "pr": 167,
+      "phase": "end-of-sprint-3 handoff refresh (docs only)",
+      "mergeCommit": "a7acbf62ff626d012740596f19a44dc1876d6a2c",
+      "headMerged": "3c95b88048d979e21ca1ef352b9beac4dc44af14"
+    },
+    {
+      "pr": 168,
+      "phase": "constraint matrix part 2, 3 pending routes probed (tests only, registry +0)",
+      "mergeCommit": "69c2916461fb9c1c174c8db1af91eb81b43fac55",
+      "headMerged": "b01e497cf7e5240473006774f8bdb311549eb3af"
     }
   ],
   "active": {
@@ -283,8 +295,8 @@
     ]
   },
   "next": [
-    "Next session: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165; dedupe of DECISIONS.md D-130..D-139, duplicated since a20b925, in a dedicated reviewed PR).",
-    "#168 (pending-3 constraint matrix, Draft awaiting review) takes the next registry turn unless merged earlier; re-reconcile the registry, migration numbers, decision and audit ranges and the exact head at merge.",
+    "Next: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165).",
+    "DECISIONS.md D-130..D-139 duplicate rows: deduplicated on the Draft docs/decisions-dedupe-and-168 (not merged).",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
   "openDecisions": [
@@ -340,14 +352,7 @@
     "restartInstruction": "docs/RESUME-CODEX.md",
     "backgroundRestartConfigured": false
   },
-  "openPullRequests": [
-    {
-      "pr": 168,
-      "branch": "test/constraint-matrix-pending-3",
-      "head": "3c6fde47fc070c13e8c9b7a89a0a4b5114f829ce",
-      "state": "constraint matrix part 2: 3 pending routes moved to probed (tests only); Draft awaiting independent review; registry +0 on its base"
-    }
-  ],
+  "openPullRequests": [],
   "inertPullRequests": [
     {
       "pr": 85,
@@ -375,9 +380,7 @@
       "head": "1e8f477c2fd6039d4393aea3e4cf6e9e2d1ed3eb"
     }
   ],
-  "mergeSequence": [
-    168
-  ],
+  "mergeSequence": [],
   "agents": {
     "lead": "Claude Opus",
     "sonnet": [
