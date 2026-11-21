@@ -26,7 +26,7 @@ public static class AuthEndpoints
         auth.MapPost("/mfa/enrol/begin", MfaEnrolBegin).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/enrol/confirm", MfaEnrolConfirm).WithMetadata(new BodyLimit());
         auth.MapPost("/mfa/step-up", MfaStepUp).RequireAuthorization(AuthDefaults.AuthenticatedPolicy).WithMetadata(new BodyLimit());
-        auth.MapPost("/logout", Logout);
+        auth.MapPost("/logout", Logout).WithMetadata(new BodyLimit());
         auth.MapGet("/status", Status);
         auth.MapPost("/change-password", ChangePassword).RequireAuthorization(AuthDefaults.AuthenticatedPolicy).WithMetadata(new BodyLimit());
 

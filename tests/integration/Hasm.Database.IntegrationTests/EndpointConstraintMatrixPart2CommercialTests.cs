@@ -16,7 +16,7 @@ public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
     private string cookie = "";
 
     private Task<ApiResponse?> Race(string what, string[] expected, HttpMethod method, string path, object? body, string? ifMatch = null, Mode mode = Mode.One, string? caller = null) =>
-        races.Run(what, expected, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
+        races.Run(what, expected, method, path, () => Send(method, path, body, caller ?? cookie, ifMatch: ifMatch), mode);
 
     private static Guid IdOf(ApiResponse r) => ConstraintRaces.IdOf(r);
     private static string EtagOf(ApiResponse r) => ConstraintRaces.EtagOf(r);
@@ -70,5 +70,6 @@ public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.IdempotencyKey} = 'cvm2-link-0001'"));
 
         races.AssertNoFindings();
+        races.AssertRan(EndpointConstraintMatrixPart2Tests.Shares[nameof(Commercial_documents_and_links_end_in_a_mapped_4xx_never_a_5xx)]);
     }
 }
