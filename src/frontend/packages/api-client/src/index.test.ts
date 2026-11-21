@@ -117,6 +117,33 @@ describe("api client", () => {
     expect(onUnauthenticated).toHaveBeenCalledTimes(1);
   });
 
+  it("tells the app once per call when an authenticated call is answered 403 mfa_enrolment_required, never as a session end, and still rejects with the ApiError", async () => {
+    const onEnrolmentRequired = vi.fn();
+    const onUnauthenticated = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "mfa_enrolment_required" }, { status: 403 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { onEnrolmentRequired, onUnauthenticated });
+    await expect(client.getMfaPolicy()).rejects.toMatchObject({ status: 403, code: "mfa_enrolment_required" });
+    expect(onEnrolmentRequired).toHaveBeenCalledTimes(1);
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);                        // not retried
+    const other = vi.fn().mockResolvedValue(json({ error: "forbidden" }, { status: 403 }));
+    const c2 = createApiClient("https://x", other as unknown as typeof fetch, { onEnrolmentRequired });
+    await expect(c2.getMfaPolicy()).rejects.toMatchObject({ code: "forbidden" });
+    expect(onEnrolmentRequired).toHaveBeenCalledTimes(1);              // an ordinary 403 is not an enrolment prompt
+  });
+
+  it("reads and changes the company MFA policy and lists the roles", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ policy: "roles", roleIds: ["r1"], updatedAtUtc: null })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.getMfaPolicy();
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/access/mfa-policy");
+    await client.putMfaPolicy({ policy: "roles", roleIds: ["r1"] });
+    expect(call(fetchMock, 1).init.method).toBe("PUT");
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ policy: "roles", roleIds: ["r1"] });
+    await client.listAccessRoles();
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/access/roles");
+  });
+
   it("carries the password-policy problems of a weak_password refusal (strings only)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ error: "weak_password", problems: ["too_short", 5, "too_repetitive"] }, { status: 400 }));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);

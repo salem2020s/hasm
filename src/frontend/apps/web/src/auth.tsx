@@ -7,7 +7,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
  * server is the source of truth and is asked on every start (`/auth/status`). Nothing sensitive (token, password, permissions) is ever
  * written to localStorage/sessionStorage; the only stored value is the non-sensitive UI language.
  */
-export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "ready";
+export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "needEnrolment" | "ready";
+/** The server answers 403 with this code when the selected company's MFA policy applies to the user and the user has no authenticator (Phase 4.1 S3b-1b). It is not a permission refusal and never ends the session. */
+export const ENROLMENT_REQUIRED = "mfa_enrolment_required";
+export const isEnrolmentRequired = (e: unknown): boolean => e instanceof ApiError && e.status === 403 && e.code === ENROLMENT_REQUIRED;
 /** The unfinished second-factor step of a login (Phase 4.1). Held in memory only; the challenge is single use, bound to this client and expires in five minutes. */
 export interface MfaFlow { kind: LoginStep["kind"]; challenge: string | null; secret: EnrolmentSecret | null }
 export type Notice = "session_expired" | "logged_out" | null;
@@ -58,7 +61,7 @@ const AuthContext = createContext<AuthValue | null>(null);
 
 /** Lets the api client tell the provider that the server ended the session (401) without a circular import. */
 export function createSessionBridge() {
-  const bridge = { listener: null as null | (() => void), fire: () => bridge.listener?.() };
+  const bridge = { listener: null as null | (() => void), fire: () => bridge.listener?.(), enrolmentListener: null as null | (() => void), fireEnrolment: () => bridge.enrolmentListener?.() };
   return bridge;
 }
 export type SessionBridge = ReturnType<typeof createSessionBridge>;
@@ -83,6 +86,8 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const [notice, setNotice] = useState<Notice>(null);
   const [mfa, setMfa] = useState<MfaFlow | null>(null);
   const mounted = useRef(true);
+  /** The company whose selection the server answered 403 mfa_enrolment_required: selected again after the enrolment. */
+  const pendingCompany = useRef<string | null>(null);
 
   const endSession = useCallback((why: Notice) => {
     setUser(null);
@@ -92,22 +97,27 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
+    pendingCompany.current = null;
     setNotice(why);
     setPhase("anonymous");
   }, []);
 
+  /** The company's MFA policy applies and the user has no authenticator: the enrolment prompt replaces the company screens. Idempotent (many calls may fail at once); the session stays and nothing is retried here. */
+  const requireEnrolment = useCallback(() => setPhase((p) => (p === "anonymous" || p === "mfa" ? p : "needEnrolment")), []);
+
   const handleError = useCallback((error: unknown) => {
+    if (isEnrolmentRequired(error)) { requireEnrolment(); return true; }
     if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
       endSession("session_expired");
       return true;
     }
     return false;
-  }, [endSession]);
+  }, [endSession, requireEnrolment]);
 
   useEffect(() => {
-    if (bridge) bridge.listener = () => endSession("session_expired");
-    return () => { if (bridge) bridge.listener = null; };
-  }, [bridge, endSession]);
+    if (bridge) { bridge.listener = () => endSession("session_expired"); bridge.enrolmentListener = requireEnrolment; }
+    return () => { if (bridge) { bridge.listener = null; bridge.enrolmentListener = null; } };
+  }, [bridge, endSession, requireEnrolment]);
 
   const enterCompany = useCallback(async () => {
     const me = await api.accessMe();
@@ -139,9 +149,10 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) throw e;
+      if (isEnrolmentRequired(e)) { pendingCompany.current = list[0].id; requireEnrolment(); return true; }   // the company's policy needs an authenticator first: the prompt is shown, the screen is not "needCompany"
       return false;
     }
-  }, [api, enterCompany]);
+  }, [api, enterCompany, requireEnrolment]);
 
   // Session restoration: the server decides (cookie), the client keeps no session data of its own.
   useEffect(() => {
@@ -156,6 +167,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
         setCompanies(list);
         try { await enterCompany(); } catch (e) {
           if (e instanceof ApiError && e.status === 401) throw e;
+          if (isEnrolmentRequired(e)) { requireEnrolment(); return; }     // a company is selected on the server and its policy needs an authenticator
           // 409 company_not_selected (or no usable selection): enter the only company, otherwise ask.
           if (!(await autoEnterSole(list))) setPhase("needCompany");
         }
@@ -166,7 +178,7 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
       }
     })();
     return () => { mounted.current = false; };
-  }, [api, enterCompany, autoEnterSole]);
+  }, [api, enterCompany, autoEnterSole, requireEnrolment]);
 
   const finishLogin = useCallback(async (signedIn: SessionUser) => {
     setMfa(null);
@@ -211,7 +223,8 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
 
   const adoptEnrolledSession = useCallback(async (enrolled: SessionUser) => {
     setUser(enrolled);
-    const previous = companyId;
+    const previous = pendingCompany.current ?? companyId;
+    pendingCompany.current = null;
     try {
       if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
@@ -226,9 +239,15 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   }, [api, endSession]);
 
   const chooseCompany = useCallback(async (id: string) => {
-    await api.selectCompany(id);
-    await enterCompany();
-  }, [api, enterCompany]);
+    try {
+      await api.selectCompany(id);
+      await enterCompany();
+    } catch (e) {
+      if (!isEnrolmentRequired(e)) throw e;
+      pendingCompany.current = id;        // the server undid the selection; it is made again after the enrolment
+      requireEnrolment();
+    }
+  }, [api, enterCompany, requireEnrolment]);
 
   const changeCompany = useCallback(async () => {
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }

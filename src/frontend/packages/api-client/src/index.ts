@@ -60,6 +60,10 @@ export interface Grant {
   scopeId: string | null;
   permissions: string[];
 }
+/** The company MFA policy (Phase 4.1 S3b-1b): `off`, `roles` (only the listed roles) or `all`. `roleIds` is empty unless the policy is `roles`. */
+export type MfaPolicyKind = "off" | "roles" | "all";
+export interface MfaPolicy { policy: MfaPolicyKind; roleIds: string[]; updatedAtUtc: string | null }
+export interface AccessRole { id: string; name: string; preset: boolean; presetKey: string | null; active: boolean; permissions: string[] }
 export interface AccessMe {
   companyId: string;
   grants: Grant[];
@@ -877,6 +881,11 @@ export interface ApiClientOptions {
    * caller gets the ApiError `mfa_step_up_required` itself.
    */
   stepUp?: () => Promise<boolean>;
+  /**
+   * Phase 4.1 S3b-2b: called when the server answers an authenticated call 403 `mfa_enrolment_required` (the selected company's MFA policy applies to the user and the user has no authenticator). One global hook for
+   * every company route and for the company selection: the app shows the enrolment prompt. The session is NOT ended and nothing is retried here; the caller still gets the ApiError.
+   */
+  onEnrolmentRequired?: () => void;
 }
 
 /** Distinct ids in batches of {@link MAX_LOOKUP_IDS}; nothing to ask means NO request (never an empty `ids`). Results are concatenated in batch order. */
@@ -921,7 +930,8 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
           if (await options.stepUp()) return request<T>(method, path, { ...opts, stepUpDone: true });
           throw new ApiError(401, "mfa_step_up_cancelled");
         }
-      } else if (response.status === 401 && !opts.anonymous && !opts.keepSessionOn?.includes(payload.error ?? "")) options.onUnauthenticated?.();
+      } else if (response.status === 403 && payload.error === "mfa_enrolment_required" && !opts.anonymous) options.onEnrolmentRequired?.();
+      else if (response.status === 401 && !opts.anonymous && !opts.keepSessionOn?.includes(payload.error ?? "")) options.onUnauthenticated?.();
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
@@ -1000,6 +1010,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     selectCompany: (companyId: string) => request<{ companyId: string }>("POST", "/api/v1/session/company", { body: { companyId } }),
     clearCompany: () => request<void>("DELETE", "/api/v1/session/company"),
     accessMe: () => get<AccessMe>("/api/v1/access/me"),
+    /** Needs `access.mfapolicy.view` and a selected company. */
+    getMfaPolicy: () => get<MfaPolicy>("/api/v1/access/mfa-policy"),
+    /** Needs `access.mfapolicy.update`; a fresh second-factor proof (the step-up host handles 401 `mfa_step_up_required`). 409 `mfa_policy_requires_own_enrolment`: the caller has no authenticator and the change would require one of them. */
+    putMfaPolicy: (body: { policy: MfaPolicyKind; roleIds?: string[] }) => request<MfaPolicy>("PUT", "/api/v1/access/mfa-policy", { body }),
+    listAccessRoles: () => get<{ roles: AccessRole[] }>("/api/v1/access/roles"),
 
     getProfile: () => get<ProfileResponse>("/api/v1/company/profile"),
     putProfile: (profile: ProfileFields, revision: number) => request<ProfileResponse>("PUT", "/api/v1/company/profile", { body: profile, ifMatch: revision }),
