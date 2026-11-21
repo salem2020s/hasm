@@ -13,7 +13,7 @@ public static class StockAdjustmentSetup
 {
     public static IServiceCollection AddHasmStockAdjustments(this IServiceCollection services)
     {
-        services.AddSingleton(sp => new StockAdjustmentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<InventoryCostingService>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new StockAdjustmentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<InventoryCostingService>(), sp.GetRequiredService<JournalService>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Hasm.Numbering")));
         services.AddSingleton(sp => new StockAdjustmentManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<StocktakeService>(), sp.GetRequiredService<StockAdjustmentService>()));
         return services;
     }

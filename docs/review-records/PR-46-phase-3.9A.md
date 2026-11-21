@@ -2,7 +2,7 @@
 
 * **Pull request:** #46 (Phase 3.9A, party registry: shared identity and company-local record)
 * **Head SHA reviewed (full 40 characters):** c4aca54726fbe927144eff026e70b2a9df6faa0a
-* **Reviewer context:** separate agent (Claude Opus 5.5), NOT the author's context; prompt: adversarial code review of the full diff; the fixes below are by the author.
+* **Reviewer context:** separate agent (Claude Opus), NOT the author's context; prompt: adversarial code review of the full diff; the fixes below are by the author.
 * **Scope read:** the full diff `origin/main...c4aca54` (system migration 0023, company migration 0021, `Hasm.Infrastructure/Parties`, permissions, runtime privileges, API, shared UI, tests, documents).
 * **Checks run (commands and results):** by the reviewer: none. By the author after the fixes: see `docs/PHASE-3.9A.md` (Review of PR #46) and the commit that records this file.
 * **Findings:** no Critical, no High. Company isolation, the outbox protocol, authorization, the database invariants and the audit were judged correct.

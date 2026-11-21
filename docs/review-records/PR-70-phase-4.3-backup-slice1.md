@@ -2,7 +2,7 @@
 
 * **Pull request:** #70 (Phase 4.3 slice 1: coordinated company backup set)
 * **Head SHA reviewed (full 40 characters):** c62a08b8ed63025f4cb7d104212a3ad165519ccd (round 1 was on 2243ec978c97b6db6c4fb98455b250f40d3cdb42, round 2 on ca6a45f68b43fd043022b2dcc090a28aa361317f)
-* **Reviewer context:** Agent C, a separate session; model family claude-sonnet-5-5, the same family as the author (stated honestly: independent context, not an independent model family). Prompt: review the full diff against origin/main for correctness, isolation (Scenario 21.8), key handling (decision K) and path safety. Findings below are relayed from Agent C's reports through the lead; this record does not reproduce the reports verbatim.
+* **Reviewer context:** Agent C, a separate session; model family Claude Sonnet, the same family as the author (stated honestly: independent context, not an independent model family). Prompt: review the full diff against origin/main for correctness, isolation (Scenario 21.8), key handling (decision K) and path safety. Findings below are relayed from Agent C's reports through the lead; this record does not reproduce the reports verbatim.
 * **Scope read:** full diff against origin/main (src/backend/Hasm.Infrastructure/Backup/BackupSet.cs, tests/unit/Hasm.Infrastructure.Tests/BackupSetTests.cs, docs/PHASE-4.3.md)
 * **Checks run (commands and results):** author: none locally (no .NET SDK in the author session). Hosted CI on ca6a45f: reported fully green by the lead (Backend build-test incl. BackupSetTests, postgres-integration, Verification). The first push (4c95366) failed 8 BackupSetTests in CI because of a header-only key read; fixed in ca6a45f.
 * **Findings:** rounds 1 and 2 of Agent C, with dispositions, listed below.
