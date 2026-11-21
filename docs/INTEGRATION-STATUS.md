@@ -54,8 +54,8 @@ Migrations on `main`: see the cloud-team handoff section below (current values a
 | D-167..D-169 | D (4.1 S3b-1b) | on #181 (`feature/phase-4-1-s3b-1b`, `3fbe4c5`), not merged |
 | D-179..D-181 | B (import-file key coverage and key-retirement report) | on #182 (`feature/phase-4-3-import-key-coverage`, `7b43859`), not merged |
 | D-182..D-189 | F2, continued by FF (4.3 slice 8 plan, multiple backup destinations, #176; audit block 2040-2049) | on `main` (#176 merged as `2d5da1f`) |
-| D-190..D-197 | FF (owner decisions of 2026-11-21: 3.8D Q1-Q5, #48 execution policy, legacy PR cleanup, #176 recovery) | in the pull request that carries this refresh |
-| D-198..D-239 | FF (the owner's consolidated decision package of 2026-11-21: one row per question or tight group; classes and reconciliation in each row) | in the pull request stacked on that one |
+| D-190..D-197 | FF (owner decisions of 2026-11-21: 3.8D Q1-Q5, #48 execution policy, legacy PR cleanup, #176 recovery) | on `main` (#186 merged as `f28155e`) |
+| D-198..D-239 | FF (the owner's consolidated decision package of 2026-11-21: one row per question or tight group; classes and reconciliation in each row) | in the pull request that records the consolidated package (based on `main` after #186 merged) |
 
 **Next free decision ID: D-240** (D-198..D-239 the owner's consolidated package of 2026-11-21; D-164..D-166 on `main`, D-167..D-169 D's S3b-1b (#181), D-170..D-178 Phase 4.4, D-179..D-181 B's (#182), D-182..D-189 on `main` (#176), D-190..D-197 the owner decisions of 2026-11-21). Audit-event codes 1336 and 1337 (4.1 S3a step-up) are on `main` via #166; 1338 is allocated to S3b-1b (#181). Audit-event blocks (lead allocation): **2000-2009** R (attachment retention), **2010-2013** 4.3 slice 5, **2014-2019** 4.3 slice 6, **2020-2029** 4.3 slice 7, **2030-2039** Phase 4.4 (signed manual updates, #152), **2040-2049** 4.3 slice 8 (multiple backup destinations, #176; not on `main`), **2100-2199** Phase 3.14 (cash and bank, #148; no 21xx code exists on `main`); the highest code in use on `main` outside these is 1908.
 
