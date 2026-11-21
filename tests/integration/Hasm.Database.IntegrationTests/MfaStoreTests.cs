@@ -62,7 +62,8 @@ public class MfaStoreTests : IdentityTestBase
     {
         await Setup();
         var user = await NewUser();
-        await Exec($"UPDATE {U.Table} SET {M.State} = 3 WHERE {U.Id} = @u", ("u", user.Id));
+        await Exec($"UPDATE {U.Table} SET {M.State} = 2 WHERE {U.Id} = @u", ("u", user.Id));
+        await Exec($"UPDATE {U.Table} SET {M.State} = 3 WHERE {U.Id} = @u", ("u", user.Id));                     // along the allowed path None -> Enrolled -> RecoveryRequired
         var id = await Mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);
         Assert.False(await Mfa.ActivatePendingAsync(user.Id, id, Step, null));
         Assert.Equal(MfaState.RecoveryRequired, await Mfa.GetStateAsync(user.Id));
@@ -113,8 +114,53 @@ public class MfaStoreTests : IdentityTestBase
         await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {TO.Table} SET {TO.Cipher} = {TO.Cipher} || ''::bytea, {TO.Nonce} = decode('000000000000000000000001', 'hex') WHERE {TO.SecretId} = @i", ("i", id)));   // material changes only through rewrap
         await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {TO.Table} SET {TO.UserId} = gen_random_uuid() WHERE {TO.SecretId} = @i", ("i", id)));
         await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {TO.Table} SET {TO.LastStep} = {TO.LastStep} - 1 WHERE {TO.SecretId} = @i", ("i", id)));   // the accepted step never decreases
+        await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {TO.Table} SET {TO.LastStep} = NULL WHERE {TO.SecretId} = @i", ("i", id)));                 // and is never cleared (review L1)
         await Exec($"UPDATE {TO.Table} SET {TO.State} = 2 WHERE {TO.SecretId} = @i", ("i", id));               // Active -> Revoked is allowed
         await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {TO.Table} SET {TO.State} = 1 WHERE {TO.SecretId} = @i", ("i", id)));                // Revoked is terminal
+    }
+
+    /// <summary>Review M1: the database refuses every MFA state change the graph does not allow, and the SQL guard and <see cref="MfaStateGraph"/> agree on every one of the 16 combinations.</summary>
+    [PostgresFact]
+    public async Task The_database_guard_on_the_user_row_allows_exactly_the_transitions_of_the_graph()
+    {
+        await Setup();
+        // the states are reached only along allowed transitions: None -> EnrolmentRequired -> Enrolled -> RecoveryRequired
+        async Task<Guid> UserIn(MfaState target, string login)
+        {
+            var u = await NewUser(login);
+            foreach (var step in new[] { MfaState.EnrolmentRequired, MfaState.Enrolled, MfaState.RecoveryRequired })
+            {
+                if (target == MfaState.None) break;
+                await Exec($"UPDATE {U.Table} SET {M.State} = @s WHERE {U.Id} = @u", ("s", (short)step), ("u", u.Id));
+                if (step == target) break;
+            }
+            Assert.Equal(target, await Mfa.GetStateAsync(u.Id));
+            return u.Id;
+        }
+        var n = 0;
+        foreach (var from in Enum.GetValues<MfaState>())
+            foreach (var to in Enum.GetValues<MfaState>())
+            {
+                var user = await UserIn(from, $"guard{n++}");
+                var graphAllows = from == to || Enum.GetValues<MfaStateCause>().Any(c => MfaStateGraph.IsAllowed(from, to, c));
+                var attempt = Exec($"UPDATE {U.Table} SET {M.State} = @s WHERE {U.Id} = @u", ("s", (short)to), ("u", user));
+                if (graphAllows) { await attempt; Assert.Equal(to, await Mfa.GetStateAsync(user)); }
+                else
+                {
+                    await Assert.ThrowsAsync<PostgresException>(() => attempt);
+                    Assert.Equal(from, await Mfa.GetStateAsync(user));                                           // refused: unchanged
+                }
+            }
+    }
+
+    [PostgresFact]
+    public async Task Concurrent_pending_creations_of_one_user_never_fail_and_leave_exactly_one_pending_secret()
+    {
+        await Setup();
+        var user = await NewUser();
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => Mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null))));   // review L3: the user row lock serializes them
+        Assert.Equal(1L, await Count($"{TO.UserId} = '{user.Id}' AND {TO.State} = 0"));
+        Assert.Equal(7L, await Count($"{TO.UserId} = '{user.Id}' AND {TO.State} = 2"));
     }
 
     [PostgresFact]

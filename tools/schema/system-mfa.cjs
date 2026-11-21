@@ -42,6 +42,22 @@ ALTER TABLE [[User.Table]]
     ADD COLUMN {{UserMfa.EnrolmentCodeExpiresAtUtc}} timestamptz NULL,
     ADD COLUMN {{UserMfa.EnrolmentCodeConsumedAtUtc}} timestamptz NULL;
 ALTER TABLE [[User.Table]] ADD CONSTRAINT {{UserMfa.CkState}} CHECK ({{UserMfa.State}} BETWEEN 0 AND 3);
+-- the MFA state moves only along the graph (review M1; MfaStateGraph is the C# twin, a PostgreSQL test pins them equal): None -> EnrolmentRequired or Enrolled (a voluntary enrolment), EnrolmentRequired -> Enrolled,
+-- Enrolled -> EnrolmentRequired (recovery, DR) or RecoveryRequired (restore), RecoveryRequired -> EnrolmentRequired (recovery, DR). Nothing ever returns to None: MFA is never silently off.
+CREATE FUNCTION {{UserMfa.FnStateGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.{{UserMfa.State}} IS DISTINCT FROM OLD.{{UserMfa.State}} AND NOT (
+        (OLD.{{UserMfa.State}} = 0 AND NEW.{{UserMfa.State}} IN (1, 2))
+        OR (OLD.{{UserMfa.State}} = 1 AND NEW.{{UserMfa.State}} = 2)
+        OR (OLD.{{UserMfa.State}} = 2 AND NEW.{{UserMfa.State}} IN (1, 3))
+        OR (OLD.{{UserMfa.State}} = 3 AND NEW.{{UserMfa.State}} = 1)) THEN
+        RAISE EXCEPTION 'this MFA state change is not allowed';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER {{UserMfa.TrStateGuard}} BEFORE UPDATE ON [[User.Table]] FOR EACH ROW EXECUTE FUNCTION {{UserMfa.FnStateGuard}}();
+
 -- the one-time enrolment code of a bootstrap administrator (every other code lives in its approval request): a SHA-256 hash with an expiry, consumed at most once
 ALTER TABLE [[User.Table]] ADD CONSTRAINT {{UserMfa.CkEnrolmentCode}} CHECK (
     ({{UserMfa.EnrolmentCodeHash}} IS NULL AND {{UserMfa.EnrolmentCodeExpiresAtUtc}} IS NULL AND {{UserMfa.EnrolmentCodeConsumedAtUtc}} IS NULL)
@@ -82,7 +98,9 @@ BEGIN
         OR NEW.{{UserTotp.KekId}} IS DISTINCT FROM OLD.{{UserTotp.KekId}}) AND COALESCE(current_setting('hasm.totp_rewrap', true), '') <> 'on' THEN
         RAISE EXCEPTION 'TOTP secret material changes only through rewrap';
     END IF;
-    IF NEW.{{UserTotp.LastStep}} IS NOT NULL AND OLD.{{UserTotp.LastStep}} IS NOT NULL AND NEW.{{UserTotp.LastStep}} < OLD.{{UserTotp.LastStep}} THEN RAISE EXCEPTION 'the accepted TOTP step never decreases'; END IF;
+    IF (OLD.{{UserTotp.LastStep}} IS NOT NULL AND NEW.{{UserTotp.LastStep}} IS NULL) OR (NEW.{{UserTotp.LastStep}} IS NOT NULL AND OLD.{{UserTotp.LastStep}} IS NOT NULL AND NEW.{{UserTotp.LastStep}} < OLD.{{UserTotp.LastStep}}) THEN
+        RAISE EXCEPTION 'the accepted TOTP step never decreases and is never cleared';
+    END IF;
     IF NEW.{{UserTotp.State}} <> OLD.{{UserTotp.State}} AND NOT ((OLD.{{UserTotp.State}} = 0 AND NEW.{{UserTotp.State}} IN (1, 2)) OR (OLD.{{UserTotp.State}} = 1 AND NEW.{{UserTotp.State}} = 2)) THEN
         RAISE EXCEPTION 'a TOTP secret moves only from pending to active or revoked, and from active to revoked';
     END IF;

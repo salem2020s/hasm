@@ -13,6 +13,8 @@ public static partial class SystemSchema
         public const string EnrolmentCodeExpiresAtUtc = "c_d4392f0b";
         public const string EnrolmentCodeConsumedAtUtc = "c_2bc5bf3f";
         public const string CkState = "k_59603816";
+        public const string FnStateGuard = "f_4dfde580";
+        public const string TrStateGuard = "r_fcfa43d5";
         public const string CkEnrolmentCode = "k_dc678b25";
     }
 
@@ -50,6 +52,8 @@ public static partial class SystemSchema
         ["UserMfa.EnrolmentCodeExpiresAtUtc"] = UserMfa.EnrolmentCodeExpiresAtUtc,
         ["UserMfa.EnrolmentCodeConsumedAtUtc"] = UserMfa.EnrolmentCodeConsumedAtUtc,
         ["UserMfa.CkState"] = UserMfa.CkState,
+        ["UserMfa.FnStateGuard"] = UserMfa.FnStateGuard,
+        ["UserMfa.TrStateGuard"] = UserMfa.TrStateGuard,
         ["UserMfa.CkEnrolmentCode"] = UserMfa.CkEnrolmentCode,
         ["UserTotp.Table"] = UserTotp.Table,
         ["UserTotp.SecretId"] = UserTotp.SecretId,

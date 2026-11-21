@@ -13,6 +13,22 @@ ALTER TABLE t_fc83d26e
     ADD COLUMN c_d4392f0b timestamptz NULL,
     ADD COLUMN c_2bc5bf3f timestamptz NULL;
 ALTER TABLE t_fc83d26e ADD CONSTRAINT k_59603816 CHECK (c_d6d40d4e BETWEEN 0 AND 3);
+-- the MFA state moves only along the graph (review M1; MfaStateGraph is the C# twin, a PostgreSQL test pins them equal): None -> EnrolmentRequired or Enrolled (a voluntary enrolment), EnrolmentRequired -> Enrolled,
+-- Enrolled -> EnrolmentRequired (recovery, DR) or RecoveryRequired (restore), RecoveryRequired -> EnrolmentRequired (recovery, DR). Nothing ever returns to None: MFA is never silently off.
+CREATE FUNCTION f_4dfde580() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.c_d6d40d4e IS DISTINCT FROM OLD.c_d6d40d4e AND NOT (
+        (OLD.c_d6d40d4e = 0 AND NEW.c_d6d40d4e IN (1, 2))
+        OR (OLD.c_d6d40d4e = 1 AND NEW.c_d6d40d4e = 2)
+        OR (OLD.c_d6d40d4e = 2 AND NEW.c_d6d40d4e IN (1, 3))
+        OR (OLD.c_d6d40d4e = 3 AND NEW.c_d6d40d4e = 1)) THEN
+        RAISE EXCEPTION 'this MFA state change is not allowed';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_fcfa43d5 BEFORE UPDATE ON t_fc83d26e FOR EACH ROW EXECUTE FUNCTION f_4dfde580();
+
 -- the one-time enrolment code of a bootstrap administrator (every other code lives in its approval request): a SHA-256 hash with an expiry, consumed at most once
 ALTER TABLE t_fc83d26e ADD CONSTRAINT k_dc678b25 CHECK (
     (c_a67002ac IS NULL AND c_d4392f0b IS NULL AND c_2bc5bf3f IS NULL)
@@ -53,7 +69,9 @@ BEGIN
         OR NEW.c_cdba63b1 IS DISTINCT FROM OLD.c_cdba63b1) AND COALESCE(current_setting('hasm.totp_rewrap', true), '') <> 'on' THEN
         RAISE EXCEPTION 'TOTP secret material changes only through rewrap';
     END IF;
-    IF NEW.c_b51a9e07 IS NOT NULL AND OLD.c_b51a9e07 IS NOT NULL AND NEW.c_b51a9e07 < OLD.c_b51a9e07 THEN RAISE EXCEPTION 'the accepted TOTP step never decreases'; END IF;
+    IF (OLD.c_b51a9e07 IS NOT NULL AND NEW.c_b51a9e07 IS NULL) OR (NEW.c_b51a9e07 IS NOT NULL AND OLD.c_b51a9e07 IS NOT NULL AND NEW.c_b51a9e07 < OLD.c_b51a9e07) THEN
+        RAISE EXCEPTION 'the accepted TOTP step never decreases and is never cleared';
+    END IF;
     IF NEW.c_994e8047 <> OLD.c_994e8047 AND NOT ((OLD.c_994e8047 = 0 AND NEW.c_994e8047 IN (1, 2)) OR (OLD.c_994e8047 = 1 AND NEW.c_994e8047 = 2)) THEN
         RAISE EXCEPTION 'a TOTP secret moves only from pending to active or revoked, and from active to revoked';
     END IF;

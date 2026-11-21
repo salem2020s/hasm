@@ -27,6 +27,7 @@ public static class MfaStateGraph
     public static bool IsAllowed(MfaState from, MfaState to, MfaStateCause cause) => (from, to, cause) switch
     {
         (MfaState.None, MfaState.EnrolmentRequired, MfaStateCause.Requirement) => true,
+        (MfaState.None, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed) => true,                         // a voluntary enrolment of a user without a requirement
         (MfaState.EnrolmentRequired, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed) => true,
         (MfaState.Enrolled, MfaState.EnrolmentRequired, MfaStateCause.Recovery or MfaStateCause.DrReset) => true,
         (MfaState.Enrolled, MfaState.RecoveryRequired, MfaStateCause.Restore) => true,

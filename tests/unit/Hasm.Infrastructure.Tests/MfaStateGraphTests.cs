@@ -8,6 +8,7 @@ public class MfaStateGraphTests
     private static readonly (MfaState From, MfaState To, MfaStateCause Cause)[] Allowed =
     [
         (MfaState.None, MfaState.EnrolmentRequired, MfaStateCause.Requirement),
+        (MfaState.None, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed),                                  // a voluntary enrolment
         (MfaState.EnrolmentRequired, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed),
         (MfaState.Enrolled, MfaState.EnrolmentRequired, MfaStateCause.Recovery),
         (MfaState.Enrolled, MfaState.EnrolmentRequired, MfaStateCause.DrReset),

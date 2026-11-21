@@ -12,17 +12,22 @@ public static class PrivilegedAccess
     public static IReadOnlySet<string> PrivilegedResources { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         "access.members", "access.roles", "access.assignments", "access.audit", "company.settings", "company.approvalpolicies",
+        // review M3 of PR #133 (when in doubt, privileged): company.attachmentssensitive authorizes the encryption-key rewrap of attachments, and company.journalsoftclosed is override-like (posting into a soft-closed period)
+        "company.attachmentssensitive", "company.journalsoftclosed",
     };
+
+    /// <summary>Individual permissions that are privileged although their resource is ordinary (review M3): <c>company.imports.configure</c> authorizes the import maintenance, including the encryption-key rewrap of imported files.</summary>
+    public static IReadOnlySet<string> PrivilegedPermissions { get; } = new HashSet<string>(StringComparer.Ordinal) { "company.imports.configure" };
 
     /// <summary>Resources classified as ordinary at resource level (their privileged ACTIONS, see <see cref="PrivilegedActions"/>, still count). Listing a resource here is a deliberate review decision.</summary>
     public static IReadOnlySet<string> OrdinaryResources { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         "company.profile", "company.currencies", "company.config", "company.branches", "company.branchstructure", "company.warehouses", "company.warehousestructure",
         "company.fiscalyears", "company.fiscalperiods", "company.fiscalreopen", "company.accounts", "company.numbering", "company.exchangerates", "company.costcenters",
-        "company.journal", "company.journalsoftclosed", "company.journalrate", "company.ledgersettings", "company.ledgerreports", "company.costcenterpolicies", "company.fiscalclosing",
+        "company.journal", "company.journalrate", "company.ledgersettings", "company.ledgerreports", "company.costcenterpolicies", "company.fiscalclosing",
         "company.imports", "company.financialstatements", "company.statementmapping", "company.units", "company.itemgroups", "company.items", "company.barcodes",
         "company.inventorysettings", "company.inventoryaccounting", "company.stockdocs", "company.stockbalance", "company.stocktake", "company.parties", "company.tax",
-        "company.partyroles", "company.salesreps", "company.pricing", "company.commercialdocs", "company.attachments", "company.attachmentssensitive",
+        "company.partyroles", "company.salesreps", "company.pricing", "company.commercialdocs", "company.attachments",
     };
 
     /// <summary>Actions that are privileged on every resource: approving (an approver is a sensitive grant), overriding a control, reopening and final-closing a period, approving the negative-stock exception.</summary>
@@ -36,7 +41,7 @@ public static class PrivilegedAccess
     {
         if (!PermissionCatalog.Default.TryGet(code, out var permission)) return true;
         var key = permission.Resource.Key;
-        if (PrivilegedResources.Contains(key)) return true;
+        if (PrivilegedResources.Contains(key) || PrivilegedPermissions.Contains(permission.Code)) return true;
         if (!OrdinaryResources.Contains(key)) return true;
         return PrivilegedActions.Contains(permission.Action);
     }

@@ -103,6 +103,11 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         var stored = protector.Protect(userId, secretId, secret);
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var lockRow = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.Id} = @u FOR UPDATE", conn, tx))     // serializes concurrent pending creations of one user (no unhandled unique violation)
+        {
+            lockRow.Parameters.AddWithValue("u", userId);
+            if (await lockRow.ExecuteScalarAsync(ct) is null) throw new InvalidOperationException("user_not_found");
+        }
         await using (var revoke = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.State} = 2 WHERE {TO.UserId} = @u AND {TO.State} = 0", conn, tx))
         {
             revoke.Parameters.AddWithValue("u", userId);
@@ -157,15 +162,10 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
             if (await act.ExecuteNonQueryAsync(ct) != 1) return false;                                           // the transaction is disposed without a commit
         }
         var receipts = new List<AuditReceipt>();
-        if (current == MfaState.None)
+        if (current is MfaState.None or MfaState.EnrolmentRequired)                                               // None is a voluntary enrolment: one audited step None -> Enrolled
         {
-            Assert(await SetStateAsync(conn, tx, userId, MfaState.None, MfaState.EnrolmentRequired, ct));         // a voluntary enrolment passes through the requirement
-            current = MfaState.EnrolmentRequired;
-        }
-        if (current == MfaState.EnrolmentRequired)
-        {
-            Assert(MfaStateGraph.IsAllowed(MfaState.EnrolmentRequired, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed) && await SetStateAsync(conn, tx, userId, MfaState.EnrolmentRequired, MfaState.Enrolled, ct));
-            receipts.Add(await AuditAsync(conn, tx, MfaAuditEvents.StateChanged, actor, userId, "mfa state EnrolmentRequired -> Enrolled (EnrolmentConfirmed)", ct));
+            Assert(MfaStateGraph.IsAllowed(current, MfaState.Enrolled, MfaStateCause.EnrolmentConfirmed) && await SetStateAsync(conn, tx, userId, current, MfaState.Enrolled, ct));
+            receipts.Add(await AuditAsync(conn, tx, MfaAuditEvents.StateChanged, actor, userId, $"mfa state {current} -> Enrolled (EnrolmentConfirmed)", ct));
         }
         receipts.Add(await AuditAsync(conn, tx, MfaAuditEvents.SecretActivated, actor, userId, $"TOTP secret {secretId:N} activated", ct));
         await audit.CommitAsync(tx, receipts, ct);

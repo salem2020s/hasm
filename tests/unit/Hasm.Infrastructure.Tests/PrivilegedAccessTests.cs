@@ -40,6 +40,19 @@ public class PrivilegedAccessTests
             Assert.False(PrivilegedAccess.IsPrivilegedPermission(code), code);
     }
 
+    [Theory]
+    [InlineData("company.attachmentssensitive.view")]
+    [InlineData("company.attachmentssensitive.upload")]            // authorizes the encryption-key rewrap of attachments (review M3 of PR #133)
+    [InlineData("company.journalsoftclosed.post")]                  // override-like: posting into a soft-closed period
+    [InlineData("company.imports.configure")]                       // import maintenance, including the key rewrap of imported files
+    public void Permissions_that_authorize_key_rewrap_or_override_a_control_are_privileged(string code) => Assert.True(PrivilegedAccess.IsPrivilegedPermission(code), code);
+
+    [Theory]
+    [InlineData("company.imports.view")]
+    [InlineData("company.attachments.view")]
+    [InlineData("company.attachments.upload")]
+    public void Their_ordinary_neighbours_stay_ordinary(string code) => Assert.False(PrivilegedAccess.IsPrivilegedPermission(code), code);
+
     [Fact]
     public void Unknown_malformed_and_unclassified_codes_fail_closed()
     {
