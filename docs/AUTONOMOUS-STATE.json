@@ -622,7 +622,8 @@
   },
   "migrationAllocation": {
     "system": {
-      "0034": "#181 (4.1 S3b-1b)"
+      "0034": "#181 (4.1 S3b-1b)",
+      "0035": "M2-TOTP slice (D-235; additive trigger), only after #181 merges; as reported by the lead"
     },
     "company": {
       "0033": "duplicate-approval-policies pull request (FA, D-209; not opened at this read)",
@@ -639,8 +640,21 @@
     "note": "queued numbers are not verified by this refresh"
   },
   "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging.",
-  "flaggedForOwnerNotBlocking": [
-    "M2-TOTP slice (D-235): a start-up refusal note, reported by the lead; no pull request at this read, details not verified",
-    "Session-expiry slice (D-236): team readings of the owner's text, reported by the lead; no pull request at this read, details not verified"
-  ]
+  "flaggedForOwnerNotBlocking": {
+    "source": "reported by the lead from the approved slice plans; slices in progress, no pull request; NOT VERIFIED against code",
+    "M2-TOTP (D-235, agent FD)": [
+      "start-up refusal when the system runtime account holds more than the reviewed grant catalogue on the TOTP table, owns it, or is a superuser or member of pg_read_all_data; development/test opt-out mirroring AllowOverprivilegedCompanyRuntime; affects an installation whose runtime account is the administrative account",
+      "team reading: reporting roles = every database role other than the table owner and the configured runtime account",
+      "grants are reviewed code plus a Hasm.Admin grant-system-runtime command, not audited in this slice (follow-up: audit it and grant-company-runtime); system migration 0035 only after #181 merges",
+      "residual: database privileges do not protect against a compromised API process, which holds the key ring"
+    ],
+    "SESSION-EXPIRY-UNSAVED (D-236, agent L)": [
+      "hidden = not rendered, not focusable, not reachable; values still in page memory",
+      "the re-authentication dialog shows no user name",
+      "no time limit on retention while locked; possible hardening: an optional maximum lock duration",
+      "preservation only when a screen reports unsaved input",
+      "Tauri follows the same no-persistence rule as Web",
+      "sign-out in another tab drops preserved state (BroadcastChannel; residual if unavailable); dropped on a different user or company, or when the page's permission is gone after re-authentication"
+    ]
+  }
 }
