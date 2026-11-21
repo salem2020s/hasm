@@ -190,7 +190,7 @@
     {
       "pr": 119,
       "branch": "test/endpoint-permission-matrix",
-      "head": "230075cf1c572c02fcfb3a77c2af5dfe9791f097",
+      "head": "9a014302d112ce9b49ca0597510271424d75d086",
       "owner": "C (Opus)",
       "state": "endpoint permission matrix; under construction"
     },
@@ -199,7 +199,7 @@
       "branch": "feature/phase-3-13-s6",
       "head": "2d524f0d1d70a9f9ef2b8ab4339c0e7c5ea09133",
       "owner": "A (Sonnet)",
-      "state": "3.13 S6 commercial-document screen, stacked on #108"
+      "state": "3.13 S6 screen, built from main (not stacked); Links tab after #108; 1 PostgreSQL test, registry reconciled at merge"
     }
   ],
   "inertPullRequests": [
