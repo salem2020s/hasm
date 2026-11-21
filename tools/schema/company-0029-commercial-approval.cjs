@@ -185,6 +185,7 @@ function existingNames() {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { if (e.name !== "bin" && e.name !== "obj") scan(p); continue; }
       if (p === outSql || p === outCs) continue;
+      if (/\d{4}_company_commercial_policies\.sql$|CompanySchema\.CommercialPolicy\.cs$|0030_company_document_links\.sql$|CompanySchema\.DocumentLink\.cs$/.test(p)) continue;   // later migrations REFERENCE the names of this one
       if (!/\.(sql|cs)$/.test(e.name)) continue;
       for (const m of fs.readFileSync(p, "utf8").matchAll(/\b[tcfkr]_[0-9a-f]{8}\b/g)) names.add(m[0]);
     }

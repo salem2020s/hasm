@@ -157,7 +157,7 @@ public sealed class BackupRunService
     /// Every secret-store table with its report label, as (label, logical name). Pinned by a unit test to <see cref="SystemSchema.SecretStoreTables"/> in both directions; which of them a dump excludes
     /// follows the per-table rule (<see cref="SystemDumpExclusionsFor"/>, D-120). The Phase 4.1 TOTP table is added to both, as included only in encrypted runs, in the slice that creates it.
     /// </summary>
-    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table")];
+    public static IReadOnlyList<(string Label, string LogicalTable)> SystemDumpExclusions { get; } = [("session", "Session.Table"), ("login_throttle", "LoginThrottle.Table"), ("user_totp", "UserTotp.Table")];
 
     /// <summary>
     /// The secret-store tables whose DATA a system dump excludes (D-120, per-table rule of <see cref="SystemSchema.SecretStoreTables"/>): an unencrypted DEV/TEST run excludes every one; an encrypted run
@@ -240,13 +240,14 @@ public sealed class BackupRunService
 
         var outcomes = new List<RunCompany>();
         var missing = new SortedSet<string>(StringComparer.Ordinal);
+        var keyIdsByCompany = new Dictionary<Guid, IReadOnlyList<string>>();
         var skipped = 0;
         var companiesDir = Path.Combine(runDir, BackupRunFiles.CompaniesFolder);
         CompanyBackupService.CreatePrivateDirectory(companiesDir, "run_exists", "run_not_private");
         foreach (var company in await registry.ListAsync(ct))
         {
             if (company.State != ProvisioningState.Ready) { skipped++; continue; }
-            outcomes.Add(await BackupCompanyAsync(company.Id, Path.Combine(companiesDir, company.Id.ToString("N")), missing, material, runId, ct));
+            outcomes.Add(await BackupCompanyAsync(company.Id, Path.Combine(companiesDir, company.Id.ToString("N")), missing, material, runId, ct, keyIdsByCompany));
         }
 
         // review L6: stop the keep-alive, then check SYNCHRONOUSLY that this session still holds the run lock before the verdict (a loss in the last keep-alive interval is not missed)
@@ -262,7 +263,7 @@ public sealed class BackupRunService
             BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(runDir, BackupRunFiles.UnencryptedMarker), "This run is NOT encrypted: DEV/TEST only (D-088, D-095).\n"u8.ToArray());
             BackupRunFiles.WriteReport(runDir, report);
         }
-        else await WriteEncryptedRunAsync(runDir, report, material, ct);
+        else await WriteEncryptedRunAsync(runDir, report, material, keyIdsByCompany, await ReadAuditKeyIdsAsync(outcomes, ct), ct);
         return (report, runDir);
     }
 
@@ -295,7 +296,35 @@ public sealed class BackupRunService
     /// Slice 5: the encrypted run report (<c>run.json.hbe</c>, a version-2 manifest of kind <c>run</c> that also names the canary), the canary (D-117: 32 random bytes encrypted to the recovery key; only
     /// its hash leaves memory, in the signed status) and, LAST, the readable signed <c>run.status.json</c> that marks the run complete.
     /// </summary>
-    private async Task WriteEncryptedRunAsync(string runDir, BackupRunReport report, BackupMaterial material, CancellationToken ct)
+    /// <summary>
+    /// The audit key ids of the run (D-138): system and company streams of the system database and the business stream of every company whose set was written; key ids only. Null when any of them
+    /// cannot be read: the status is then written as version 1 (key needs unknown; review M2 of #130 keeps the key report false).
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> ReadAuditKeyIdsAsync(IReadOnlyList<RunCompany> outcomes, CancellationToken ct)
+    {
+        try
+        {
+            var ids = new SortedSet<string>(StringComparer.Ordinal);
+            await using (var sys = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true)))
+            {
+                await sys.OpenAsync(ct);
+                foreach (var k in await CompanyBackupService.ReadAuditKeyIdsAsync(sys, ct, SystemSchema.AuditEvent.Table, SystemSchema.AuditEvent.KeyId)) ids.Add(k);
+            }
+            foreach (var c in outcomes.Where(o => o.Outcome is "ok" or "ok_missing_keys"))
+            {
+                var company = await registry.GetAsync(c.CompanyId, ct);
+                if (company is null) return null;
+                await using var db = new NpgsqlConnection(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName));
+                await db.OpenAsync(ct);
+                foreach (var k in await CompanyBackupService.ReadAuditKeyIdsAsync(db, ct)) ids.Add(k);
+            }
+            return [.. ids];
+        }
+        catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { return null; }
+    }
+
+    private async Task WriteEncryptedRunAsync(string runDir, BackupRunReport report, BackupMaterial material, IReadOnlyDictionary<Guid, IReadOnlyList<string>> keyIdsByCompany,
+        IReadOnlyList<string>? auditKeyIds, CancellationToken ct)
     {
         var canary = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         string canaryHash;
@@ -308,10 +337,12 @@ public sealed class BackupRunService
         finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(canary); }
         var runManifest = new ManifestV2(ManifestV2.CurrentVersion, BackupRunFiles.RunKind, report.RunId, null, report.StartedUtc, material.Recovery.KeyId, material.Signer.KeyId, [canaryEntry], Run: report);
         await SignedDocuments.WriteManifestAsync(runDir, runManifest, material.Recovery, material.Signer, ct);
-        var status = new RunStatus(RunStatus.CurrentVersion, RunStatus.KindValue, report.RunId, report.StartedUtc, report.FinishedUtc, report.DurationMs, report.Verdict,
+        // D-138: version 2 only with a complete key inventory (every written set's key ids and the audit key ids); otherwise version 1 (key needs unknown)
+        var inventory = auditKeyIds is not null && report.Companies.Where(c => c.Outcome is "ok" or "ok_missing_keys").All(c => keyIdsByCompany.ContainsKey(c.CompanyId));
+        var status = new RunStatus(inventory ? RunStatus.CurrentVersion : 1, RunStatus.KindValue, report.RunId, report.StartedUtc, report.FinishedUtc, report.DurationMs, report.Verdict,
             report.Companies.Count(c => c.Outcome == "ok"), report.Companies.Count(c => c.Outcome == "ok_missing_keys"), report.Companies.Count(c => c.Outcome == "busy"),
             report.Companies.Count(c => c.Outcome == "failed"), report.Skipped, material.Recovery.KeyId, material.Signer.KeyId, canaryHash, report.Excluded, report.Warnings ?? [], true,
-            [.. report.Companies.Select(c => new RunStatusCompany(c.CompanyId, c.Outcome))]);
+            [.. report.Companies.Select(c => new RunStatusCompany(c.CompanyId, c.Outcome, inventory ? keyIdsByCompany.GetValueOrDefault(c.CompanyId) ?? [] : null))], inventory ? auditKeyIds : null);
         SignedDocuments.WriteRunStatus(runDir, status, material.Signer);
     }
 
@@ -360,7 +391,8 @@ public sealed class BackupRunService
         }
     }
 
-    private async Task<RunCompany> BackupCompanyAsync(Guid companyId, string destination, SortedSet<string> missing, BackupMaterial? material, string runId, CancellationToken ct)
+    private async Task<RunCompany> BackupCompanyAsync(Guid companyId, string destination, SortedSet<string> missing, BackupMaterial? material, string runId, CancellationToken ct,
+        Dictionary<Guid, IReadOnlyList<string>> keyIdsByCompany)
     {
         var start = clock.GetUtcNow(); var t = clock.GetTimestamp();
         RunCompany Done(string outcome, string? code, long bytes = 0, int files = 0, int keys = 0) =>
@@ -371,6 +403,7 @@ public sealed class BackupRunService
             {
                 var e = await companies.BackupCompanyEncryptedAsync(companyId, destination, material, runId, ct);
                 foreach (var k in e.MissingKeyIds) missing.Add(k);
+                keyIdsByCompany[companyId] = e.Manifest.Company!.KeyIdsRequired;
                 return Done(e.MissingKeyIds.Count == 0 ? "ok" : "ok_missing_keys", null, e.Manifest.Files[0].Size, e.Manifest.Files.Count - 1, e.MissingKeyIds.Count);
             }
             var r = await companies.BackupCompanyAsync(companyId, destination, ct);

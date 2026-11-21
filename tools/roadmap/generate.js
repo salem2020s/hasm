@@ -274,9 +274,13 @@ Scheduled and manual backups with retention and encryption; full and single-comp
 Recorded limitations against G (dated; each must be closed or explicitly accepted before release):
 * 2026-11-21 (D-118, Phase 4.3 slice 5): trial restore and the backup recovery test run without independent approval until the Phase 4.1 approval framework exists. They run only through the administrative tool under operating-system access, and each writes a system-stream audit event.
 * 2026-11-21 (D-099, D-118, Phase 4.3 slice 5): backup-recovery-keygen, backup-signing-keygen and backup-keys run in an interim mode under operating-system access, without a named administrator with MFA, until the Phase 4.1 administrative-tool login (D-099) exists; backup-signing-keygen and backup-keys write system-stream audit events.
+* 2026-11-21 (D-086, D-137, Phase 4.3 slice 6): automatic deletion of backup runs is INACTIVE (a code gate changed only by an owner-instructed activation PR, runtime prerequisites and an exact per-installation opt-in); backups accumulate and the operator manages storage. The retention preview (backup-retention-plan) and backup legal holds work; a backup legal hold cannot be released until the Phase 4.1 approval framework exists.
 
 ## H. Security (SRS 17, 4)
 No open Critical or High finding; audit chain verifies after export; secrets never in repository, logs or support bundles; opaque physical names preserved by every migration; MFA and emergency account as specified.
+
+Recorded limitations against H (dated; each must be closed or explicitly accepted before release):
+* 2026-11-21 (Phase 4.1 S1, review M2 of PR #133, lead decision D-048): the system database runtime connection is not least-privilege for user_totp; the hasm.totp_rewrap flag is code discipline only, settable by any session. A system-database runtime-role grant model is an architecture change outside slice S1; it is a follow-up of the S4 authorization or the database-role work, is on the owner/DBA register, and is a blocker for production readiness until closed or explicitly accepted.
 
 ## I. Quality gates
 All mandatory tests pass on the final committed tree; all required GitHub Actions checks green on the exact release head; no weakened or disabled test, no reduced expected count; frontend typecheck, production build and Tauri build pass; manual visual review of Arabic RTL and English LTR on Web and Desktop recorded with owner sign-off.

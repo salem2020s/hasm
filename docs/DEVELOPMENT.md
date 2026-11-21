@@ -553,7 +553,7 @@ dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
   * is not a registered company, system, maintenance or built-in database;
   * carries the file's token in its comment.
   The registry is locked against changes until the drop has completed. This is the only supported way to remove a kept trial database.
-* **Not available (BLOCKED, owner decision):** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch. The procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
+* **Not available yet:** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch are decided (D-081) and planned in `docs/PHASE-4.3.md` slice 7 (D-143..D-153); cutovers stay unavailable until that slice, the Phase 4.1 approval framework and an owner-instructed activation exist. Until then the procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
 
 ### Backup runs of the whole installation, monitoring and retention preview (Phase 4.3 slice 4)
 Decisions D-069..D-073; the design is in `docs/PHASE-4.3.md` slice 4.
@@ -644,6 +644,74 @@ dotnet run --project src/backend/Hasm.Admin -- backup-recovery-test <run-dir> --
   * Failed: exit 1, no proof is written. An unencrypted run is refused (`unencrypted_run`: there is no recovery key to test).
 * **DEV/TEST only: unencrypted sets.** `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production` (exactly) permits unencrypted sets; any other value is a configuration error, and it is refused while a recovery public key is configured. Every output then shows `DEGRADED: unencrypted backups (DEV/TEST only)`, sets and runs carry the file `UNENCRYPTED-DEV-TEST-ONLY`, and `backup-status` exits 8 (`unencrypted_dev_test`). Never set it in production (D-088).
 * **Interim mode (dated limitations in RELEASE1-ACCEPTANCE G).** Until Phase 4.1 delivers the administrative-tool login (D-099) and the approval framework, these commands run under operating-system access to the service account; the audit events record the operating-system account (`os:<account>`). Trial restore and the recovery test are restore operations that will then need independent approval (D-118).
+
+### Retention of backup runs and backup legal holds (Phase 4.3 slice 6)
+Owner decision D-086; decisions D-130..D-139; the design is in `docs/PHASE-4.3.md` slice 6.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-plan <root> [--json <file>]
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-apply <root>          (INACTIVE: refuses, see below)
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text>
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
+```
+* **Configuration (`Hasm__Backup__Retention__*`):**
+  * `InstallationTimeZone` (required; an IANA id such as `Asia/Riyadh`). It classifies the system part. The server's local time zone is never used.
+  * `DailyKeep` (default 7) and `WeeklyKeep` (default 4). These are the D-086 minimums: they can be raised, never lowered. A lower or unreadable value stops the command with exit 3 (`retention_below_minimum`, `retention_config_invalid`); it is never clamped.
+  * `WeekStart` (default `Monday`, ISO 8601).
+  * `MaxDeletionsPerRun` (default 7, at most 31).
+* **`backup-retention-plan <root>`** classifies every run of the root and prints, per run, either its keep reasons or `ELIGIBLE`. Nothing is deleted.
+  * It reads each run's signed `run.status.json` with the server's signing public keys and never decrypts anything.
+  * It also reads each company's configured time zone and fiscal calendar, and the backup legal holds and pins.
+  * It ends with the plan hash and the key inventory of the retained runs (D-138). While the inventory is incomplete, no key may be retired.
+  * It writes system audit event 2014. With `--json` it writes the plan to a new file.
+* **Keep reasons:**
+  * `minimum_daily`, `minimum_weekly`: the newest recoverable run of each of the latest 7 days and 4 weeks that HAVE a run.
+  * `last_recoverable`, `newest`, `recovery_test_proof`: always kept.
+  * `period_end`, `year_end`: the last run before and the first run after every fiscal period end, calendar month end and fiscal year end. They are never deleted automatically until the owner decides the legal policy.
+  * `classification_unknown`: a company whose time zone is not configured or unknown, a run outside every fiscal year, or a company that is not Ready or cannot be read.
+  * `legal_hold`, `attachment_hold`, `d114_hold`, `hold_check_failed`: a hold on the run.
+  * `recovery_chain`: a pin, or a kept trial restore inside the run.
+  * `incomplete`, `status_unverifiable`, `unencrypted`, `recovery_key_untested`: the run is not recoverable. It never counts toward a minimum and is never deleted automatically.
+  * `run_not_clean`: the run holds an unexpected file or a symbolic link.
+* **Backup legal holds.** `backup-hold-place` takes effect at once and writes system audit event 2018 (the reason is stored in the hold, not in the event). A hold covers either one run, or one company's runs started within the given local dates.
+  * **A hold cannot be released with this tool.** Release needs a named administrator and independent approval (Phase 4.1). The database refuses every change to a hold except a single release.
+* **Automatic deletion is INACTIVE (D-137).** `backup-retention-apply` writes audit event 2017 and stops with exit 3 (`retention_deletion_inactive`); nothing is deleted. Three independent layers enforce this:
+  1. a code gate that is `false` in this release;
+  2. runtime prerequisites checked on every execution;
+  3. an exact opt-in, `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups`, that no shipped configuration sets.
+
+  Only an activation PR merged on an explicit owner instruction can change the gate. **Until then backups accumulate:** watch the free space of the backup root. Never delete a run folder by hand while a trial restore, recovery test or backup runs. Never delete a run that the plan shows with a keep reason.
+* **Trial restores and recovery tests** hold a shared restore lock for their duration. A deletion, once activated, takes that lock exclusively, so the two never overlap. A restore started during a deletion stops with `retention_in_progress`.
+* **What a deletion will do once activated** (D-136):
+  * it runs only when `backup-status` is `ok`, the clock is consistent, and no more than `MaxDeletionsPerRun` runs, and never more than half of the complete runs, are eligible;
+  * it re-validates every run just before touching it;
+  * it writes audit event 2015 first;
+  * it keeps a tombstone (the run's signed status and signature, plus `deleted.json`) under `<root>/.retention/tombstones/`;
+  * it renames the run to `<run id>.deleting-<hex>`, deletes it without following links, and writes audit event 2016.
+
+  An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
+
+## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
+
+`tools/loadtest/` is tooling only: no migration, no change to the PostgreSQL registry. It talks to the REAL HTTP API as ordinary users, so every server rule (validation, RBAC, numbering, audit, period and approval rules, optimistic concurrency) applies. Stage 2 (the 60-minute, 50-session runner) is separate and later.
+
+**Safety.** It refuses to run unless `HASM_LOADTEST_DISPOSABLE=this-installation-is-disposable` is set (the operator's statement that the installation and its database are disposable), refuses a non-loopback API unless it is https and `--environment <file>` is given, refuses port 5432 (`--database-port`, `PGPORT`), and refuses a company that holds anything that is not load-test data: an item or party whose code does not START with `LT-` (case-sensitive), a journal entry not described `LT entry ...` or a stock document not referenced `LT-S-...` (read through the API, so a user with a narrower scope sees less: use a company-wide user). `seed` AND `run` make this check before their first write. It cannot see the PostgreSQL cluster behind the API, so these are best-effort protections, not proof: point it only at an installation on the isolated runner's cluster (`scripts/test-pg/`) or the dedicated reference machine. Credentials come only from the environment (`HASM_LT_LOGIN`, `HASM_LT_PASSWORD`; `HASM_LT_APPROVER_LOGIN`, `HASM_LT_APPROVER_PASSWORD` for stock-document approval, which needs a second user). A development certificate is trusted through `NODE_EXTRA_CA_CERTS`; validation is never disabled.
+
+**Prerequisites in the target company** (the seeder checks and names what is missing): a fiscal year covering `--year`, the base currency selected, at least two active postable base-currency accounts, at least one active warehouse (stock documents). It creates its own unit and group (`LT-PCS`, `LT-G`).
+
+```
+node tools/loadtest/loadtest.js plan --items 20000 --parties 10000 --journals N --stock-docs N   # the plan digest, no API
+node tools/loadtest/loadtest.js seed --api http://127.0.0.1:PORT --company <id> --items 20000 --parties 10000 --journals N --stock-docs N --year 2026 --concurrency 4 > seed-manifest.json
+node tools/loadtest/loadtest.js run  --api ... --company <id> --items ... --parties ... --iterations 100 [--duration-seconds S] [--environment env.json] [--out results.json]
+node --test tools/loadtest/tests/smoke.test.js                                                     # no database, no real API
+```
+
+**Data.** Deterministic: record i of kind k depends only on (`--seed`, k, i) (default seed `hasm-loadtest-1`), so the same seed and counts give the same data and the same plan digest on any machine. Items and parties (Latin and Arabic names; about 60% of parties get a customer role) are idempotent by code. Journal entries (create, submit, post by the maker; found again by their description) and stock documents (receipts first, then issues and transfers; create, submit, approve by a second user; found again by their reference) are idempotent too. A multi-step flow is driven by the state the API reports, one step at a time: a failed or ambiguous call is answered by re-reading the state, never by repeating the chain or creating a second record. Item k is only ever stocked in warehouse (k-1) mod W, so an issue draws only items its warehouse can have received; quantities are not tracked. Approving a stock document changes no stock figure by itself (posting is a later stage), and invoices are not seeded in stage 1: both are listed as missing in every results file, never omitted.
+
+**Scenarios.** Item search, party search, customer search (P95 target 1 s), ordinary screen-load calls (2 s), save and post a journal entry (3 s), trial balance and general ledger (5 s). Declared but not implemented: invoice save/post and the stock balance report; they appear with `implemented: false`.
+
+**Results and the verdict.** A results file records the tool, seed, data counts, load shape, the load generator's host facts and the operator-declared reference environment (`--environment`: `vcpu`, `ramGb`, `diskGb`, `ssd`, `backendAndPostgresTogether`, `companies`; the tool cannot verify it). Samples are measured, never estimated; a scenario without samples shows `null`. The data counts in the verdict are MEASURED from the API at run start (the declared counts are recorded beside them but never used). Only the six documented keys of `--environment` reach the results file. A scenario is within target when p95 is at most (inclusive) its target. The verdict is **NOT VERIFIED** unless every reference condition (8 vCPU/32 GB/500 GB SSD declared, 5 companies, 20,000 items, 10,000 parties, 100,000 invoices, 500,000 entries and stock movements, 50 sessions, 3,600 s, every scenario implemented) is met; the file lists each unmet reason. Stage 1 cannot meet them, so its output is mechanics validation and never acceptance evidence. `loadtest-results/` is git-ignored.
+
+**Validation.** `tools/loadtest/tests/smoke.test.js` (Node, no database): determinism, the guard, the verdict rule, a contract check of every route, request field, query parameter, enum value and response key against the backend sources, and a seed plus short run against an in-process stub. It runs in the hosted `backend-build-test` job of `.github/workflows/backend.yml` (an added step; the workflow's path filter is mirrored by the protected `required-checks.json`, so it runs when `src/backend/**` or `tests/**` change, which is when the contract can break, and on every push to `main`, not on a change that only touches `tools/loadtest/`; the self-hosted twin is unchanged). Beyond the smoke test, the harness was run once end to end against the real API in-process on the isolated runner (60 items, 30 parties, 15 journal entries posted, 10 stock documents approved by two users, 80 scenario iterations, 0 errors); those numbers are meaningless and not recorded.
 
 ## Checks
 ```
