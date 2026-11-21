@@ -22,8 +22,9 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
 /// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
-/// <remarks><see cref="DatabaseLocale"/> is the encoding and locale of the source database captured at dump time (decision D-053); a manifest written before it existed reads with null (the restore then needs the live source).</remarks>
-public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0, DatabaseLocale? DatabaseLocale = null);
+/// <remarks><see cref="DatabaseLocale"/> is the encoding and locale of the source database captured at dump time (decision D-053); a manifest written before it existed reads with null (the restore then needs the live source).
+/// <see cref="CompanyMigrationVersion"/> is the highest company migration applied to the source at backup time (decision D-062); null in an older manifest (checked after the restore instead).</remarks>
+public sealed record BackupManifest(int Version, Guid CompanyId, DateTimeOffset CreatedUtc, ManifestFile Database, IReadOnlyList<ManifestFile> Attachments, IReadOnlyList<string> KeyIdsRequired, int SkippedStrayFiles, int NonEnvelopeFilesWithMagic = 0, DatabaseLocale? DatabaseLocale = null, int? CompanyMigrationVersion = null);
 
 /// <summary>
 /// The encoding, libc collation/ctype and locale provider (<c>c</c> = libc, <c>i</c> = ICU, <c>b</c> = builtin; null on PostgreSQL 14, which has only libc) of a company database, captured when it is dumped, so a restore
@@ -65,18 +66,21 @@ public static class BackupSet
     public const string AttachmentFolderName = "attachments";
 
     private static readonly Regex StorageName = new("^[0-9a-f]{32}\\.att$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    /// <summary>True for a generated attachment storage name (<c>&lt;32 hex&gt;.att</c>).</summary>
+    internal static bool IsStorageName(string? name) => name is not null && StorageName.IsMatch(name);
     private static readonly Regex Sha256Hex = new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly byte[] EnvelopeMagic = [(byte)'H', (byte)'F', (byte)'E', (byte)'1'];
 
     /// <summary>
     /// Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.
-    /// <paramref name="databaseLocale"/> is what <see cref="PgBackupTool.DumpAsync"/> captured; it is stored in the manifest.
+    /// <paramref name="databaseLocale"/> is what <see cref="PgBackupTool.DumpAsync"/> captured and <paramref name="companyMigrationVersion"/> the company migration level; both are stored in the manifest.
     /// </summary>
-    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null)
+    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null, int? companyMigrationVersion = null)
     {
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
         if (databaseLocale is { IsWellFormed: false }) throw new BackupException("invalid_database_locale");
+        if (companyMigrationVersion is <= 0) throw new BackupException("invalid_migration_version");
         if (!File.Exists(databaseDumpFile)) throw new BackupException("database_dump_missing");
         if (!Path.IsPathFullyQualified(destination) || !Path.IsPathFullyQualified(attachmentCompanyDirectory)) throw new BackupException("path_not_absolute");
         var source = RealPath(attachmentCompanyDirectory);
@@ -87,7 +91,7 @@ public static class BackupSet
         if (new FileInfo(databaseDumpFile).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
 
         var destExisted = Directory.Exists(dest);
-        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale); }
+        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale, companyMigrationVersion); }
         catch
         {
             // never leave a partial set that could be mistaken for a backup
@@ -97,7 +101,7 @@ public static class BackupSet
         }
     }
 
-    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale)
+    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale, int? companyMigrationVersion)
     {
         AuditFilePermissions.CreateOwnerOnlyDirectory(dest);
         var attachDir = Path.Combine(dest, AttachmentFolderName);
@@ -128,7 +132,7 @@ public static class BackupSet
             }
         }
 
-        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes, databaseLocale);
+        var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes, databaseLocale, companyMigrationVersion);
         var temp = Path.Combine(dest, ManifestFileName + ".tmp");
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));
         File.Move(temp, Path.Combine(dest, ManifestFileName));
@@ -243,6 +247,7 @@ public static class BackupSet
             if (a is null || a.Name is null || !StorageName.IsMatch(a.Name) || !Sha256Hex.IsMatch(a.Sha256 ?? "") || a.Size < 0 || !names.Add(a.Name)) return null;
         if (m.KeyIdsRequired.Any(k => k is null || !KekRing.IsValidKeyId(k))) return null;
         if (m.DatabaseLocale is { IsWellFormed: false }) return null;
+        if (m.CompanyMigrationVersion is <= 0) return null;
         return m;
     }
 
@@ -277,7 +282,7 @@ public static class BackupSet
     }
 
     /// <summary>The full path with EVERY existing component resolved through symbolic links (so an alias anywhere in the path cannot hide an overlap).</summary>
-    private static string RealPath(string path)
+    internal static string RealPath(string path)
     {
         var cur = RealPathOnce(path);
         for (var i = 0; i < 40; i++)
@@ -322,7 +327,7 @@ public static class BackupSet
         return actual.Size == expected.Size && string.Equals(actual.Sha256, expected.Sha256, StringComparison.Ordinal);
     }
 
-    private static bool IsInside(string path, string root)
+    internal static bool IsInside(string path, string root)
     {
         var r = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var p = path.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
