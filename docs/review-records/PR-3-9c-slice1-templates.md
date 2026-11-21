@@ -19,7 +19,7 @@ Checked without defect: the version-gap trigger plus the unique index is race-sa
 
 ## Re-review - full diff against main after the integration of #53/#54/#56/#57 (2026-11-20, head 48693b6)
 
-Reviewer: a separate read-only subagent (general-purpose, Sonnet 5.5 family, fresh context; static, it did not run the PostgreSQL suite). **No Critical, no High.** The earlier H1 and M1-M3 were verified fixed (audit codes 1700/1701 unique across every `*AuditEvents` class; default length refused at save; name cleaning; own-row response); pinned migration counts (24 -> 25, `0026_extra` test migrations) not weakened; registry 1003 -> 1011 raise-only; migration 0025 contiguous, additive, append-only, runtime SELECT/INSERT only; company scope and permissions on every endpoint.
+Reviewer: a separate read-only subagent (general-purpose, Sonnet family, fresh context; static, it did not run the PostgreSQL suite). **No Critical, no High.** The earlier H1 and M1-M3 were verified fixed (audit codes 1700/1701 unique across every `*AuditEvents` class; default length refused at save; name cleaning; own-row response); pinned migration counts (24 -> 25, `0026_extra` test migrations) not weakened; registry 1003 -> 1011 raise-only; migration 0025 contiguous, additive, append-only, runtime SELECT/INSERT only; company scope and permissions on every endpoint.
 
 | # | Sev | Finding | Disposition |
 |---|-----|---------|-------------|
