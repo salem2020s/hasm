@@ -109,6 +109,20 @@ public class EndpointPermissionMatrixWarehouseTests : StocktakeTestBase
         Assert.True(take.Status == HttpStatusCode.Created, $"stocktake create on W1: {(int)take.Status} {take.Body}");
         var edited = await Call("PUT", $"/api/v1/company/warehouses/{W1.Id}", WarehouseBody(W1), cookie, $"\"{W1.Revision}\"");
         Assert.True(edited.Status == HttpStatusCode.OK, $"warehouse edit on W1: {(int)edited.Status} {edited.Body}");
+        // H's follow-up Low: on W1 every warehouse-scoped route acting on a W1 resource gets past authorization (a 409 or 400 from the state or the body is fine, never 403 forbidden), so the refusals
+        // on W2 above come from the scope, route by route (approve, reject, cancel, negative-exception approvals and the stocktake adjustment included)
+        var ownDoc = await Draft(Receipt(W1));
+        var ownTake = Ok(await Takes.CreateAsync(Admin.Id, Company.Id, Head(W1)));
+        var notAuthorized = new List<string>();
+        foreach (var r in routes.Where(r => WarehouseScoped[r.Key] is Target.StockDocument or Target.Stocktake))
+        {
+            var isDoc = WarehouseScoped[r.Key] == Target.StockDocument;
+            var path = r.Pattern.Replace("{id:guid}", (isDoc ? ownDoc.Id : ownTake.Id).ToString());
+            var body = r.Method == "PUT" ? (isDoc ? DocBody(W1) : TakeBody(W1)) : null;
+            var res = await Call(r.Method, path, body, cookie, $"\"{(isDoc ? ownDoc.Revision : ownTake.Revision)}\"");
+            if (res.Status == HttpStatusCode.Forbidden && EndpointPermissionMatrixTests.ErrorOf(res) == "forbidden") notAuthorized.Add($"{r.Key} on W1: {res.Body}");
+        }
+        Assert.True(notAuthorized.Count == 0, "the W1 grant must pass authorization on its own warehouse:\n" + string.Join("\n", notAuthorized));
         // the warehouse structure operations need the company-wide structure permission: refused on W1 as well
         foreach (var r in routes.Where(r => WarehouseScoped[r.Key] == Target.WarehouseItself && r.Method == "POST"))
         {
