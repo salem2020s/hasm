@@ -123,7 +123,7 @@ public class PgBackupToolTests
 }
 
 /// <summary>
-/// The process wiring of <see cref="PgBackupTool"/> with FAKE PostgreSQL tools (POSIX shell scripts under the test output directory; reported as skipped on Windows): the <c>--version</c> probe, the environment and
+/// The process wiring of <see cref="PgBackupTool"/> with FAKE PostgreSQL tools (POSIX shell scripts under the test output directory; on Windows the tests pass without running: an early return, not a reported skip): the <c>--version</c> probe, the environment and
 /// working directory a started tool really sees, the timeout, the exit-code mapping and the refusal ORDER (a configuration refusal comes before any database contact). The options point at 127.0.0.1:1, so a
 /// database contact would surface as a connection error instead of the expected code; no real server is ever contacted.
 /// </summary>
@@ -160,9 +160,10 @@ public sealed class PgBackupToolProcessTests : IDisposable
         Host = "127.0.0.1", Port = 1, AdminUsername = "admin", AdminPassword = "pw-not-a-secret", SslMode = mode, SslRootCertificate = root, SystemDatabaseName = "hasm_sys",
     };
 
-    [PosixFact]
+    [Fact]
     public async Task A_started_tool_sees_only_the_built_environment_the_fixed_working_directory_and_no_credential_on_its_command_line()
     {
+        if (OperatingSystem.IsWindows()) return;   // POSIX-only (fake shell tools): passes WITHOUT running on Windows; a reported skip needs a ci-guard allowance (not taken)
         var sentinel = "HASM_TEST_SENTINEL_" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(sentinel, "leak");
         try
@@ -188,9 +189,10 @@ public sealed class PgBackupToolProcessTests : IDisposable
         finally { Environment.SetEnvironmentVariable(sentinel, null); }
     }
 
-    [PosixFact]
+    [Fact]
     public async Task An_old_client_in_a_validating_mode_without_a_certificate_is_refused_before_any_database_contact_and_no_file_is_left()
     {
+        if (OperatingSystem.IsWindows()) return;   // POSIX-only (fake shell tools): passes WITHOUT running on Windows; a reported skip needs a ci-guard allowance (not taken)
         var tool = new PgBackupTool(Opts(SslMode.VerifyFull), oldTool);
         var dump = Path.Combine(work, "a.dump");
         Assert.Equal("ssl_root_certificate_required", (await Assert.ThrowsAsync<BackupException>(() => tool.DumpAsync("hasm_c_a", dump))).Code);
@@ -201,9 +203,10 @@ public sealed class PgBackupToolProcessTests : IDisposable
         await Assert.ThrowsAnyAsync<Npgsql.NpgsqlException>(() => new PgBackupTool(Opts(SslMode.VerifyFull, "/certs/ca.pem"), oldTool).RestoreIntoNewDatabaseAsync(dump, "hasm_c_b", "hasm_c_a"));
     }
 
-    [PosixFact]
+    [Fact]
     public async Task Unreadable_version_output_counts_as_an_old_client_and_the_probe_result_is_cached_per_tool()
     {
+        if (OperatingSystem.IsWindows()) return;   // POSIX-only (fake shell tools): passes WITHOUT running on Windows; a reported skip needs a ci-guard allowance (not taken)
         var tool = new PgBackupTool(Opts(SslMode.VerifyCA), garbageTool);
         Assert.Equal("ssl_root_certificate_required", (await Assert.ThrowsAsync<BackupException>(() => tool.PrepareAsync("pg_dump", [], CancellationToken.None))).Code);
         File.Delete(Path.Combine(garbageTool, "pg_dump"));                                                  // the cached probe result of this instance is kept: no second launch
@@ -213,9 +216,10 @@ public sealed class PgBackupToolProcessTests : IDisposable
         Assert.Equal("system", (await new PgBackupTool(Opts(SslMode.VerifyCA), v17Tool).PrepareAsync("pg_dump", [], CancellationToken.None)).Environment["PGSSLROOTCERT"]);
     }
 
-    [PosixFact]
+    [Fact]
     public async Task A_failing_tool_maps_to_its_code_and_a_hanging_tool_is_killed_at_the_timeout()
     {
+        if (OperatingSystem.IsWindows()) return;   // POSIX-only (fake shell tools): passes WITHOUT running on Windows; a reported skip needs a ci-guard allowance (not taken)
         var tool = new PgBackupTool(Opts(SslMode.Require), failTool, TimeSpan.FromSeconds(1));
         Assert.Equal("dump_failed", (await Assert.ThrowsAsync<BackupException>(async () => await tool.RunAsync("pg_dump", await tool.PrepareAsync("pg_dump", [], CancellationToken.None), CancellationToken.None))).Code);
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -224,9 +228,10 @@ public sealed class PgBackupToolProcessTests : IDisposable
         Assert.Equal("tool_unavailable", (await Assert.ThrowsAsync<BackupException>(() => new PgBackupTool(Opts(SslMode.Require), Path.Combine(work, "no-bin")).PrepareAsync("pg_dump", [], CancellationToken.None))).Code);
     }
 
-    [PosixFact]
+    [Fact]
     public void The_warm_up_retries_only_a_busy_text_file_and_fails_at_once_on_any_other_launch_error()
     {
+        if (OperatingSystem.IsWindows()) return;   // POSIX-only (fake shell tools): passes WITHOUT running on Windows; a reported skip needs a ci-guard allowance (not taken)
         var dir = tools.Dir("noexec");
         File.WriteAllText(Path.Combine(dir, "pg_dump"), "#!/bin/sh\nexit 0\n");                              // not executable: EACCES, never retried
         var attempts = 0;

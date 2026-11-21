@@ -38,7 +38,7 @@ Sources: SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10; PHASE-3.12 (backup c
 * **Built as planned:**
   * `CompanyBackupService` (`BackupCompanyAsync`, `TrialRestoreAsync`, `DropTrialRestoreAsync`);
   * the three `Hasm.Admin` commands;
-  * `PosixFactAttribute` and `FakeTools` (unit tests);
+  * `FakeTools` (unit tests);
   * the optional manifest field `companyMigrationVersion`;
   * the operator section "Company backup and trial restore" in `docs/DEVELOPMENT.md`.
 * **Review round 2 Lows, implemented:**
@@ -54,6 +54,7 @@ Sources: SRS 14.4, 16.1, 16.2, 16.4; Scenarios 21.8, 21.10; PHASE-3.12 (backup c
     * `migration_level_changed`;
     * `restored_locale_mismatch`;
     * `trial_drop_failed`: the trial database could not be dropped; it is then recorded in a kept-trial file instead of being left unnamed.
+  * **`PosixFactAttribute` was NOT built.** A reported skip (`Skip = "..."` on Windows) is refused by the protected `ci-guard` ("adds skipped, ignored or focused tests"). That gate is not worked around (no evasive spelling) and its tooling is not changed here. The fake-tool tests therefore keep the early return: on Windows they pass WITHOUT running, which is documented in the tests. A reported Windows skip needs an explicit ci-guard allowance, which is the owner's decision on protected tooling. Everything else of plan item 3 is built: the exec-capable folder under the test output, all tools written before any process starts, and the retry only on ETXTBSY.
   * `CompanyBackupServiceTests` runs in a non-parallel xunit collection. The trial databases that `Hasm.Admin` names opaquely would otherwise make the cluster-identity gate of a concurrently starting test refuse the cluster.
 * Local verification and CI results: see the PR description.
 

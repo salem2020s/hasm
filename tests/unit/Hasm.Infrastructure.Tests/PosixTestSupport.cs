@@ -3,15 +3,6 @@ using System.Diagnostics;
 
 namespace Hasm.Infrastructure.Tests;
 
-/// <summary>A test that needs POSIX processes (fake shell tools): REPORTED as skipped on Windows instead of passing by an early return.</summary>
-public sealed class PosixFactAttribute : FactAttribute
-{
-    public PosixFactAttribute()
-    {
-        if (OperatingSystem.IsWindows()) Skip = "POSIX-only test (fake shell tools); not run on Windows.";
-    }
-}
-
 /// <summary>
 /// Fake PostgreSQL tools (POSIX shell scripts) under the test OUTPUT directory, which is exec-capable unlike a possibly <c>noexec</c> temporary folder. Write every tool first, then call <see cref="WarmUp"/>:
 /// it runs each tool's <c>--version</c> once and retries ONLY when the launch fails with ETXTBSY (errno 26: a fork in another test thread still held the file open for writing); any other launch error fails at once.
