@@ -48,7 +48,7 @@ public class MfaLoginTests : IdentityTestBase
         await Setup();
         await NewUser("plain");
         var ok = Assert.IsType<LoginOutcome.Success>(await PasswordStep("plain"));
-        Assert.Equal(1L, await Scalar<long>($"SELECT {SM.AuthMethods} FROM {S.Table} WHERE {S.Id} = @i", ("i", ok.SessionId)));            // password only
+        Assert.Equal(1L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", ok.SessionId)));            // password only
         Assert.Equal(0L, await Challenges());
     }
 
@@ -63,7 +63,7 @@ public class MfaLoginTests : IdentityTestBase
 
         var done = Assert.IsType<LoginOutcome.Success>(await MfaAuth.CompleteMfaLoginAsync(required.Challenge, Code(secret), SessionClient.Web, "10.0.0.1"));
         Assert.Equal(1L, await Sessions());
-        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods} FROM {S.Table} WHERE {S.Id} = @i", ("i", done.SessionId)));            // password + totp
+        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", done.SessionId)));            // password + totp
         Assert.True(await Scalar<bool>($"SELECT {SM.VerifiedAtUtc} IS NOT NULL FROM {S.Table} WHERE {S.Id} = @i", ("i", done.SessionId)));
         Assert.NotNull(await MfaAuth.AuthenticateAsync(done.Token));
         Assert.Equal(user.Id, done.User.Id);

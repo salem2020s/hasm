@@ -57,7 +57,7 @@ public class MfaEnrolmentTests : IdentityTestBase
         var done = Assert.IsType<MfaEnrolOutcome.Confirmed>(await MfaAuth.ConfirmEnrolmentWithChallengeAsync(challenge.Challenge, Code(secret), SessionClient.Web, Source));
         Assert.NotNull(done.NewSession);
         Assert.Equal(MfaState.Enrolled, await Mfa.GetStateAsync(user.Id));
-        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods} FROM {S.Table} WHERE {S.Id} = @i", ("i", done.NewSession!.SessionId)));   // password + totp
+        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", done.NewSession!.SessionId)));   // password + totp
         Assert.Null(await MfaAuth.AuthenticateAsync(early.Token));                                             // the earlier session was revoked
         Assert.NotNull(await MfaAuth.AuthenticateAsync(done.NewSession.Token));
         Assert.False(await Mfa.CheckEnrolmentCodeAsync(user.Id, code));                                        // the one-time code is spent
@@ -118,7 +118,7 @@ public class MfaEnrolmentTests : IdentityTestBase
         var upgraded = (await MfaAuth.AuthenticateAsync(s.Token))!;                                            // the confirming session lives and is password + totp
         Assert.Equal(MfaState.Enrolled, upgraded.MfaState);
         Assert.NotNull(upgraded.MfaVerifiedAtUtc);
-        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods} FROM {S.Table} WHERE {S.Id} = @i", ("i", s.SessionId)));
+        Assert.Equal(3L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", s.SessionId)));
         // the used code cannot sign in again (replay protection carries over from the confirmation)
         var login = Assert.IsType<LoginOutcome.MfaRequired>(await MfaAuth.LoginAsync("vol", Pw, SessionClient.Web, "10.7.7.7"));
         Assert.IsType<LoginOutcome.InvalidCredentials>(await MfaAuth.CompleteMfaLoginAsync(login.Challenge, Code(secret), SessionClient.Web, "10.7.7.7"));

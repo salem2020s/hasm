@@ -18,7 +18,7 @@ public class MfaChallengeStoreTests : IdentityTestBase
         return await NewUser();
     }
 
-    private Task<long> Attempts(Guid id) => Scalar<long>($"SELECT {C.Attempts} FROM {C.Table} WHERE {C.Id} = @i", ("i", id));
+    private Task<long> Attempts(Guid id) => Scalar<long>($"SELECT {C.Attempts}::bigint FROM {C.Table} WHERE {C.Id} = @i", ("i", id));
 
     [PostgresFact]
     public async Task A_challenge_is_stored_only_as_a_hash_and_is_usable_with_its_exact_bindings()
@@ -97,7 +97,7 @@ public class MfaChallengeStoreTests : IdentityTestBase
         var user = await Setup();
         var login = await Login("alice", Pw);
         var ok = Assert.IsType<LoginOutcome.Success>(login);
-        Assert.Equal(1L, await Scalar<long>($"SELECT {SM.AuthMethods} FROM {S.Table} WHERE {S.Id} = @i", ("i", ok.SessionId)));
+        Assert.Equal(1L, await Scalar<long>($"SELECT {SM.AuthMethods}::bigint FROM {S.Table} WHERE {S.Id} = @i", ("i", ok.SessionId)));
         Assert.False(await Scalar<bool>($"SELECT {SM.Emergency} FROM {S.Table} WHERE {S.Id} = @i", ("i", ok.SessionId)));
         await Assert.ThrowsAsync<PostgresException>(() => Exec($"UPDATE {S.Table} SET {SM.AuthMethods} = 3 WHERE {S.Id} = @i", ("i", ok.SessionId)));            // the totp bit without a verification time
         await Exec($"UPDATE {S.Table} SET {SM.AuthMethods} = 3, {SM.VerifiedAtUtc} = now() WHERE {S.Id} = @i", ("i", ok.SessionId));
