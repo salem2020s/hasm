@@ -146,6 +146,13 @@ if (command is "backup-status" or "backup-retention-preview")
     foreach (var (company, n) in status.MissedRuns) Console.WriteLine($"  [WARNING] company_missed_runs company={company} consecutive={n}");
     if (status.IncompleteRuns > 0) Console.WriteLine($"  [WARNING] incomplete_runs count={status.IncompleteRuns} (older than 24 hours, never deleted)");
     if (status.UnreadableRuns > 0) Console.WriteLine($"  [WARNING] unreadable_reports count={status.UnreadableRuns} (a damaged or altered run.json; investigate before relying on the newest run)");
+    // slice 6 (D-136): a deletion that started and did not finish is never silent
+    var deleting = RetentionInventory.DeletingFolderCount(args[1]);
+    if (deleting > 0)
+    {
+        Console.WriteLine($"  [WARNING] retention_deletion_incomplete count={deleting} (the next backup-retention-apply completes it)");
+        if (status.ExitCode == 0) { Console.WriteLine("Backup status: retention_deletion_incomplete (exit 8)."); return 8; }
+    }
     return status.ExitCode;
 }
 

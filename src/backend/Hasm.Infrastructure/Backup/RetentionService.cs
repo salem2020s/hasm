@@ -36,6 +36,10 @@ public static partial class RetentionInventory
     [GeneratedRegex(@"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.deleting-[0-9a-f]{16}$", RegexOptions.CultureInvariant)]
     internal static partial Regex DeletingFolder();
 
+    /// <summary>The run folders whose deletion started and did not finish (<c>&lt;run id&gt;.deleting-&lt;hex&gt;</c>); reported by backup-status as <c>retention_deletion_incomplete</c>.</summary>
+    public static int DeletingFolderCount(string root) =>
+        Directory.Exists(root) ? new DirectoryInfo(root).EnumerateDirectories().Count(d => DeletingFolder().IsMatch(d.Name)) : 0;
+
     public static (IReadOnlyList<RetentionRun> Runs, IReadOnlyList<string> Deleting) Scan(string root, SigningTrust? trust)
     {
         var runs = new List<RetentionRun>();

@@ -274,6 +274,7 @@ Scheduled and manual backups with retention and encryption; full and single-comp
 Recorded limitations against G (dated; each must be closed or explicitly accepted before release):
 * 2026-11-21 (D-118, Phase 4.3 slice 5): trial restore and the backup recovery test run without independent approval until the Phase 4.1 approval framework exists. They run only through the administrative tool under operating-system access, and each writes a system-stream audit event.
 * 2026-11-21 (D-099, D-118, Phase 4.3 slice 5): backup-recovery-keygen, backup-signing-keygen and backup-keys run in an interim mode under operating-system access, without a named administrator with MFA, until the Phase 4.1 administrative-tool login (D-099) exists; backup-signing-keygen and backup-keys write system-stream audit events.
+* 2026-11-21 (D-086, D-137, Phase 4.3 slice 6): automatic deletion of backup runs is INACTIVE (a code gate changed only by an owner-instructed activation PR, runtime prerequisites and an exact per-installation opt-in); backups accumulate and the operator manages storage. The retention preview (backup-retention-plan) and backup legal holds work; a backup legal hold cannot be released until the Phase 4.1 approval framework exists.
 
 ## H. Security (SRS 17, 4)
 No open Critical or High finding; audit chain verifies after export; secrets never in repository, logs or support bundles; opaque physical names preserved by every migration; MFA and emergency account as specified.

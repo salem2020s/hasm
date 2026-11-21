@@ -187,8 +187,10 @@ public sealed class RetentionExecutorTests : IDisposable
             Directory.CreateDirectory(Path.Combine(deleting, "system"));
             File.WriteAllText(Path.Combine(deleting, "system", "database.dump.hbe"), "x");
             if (!OperatingSystem.IsWindows()) Directory.CreateSymbolicLink(Path.Combine(deleting, "link"), outside);
+            Assert.Equal(1, RetentionInventory.DeletingFolderCount(root));                                          // backup-status reports retention_deletion_incomplete
             var result = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
             Assert.Equal(1, result.Resumed);
+            Assert.Equal(0, RetentionInventory.DeletingFolderCount(root));
             Assert.False(Directory.Exists(deleting));
             Assert.True(File.Exists(Path.Combine(outside, "precious.txt")));                                        // the link was removed, never its target
             Assert.Contains(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains("resumed=yes"));
