@@ -595,3 +595,19 @@ describe("api client: by-ids lookup of units and item groups", () => {
     await expect(client.lookupInventoryGroups(["g2"])).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe("api client: party list filters", () => {
+  it("sends active and withoutRole next to search, limit and offset, and nothing when absent", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ parties: [], total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listParties({ search: "a b", limit: 50, active: true, withoutRole: "customer" });
+    await client.listParties({ active: false, withoutRole: "supplier", offset: 5 });
+    await client.listParties();
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("active")).toBe("true");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("withoutRole")).toBe("customer");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("search")).toBe("a b");
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("active")).toBe("false");   // false is sent, not dropped
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("withoutRole")).toBe("supplier");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/parties");
+  });
+});

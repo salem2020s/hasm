@@ -15,6 +15,13 @@ const go = async (hash: string) => {
 };
 beforeEach(() => { localStorage.clear(); window.location.hash = ""; });
 
+/** The party picker is a server search: its list (a combobox) fills asynchronously after the first load. */
+const partyBox = async (scope: ReturnType<typeof within>) => {
+  const box = await scope.findByRole("combobox", { name: lbl("pr.party") });
+  await waitFor(() => expect(within(box).getAllByRole("option").length).toBeGreaterThan(1));
+  return box;
+};
+const pickParty = async (scope: ReturnType<typeof within>, value: string) => userEvent.selectOptions(await partyBox(scope), value);
 const perms = [...ALL_PERMISSIONS, "company.partyroles.view", "company.salesreps.view", "company.parties.view", "company.accounts.view"];
 const party = (id: string, code: string): LocalPartySummary => ({ id, code, displayName: `طرف ${code}`, isActive: true, linkState: 2, legalNameAr: null, legalNameEn: null, hasOpenRequest: false, revision: 1, updatedAtUtc: "2026-01-01T00:00:00Z" }) as unknown as LocalPartySummary;
 const account = (id: string, code: string, type: string, over: Partial<Account> = {}): Account => ({ id, code, nameAr: `حساب ${code}`, nameEn: `Acc ${code}`, type, isGroup: false, isActive: true, postable: true, ...over }) as unknown as Account;
@@ -25,7 +32,8 @@ function render(over: Record<string, unknown> = {}, can = true, p = perms) {
   const client = signedIn({
     listPartyRoles: vi.fn().mockImplementation((kind?: number) => Promise.resolve({ items: kind === 1 ? [customer] : [], can: { configure: can } })),
     listSalesRepresentatives: vi.fn().mockResolvedValue({ items: [rep, { ...rep, id: "s2", code: "OFF", isActive: false }], can: { configure: can } }),
-    listParties: vi.fn().mockResolvedValue({ parties: [party("p1", "C1"), party("p2", "C2")], total: 2 }),
+    // emulates the server: C1 already holds the customer role, so "without a customer role" leaves only C2 (the filters apply before paging)
+    listParties: vi.fn().mockImplementation((q?: { withoutRole?: string }) => { const rows = [party("p1", "C1"), party("p2", "C2")].filter((p) => !(q?.withoutRole === "customer" && p.id === "p1")); return Promise.resolve({ parties: rows, total: rows.length }); }),
     listAccounts: vi.fn().mockResolvedValue({ accounts: [account("a1", "1201", "asset"), account("a2", "2101", "liability"), account("a3", "1", "asset", { isGroup: true, postable: false })], settings: {} }),
     createPartyRole: vi.fn().mockResolvedValue(customer), updatePartyRole: vi.fn().mockResolvedValue(customer),
     createSalesRepresentative: vi.fn().mockResolvedValue(rep), updateSalesRepresentative: vi.fn().mockResolvedValue(rep),
@@ -52,7 +60,7 @@ describe("customers and suppliers screen", () => {
     const client = render();
     await go("#/company/party-roles");
     const form = within(await screen.findByTestId("pr-customer-form"));
-    const partyOptions = Array.from((form.getByLabelText(lbl("pr.party")) as HTMLSelectElement).options).map((o) => o.textContent ?? "");
+    const partyOptions = Array.from((await partyBox(form) as HTMLSelectElement).options).map((o) => o.textContent ?? "");
     expect(partyOptions.some((o) => o.includes("C1"))).toBe(false);                    // already a customer
     expect(partyOptions.some((o) => o.includes("C2"))).toBe(true);
     const accOptions = Array.from((form.getByLabelText(A("pr.control_account_customer")) as HTMLSelectElement).options).map((o) => o.textContent ?? "");
@@ -61,7 +69,7 @@ describe("customers and suppliers screen", () => {
     expect(accOptions.some((o) => o.startsWith("1 "))).toBe(false);                    // a group account is never offered
     const save = form.getByRole("button", { name: A("pr.save") });
     expect(save).toBeDisabled();
-    await userEvent.selectOptions(form.getByLabelText(lbl("pr.party")), "p2");
+    await pickParty(form, "p2");
     await userEvent.type(form.getByLabelText(A("pr.credit_limit")), "٢٥٠٠,٥");
     await userEvent.selectOptions(form.getByLabelText(A("pr.control_account_customer")), "a1");
     await userEvent.selectOptions(form.getByLabelText(A("pr.representative")), "s1");
@@ -75,7 +83,7 @@ describe("customers and suppliers screen", () => {
     await userEvent.click(await screen.findByRole("tab", { name: lbl("pr.tab.suppliers") }));
     const form = within(await screen.findByTestId("pr-supplier-form"));
     expect(form.queryByLabelText(A("pr.representative"))).not.toBeInTheDocument();
-    await userEvent.selectOptions(form.getByLabelText(lbl("pr.party")), "p1");
+    await pickParty(form, "p1");
     await userEvent.selectOptions(form.getByLabelText(lbl("pr.mode")), "1");
     expect(form.queryByLabelText(lbl("pr.term_days"))).not.toBeInTheDocument();
     await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
@@ -105,7 +113,7 @@ describe("customers and suppliers screen", () => {
     await userEvent.click(within(await screen.findByTestId("pr-role-C1-1")).getByRole("button", { name: A("pr.deactivate") }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("r1", expect.objectContaining({ isActive: false, termDays: 30, creditLimit: 1500, controlAccountId: "a1" }), 4));
     const form = within(screen.getByTestId("pr-customer-form"));
-    await userEvent.selectOptions(form.getByLabelText(lbl("pr.party")), "p2");
+    await pickParty(form, "p2");
     await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
     expect(await screen.findByText(A("field.customer_account_must_be_asset"))).toBeInTheDocument();
   });
@@ -193,10 +201,127 @@ describe("customers and suppliers screen", () => {
     render({ createPartyRole: create });
     await go("#/company/party-roles");
     const form = within(await screen.findByTestId("pr-customer-form"));
-    await userEvent.selectOptions(form.getByLabelText(lbl("pr.party")), "p2");
+    await pickParty(form, "p2");
     await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
     expect(await screen.findByText(A("field.pr.account_not_postable"))).toBeInTheDocument();
     expect(A("field.pr.account_not_postable")).not.toBe(A("field.account_not_postable"));         // ledger and journal screens keep their own text
     expect(A("field.account_not_postable")).toMatch(/موقوف/);
+  });
+  describe("party picker (server search instead of a list cut off at 500)", () => {
+    const many = (n: number, from = 0) => Array.from({ length: n }, (_, i) => party(`px${from + i}`, `P${String(from + i).padStart(4, "0")}`));
+
+    it("never loads a full list: every request is a bounded page (limit 50), and it can search past the first 500 parties", async () => {
+      const far = party("p-far", "ZED-0777");
+      const list = vi.fn().mockImplementation((q?: { search?: string; limit?: number }) => Promise.resolve(q?.search ? { parties: [far], total: 1 } : { parties: many(50), total: 900 }));
+      render({ listParties: list });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      const box = await partyBox(form);
+      expect(await form.findByText(new RegExp(A("picker.showing").replace("{shown}", "50").replace("{total}", "900")))).toBeInTheDocument();   // 50 of 900: the rest is reached by searching
+      await userEvent.type(form.getByRole("searchbox", { name: lbl("pr.party") }), "zed");
+      await waitFor(() => expect(list).toHaveBeenCalledWith({ search: "zed", limit: 50, active: true, withoutRole: "customer" }));
+      await waitFor(() => expect(within(box).getByRole("option", { name: /ZED-0777/ })).toBeInTheDocument());
+      expect(list.mock.calls.every((c) => c[0]?.limit === 50 && c[0]?.active === true && !!c[0]?.withoutRole)).toBe(true);                                   // no call without a limit, none for 500
+      expect(list.mock.calls.some((c) => c[0] === undefined || c[0].limit === 500)).toBe(false);
+    });
+
+    it("asks the SERVER for active parties without a role of this kind (customer tab: customer, supplier tab: supplier), sends the party chosen through a search and keeps it when the search changes", async () => {
+      const far = party("p-far", "ZED-0777");
+      const list = vi.fn().mockImplementation((q?: { search?: string }) => Promise.resolve(q?.search ? { parties: [far], total: 1 } : { parties: [party("p2", "C2")], total: 1 }));
+      const client = render({ listParties: list });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      await userEvent.type(form.getByRole("searchbox", { name: lbl("pr.party") }), "z");
+      const box = form.getByRole("combobox", { name: lbl("pr.party") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /ZED-0777/ })).toBeInTheDocument());
+      await userEvent.selectOptions(box, "p-far");
+      await userEvent.clear(form.getByRole("searchbox", { name: lbl("pr.party") }));
+      await userEvent.type(form.getByRole("searchbox", { name: lbl("pr.party") }), "c2");
+      await waitFor(() => expect(within(box).getByRole("option", { name: /C2/ })).toBeInTheDocument());
+      expect(box).toHaveValue("p-far");                                                                       // the chosen party survives the new search
+      await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
+      await waitFor(() => expect(client.createPartyRole).toHaveBeenCalledWith(expect.objectContaining({ partyId: "p-far", role: 1 })));
+      expect(list.mock.calls.some((c) => c[0]?.withoutRole === "customer" && c[0]?.active === true)).toBe(true);
+      await userEvent.click(await screen.findByRole("tab", { name: lbl("pr.tab.suppliers") }));
+      await waitFor(() => expect(list.mock.calls.some((c) => c[0]?.withoutRole === "supplier" && c[0]?.active === true)).toBe(true));
+    });
+
+    it("a company whose first 50 parties all hold the role no longer ends in 'no results': the server returns the eligible parties and the exact total", async () => {
+      // emulates the server: 60 parties, the first 55 already customers; the filter applies BEFORE paging
+      const all = many(60);
+      const eligible = all.slice(55);
+      const list = vi.fn().mockImplementation((q?: { withoutRole?: string; limit?: number }) => Promise.resolve(q?.withoutRole === "customer" ? { parties: eligible.slice(0, q.limit ?? 50), total: eligible.length } : { parties: all.slice(0, q?.limit ?? 50), total: 60 }));
+      render({ listParties: list });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      const box = await partyBox(form);
+      expect(within(box).getAllByRole("option").length).toBe(1 + 5);                                          // the empty choice and the 5 eligible parties
+      expect(within(box).getByRole("option", { name: /P0055/ })).toBeInTheDocument();
+      expect(form.queryByText(A("picker.no_results"))).not.toBeInTheDocument();
+      expect(form.queryByText(new RegExp(A("picker.refine")))).not.toBeInTheDocument();                       // 5 of 5: nothing more to refine
+    });
+
+    it("shows 'no results' only when the server really has none, and 'N of M' from the server's exact total", async () => {
+      const list = vi.fn().mockImplementation((q?: { search?: string }) => Promise.resolve(q?.search === "zzz" ? { parties: [], total: 0 } : { parties: many(50), total: 120 }));
+      render({ listParties: list });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      expect(await form.findByText(new RegExp(A("picker.showing").replace("{shown}", "50").replace("{total}", "120")))).toBeInTheDocument();
+      await userEvent.type(form.getByRole("searchbox", { name: lbl("pr.party") }), "zzz");
+      expect(await form.findByText(A("picker.no_results"))).toBeInTheDocument();
+    });
+
+    it("isolates the code and the name in the option labels", async () => {
+      render({ listParties: vi.fn().mockResolvedValue({ parties: [party("p2", "C2")], total: 1 }) });
+      await go("#/company/party-roles");
+      const box = await partyBox(within(await screen.findByTestId("pr-customer-form")));
+      expect(within(box).getByRole("option", { name: "\u2068C2\u2069 — \u2068طرف C2\u2069" })).toBeInTheDocument();
+    });
+
+    it("without permission to view parties the picker is replaced by the existing hint and no party request is sent", async () => {
+      const client = render({}, true, [...ALL_PERMISSIONS, "company.partyroles.view", "company.salesreps.view", "company.accounts.view"]);
+      await go("#/company/party-roles");
+      const none = await screen.findByTestId("pr-customer-form");
+      expect(within(none).getByText(A("pr.party_unavailable"))).toBeInTheDocument();
+      expect(client.listParties).not.toHaveBeenCalled();
+    });
+
+    it("a 403 on the search turns the picker into the hint", async () => {
+      render({ listParties: vi.fn().mockRejectedValue(apiError(403, "forbidden")) });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      expect(await form.findByText(A("pr.party_unavailable"))).toBeInTheDocument();
+      expect(form.queryByRole("combobox", { name: lbl("pr.party") })).not.toBeInTheDocument();
+    });
+
+    it("a failing search (500) shows a retryable error and keeps search enabled; keyboard reaches the search box", async () => {
+      let failNext = true;
+      const list = vi.fn().mockImplementation((q?: { search?: string }) => (q?.search === "c" && failNext ? (failNext = false, Promise.reject(apiError(500, "internal"))) : Promise.resolve({ parties: [party("p2", "C2")], total: 1 })));
+      render({ listParties: list });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      const search = await form.findByRole("searchbox", { name: lbl("pr.party") });
+      search.focus();
+      await userEvent.keyboard("c");
+      expect(await form.findByRole("alert")).toHaveTextContent(A("picker.error"));
+      expect(search).toBeEnabled();
+      await userEvent.click(form.getByRole("button", { name: A("picker.retry") }));
+      await waitFor(() => expect(form.queryByRole("alert")).not.toBeInTheDocument());
+    });
+
+    it("lists the parties again after a role was added, so the new role's party disappears from the picker", async () => {
+      const roles = { items: [customer], can: { configure: true } };
+      // emulates the server against the CURRENT role list: parties that already hold the customer role are excluded
+      const list = vi.fn().mockImplementation((q?: { withoutRole?: string }) => { const rows = [party("p1", "C1"), party("p2", "C2")].filter((p) => !(q?.withoutRole === "customer" && roles.items.some((r) => r.partyId === p.id))); return Promise.resolve({ parties: rows, total: rows.length }); });
+      const create = vi.fn().mockImplementation(() => { roles.items = [customer, { ...customer, id: "r2", partyId: "p2", partyCode: "C2" }]; return Promise.resolve(customer); });
+      render({ listParties: list, createPartyRole: create, listPartyRoles: vi.fn().mockImplementation((kind?: number) => Promise.resolve({ items: kind === 1 ? roles.items : [], can: { configure: true } })) });
+      await go("#/company/party-roles");
+      const form = within(await screen.findByTestId("pr-customer-form"));
+      await pickParty(form, "p2");
+      await userEvent.click(form.getByRole("button", { name: A("pr.save") }));
+      await waitFor(() => expect(create).toHaveBeenCalled());
+      const box = form.getByRole("combobox", { name: lbl("pr.party") });
+      await waitFor(() => expect(within(box).queryByRole("option", { name: /C2/ })).not.toBeInTheDocument());
+    });
   });
 });

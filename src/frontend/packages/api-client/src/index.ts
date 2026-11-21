@@ -1061,8 +1061,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Party registry (Phase 3.9A). Changes carry the local party (or proposal) revision as If-Match; the company comes only from the session; the central queue is for identity administrators.
     getPartyCapabilities: () => get<PartyCapabilities>("/api/v1/company/parties/capabilities"),
-    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number } = {}) => {
-      const qs = [q.search ? `search=${enc(q.search)}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
+    /** `active` keeps only active (true) or inactive (false) parties; `withoutRole` keeps only parties that hold NO role of that kind yet. Both are applied by the server before paging, so `total` and the page are exact. */
+    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number; active?: boolean; withoutRole?: "customer" | "supplier" } = {}) => {
+      const qs = [q.search ? `search=${enc(q.search)}` : "", q.active !== undefined ? `active=${q.active}` : "", q.withoutRole ? `withoutRole=${q.withoutRole}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
       return get<{ parties: LocalPartySummary[]; total: number; registryUnavailable?: boolean }>(`/api/v1/company/parties${qs ? "?" + qs : ""}`);
     },
     getParty: (id: string) => get<LocalParty>(`/api/v1/company/parties/${enc(id)}`),
