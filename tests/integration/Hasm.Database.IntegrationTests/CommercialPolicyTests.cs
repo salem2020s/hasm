@@ -190,6 +190,40 @@ public class CommercialPolicyTests : CommercialTestBase
     }
 
     [PostgresFact]
+    public async Task The_value_threshold_rounds_a_tie_half_away_from_zero_not_half_to_even_exactly_like_the_journal()
+    {
+        var (branch, party, item, unit) = await Setup();
+        // a USD price of 14.35, one piece, rate 0.71: 10.1885 raw, an exact tie at the third minor unit of JOD. Half away from zero (the journal rule) gives 10.189; half to even would give 10.188 (the digit 8 is even),
+        // so a minimum of 10.189 is met ONLY by the journal rule and pins the mode (F review Low of #136)
+        var usdList = Ok(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, new Hasm.Infrastructure.Pricing.PriceListInput("PL-PL1USD", "قائمة", "List", 11, "USD", new DateOnly(2026, 1, 1), null, true, null)));
+        Ok(await Pricing.CreateEntryAsync(Admin.Id, Company.Id, usdList.Id, new Hasm.Infrastructure.Pricing.PriceEntryInput(item, null, unit, 0m, 14.35m, null)));
+        var d = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "rnd-key-000002", 1m) with { Currency = "USD" }));
+        var one = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, d.Id, d.Revision));
+        Assert.Equal((14.35m, 0.71m), (one.TotalGross, one.ExchangeRate));
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1], min: 10.189m)));
+        Assert.Equal([1], (await Plan(one.Id)).Select(p => p.Required));                                                   // 10.189 is met: the tie rounded UP
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1, 1], min: 10.190m)));                          // one thousandth above the rounded value: not met
+        Assert.Equal([1], (await Plan(one.Id)).Select(p => p.Required));
+    }
+
+    [PostgresFact]
+    public async Task The_value_threshold_rounds_a_non_tie_down_so_it_is_neither_a_ceiling_nor_a_tie_rule()
+    {
+        var (branch, party, item, unit) = await Setup();
+        // a USD price of 14.34, one piece, rate 0.71: 10.1814 raw, NOT a tie (the fourth decimal is 4): nearest rounding gives 10.181. A ceiling would give 10.182, so a minimum of 10.182 is met ONLY by a ceiling and must NOT apply;
+        // a minimum of 10.181 is met by the nearest rounding (G review L1 of #159: the tie case alone does not exclude a ceiling)
+        var usdList = Ok(await Pricing.CreatePriceListAsync(Admin.Id, Company.Id, new Hasm.Infrastructure.Pricing.PriceListInput("PL-PL1USD", "قائمة", "List", 11, "USD", new DateOnly(2026, 1, 1), null, true, null)));
+        Ok(await Pricing.CreateEntryAsync(Admin.Id, Company.Id, usdList.Id, new Hasm.Infrastructure.Pricing.PriceEntryInput(item, null, unit, 0m, 14.34m, null)));
+        var d = Ok(await Docs.CreateAsync(Admin.Id, Company.Id, Doc(branch, party, item, unit, "rnd-key-000003", 1m) with { Currency = "USD" }));
+        var one = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, d.Id, d.Revision));
+        Assert.Equal((14.34m, 0.71m), (one.TotalGross, one.ExchangeRate));
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1, 1], min: 10.182m)));                          // met only by a ceiling
+        Assert.Empty(await Plan(one.Id));                                                                                    // not met: 10.1814 rounds DOWN to 10.181
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1], min: 10.181m)));
+        Assert.Equal([1], (await Plan(one.Id)).Select(p => p.Required));                                                   // met by the rounded value 10.181
+    }
+
+    [PostgresFact]
     public async Task PostgreSQL_refuses_a_decision_or_an_approval_that_breaks_the_plan_for_a_direct_statement()
     {
         var (branch, party, item, unit) = await Setup();
