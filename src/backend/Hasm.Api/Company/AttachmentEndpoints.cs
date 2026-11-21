@@ -43,9 +43,9 @@ public static class AttachmentEndpoints
         g.MapPost("", Upload).DisableAntiforgery();
         g.MapGet("/{id:guid}/content", Download);
         g.MapPost("/{id:guid}/remove", Remove).WithMetadata(new BodyLimit());
-        g.MapPost("/maintenance/rewrap", Rewrap);
-        g.MapPost("/maintenance/sweep", Sweep);
-        g.MapPost("/maintenance/verify", Verify);
+        g.MapPost("/maintenance/rewrap", Rewrap).WithMetadata(new BodyLimit());
+        g.MapPost("/maintenance/sweep", Sweep).WithMetadata(new BodyLimit());
+        g.MapPost("/maintenance/verify", Verify).WithMetadata(new BodyLimit());
     }
 
     private static object Body(AttachmentView v) => new

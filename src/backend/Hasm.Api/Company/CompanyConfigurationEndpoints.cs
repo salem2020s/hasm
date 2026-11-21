@@ -50,7 +50,7 @@ public static class CompanyConfigurationEndpoints
         var g = app.MapGroup("/api/v1/company").RequireAuthorization();
         g.MapGet("/profile", GetProfile);
         g.MapPut("/profile", PutProfile).WithMetadata(new BodyLimit());
-        g.MapPost("/profile/display-name-sync", SyncDisplayName);
+        g.MapPost("/profile/display-name-sync", SyncDisplayName).WithMetadata(new BodyLimit());
         g.MapGet("/settings", GetSettings);
         g.MapPut("/settings", PutSettings).WithMetadata(new BodyLimit());
         g.MapGet("/currencies", GetCurrencies);

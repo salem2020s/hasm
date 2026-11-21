@@ -27,27 +27,27 @@ public static class ImportEndpoints
         g.MapPost("/{id:guid}/mapping/apply-template", ApplyTemplate).WithMetadata(new BodyLimit(4 * 1024));
         g.MapGet("/settings", GetSettings);
         g.MapPut("/settings", PutSettings).WithMetadata(new BodyLimit(4 * 1024));
-        g.MapPost("/maintenance/run", Maintain);
-        g.MapPost("/maintenance/rewrap", Rewrap);
+        g.MapPost("/maintenance/run", Maintain).WithMetadata(new BodyLimit(4 * 1024));
+        g.MapPost("/maintenance/rewrap", Rewrap).WithMetadata(new BodyLimit(4 * 1024));
         g.MapGet("/", List);
         g.MapPost("/", Upload).WithMetadata(new BodyLimit(limits.MaxFileBytes + 64 * 1024));
         g.MapGet("/{id:guid}", Get);
         g.MapPost("/{id:guid}/stage", Stage).WithMetadata(new BodyLimit(4 * 1024));
-        g.MapPost("/{id:guid}/cancel", Cancel);
-        g.MapPost("/{id:guid}/renew", Renew);
+        g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(new BodyLimit(4 * 1024));
+        g.MapPost("/{id:guid}/renew", Renew).WithMetadata(new BodyLimit(4 * 1024));
         g.MapGet("/{id:guid}/rows", Rows);
         g.MapGet("/{id:guid}/events", Events);
         g.MapGet("/{id:guid}/fields", Fields);
         g.MapGet("/{id:guid}/mapping/suggestion", SuggestMapping);
         g.MapPut("/{id:guid}/mapping", SetMapping).WithMetadata(new BodyLimit(64 * 1024));
-        g.MapPost("/{id:guid}/dry-run", DryRun);
+        g.MapPost("/{id:guid}/dry-run", DryRun).WithMetadata(new BodyLimit(4 * 1024));
         g.MapPost("/{id:guid}/resolutions", SetResolutions).WithMetadata(new BodyLimit(512 * 1024));
         g.MapGet("/{id:guid}/plan-check", PlanCheck);
-        g.MapPost("/{id:guid}/submit", Submit);
-        g.MapPost("/{id:guid}/withdraw", Withdraw);
+        g.MapPost("/{id:guid}/submit", Submit).WithMetadata(new BodyLimit(4 * 1024));
+        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(new BodyLimit(4 * 1024));
         g.MapPost("/{id:guid}/approve", Approve).WithMetadata(new BodyLimit(4 * 1024));
         g.MapPost("/{id:guid}/reject", Reject).WithMetadata(new BodyLimit(4 * 1024));
-        g.MapPost("/{id:guid}/apply", Apply);
+        g.MapPost("/{id:guid}/apply", Apply).WithMetadata(new BodyLimit(4 * 1024));
         g.MapGet("/{id:guid}/decisions", Decisions);
     }
 
