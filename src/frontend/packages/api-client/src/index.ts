@@ -8,6 +8,8 @@ export interface ApiErrorDetails {
   fields?: { field: string; code: string }[];
   currentRevision?: number;
   retryAfterSeconds?: number;
+  /** Password-policy violations of a weak_password refusal: short codes only, never the password. */
+  problems?: string[];
 }
 
 /** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
@@ -680,7 +682,7 @@ export type CommercialStatus = 1 | 2 | 3 | 4 | 5;
 export interface CommercialLine { lineNo: number; itemId: string; unitId: string; quantity: number; warehouseId: string | null; lineNet: number | null; pricingHash: string | null }
 export interface CommercialEvent { kind: number; fromStatus: CommercialStatus | null; toStatus: CommercialStatus; revision: number; actorUserId: string; reason: string | null; atUtc: string }
 export interface CommercialDocument {
-  id: string; docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; status: CommercialStatus; note: string | null; submittedBy: string | null;
+  id: string; docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; status: CommercialStatus; note: string | null; submittedBy: string | null; lastEditedBy: string | null;
   officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
   revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
 }
@@ -844,7 +846,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
     if (!response.ok) {
-      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number } = {};
+      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number; problems?: unknown } = {};
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
@@ -855,6 +857,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
+        problems: Array.isArray(payload.problems) ? payload.problems.filter((x): x is string => typeof x === "string") : undefined,
         retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
       });
     }
@@ -1092,8 +1095,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Party registry (Phase 3.9A). Changes carry the local party (or proposal) revision as If-Match; the company comes only from the session; the central queue is for identity administrators.
     getPartyCapabilities: () => get<PartyCapabilities>("/api/v1/company/parties/capabilities"),
-    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number } = {}) => {
-      const qs = [q.search ? `search=${enc(q.search)}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
+    /** `active` keeps only active (true) or inactive (false) parties; `withoutRole` keeps only parties that hold NO role of that kind yet. Both are applied by the server before paging, so `total` and the page are exact. */
+    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number; active?: boolean; withoutRole?: "customer" | "supplier" } = {}) => {
+      const qs = [q.search ? `search=${enc(q.search)}` : "", q.active !== undefined ? `active=${q.active}` : "", q.withoutRole ? `withoutRole=${q.withoutRole}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
       return get<{ parties: LocalPartySummary[]; total: number; registryUnavailable?: boolean }>(`/api/v1/company/parties${qs ? "?" + qs : ""}`);
     },
     getParty: (id: string) => get<LocalParty>(`/api/v1/company/parties/${enc(id)}`),

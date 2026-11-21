@@ -49,7 +49,7 @@ public static class CommercialEndpoints
     private static object Body(CommercialDocumentView d) => new
     {
         id = d.Id, docType = d.DocType, branchId = d.BranchId, partyId = d.PartyId, currency = d.Currency, documentDate = d.DocumentDate, mode = (short)d.Mode, status = (short)d.Status, note = d.Note,
-        submittedBy = d.SubmittedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
+        submittedBy = d.SubmittedBy, lastEditedBy = d.LastEditedBy, officialNumber = d.OfficialNumber, approvedBy = d.ApprovedBy, approvedAtUtc = d.ApprovedAtUtc, sealedAtUtc = d.SealedAtUtc, exchangeRate = d.ExchangeRate, totalNet = d.TotalNet, totalTax = d.TotalTax, totalGross = d.TotalGross, revision = d.Revision, createdBy = d.CreatedBy, createdAtUtc = d.CreatedAtUtc, updatedAtUtc = d.UpdatedAtUtc, replayed = d.Replayed,
         lines = d.Lines.Select(l => new { lineNo = l.LineNo, itemId = l.ItemId, unitId = l.UnitId, quantity = l.Quantity, warehouseId = l.WarehouseId, lineNet = l.LineNet, pricingHash = l.PricingHash }),
         events = d.Events.Select(e => new { kind = (short)e.Kind, fromStatus = e.FromStatus is { } f ? (short?)f : null, toStatus = (short)e.ToStatus, revision = e.Revision, actorUserId = e.ActorUserId, reason = e.Reason, atUtc = e.AtUtc }),
     };

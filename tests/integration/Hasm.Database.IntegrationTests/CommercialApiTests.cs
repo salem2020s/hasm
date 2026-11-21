@@ -41,6 +41,7 @@ public class CommercialApiTests : CommercialTestBase
         Assert.Equal("\"1\"", Etag(created));
         var docId = created.Json.GetProperty("id").GetGuid();
         Assert.Equal("JOD", created.Json.GetProperty("currency").GetString());
+        Assert.Equal(Admin.Id, created.Json.GetProperty("lastEditedBy").GetGuid());                          // the read model names the last editor (the screen mirrors D-066 with it)
         Assert.False(created.Json.GetProperty("replayed").GetBoolean());
         Assert.False(created.Json.GetProperty("lines")[0].TryGetProperty("unitPrice", out _));                                // the view carries none either
         Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"(?<![0-9A-Za-z-])999(?![0-9A-Za-z-])"), created.Body);   // the client-sent price is not echoed (a random id may contain the digits, a number token may not)

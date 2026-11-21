@@ -3,6 +3,7 @@ import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
+import { parsePositiveDecimal } from "../numberInput";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
 import { blankToNull, invName } from "./inventoryCommon";
 
@@ -157,6 +158,7 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   const [tab, setTab] = useState("document");
   const [dialog, setDialog] = useState<null | "reject" | "cancel">(null);
   const [reason, setReason] = useState("");
+  const [reasonError, setReasonError] = useState<string | null>(null);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [key] = useState(newKey);   // one idempotency key per new-draft editor: a retry of the same save never creates a second document
   const [partyNames, setPartyNames] = useState<Map<string, string>>(new Map());
@@ -185,7 +187,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
   useReportUnsaved("commercial-document-form", dirty, t("commdoc.form_section"));
   const status = (doc?.status ?? 1) as CommercialStatus;
   const canEdit = isNew ? can("company.commercialdocs.create") : (status === 1 || status === 3 || status === 4) && can("company.commercialdocs.update");
-  const mine = !!doc && (doc.createdBy === auth.user?.id || doc.submittedBy === auth.user?.id);
+  // D-066: the approver is never the creator, the last editor or the submitter (the server enforces it; the screen mirrors it to explain the disabled buttons)
+  const mine = !!doc && [doc.createdBy, doc.lastEditedBy, doc.submittedBy].some((u) => u !== null && u === auth.user?.id);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const activeBranches = branches.filter((b) => b.isActive || b.id === form.branchId);
 
@@ -200,14 +203,14 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
     form.lines.forEach((l, i) => {
       if (!l.item) v[`lines[${i}].itemId`] = t("commdoc.field.required");
       if (!l.unitId) v[`lines[${i}].unitId`] = t("commdoc.field.required");
-      if (!/^\d+(\.\d{1,10})?$/.test(l.quantity.trim()) || Number(l.quantity) <= 0) v[`lines[${i}].quantity`] = t("commdoc.field.invalid_quantity");
+      if (Number.isNaN(parsePositiveDecimal(l.quantity))) v[`lines[${i}].quantity`] = t("commdoc.field.invalid_quantity");   // Arabic-Indic digits and a decimal separator are accepted; a grouping separator ("1,500") is refused
     });
     return v;
   }
   const tabsWithErrors = (e: Record<string, string>) => new Set(Object.keys(e).map(TAB_OF));
   const toInput = (): CommercialDocumentInput => ({
     docType: form.docType, branchId: form.branchId, partyId: form.party!.id, currency: form.currency.trim().toUpperCase(), documentDate: form.date, mode: form.mode, note: blankToNull(form.note), idempotencyKey: key,
-    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: Number(l.quantity) })),
+    lines: form.lines.map((l) => ({ itemId: l.item!.id, unitId: l.unitId, quantity: parsePositiveDecimal(l.quantity) })),
   });
 
   function showServerError(err: unknown) {
@@ -332,7 +335,7 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
           <table className="data-table" data-testid="history">
             <caption className="visually-hidden">{t("commdoc.tab.history")}</caption>
             <thead><tr><th scope="col">{t("commdoc.event")}</th><th scope="col">{t("commdoc.event_status")}</th><th scope="col">{t("commdoc.event_at")}</th><th scope="col">{t("commdoc.event_actor")}</th><th scope="col">{t("commdoc.event_reason")}</th></tr></thead>
-            <tbody>{doc.events.map((e) => <tr key={e.revision}><td>{t(`commdoc.event.${e.kind}`)}</td><td>{t(`commdoc.status.${e.toStatus}`)}</td><td><bdi dir="ltr">{e.atUtc.slice(0, 19).replace("T", " ")}</bdi></td><td><bdi dir="ltr">{shortId(e.actorUserId)}</bdi></td><td><bdi>{e.reason ?? ""}</bdi></td></tr>)}</tbody>
+            <tbody>{doc.events.map((e, i) => <tr key={`${e.revision}-${e.kind}-${i}`}><td>{t(`commdoc.event.${e.kind}`)}</td><td>{t(`commdoc.status.${e.toStatus}`)}</td><td><bdi dir="ltr">{e.atUtc.slice(0, 19).replace("T", " ")}</bdi></td><td><bdi dir="ltr">{shortId(e.actorUserId)}</bdi></td><td><bdi>{e.reason ?? ""}</bdi></td></tr>)}</tbody>
           </table>
         </div>
       ),
@@ -358,8 +361,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
           {doc && status === 1 && can("company.commercialdocs.submit") && <button type="button" disabled={busy || dirty} title={dirty ? t("commdoc.save_first") : undefined} onClick={() => setConfirmSubmit(true)}>{t("commdoc.submit")}</button>}
           {doc && status === 2 && can("company.commercialdocs.submit") && <button type="button" disabled={busy} onClick={() => void act(() => auth.api.withdrawCommercialDocument(doc.id, rev), t("commdoc.withdrawn"))}>{t("commdoc.withdraw")}</button>}
           {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" className="primary" data-testid="approve" disabled={busy || mine} title={mine ? t("commdoc.self_approval") : undefined} onClick={() => void act(() => auth.api.approveCommercialDocument(doc.id, rev), t("commdoc.approved"))}>{t("commdoc.approve")}</button>}
-          {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
-          {doc && status !== 5 && can("company.commercialdocs.cancel") && <button type="button" className="danger" data-testid="cancel-document" disabled={busy} onClick={() => { setReason(""); setDialog("cancel"); }}>{t("commdoc.cancel_document")}</button>}
+          {doc && status === 2 && can("company.commercialdocs.approve") && <button type="button" data-testid="reject" disabled={busy || mine} onClick={() => { setReason(""); setReasonError(null); setDialog("reject"); }}>{t("commdoc.reject")}</button>}
+          {doc && status !== 5 && can("company.commercialdocs.cancel") && <button type="button" className="danger" data-testid="cancel-document" disabled={busy} onClick={() => { setReason(""); setReasonError(null); setDialog("cancel"); }}>{t("commdoc.cancel_document")}</button>}
         </div>
         {doc && status === 2 && mine && can("company.commercialdocs.approve") && <p className="hint" data-testid="self-approval-note">{t("commdoc.self_approval")}</p>}
       </form>
@@ -367,8 +370,8 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
       {dialog && doc && (
         <ConfirmDialog title={dialog === "reject" ? t("commdoc.reject") : t("commdoc.cancel_document")} message={dialog === "reject" ? t("commdoc.reject_message") : t("commdoc.cancel_message")} confirmLabel={t("form.confirm")}
           onCancel={() => setDialog(null)}
-          onConfirm={() => { if (!reason.trim()) { setError(t("commdoc.reason_required")); setDialog(null); return; } void act(() => (dialog === "reject" ? auth.api.rejectCommercialDocument(doc.id, reason.trim(), rev) : auth.api.cancelCommercialDocument(doc.id, reason.trim(), rev)), t(dialog === "reject" ? "commdoc.rejected" : "commdoc.cancelled")); }}>
-          <Field id="cd-reason" label={t("commdoc.reason")} required>{(aria) => <textarea {...aria} value={reason} rows={3} maxLength={500} onChange={(e) => setReason(e.target.value)} />}</Field>
+          onConfirm={() => { if (!reason.trim()) { setReasonError(t("commdoc.reason_required")); return; } setReasonError(null); void act(() => (dialog === "reject" ? auth.api.rejectCommercialDocument(doc.id, reason.trim(), rev) : auth.api.cancelCommercialDocument(doc.id, reason.trim(), rev)), t(dialog === "reject" ? "commdoc.rejected" : "commdoc.cancelled")); }}>
+          <Field id="cd-reason" label={t("commdoc.reason")} error={reasonError ?? undefined} required>{(aria) => <textarea {...aria} value={reason} rows={3} maxLength={500} onChange={(e) => { setReason(e.target.value); setReasonError(null); }} />}</Field>
         </ConfirmDialog>
       )}
     </section>

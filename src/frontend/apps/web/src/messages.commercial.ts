@@ -34,7 +34,7 @@ export const commercialAr: Record<string, string> = {
   "commdoc.error.revision_conflict": "تم تغيير المستند من مكان آخر.", "commdoc.error.concurrent_change": "تغيّر المستند أثناء العملية؛ أعد التحميل وحاول مجدداً.", "commdoc.error.document_not_draft": "لا يسمح بالتعديل في الحالة الحالية للمستند.",
   "commdoc.error.document_not_submitted": "المستند ليس بانتظار الاعتماد.", "commdoc.error.document_not_cancellable": "لا يمكن إلغاء هذا المستند.", "commdoc.error.document_has_effects": "للمستند أثر مخزني أو محاسبي فلا يمكن إلغاؤه.",
   "commdoc.error.document_has_links": "للمستند روابط بمستندات أخرى فلا يمكن إلغاؤه ولا إعادته إلى مسودة.", "commdoc.error.approver_not_independent": "المعتمد يجب أن يكون شخصاً آخر غير من أنشأ المستند أو عدّله أو أرسله.",
-  "commdoc.error.pricing_changed": "تغيّرت الأسعار أو الضرائب منذ الإرسال؛ اسحب المستند إلى مسودة وأعد إرساله.", "commdoc.error.commercial_document_not_found": "المستند غير موجود.", "commdoc.error.forbidden": "لا تملك صلاحية هذا الإجراء.",
+  "commdoc.error.pricing_changed": "تغيّرت الأسعار أو الضرائب منذ الإرسال؛ اسحب المستند إلى مسودة وأعد إرساله.", "commdoc.error.commercial_document_not_found": "المستند غير موجود.",
   "commdoc.error.idempotency_key_reused": "مفتاح الإرسال مستعمل لمستند آخر.", "commdoc.error.invariant_violation": "رفضت قاعدة البيانات هذا التغيير لأنه يخالف قاعدة حماية.", "commdoc.error.period_closed": "الفترة المالية لتاريخ المستند غير مفتوحة.",
   "commdoc.error.no_open_period": "لا توجد فترة مالية مفتوحة لتاريخ المستند.", "commdoc.error.date_outside_number_year": "يجب أن يبقى التاريخ ضمن السنة المالية لرقم المستند.",
 };
@@ -74,7 +74,7 @@ export const commercialEn: Record<string, string> = {
   "commdoc.error.revision_conflict": "The document was changed elsewhere.", "commdoc.error.concurrent_change": "The document changed during the operation; reload and try again.", "commdoc.error.document_not_draft": "Editing is not allowed in the document's current state.",
   "commdoc.error.document_not_submitted": "The document is not awaiting approval.", "commdoc.error.document_not_cancellable": "This document cannot be cancelled.", "commdoc.error.document_has_effects": "The document has a stock or accounting effect and cannot be cancelled.",
   "commdoc.error.document_has_links": "The document is linked to other documents and cannot be cancelled or returned to draft.", "commdoc.error.approver_not_independent": "The approver must be someone other than whoever created, edited or submitted the document.",
-  "commdoc.error.pricing_changed": "Prices or taxes changed since the submission; withdraw the document to draft and submit it again.", "commdoc.error.commercial_document_not_found": "The document was not found.", "commdoc.error.forbidden": "You do not have permission for this action.",
+  "commdoc.error.pricing_changed": "Prices or taxes changed since the submission; withdraw the document to draft and submit it again.", "commdoc.error.commercial_document_not_found": "The document was not found.",
   "commdoc.error.idempotency_key_reused": "The submission key was used for another document.", "commdoc.error.invariant_violation": "The database refused this change because it breaks a protection rule.", "commdoc.error.period_closed": "The fiscal period of the document date is not open.",
   "commdoc.error.no_open_period": "No open fiscal period exists for the document date.", "commdoc.error.date_outside_number_year": "The date must stay inside the fiscal year of the document number.",
 };

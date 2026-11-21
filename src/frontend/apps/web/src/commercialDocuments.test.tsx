@@ -25,7 +25,7 @@ const apple: InventoryItem = {
 const unitRows = [{ id: "u-pcs", code: "PCS" }, { id: "u-box", code: "BOX" }];
 const doc = (over: Partial<CommercialDocument> = {}): CommercialDocument => ({
   id: "d1", docType: "commercial_test", branchId: "b1", partyId: "p1", currency: "JOD", documentDate: "2026-03-10", mode: 1, status: 1, note: null, submittedBy: null, officialNumber: null, approvedBy: null,
-  approvedAtUtc: null, sealedAtUtc: null, exchangeRate: null, totalNet: null, totalTax: null, totalGross: null, revision: 1, createdBy: "someone", createdAtUtc: STAMP, updatedAtUtc: STAMP, replayed: false,
+  approvedAtUtc: null, sealedAtUtc: null, exchangeRate: null, totalNet: null, totalTax: null, totalGross: null, revision: 1, createdBy: "someone", lastEditedBy: "someone", createdAtUtc: STAMP, updatedAtUtc: STAMP, replayed: false,
   lines: [{ lineNo: 1, itemId: "i1", unitId: "u-box", quantity: 2, warehouseId: null, lineNet: null, pricingHash: null }],
   events: [{ kind: 1, fromStatus: null, toStatus: 1, revision: 1, actorUserId: "someone", reason: null, atUtc: STAMP }], ...over,
 });
@@ -183,6 +183,31 @@ describe("commercial document life cycle", () => {
     await waitFor(() => expect(approve).toHaveBeenCalledWith("d1", 3));
   });
 
+  it("disables approve and reject for the LAST EDITOR too (D-066: not the creator, the last editor or the submitter)", async () => {
+    setup({}, PERMS, ["commercial_test"], [doc({ status: 2 })], doc({ status: 2, revision: 3, createdBy: "x", lastEditedBy: "u1", submittedBy: "x" }));
+    await openDoc();
+    expect(screen.getByTestId("approve")).toBeDisabled();
+    expect(screen.getByTestId("reject")).toBeDisabled();
+    expect(screen.getByTestId("self-approval-note")).toBeInTheDocument();
+  });
+
+  it("accepts Arabic-Indic digits in a quantity and refuses a grouping separator (the shared parser)", async () => {
+    const update = vi.fn().mockResolvedValue(doc());
+    setup({ updateCommercialDocument: update });
+    await openDoc();
+    await userEvent.click(tab("السطور"));
+    await userEvent.clear(screen.getByLabelText("الكمية"));
+    await userEvent.type(screen.getByLabelText("الكمية"), "1,500");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(await screen.findByText(/كمية غير صالحة/)).toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+    await userEvent.clear(screen.getByLabelText("الكمية"));
+    await userEvent.type(screen.getByLabelText("الكمية"), "١٫٥");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect((update.mock.calls[0]![1] as { lines: { quantity: number }[] }).lines[0]!.quantity).toBe(1.5);
+  });
+
   it("disables approve and reject for the user who submitted the document and says why", async () => {
     setup({}, PERMS, ["commercial_test"], [doc({ status: 2 })], doc({ status: 2, revision: 3, submittedBy: "u1" }));
     await openDoc();
@@ -203,11 +228,15 @@ describe("commercial document life cycle", () => {
     setup({ rejectCommercialDocument: reject }, PERMS, ["commercial_test"], [doc({ status: 2 })], doc({ status: 2, revision: 3, submittedBy: "other" }));
     await openDoc();
     await userEvent.click(screen.getByTestId("reject"));
-    await userEvent.click(await screen.findByRole("button", { name: "تأكيد" }));                         // no reason: refused on the client
-    expect(await screen.findByTestId("form-error")).toHaveTextContent("السبب مطلوب.");
+    await userEvent.click(await screen.findByRole("button", { name: "تأكيد" }));                         // no reason: refused on the client, the dialog stays open with the error inside it
+    expect(within(screen.getByRole("dialog")).getByText("السبب مطلوب.")).toBeInTheDocument();
     expect(reject).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByTestId("reject"));
-    await userEvent.type(await screen.findByLabelText(/^السبب/), "السعر غير مقبول");
+    await userEvent.type(screen.getByLabelText(/^السبب/), "   ");                                        // whitespace only is still no reason and what was typed is kept
+    await userEvent.click(screen.getByRole("button", { name: "تأكيد" }));
+    expect(screen.getByLabelText(/^السبب/)).toHaveValue("   ");
+    expect(within(screen.getByRole("dialog")).getByText("السبب مطلوب.")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText(/^السبب/));
+    await userEvent.type(screen.getByLabelText(/^السبب/), "السعر غير مقبول");
     await userEvent.click(screen.getByRole("button", { name: "تأكيد" }));
     await waitFor(() => expect(reject).toHaveBeenCalledWith("d1", "السعر غير مقبول", 3));
   });
