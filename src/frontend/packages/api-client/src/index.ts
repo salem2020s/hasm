@@ -716,6 +716,10 @@ export interface CommercialDocument {
   officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
   revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
 }
+/** The approval plan of the CURRENT revision of a submitted document (stages in order, with the decisions counted per stage) and the decisions cast on it. An empty plan means no policy matches: the single independent approval applies. */
+export interface CommercialApprovalStage { stage: number; required: number; approved: number; roleId: string | null }
+export interface CommercialApprovalDecision { id: number; revision: number; approver: string; stage: number; decidedAtUtc: string }
+export interface CommercialApprovals { plan: CommercialApprovalStage[]; decisions: CommercialApprovalDecision[] }
 export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
 export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
 /** `partyId`, `currency` and `search` (a literal part of the official number) are applied by the SERVER before paging, so a page and its total are exact. */
@@ -1087,6 +1091,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** The same list with the exact `total` of the documents matching every filter (what a paged picker needs). */
     searchCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`),
     getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
+    getCommercialApprovals: (id: string) => get<CommercialApprovals>(`/api/v1/company/commercial-documents/${enc(id)}/approvals`),
     createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
     updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/submit`, { ifMatch: revision }),
