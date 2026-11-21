@@ -61,6 +61,13 @@ const tab = (n: string) => screen.getByRole("tab", { name: new RegExp(`^${n}`) }
 const baseCurrencyOf = (code: string | null) => ({ currencies: [], baseCurrency: code, baseCurrencySelected: code !== null, baseCurrencyLock: { locked: false, checksImplemented: false, unimplementedDomains: [] } });
 const label = (k: string) => new RegExp(`^${A(k)}`);
 /** The item picker is a server search: its list (a combobox) fills asynchronously after the first load. */
+/** The customer picker (a search over party roles): its list is a combobox that fills after the first load. */
+const pickCustomer = async (scope: ReturnType<typeof within>, value = "p1") => {
+  const box = await scope.findByRole("combobox", { name: label("pricing.customer") });
+  await waitFor(() => expect(within(box).getByRole("option", { name: /CUST1/ })).toBeInTheDocument());
+  await userEvent.selectOptions(box, value);
+  return box;
+};
 const pickItem = async (scope: ReturnType<typeof within>, k: string) => {
   const box = await scope.findByRole("combobox", { name: label(k) });
   await waitFor(() => expect(within(box).getByRole("option", { name: /APPLE/ })).toBeInTheDocument());
@@ -102,7 +109,7 @@ describe("pricing administration screen", () => {
     const panel = within(screen.getByTestId("pricing-list-create"));
     await userEvent.type(panel.getByLabelText(label("pricing.code")), "vip");
     await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "قائمة كبار العملاء");
-    await userEvent.selectOptions(panel.getByLabelText(label("pricing.customer")), "p1");
+    await pickCustomer(panel);
     await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
     await waitFor(() => expect(client.createPriceList).toHaveBeenCalledWith(expect.objectContaining({ code: "vip", nameAr: "قائمة كبار العملاء", priority: 10, currency: "JOD", customerId: "p1", nameEn: null, validTo: null })));
 
@@ -228,13 +235,24 @@ describe("pricing administration screen", () => {
     await userEvent.type(panel.getByLabelText(label("pricing.code")), "vipl");
     await userEvent.type(panel.getByLabelText(label("pricing.name_ar")), "قائمة المجموعة");
     await userEvent.selectOptions(panel.getByLabelText(label("pricing.customer_group")), "cg1");
-    expect(panel.getByLabelText(label("pricing.customer"))).toBeDisabled();                                       // never both
+    expect(panel.getByRole("combobox", { name: label("pricing.customer") })).toBeDisabled();                                       // never both
     await userEvent.click(panel.getByRole("button", { name: A("pricing.create_list") }));
     await waitFor(() => expect(client.createPriceList).toHaveBeenCalledWith(expect.objectContaining({ code: "vipl", customerId: null, customerGroupId: "cg1" })));
     await userEvent.click(tab(A("pricing.tab.discounts")));
     const form = within(await screen.findByTestId("pricing-discount-create"));
-    await userEvent.selectOptions(form.getByLabelText(label("pricing.customer")), "p1");
+    await pickCustomer(form);
     expect(form.getByLabelText(label("pricing.customer_group"))).toBeDisabled();
+    expect(form.getByRole("combobox", { name: label("pricing.customer") })).toBeEnabled();
+  });
+
+  it("disables the customer's search box together with its list while a customer group is chosen", async () => {
+    render({ getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+    await go("#/company/pricing");
+    await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+    const panel = within(await screen.findByTestId("pricing-list-create"));
+    await userEvent.selectOptions(panel.getByLabelText(label("pricing.customer_group")), "cg1");
+    expect(panel.getByRole("combobox", { name: label("pricing.customer") })).toBeDisabled();
+    expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeDisabled();
   });
 
   it("keeps an inactive CURRENT group selectable in the membership row but never offers it for a new list, and shows an id when the names cannot be read", async () => {
@@ -461,6 +479,109 @@ describe("pricing administration screen", () => {
       await go("#/company/pricing");
       await screen.findByTestId("pricing-note");
       expect(screen.queryByTestId("pricing-currency-unavailable")).not.toBeInTheDocument();
+    });
+    it("searches customers on the server (bounded, with the search text), shows how many more exist, and keeps the chosen customer when the search changes", async () => {
+      const other = { ...customer, id: "r2", partyId: "p2", partyCode: "ZED9", partyName: "زيد" };
+      const list = vi.fn().mockImplementation((_kind?: number, q?: { search?: string }) => Promise.resolve(q?.search ? { items: [other], total: 1, can: { configure: true } } : q ? { items: [customer], total: 700, can: { configure: true } } : { items: [customer], can: { configure: true } }));
+      render({ listPartyRoles: list });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      const box = await pickCustomer(panel);
+      expect(await panel.findByText(/700/)).toBeInTheDocument();                                             // "showing 1 of 700 ... refine"
+      expect(list).toHaveBeenCalledWith(1, { limit: 50 });
+      await userEvent.type(panel.getByRole("searchbox", { name: label("pricing.customer") }), "zed");
+      await waitFor(() => expect(list).toHaveBeenLastCalledWith(1, { search: "zed", limit: 50 }));
+      await waitFor(() => expect(within(box).getByRole("option", { name: /ZED9/ })).toBeInTheDocument());
+      expect(within(box).getByRole("option", { name: /CUST1/ })).toBeInTheDocument();                        // the chosen customer stays selectable
+      expect(box).toHaveValue("p1");
+    });
+
+    it("sends the picked customer (found by search, not in the preloaded list) with the new price list and discount", async () => {
+      const other = { ...customer, id: "r2", partyId: "p2", partyCode: "ZED9", partyName: "زيد" };
+      const list = vi.fn().mockImplementation((_kind?: number, q?: { search?: string }) => Promise.resolve(q?.search ? { items: [other], total: 1, can: { configure: true } } : q ? { items: [customer], total: 1, can: { configure: true } } : { items: [customer], can: { configure: true } }));
+      const createDiscountRule = vi.fn().mockResolvedValue(promo);
+      render({ listPartyRoles: list, createDiscountRule });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.discounts") }));
+      const form = within(await screen.findByTestId("pricing-discount-create"));
+      await userEvent.type(form.getByRole("searchbox", { name: label("pricing.customer") }), "zed");
+      const box = form.getByRole("combobox", { name: label("pricing.customer") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /ZED9/ })).toBeInTheDocument());
+      await userEvent.selectOptions(box, "p2");
+      await userEvent.type(form.getByLabelText(label("pricing.code")), "z");
+      await userEvent.type(form.getByLabelText(label("pricing.name_ar")), "ز");
+      await userEvent.type(form.getByLabelText(label("pricing.percent")), "5");
+      await userEvent.click(form.getByRole("button", { name: A("pricing.create_discount") }));
+      await waitFor(() => expect(createDiscountRule).toHaveBeenCalledWith(expect.objectContaining({ customerId: "p2", customerGroupId: null })));
+    });
+
+    it("without the party-role permission the customer picker offers only all customers, sends no search and keeps the existing helper warning", async () => {
+      const list = vi.fn().mockRejectedValue(apiError(403, "forbidden"));
+      render({ listPartyRoles: list });
+      await go("#/company/pricing");
+      expect(await screen.findByTestId("pricing-pickers-failed")).toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      const box = await panel.findByRole("combobox", { name: label("pricing.customer") });
+      await waitFor(() => expect(panel.queryByText(A("picker.loading"))).not.toBeInTheDocument());
+      expect(within(box).getAllByRole("option").map((o) => o.textContent)).toEqual([A("pricing.all_customers")]);
+      expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeDisabled();             // nothing can be searched without the permission
+      expect(panel.queryByRole("alert")).not.toBeInTheDocument();                                            // no per-picker error: the page warning already says it
+      expect(list).toHaveBeenCalledTimes(1);                                                                 // the preload only
+    });
+
+    it("a transient preload failure (500) does not lock a permitted user out: search stays enabled and a search request is made", async () => {
+      const list = vi.fn().mockImplementation((_k?: number, q?: { search?: string }) => (q ? Promise.resolve({ items: [customer], total: 1, can: { configure: true } }) : Promise.reject(apiError(500, "internal"))));
+      render({ listPartyRoles: list });
+      await go("#/company/pricing");
+      expect(await screen.findByTestId("pricing-pickers-failed")).toBeInTheDocument();                       // the page's helper-lists warning may stay
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      expect(panel.getByRole("searchbox", { name: label("pricing.customer") })).toBeEnabled();
+      const box = await panel.findByRole("combobox", { name: label("pricing.customer") });
+      await waitFor(() => expect(within(box).getByRole("option", { name: /CUST1/ })).toBeInTheDocument());
+      expect(list).toHaveBeenCalledWith(1, { limit: 50 });                                                   // the picker's own request
+    });
+
+    it("the customer picker is keyboard operable and a failing search shows a retryable error", async () => {
+      let failNext = true;                                                                                   // all three customer pickers (the panels stay mounted) load; only the SEARCH "c" fails, once
+      const list = vi.fn().mockImplementation((_k?: number, q?: { search?: string }) => (q?.search === "c" && failNext ? (failNext = false, Promise.reject(apiError(500, "internal"))) : Promise.resolve(q ? { items: [customer], total: 1, can: { configure: true } } : { items: [customer], can: { configure: true } })));
+      render({ listPartyRoles: list });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.lists") }));
+      const panel = within(await screen.findByTestId("pricing-list-create"));
+      const search = await panel.findByRole("searchbox", { name: label("pricing.customer") });
+      search.focus();
+      await userEvent.keyboard("c");
+      expect(await panel.findByRole("alert")).toHaveTextContent(A("picker.error"));
+      await userEvent.click(panel.getByRole("button", { name: A("picker.retry") }));
+      await waitFor(() => expect(panel.queryByRole("alert")).not.toBeInTheDocument());
+    });
+
+    it("sends the customer picked on the quote tab with the quote", async () => {
+      const quotePrice = vi.fn().mockResolvedValue(quote);
+      render({ quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      await userEvent.selectOptions(await pickItem(form, "pricing.kind_item"), "i1");
+      await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
+      await pickCustomer(form);
+      await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
+      await waitFor(() => expect(quotePrice).toHaveBeenCalledWith(expect.objectContaining({ itemId: "i1", customerId: "p1", currency: "JOD" })));
+    });
+
+    it("sends customerId null when the quote customer is left on all customers", async () => {
+      const quotePrice = vi.fn().mockResolvedValue(quote);
+      render({ quotePrice, getCurrencies: vi.fn().mockResolvedValue(baseCurrencyOf("JOD")) });
+      await go("#/company/pricing");
+      await userEvent.click(await screen.findByRole("tab", { name: label("pricing.tab.quote") }));
+      const form = within(await screen.findByTestId("pricing-quote-form"));
+      await userEvent.selectOptions(await pickItem(form, "pricing.kind_item"), "i1");
+      await userEvent.selectOptions(form.getByLabelText(label("pricing.unit")), "u1");
+      await userEvent.click(form.getByRole("button", { name: A("pricing.quote.run") }));
+      await waitFor(() => expect(quotePrice).toHaveBeenCalledWith(expect.objectContaining({ customerId: null })));
     });
   });
 });

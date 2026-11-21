@@ -182,4 +182,27 @@ describe("SearchPicker", () => {
     expect(box).not.toHaveAttribute("aria-required");
     expect(box).not.toHaveAttribute("aria-describedby");
   });
+  it("shows a caller-supplied text for the empty choice instead of the catalog default", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render(
+      <I18nProvider catalog={catalog}>
+        <SearchPicker label="Item" value="" onChange={() => undefined} load={() => Promise.resolve({ items: rows(1), total: 1 })} getId={(r: Row) => r.id} getLabel={(r: Row) => r.name} noneLabel="All customers" />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Item 0" });
+    expect(screen.getByRole("option", { name: "All customers" })).toHaveValue("");
+    expect(screen.queryByRole("option", { name: "— None —" })).not.toBeInTheDocument();
+  });
+
+  it("can disable only the search box while the list stays usable", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    render(
+      <I18nProvider catalog={catalog}>
+        <SearchPicker label="Item" value="" onChange={() => undefined} load={() => Promise.resolve({ items: rows(1), total: 1 })} getId={(r: Row) => r.id} getLabel={(r: Row) => r.name} searchDisabled />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Item 0" });
+    expect(screen.getByRole("searchbox")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Item" })).toBeEnabled();
+  });
 });
