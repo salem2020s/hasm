@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #120 (D-120: S1 ships with `user_totp` always excluded from the system dump; documentation only)
-* **Head SHA reviewed (full 40 characters):** 20daccc177a431a4b8f983bf4b25cf7789fd9b8b
+* **Head SHA reviewed (full 40 characters):** 8b3173d8ba33e769949a863794d4a2c4e6f98aaf (delta confirmation; round 1 reviewed 20daccc177a431a4b8f983bf4b25cf7789fd9b8b)
 * **Reviewer context:** Agent G, an independent security/audit reviewer, a separate agent from the author (Agent D); model family Claude Opus; read-only.
 * **Scope read:** `git diff origin/main...20daccc` (`docs/DECISIONS.md`, `docs/PHASE-4.1.md`) read in full and checked against D-091 (#116), D-106/D-107 and the #104 pin test (`SystemDumpExclusions` set-equal to `SecretStoreTables`).
 * **Checks run (commands and results):** git fetch/ls-remote and `git diff origin/main...20daccc`, read in full and cross-checked as stated; no build or tests (documentation only).
@@ -16,5 +16,8 @@ Reviewer: Agent G (independent security/audit reviewer, separate agent; not the 
 | L3 | Low | Record the D-120..D-129 allocation in DECISIONS.md and correct D-104's "exhausted" wording | Fixed in c5f1ebdaf12202bcb34a2ece71f2a7de025c8d49 (D-104 rows in `docs/DECISIONS.md` and the plan) |
 
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** Agent G has not yet confirmed the wording delta 20daccc..c5f1ebd (L1-L3); the D-120 reference in #116 is outside this PR; documentation only (no code, workflow or protected file), so no build or test applies.
+* **NOT VERIFIED:** the D-120 reference inside #116 is outside this PR (B adds it there); documentation only.
 * **Verdict:** approve
+
+
+Confirmation: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #120 delta 20daccc..8b3173d (c5f1ebd fixes L1-L3; review record)"; Head SHA reviewed 8b3173d8ba33e769949a863794d4a2c4e6f98aaf; executed: git fetch/ls-remote, git log and `git diff 20daccc..8b3173d` (DECISIONS.md D-104/D-120, PHASE-4.1.md sections 4, 11, 12, 13, docs/review-records/PR-120-phase-4.1-d120.md) checked against the round-1 findings; no tests (docs only); verdict APPROVE; findings 0 open (L1, L2, L3 fixed in c5f1ebdaf12202bcb34a2ece71f2a7de025c8d49).
