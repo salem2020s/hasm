@@ -1,7 +1,7 @@
 # Independent review record
 
 * **Pull request:** #113 (Phase 4.1 plan: MFA and identity security, `docs/PHASE-4.1.md`, decisions D-096..D-107; documentation only)
-* **Head SHA reviewed (full 40 characters):** 4d5012c0fe7b4881176c8ba1eecc56a414a62bb6 (round 3; round 1 reviewed 20fbffd0dd68fd30398b46344bb2de4a6dffc602, round 2 reviewed 6aa77782ee23c407104b53fa93b18ca248a5516f)
+* **Head SHA reviewed (full 40 characters):** 104295ae95e77275475a998f504dae0ec79104b2 (round 4; round 3 reviewed 4d5012c0fe7b4881176c8ba1eecc56a414a62bb6, round 2 reviewed 6aa77782ee23c407104b53fa93b18ca248a5516f, round 1 reviewed 20fbffd0dd68fd30398b46344bb2de4a6dffc602)
 * **Reviewer context:** Agent G, an independent security/audit reviewer, a separate agent from the author (Agent D); model family Claude Opus; read-only. Three rounds, recorded verbatim below.
 * **Scope read:** round 1: the whole PR diff `origin/main...origin/docs/phase-4-1-plan` and `docs/PHASE-4.1.md` in full, D-080 in `docs/DECISIONS.md`, `Totp.cs`, `IdentityStore`/`AuthService` (throttle, sessions, bootstrap), `AuthEndpoints`, `Hasm.Admin/Program.cs`, `PHASE-4.3.md`, `PHASE-3.12.md` item K, the #104 branch `SecretStoreTables`/`SystemDumpExclusions`/pin test; round 2: `20fbffd..6aa7778` (fix commit 26f2e21, migration wording c983557, D-091 alignment 6aa7778, merge ffde344 checked to contain only main content), full read of `PHASE-4.1.md` at 26f2e21 plus the later delta, the `DECISIONS.md` diff, cross-check with #116 D-091; round 3: `6aa7778..4d5012c` (`DECISIONS.md`, `PHASE-4.1.md`) against the earlier findings.
 * **Checks run (commands and results):** only what the reviewer executed, per round (no build or tests: documentation only). Round 1: git ls-remote/fetch, `git diff origin/main...origin/docs/phase-4-1-plan`, reads of the files listed above. Round 2: git log/diff `20fbffd..6aa7778` and the reads listed above. Round 3: git fetch/ls-remote, `git log` and `git diff 6aa7778..4d5012c`, compared with the earlier findings.
@@ -12,6 +12,8 @@ Round 1: Reviewer: Agent G (independent security/audit reviewer, separate agent;
 Round 2: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm fixes for H1,H2,M1-M8,L1-L5 on #113 and assess judgement calls (a) S4 quorum fail-closed until S7, (b) password-only self-filed recovery request; check D-091 alignment with #116"; Head SHA reviewed 6aa77782ee23c407104b53fa93b18ca248a5516f; executed: git log/diff 20fbffd..6aa7778 (fix commit 26f2e21, migration-wording c983557, D-091 6aa7778, merge ffde344 checked to contain only main content), full read of PHASE-4.1.md at 26f2e21 plus later delta, DECISIONS.md diff, cross-check with #116 D-091; no tests (docs only); verdict REQUEST CHANGES; findings 2 Medium (N1 self-filed request hardening; N2 D-091 restore resurrects revoked secrets / cross-installation / recovery-key compromise response), 4 Low; all prior H/M/L findings resolved.
 
 Round 3: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm #113 delta 6aa7778..4d5012c addresses N1, N2 (D-106/D-107) and the four Lows"; Head SHA reviewed 4d5012c0fe7b4881176c8ba1eecc56a414a62bb6; executed: git fetch/ls-remote, git log and git diff 6aa7778..4d5012c (DECISIONS.md, PHASE-4.1.md), checked against my earlier findings; no tests (docs only); verdict APPROVE; findings 0 Critical/High/Medium, 2 Low (L-a restore must invalidate unconsumed bootstrap enrolment codes; L-b specify the audited unblock step after restore).
+
+Round 4: Reviewer: Agent G (independent security/audit reviewer, separate agent; not the author); model family Claude Opus; prompt: "confirm final #113 delta 4d5012c..104295a (L-a, L-b wording in 0c4e9ad; review record)"; Head SHA reviewed 104295ae95e77275475a998f504dae0ec79104b2; executed: git fetch/ls-remote, git log and git diff 4d5012c..104295a (DECISIONS.md D-106, PHASE-4.1.md section 4, docs/review-records/PR-113-phase-4.1-plan.md) compared with rounds 1-3; no tests (docs only); verdict APPROVE; findings 0 open (L-a, L-b fixed in 0c4e9ad391bc1c3ee49ff73a2950ed518bb7f147).
 
 | ID | Round | Severity | Problem | Resolution |
 |----|-------|----------|---------|------------|
@@ -26,5 +28,5 @@ Round 3: Reviewer: Agent G (independent security/audit reviewer, separate agent;
 | L-b | 3 | Low | Specify the audited unblock step after a restore | Fixed in 0c4e9ad391bc1c3ee49ff73a2950ed518bb7f147 |
 
 * **Blocker or High findings open:** none
-* **NOT VERIFIED:** Agent G has not yet confirmed the small delta 4d5012c..0c4e9ad (L-a and L-b, wording only); documentation only (no code, migration, workflow or protected file), so no build or test applies.
+* **NOT VERIFIED:** none for the plan text (L-a and L-b in 0c4e9ad were confirmed in round 4); documentation only, no build or test applies.
 * **Verdict:** approve
