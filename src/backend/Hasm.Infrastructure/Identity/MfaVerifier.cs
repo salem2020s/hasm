@@ -28,6 +28,9 @@ public interface IMfaSecretStore
     /// <c>UPDATE ... SET last_step = @s WHERE secret_id = @id AND (last_step IS NULL OR last_step &lt; @s)</c>) and returns whether exactly one row changed.
     /// </summary>
     Task<bool> TryAdvanceLastStepAsync(Guid secretId, long matchedStep, CancellationToken ct);
+
+    /// <summary>The user's Pending secret (an enrolment being confirmed), or null. Same failure behaviour as <see cref="FindActiveSecretAsync"/>. The default says there is none.</summary>
+    Task<MfaSecret?> FindPendingSecretAsync(Guid userId, CancellationToken ct) => Task.FromResult<MfaSecret?>(null);
 }
 
 /// <summary>Failure counters of the second factor (login throttle table, domain-separated keys): bounded per (user, source) and per user, time-based blocks only.</summary>
@@ -64,13 +67,20 @@ public sealed class MfaVerifier(IMfaSecretStore store, IMfaAttemptLimiter limite
     public const int Window = 1;
     private static readonly byte[] BurnSecret = new byte[Totp.SecretBytes];
 
-    public async Task<MfaResult> VerifyAsync(Guid userId, string? code, string? sourceAddress, CancellationToken ct = default)
+    public Task<MfaResult> VerifyAsync(Guid userId, string? code, string? sourceAddress, CancellationToken ct = default) =>
+        VerifyCoreAsync(userId, code, sourceAddress, () => store.FindActiveSecretAsync(userId, ct), ct);
+
+    /// <summary>Confirms an enrolment: the code is checked against the user's PENDING secret through the very same window, replay compare-and-set and throttle as a sign-in.</summary>
+    public Task<MfaResult> VerifyPendingAsync(Guid userId, string? code, string? sourceAddress, CancellationToken ct = default) =>
+        VerifyCoreAsync(userId, code, sourceAddress, () => store.FindPendingSecretAsync(userId, ct), ct);
+
+    private async Task<MfaResult> VerifyCoreAsync(Guid userId, string? code, string? sourceAddress, Func<Task<MfaSecret?>> find, CancellationToken ct)
     {
         var source = string.IsNullOrWhiteSpace(sourceAddress) ? SourceAddress.Unknown : sourceAddress;
         if (await limiter.BlockedForAsync(userId, source, ct) is { } retry) return new MfaResult.Throttled(retry);
 
         MfaSecret? secret;
-        try { secret = await store.FindActiveSecretAsync(userId, ct); }
+        try { secret = await find(); }
         catch (MfaUnavailableException ex) { return new MfaResult.Unavailable(ex.Code); }                    // fail closed, and not counted against the user
 
         using (secret)
