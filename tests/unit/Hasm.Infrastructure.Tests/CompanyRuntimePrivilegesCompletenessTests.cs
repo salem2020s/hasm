@@ -53,4 +53,22 @@ public class CompanyRuntimePrivilegesCompletenessTests
         Assert.Equal(["SELECT", "INSERT"], Of(CompanySchema.DocumentLink.Table));
         Assert.DoesNotContain("DELETE", Of(CompanySchema.CommercialDocument.Table));
     }
+
+    [Fact]
+    public void Every_table_created_by_a_company_migration_is_registered_in_the_schema_dictionary()
+    {
+        // the guard above trusts CompanySchema.Map: a table that a migration creates but nobody registered would escape it (F/G review L2), so the migrations themselves are read
+        var assembly = typeof(CompanySchema).Assembly;
+        var created = new SortedSet<string>();
+        foreach (var name in assembly.GetManifestResourceNames().Where(n => n.Contains("CompanyDatabase.Migrations.", StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.Ordinal)))
+        {
+            using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(reader.ReadToEnd(), @"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(t_[0-9a-f]{8})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                created.Add(m.Groups[1].Value);
+        }
+        Assert.True(created.Count > 90, "the company migrations were not read");
+        var registered = TableTokens().Select(t => t.Value).ToHashSet();
+        var unregistered = created.Where(t => !registered.Contains(t)).ToList();
+        Assert.True(unregistered.Count == 0, "tables created by a company migration but absent from CompanySchema.Map: " + string.Join(", ", unregistered));
+    }
 }
