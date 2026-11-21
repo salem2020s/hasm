@@ -3,6 +3,8 @@ using Npgsql;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
 using TO = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTotp;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
+using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
+using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -10,6 +12,8 @@ namespace Hasm.Infrastructure.Identity;
 public static class MfaAuditEvents
 {
     public const short StateChanged = 1330, SecretCreated = 1331, SecretActivated = 1332, SecretsRevoked = 1333, SecretsRewrapped = 1334, RestoreApplied = 1335;
+    /// <summary>Phase 4.1 S3a (D-163): a step-up succeeded / was refused for a wrong or replayed code (bounded by the shared MFA throttle). Detail never carries a code.</summary>
+    public const short StepUpSucceeded = 1336, StepUpFailed = 1337;
 }
 
 public sealed record RewrapResult(int Rewrapped, int Remaining);
@@ -200,6 +204,37 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     // ---- The one-time enrolment code of the user row (bootstrap administrator; every other code lives in its approval request) ----
 
     public static byte[] EnrolmentCodeHash(string code) => SessionToken.HashKey("mfa-enrol-code:" + code.Trim().ToUpperInvariant());
+
+    /// <summary>
+    /// Records a successful step-up (Phase 4.1 S3a, D-160): sets the live session's second-factor proof time to now and writes the audit event in ONE transaction.
+    /// Null when the session is not live or does not belong to the user (nothing is written). The proof time only moves forward, never back.
+    /// </summary>
+    public async Task<DateTimeOffset?> RecordStepUpAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var cmd = new NpgsqlCommand(
+            $"UPDATE {S.Table} SET {SM.VerifiedAtUtc} = @n, {SM.AuthMethods} = 3 WHERE {S.Id} = @s AND {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL AND ({SM.VerifiedAtUtc} IS NULL OR {SM.VerifiedAtUtc} < @n)", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("n", now);
+            cmd.Parameters.AddWithValue("s", sessionId);
+            cmd.Parameters.AddWithValue("u", userId);
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return null; }
+        }
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StepUpSucceeded, userId, userId, $"step-up succeeded session {sessionId:N}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
+        return now;
+    }
+
+    /// <summary>Audits a step-up refused for a wrong or replayed code (never the code). Called only for verifier-counted failures, so the shared MFA throttle bounds how many rows one session can append; throttled and unavailable answers are not audited.</summary>
+    public async Task RecordStepUpFailureAsync(Guid sessionId, Guid userId, string cause, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StepUpFailed, userId, userId, $"step-up refused ({cause}) session {sessionId:N}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
+    }
 
     /// <summary>Generates a one-time enrolment code, stores only its hash with the expiry (at most 24 hours), and returns the plaintext once. Audited.</summary>
     public async Task<string> IssueEnrolmentCodeAsync(Guid userId, TimeSpan validFor, Guid? actor, CancellationToken ct = default)

@@ -16,6 +16,15 @@ public abstract record LoginOutcome
     public sealed record MfaRecoveryRequired : LoginOutcome;
 }
 
+/// <summary>Result of a step-up (Phase 4.1 S3a). NotApplicable: the user's MFA state is None, so MFA is not required of them (pass-through, D-161). Refused covers a wrong, replayed or malformed code, a missing secret and a missing key: one answer for every cause.</summary>
+public abstract record StepUpOutcome
+{
+    public sealed record Verified(DateTimeOffset VerifiedAtUtc) : StepUpOutcome;
+    public sealed record Refused : StepUpOutcome;
+    public sealed record Throttled(TimeSpan RetryAfter) : StepUpOutcome;
+    public sealed record NotApplicable : StepUpOutcome;
+}
+
 /// <summary>The second-factor services the login uses. When absent (no encryption key ring configured, or a test that does not use MFA) the login behaves exactly as before and issues sessions after the password.</summary>
 public sealed record MfaLoginServices(MfaChallengeStore Challenges, MfaVerifier Verifier, MfaStore State, IMfaAttemptLimiter Limiter);
 
@@ -178,6 +187,36 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         var user = await store.FindUserByIdAsync(attempt.UserId, ct);
         if (user is null || user.State != UserState.Active) return new LoginOutcome.InvalidCredentials();
         return await CreateSessionAsync(user, client, store.UtcNow, ct);
+    }
+
+    // ---- Step-up (Phase 4.1 S3a; D-160) ----
+
+    /// <summary>
+    /// Re-proves the second factor on a live session: the code goes through the single <see cref="MfaVerifier"/> (same window, replay protection and throttling as login),
+    /// and on success the session's proof time moves to now in one transaction with its audit event. A user whose MFA state is None is not asked (NotApplicable).
+    /// </summary>
+    public async Task<StepUpOutcome> StepUpAsync(AuthenticatedSession session, string? code, string? sourceAddress, CancellationToken ct = default)
+    {
+        if (session.MfaState == MfaState.None) return new StepUpOutcome.NotApplicable();
+        if (mfa is null) return new StepUpOutcome.Refused();
+        var result = await mfa.Verifier.VerifyAsync(session.UserId, code, sourceAddress, ct);
+        switch (result)
+        {
+            case MfaResult.Throttled t:
+                return new StepUpOutcome.Throttled(t.RetryAfter);
+            case MfaResult.Verified:
+                var at = await mfa.State.RecordStepUpAsync(session.SessionId, session.UserId, ct);
+                if (at is null) return new StepUpOutcome.Refused();                           // the session ended meanwhile
+                logger?.LogInformation("auth.mfa_step_up outcome=verified user={UserId} session={SessionId}", session.UserId, session.SessionId);
+                return new StepUpOutcome.Verified(at.Value);
+            case MfaResult.Invalid inv:
+                await mfa.State.RecordStepUpFailureAsync(session.SessionId, session.UserId, "invalid", ct);
+                logger?.LogWarning("auth.mfa_step_up outcome=failed user={UserId} lockout={Lockout}", session.UserId, inv.UserLockoutReached);
+                return new StepUpOutcome.Refused();
+            default:                                                                          // not audited: an unavailable key is an operator condition and an authenticated caller must not be able to append audit rows at will
+                logger?.LogError("auth.mfa_step_up outcome=unavailable user={UserId}", session.UserId);
+                return new StepUpOutcome.Refused();
+        }
     }
 
     // ---- Enrolment (Phase 4.1 section 4; D-142) ----
