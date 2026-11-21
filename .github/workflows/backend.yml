@@ -139,7 +139,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1149 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1152 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -185,7 +185,7 @@ jobs:
                 "ApprovalPolicyTests": 4, "ApprovalDecisionTests": 5, "ApprovalDatabaseGuardTests": 3, "ApprovalAccessTests": 2,
                 # slice S5 journal and posting engine (company migration 0008, system migration 0011); slice S6 ledger reports.
                 "JournalLifecycleTests": 9, "JournalPeriodTests": 2, "JournalMultiCurrencyTests": 5, "JournalAllocationTests": 4, "JournalApprovalTests": 7,
-                "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 3, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
+                "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 5, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
                 # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
                 "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
                 # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
@@ -227,7 +227,7 @@ jobs:
                 # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
                 "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 3,
                 # Phase 3.13 S1b commercial approval, numbering and server-produced snapshots (company migration 0029, system migration 0029).
-                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 4, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1,
+                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 5, "DocumentLinkTests": 7, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1,
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
