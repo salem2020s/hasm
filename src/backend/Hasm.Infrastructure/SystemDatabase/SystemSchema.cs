@@ -282,7 +282,7 @@ public static partial class SystemSchema
     /// <summary>Every logical name with its physical identifier (for validation, backup and restore tooling).</summary>
     public static IReadOnlyDictionary<string, string> Map => map.Value;
 
-    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).ToDictionary(kv => kv.Key, kv => kv.Value));
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> map = new(() => CoreMap.Concat(PartyMap).Concat(BackupRetentionMap).ToDictionary(kv => kv.Key, kv => kv.Value));
 
     private static IReadOnlyDictionary<string, string> CoreMap { get; } = new Dictionary<string, string>
     {
