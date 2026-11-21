@@ -22,7 +22,7 @@ namespace Hasm.Database.IntegrationTests;
 /// trial-restored. The proof is a before and after comparison of per-database CONTENT HASHES (every public table, exact row counts and row hashes) of the other company, the restored company's live
 /// database and the system database, plus a hash of every file of the live attachment storage: all must be byte-identical, the restored copy must equal its source and contain nothing of the other
 /// company, and an inconsistent set fails closed with the exact findings and changes nothing anywhere. Evidence only: it does not claim release acceptance of group G. Needs pg_dump and pg_restore of the
-/// server's major version on PATH. Non-parallel collection, like <see cref="CompanyBackupServiceTests"/>, because a trial database must not exist while another test class starts.
+/// server's major version on PATH. The sets are UNENCRYPTED v1 sets (DEV/TEST path, allowUnencrypted); an encrypted-set variant is not covered. The sets used are UNENCRYPTED v1 sets (DEV/TEST path, allowUnencrypted); an encrypted-set variant is not covered. Non-parallel collection, like <see cref="CompanyBackupServiceTests"/>, because a trial database must not exist while another test class starts.
 /// </summary>
 [Collection(CompanyBackupSerialCollection.Name)]
 public class CompanyRestoreIsolationTests : PostgresTestBase
@@ -77,8 +77,11 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         return (T)(await cmd.ExecuteScalarAsync())!;
     }
 
-    /// <summary>Every public table with its exact row count and a hash of its rows: any change to tables or data shows.</summary>
-    private static async Task<string> Digest(string connection)
+    /// <summary>
+    /// Every public table with its exact row count and a hash of its rows, every sequence with its last value, and a fingerprint of the schema objects (trigger, function and constraint definitions of
+    /// public): any change to data, counters or schema shows. <paramref name="constraintText"/> false compares constraint names and kinds only (needed against a pg_restore copy, which renders CHECK expressions differently).
+    /// </summary>
+    private static async Task<string> Digest(string connection, bool constraintText = true)
     {
         await using var conn = new NpgsqlConnection(connection);
         await conn.OpenAsync();
@@ -91,7 +94,17 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
             await using var cmd = new NpgsqlCommand($"SELECT count(*)::text || ':' || coalesce(md5(string_agg(x::text, ',' ORDER BY x::text)), '') FROM {new NpgsqlCommandBuilder().QuoteIdentifier(table)} x", conn);
             sb.Append(table).Append('=').Append((string)(await cmd.ExecuteScalarAsync())!).Append(';');
         }
+        sb.Append("sequences=").Append(await Text(conn, "SELECT coalesce(string_agg(schemaname || '.' || sequencename || ':' || coalesce(last_value::text, 'null'), ',' ORDER BY schemaname, sequencename), '') FROM pg_sequences")).Append(';');
+        sb.Append("triggers=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(pg_get_triggerdef(t.oid), E'\\n' ORDER BY c.relname, t.tgname), '')) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal")).Append(';');
+        sb.Append("functions=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(pg_get_functiondef(p.oid), E'\\n' ORDER BY p.proname, p.oid::text), '')) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')")).Append(';');
+        sb.Append("constraints=").Append(await Text(conn, "SELECT md5(coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.contype::text || (CASE WHEN " + (constraintText ? "true" : "false") + " THEN pg_get_constraintdef(c.oid) ELSE '' END), E'\\n' ORDER BY c.conrelid::regclass::text, c.conname), '')) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public'")).Append(';');
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
+    }
+
+    private static async Task<string> Text(NpgsqlConnection conn, string sql)
+    {
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        return (string)(await cmd.ExecuteScalarAsync())!;
     }
 
     private static string H(byte[] b) => Convert.ToHexStringLower(SHA256.HashData(b));
@@ -196,7 +209,7 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         var kept = CompanyBackupService.ReadKeptFile(r.KeptFile!)!;
 
         // the restored copy equals its source and holds nothing of the other company
-        Assert.Equal(before.A, await Digest(Db(kept.Database)));
+        Assert.Equal(await Digest(Db(a.PhysicalDatabaseName), constraintText: false), await Digest(Db(kept.Database), constraintText: false));   // pg_restore re-renders CHECK expressions (same meaning, different text): constraint names and kinds are compared, not their text
         Assert.Equal(0L, await Scalar<long>(Db(kept.Database), $"SELECT count(*) FROM {LP.Table} WHERE {LP.Code} LIKE 'B-%'"));
         Assert.Equal(1L, await Scalar<long>(Db(kept.Database), $"SELECT count(*) FROM {LP.Table} WHERE {LP.Code} LIKE 'A-%'"));
         Assert.Equal(attachmentsOfA.Values.Order(StringComparer.Ordinal).ToArray(), Files(trialAtt).Values.Order(StringComparer.Ordinal).ToArray());      // the restored files are exactly A's bytes (plain and sensitive), nothing of B
@@ -206,7 +219,7 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         Assert.Equal(before.B, await Digest(Db(b.PhysicalDatabaseName)));
         Assert.Equal(before.System, await Digest(SystemConnection));
         Assert.Equal(before.Live, Files(Storage));
-        Assert.DoesNotContain(Storage, trialAtt);                                                                   // the trial files never go into live storage
+        Assert.StartsWith("..", Path.GetRelativePath(Storage, trialAtt));                                           // the trial files lie OUTSIDE the live storage (relative path leaves it)
 
         await Service().DropTrialRestoreAsync(r.KeptFile!);
 
@@ -216,6 +229,28 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         Assert.Equal(before.B, await Digest(Db(b.PhysicalDatabaseName)));
         Assert.Equal(before.System, await Digest(SystemConnection));
         Assert.Equal(before.Live, Files(Storage));
+
+        // sensitivity: each kind of change the proof is meant to catch really moves the matching hash, and reverting restores it exactly
+        var bDb = Db(b.PhysicalDatabaseName);
+        var seq = await Scalar<string>(bDb, "SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1 LIMIT 1");   // one live sequence
+        var lastText = await Scalar<string>(bDb, $"SELECT coalesce(last_value::text, '') FROM pg_sequences WHERE schemaname = 'public' AND sequencename = '{seq}'");
+        long? last = lastText == "" ? null : long.Parse(lastText);
+        await Exec(bDb, $"SELECT setval('public.\"{seq}\"', {(last ?? 0) + 1000}, true)");
+        Assert.NotEqual(before.B, await Digest(bDb));
+        await Exec(bDb, last is null ? $"SELECT setval('public.\"{seq}\"', 1, false)" : $"SELECT setval('public.\"{seq}\"', {last}, true)");
+        Assert.Equal(before.B, await Digest(bDb));
+
+        var liveFile = Directory.EnumerateFiles(Path.Combine(Storage, a.Id.ToString("N"))).First();                    // one byte of a live attachment
+        var original = File.ReadAllBytes(liveFile);
+        var changed = (byte[])original.Clone(); changed[^1] ^= 0x01;
+        File.WriteAllBytes(liveFile, changed);
+        Assert.NotEqual(before.Live, Files(Storage));
+        File.WriteAllBytes(liveFile, original);
+        Assert.Equal(before.Live, Files(Storage));
+
+        var partyB = await Scalar<Guid>(bDb, $"SELECT {LP.Id} FROM {LP.Table} LIMIT 1");                               // one row of B (last: the revision trigger allows only an advance by one, so this one is not reverted; B is throwaway)
+        await Exec(bDb, $"UPDATE {LP.Table} SET {LP.Notes} = 'mutated', {LP.Revision} = {LP.Revision} + 1 WHERE {LP.Id} = '{partyB}'");
+        Assert.NotEqual(before.B, await Digest(bDb));
     }
 
     [PostgresFact]
@@ -237,6 +272,7 @@ public class CompanyRestoreIsolationTests : PostgresTestBase
         Assert.Equal(TrialRestoreVerdict.Failed, r.Verdict);                                                         // the inconsistent set is refused by the pre-checks
         Assert.Equal("attachment_file_missing=1,attachment_hash_mismatch=1,shared_links_unresolved=1", Codes(r.Failures));
         Assert.Null(r.KeptFile);
+        Assert.Equal("", Codes(r.Warnings));                                         // exact warnings (none expected)
 
         Assert.Equal(before.Databases, await DatabaseNames());                                                       // the trial database was dropped even though the checks failed
         Assert.Equal(before.A, await Digest(Db(a.PhysicalDatabaseName)));
