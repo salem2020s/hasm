@@ -1,6 +1,6 @@
 # Review record - PR #48 compensation calculator, date guard and transfer acceptance
 
-Reviewer: separate read-only subagent (Claude Sonnet 5.5 family), did not write the code. Reviewed `git diff 9c88d0a HEAD` (calculator, evidence changes, tests, registry) against the 3.8D transition matrix working baseline and the real engine (comparison semantics, journal shape, replay amounts).
+Reviewer: separate read-only subagent (Claude Sonnet family), did not write the code. Reviewed `git diff 9c88d0a HEAD` (calculator, evidence changes, tests, registry) against the 3.8D transition matrix working baseline and the real engine (comparison semantics, journal shape, replay amounts).
 
 Result: no Critical/High. Confirmed sound: sign and account choice (positive delta = Dr K / Cr I), journal shape (one K debit, one credit per inventory account), per-entry delta semantics, transfer legs share one operation id and produce no line, transfer acceptance in the evidence service, fingerprint determinism, and that the PostgreSQL ledger assertions are real (not vacuous).
 Medium 1: offsetting entry deltas inside one operation net to zero and the operation was skipped without the provenance checks (silent partial plan). Fixed: provenance/posted checks run whenever ANY entry cost changed; only the line emission is skipped for a zero net; tests added (offsetting with two inventory accounts -> ambiguous, single pair -> no line, unposted -> refused).

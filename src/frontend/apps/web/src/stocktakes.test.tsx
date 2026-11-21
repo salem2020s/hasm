@@ -117,3 +117,17 @@ describe("stocktake", () => {
     await waitFor(() => expect(client.approveStocktake).toHaveBeenCalledWith("s1", 3));
   });
 });
+
+describe("Arabic-Indic digits in counted quantities", () => {
+  it("converts ٢٫٥٠٥ to 2.505 for the preview and for the saved body", async () => {
+    const client = setup();
+    await open();
+    await userEvent.click(tab("السطور"));
+    await userEvent.type(within(screen.getByTestId("stk-line-1")).getByLabelText("الكمية المعدودة"), "٢٫٥٠٥");
+    expect(screen.getByTestId("stk-variance-1")).toHaveTextContent("0.005");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.updateStocktake).toHaveBeenCalledWith("s1", expect.objectContaining({
+      lines: [expect.objectContaining({ countedQuantity: 2 }), expect.objectContaining({ itemId: "i2", countedQuantity: 2.505 })],
+    }), 2));
+  });
+});

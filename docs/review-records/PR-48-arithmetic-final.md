@@ -2,7 +2,7 @@
 
 * **Pull request:** #48 (Draft; phase incomplete)
 * **Head SHA reviewed:** 2344d4fc18360e712e1427ff6d1febac2e0f662d
-* **Reviewer context:** separate Codex/GPT-6 agent (`pr46_review`), independent of the author.
+* **Reviewer context:** separate Codex/GPT agent (`pr46_review`), independent of the author.
 * **Scope read:** full seven-file committed diff against origin/main at814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb: revised design, replay primitive, fixtures, checkpoint twins and review records.
 * **Prompt:** adversarial review of the FULL checkpoint diff, limited to safe internal arithmetic; verify accounting/security boundaries, exact arithmetic, immutability, numeric bounds and truthful incomplete scope.
 * **Checks run:** reviewer performed read-only source/Git inspection and git diff --check (passed), and confirmed CostReplay has only unit-test callers. No tests executed by reviewer.

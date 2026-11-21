@@ -1,4 +1,4 @@
-import { ApiError, type ApiClient, type CompanySummary, type SessionUser } from "@hasm/api-client";
+import { ApiError, type ApiClient, type CompanySummary, type EnrolmentSecret, type LoginStep, type SessionUser } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -7,7 +7,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
  * server is the source of truth and is asked on every start (`/auth/status`). Nothing sensitive (token, password, permissions) is ever
  * written to localStorage/sessionStorage; the only stored value is the non-sensitive UI language.
  */
-export type Phase = "loading" | "unreachable" | "anonymous" | "needCompany" | "ready";
+export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "ready";
+/** The unfinished second-factor step of a login (Phase 4.1). Held in memory only; the challenge is single use, bound to this client and expires in five minutes. */
+export interface MfaFlow { kind: LoginStep["kind"]; challenge: string | null; secret: EnrolmentSecret | null }
 export type Notice = "session_expired" | "logged_out" | null;
 
 export interface AuthValue {
@@ -18,6 +20,16 @@ export interface AuthValue {
   notice: Notice;
   api: ApiClient;
   login(login: string, password: string): Promise<void>;
+  /** Set while a login waits for its second factor, an enrolment or a recovery (phase "mfa"). */
+  mfa: MfaFlow | null;
+  /** Second step of a login: the 6-digit code. Throws ApiError (401 is the one refusal; 429 is throttled). */
+  submitMfaCode(code: string): Promise<void>;
+  /** Starts an enrolment with the one-time enrolment code; the secret is shown once from the returned value. */
+  beginEnrolment(enrolmentCode: string): Promise<void>;
+  /** Confirms the enrolment with a code from the new authenticator; ends in a signed-in session. */
+  confirmEnrolment(code: string): Promise<void>;
+  /** Abandons the second step and returns to the password form. */
+  cancelMfa(): void;
   logout(): Promise<void>;
   chooseCompany(id: string): Promise<void>;
   changeCompany(): Promise<void>;
@@ -25,6 +37,13 @@ export interface AuthValue {
   can(permission: string): boolean;
   /** True when ANY grant (company-wide or for a single branch) holds the permission. Only for showing a screen; the server decides per branch. */
   canAny(permission: string): boolean;
+  /**
+   * The permission for ONE branch, like the server's decision for a branch-scoped resource: a company-wide grant covers every branch, a grant for a single branch covers only that branch. A grant for ANOTHER branch
+   * does not count. For hiding or disabling a control on a branch-scoped document; the server still decides.
+   */
+  canOnBranch(permission: string, branchId: string): boolean;
+  /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
+  hasRole(roleId: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -54,7 +73,10 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<ReadonlySet<string>>(new Set());
   const [anyPermissions, setAnyPermissions] = useState<ReadonlySet<string>>(new Set());
+  const [branchPermissions, setBranchPermissions] = useState<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
+  const [roleGrants, setRoleGrants] = useState<readonly { roleId: string; scope: string; scopeId: string | null }[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
+  const [mfa, setMfa] = useState<MfaFlow | null>(null);
   const mounted = useRef(true);
 
   const endSession = useCallback((why: Notice) => {
@@ -63,12 +85,14 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
+    setRoleGrants([]);
+    setBranchPermissions(new Map());
     setNotice(why);
     setPhase("anonymous");
   }, []);
 
   const handleError = useCallback((error: unknown) => {
-    if (error instanceof ApiError && error.status === 401) {
+    if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
       endSession("session_expired");
       return true;
     }
@@ -85,6 +109,10 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
     setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
+    const perBranch = new Map<string, Set<string>>();
+    for (const g of me.grants) if (g.scope === "branch" && g.scopeId) { const set = perBranch.get(g.scopeId) ?? new Set<string>(); g.permissions.forEach((p) => set.add(p)); perBranch.set(g.scopeId, set); }
+    setBranchPermissions(perBranch);
+    setRoleGrants(me.grants.map((g) => ({ roleId: g.roleId, scope: g.scope, scopeId: g.scopeId })));
     setPhase("ready");
   }, [api]);
 
@@ -135,14 +163,46 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     return () => { mounted.current = false; };
   }, [api, enterCompany, autoEnterSole]);
 
-  const login = useCallback(async (loginName: string, password: string) => {
-    const result = await api.login(loginName, password); // throws ApiError: the form shows the mapped message
-    setUser(result.user);
+  const finishLogin = useCallback(async (signedIn: SessionUser) => {
+    setMfa(null);
+    setUser(signedIn);
     setNotice(null);
     const list = (await api.listCompanies()).companies;
     setCompanies(list);
     if (!(await autoEnterSole(list))) setPhase("needCompany");
   }, [api, autoEnterSole]);
+
+  const login = useCallback(async (loginName: string, password: string) => {
+    const result = await api.login(loginName, password); // throws ApiError: the form shows the mapped message
+    if (result.step) {                                   // a second factor, an enrolment or a recovery stands between the password and a session
+      setMfa({ kind: result.step.kind, challenge: result.step.kind === "mfa_recovery_required" ? null : result.step.challenge, secret: null });
+      setPhase("mfa");
+      return;
+    }
+    await finishLogin(result.user);
+  }, [api, finishLogin]);
+
+  const submitMfaCode = useCallback(async (code: string) => {
+    if (!mfa?.challenge) throw new ApiError(401, "invalid_credentials");
+    const result = await api.verifyMfa(mfa.challenge, code);
+    if (result.step) throw new ApiError(401, "invalid_credentials");
+    await finishLogin(result.user);
+  }, [api, mfa, finishLogin]);
+
+  const beginEnrolment = useCallback(async (enrolmentCode: string) => {
+    if (!mfa?.challenge) throw new ApiError(401, "invalid_credentials");
+    const secret = await api.beginEnrolment({ challenge: mfa.challenge, enrolmentCode });
+    setMfa({ ...mfa, secret: { otpauthUri: secret.otpauthUri, secret: secret.secret } });
+  }, [api, mfa]);
+
+  const confirmEnrolment = useCallback(async (code: string) => {
+    if (!mfa?.challenge) throw new ApiError(401, "invalid_credentials");
+    const result = await api.confirmEnrolment({ challenge: mfa.challenge, code });
+    if (!("user" in result) || !result.user) throw new ApiError(401, "invalid_credentials");
+    await finishLogin(result.user);
+  }, [api, mfa, finishLogin]);
+
+  const cancelMfa = useCallback(() => { setMfa(null); setPhase("anonymous"); }, []);
 
   const logout = useCallback(async () => {
     try { await api.logout(); } catch { /* the server session may already be gone; the local state is cleared regardless */ }
@@ -159,6 +219,8 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
     setCompanyId(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
+    setRoleGrants([]);
+    setBranchPermissions(new Map());
     try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
     setPhase("needCompany");
   }, [api, handleError, loadCompanies]);
@@ -168,11 +230,13 @@ export function AuthProvider({ api, bridge, children }: { api: ApiClient; bridge
   }, [handleError, loadCompanies]);
 
   const value = useMemo<AuthValue>(() => ({
-    phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
+    phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError,
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
+    canOnBranch: (p, branchId) => permissions.has(p) || (branchPermissions.get(branchId)?.has(p) ?? false),
+    hasRole: (r) => roleGrants.some((g) => g.roleId === r),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
-  }), [phase, user, companies, companyId, notice, api, login, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, locale]);
+  }), [phase, user, companies, companyId, notice, api, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

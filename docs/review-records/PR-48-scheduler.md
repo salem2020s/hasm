@@ -2,7 +2,7 @@
 
 * **Pull request:** #48 (Draft; phase incomplete)
 * **Reviewed baseline:** HEAD3ba1aba36ce74929ea32aa6cab31ee3658d39c1f plus FULL working PR diff against origin/main814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb, including scheduler source/tests; unrelated workflow-optimization worktree excluded. Final pushed-head confirmation is a separate gate.
-* **Reviewer context/model:** separate independent Codex/GPT-6 agent (`pr46_review`), read-only.
+* **Reviewer context/model:** separate independent Codex/GPT agent (`pr46_review`), read-only.
 * **Prompt/scope:** adversarial review of the full PR and proposed multi-position scheduler before implementation, then code/tests; inspect grouped transfers/reversals, history ordinals, same-date proposal insertion, determinism, completeness boundaries, cycle/missing-origin refusal, resource use and cancellation. No chosen-slice review or write access by reviewer.
 * **Checks run by reviewer:** read-only Git/source inspection and git diff --check passed; no application tests executed.
 * **Three Medium design findings, fixed:** specify group/position/leg/edge caps and cancellation; require reversal affected-position set to match its original and refuse duplicate/reversal-of-reversal origins; require canonical positive contiguous position ordinals without silently collapsing/interleaving rows. Implementation and14 cases address them. No new Critical/High/Medium code finding identified.

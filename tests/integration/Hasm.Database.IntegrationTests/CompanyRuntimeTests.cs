@@ -15,7 +15,7 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 {
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0022_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0033_extra.sql", sql);
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
 
     [PostgresFact]
@@ -225,7 +225,7 @@ public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 public class CompanyMigrationTests : CompanyRuntimeTestBase
 {
     private static IReadOnlyList<MigrationScript> OnlyFirst => [.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version == 1)];
-    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0022_extra.sql", sql);
+    private static MigrationScript Extra(string sql) => MigrationScript.Parse("0033_extra.sql", sql);
 
     private async Task<long> JournalRows(CompanyRecord c) =>
         await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}");
@@ -234,12 +234,27 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await InCompany<bool>(c.PhysicalDatabaseName, $"SELECT to_regclass('{CompanySchema.BusinessAudit.Table}') IS NOT NULL");
 
     [PostgresFact]
+    public async Task A_company_lock_released_a_moment_ago_is_waited_for_by_the_migration_instead_of_reporting_the_company_busy()
+    {
+        await StartCompanies();
+        var legacy = await ReadyCompany(OnlyFirst);
+        var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await holder.OpenAsync();
+        Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, legacy.Id, default));
+        var migrating = new CompanyMigrator(Options, Registry).MigrateAsync(legacy.Id);
+        await Task.Delay(1000);
+        await holder.DisposeAsync();
+        Assert.Equal(CompanyMigrationStatus.Migrated, Assert.Single(await migrating).Status);    // not Busy
+        Assert.True(await HasAuditTable(legacy));
+    }
+
+    [PostgresFact]
     public async Task Fresh_provisioning_creates_the_business_audit_table_through_migration_0002()
     {
         await StartCompanies();
         var c = await ReadyCompany();
         Assert.True(await HasAuditTable(c));
-        Assert.Equal(21L, await JournalRows(c));
+        Assert.Equal(32L, await JournalRows(c));
         Assert.Equal(0L, await InCompany<long>(c.PhysicalDatabaseName, $"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
     }
 
@@ -254,7 +269,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
 
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], outcome.Applied);
+        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32], outcome.Applied);
         Assert.True(await HasAuditTable(legacy));
         Assert.Equal(7, await InCompany<int>(legacy.PhysicalDatabaseName, "SELECT a FROM zz_existing"));
         Assert.Equal(legacy.Id, await InCompany<Guid>(legacy.PhysicalDatabaseName, $"SELECT {I.CompanyId} FROM {I.Table}"));
@@ -274,7 +289,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
 
         Assert.Equal(CompanyMigrationStatus.UpToDate, second.Status);
         Assert.Empty(second.Applied);
-        Assert.Equal(21L, await JournalRows(legacy));
+        Assert.Equal(32L, await JournalRows(legacy));
         Assert.Equal(checksums, await InCompany<string>(legacy.PhysicalDatabaseName, $"SELECT string_agg(checksum, ',' ORDER BY version) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
@@ -312,7 +327,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await using (var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true)))
         {
             await holder.OpenAsync();
-            Assert.True(await CompanyProvisioner.TryLockAsync(holder, legacy.Id, default));       // e.g. provisioning or another migration
+            Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, legacy.Id, default));   // e.g. provisioning or another migration
 
             var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
 
@@ -331,7 +346,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var statuses = runs.Select(r => Assert.Single(r).Status).ToList();
         Assert.All(statuses, s => Assert.Contains(s, new[] { CompanyMigrationStatus.Migrated, CompanyMigrationStatus.UpToDate, CompanyMigrationStatus.Busy }));
         Assert.Equal(1, statuses.Count(s => s == CompanyMigrationStatus.Migrated));
-        Assert.Equal(21L, await JournalRows(legacy));
+        Assert.Equal(32L, await JournalRows(legacy));
         Assert.True(await HasAuditTable(legacy));
     }
 
@@ -350,12 +365,12 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var g = outcomes.Single(o => o.CompanyId == good.Id);
         var b = outcomes.Single(o => o.CompanyId == bad.Id);
         Assert.Equal(CompanyMigrationStatus.Migrated, g.Status);
-        Assert.Equal([22], g.Applied);
+        Assert.Equal([33], g.Applied);
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
-        Assert.Equal(22L, await JournalRows(good));
-        Assert.Equal(21L, await JournalRows(bad));
+        Assert.Equal(33L, await JournalRows(good));   // 0001-0032 plus the extra 0033
+        Assert.Equal(32L, await JournalRows(bad));
         Assert.Equal(0L, await InCompany<long>(bad.PhysicalDatabaseName, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'zz_added'"));
         Assert.Equal(ProvisioningState.Ready, (await Registry.GetAsync(bad.Id))!.State);       // never marked Failed or dropped
         Assert.Equal(1L, await Scalar<long>("SELECT count(*) FROM pg_database WHERE datname = @n", ("n", bad.PhysicalDatabaseName)));
@@ -447,7 +462,8 @@ public class CompanyRuntimeGrantGuardTests : CompanyRuntimeTestBase
         var c = await ReadyCompany();
         await using var holder = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await holder.OpenAsync();
-        Assert.True(await CompanyProvisioner.TryLockAsync(holder, c.Id, default));
+        // the provisioning session's lock is released by the server asynchronously after its connection closed: the shared bounded acquisition waits for it
+        Assert.True(await CompanyProvisioner.AcquireLockAsync(holder, c.Id, default));
         var result = await Provisioner().GrantAsync(c.Id);
         Assert.Equal(RuntimeGrantOutcome.InProgressElsewhere, result.Outcome);
         Assert.False(result.RoleCreated);

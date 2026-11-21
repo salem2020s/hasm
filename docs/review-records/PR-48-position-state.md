@@ -1,6 +1,6 @@
 # Phase3.8D private replay-state preparation
 
-Independent reviewer: separate Codex/GPT-6 context `pr46_review`, applying hasm-pr. Prompt: read-only FULL PR48 diff against current main `fe4432113c1c13a62c70ee98c218586d7b424b32`, including current source/tests, accounting invariants and phase boundaries; check preserved assertions, exact arithmetic and cancellation. Nested worktrees excluded. Reviewed HEAD `bbbe07b08bbbec29c6aa7aa71b2d7080d8a99900` plus the two source/test changes; final committed-head confirmation is separate.
+Independent reviewer: separate Codex/GPT context `pr46_review`, applying hasm-pr. Prompt: read-only FULL PR48 diff against current main `fe4432113c1c13a62c70ee98c218586d7b424b32`, including current source/tests, accounting invariants and phase boundaries; check preserved assertions, exact arithmetic and cancellation. Nested worktrees excluded. Reviewed HEAD `bbbe07b08bbbec29c6aa7aa71b2d7080d8a99900` plus the two source/test changes; final committed-head confirmation is separate.
 
 Verdict: approve this limited preparation checkpoint, no Critical/High/Medium finding. No test removed or weakened. Reviewer inspected Git/source and passed diff whitespace check; did not run tests, databases, network or vulnerability probes. No whole-phase, conversion-activation or merge approval.
 

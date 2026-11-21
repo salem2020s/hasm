@@ -88,7 +88,7 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
         return v is null ? null : await WithIdentity(companyId, v, ct);
     }
 
-    /// <summary>Filtered, paged list of this company's local parties (code or display name search, link state), with the legal names of the linked shared identities.</summary>
+    /// <summary>Filtered, paged list of this company's local parties (code or display name search, link state, active flag, parties without a role of a kind), with the legal names of the linked shared identities. Every filter is a bound parameter.</summary>
     public async Task<PartyPage> ListAsync(Guid companyId, PartyFilter f, CancellationToken ct = default)
     {
         var rows = new List<(Guid Id, string Code, string Name, bool Active, int State, Guid? Global, bool Open, long Rev, DateTimeOffset Updated)>();
@@ -98,6 +98,12 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             var where = new List<string>();
             await using var cmd = new NpgsqlCommand { Connection = conn };
             if (f.LinkState is { } st) { where.Add($"p.{LP.LinkState} = @st"); cmd.Parameters.AddWithValue("st", (short)st); }
+            if (f.Active is { } active) { where.Add($"p.{LP.IsActive} = @active"); cmd.Parameters.AddWithValue("active", active); }
+            if (f.WithoutRole is { } role)
+            {
+                where.Add($"NOT EXISTS (SELECT 1 FROM {CompanyDatabase.CompanySchema.PartyRole.Table} pr WHERE pr.{CompanyDatabase.CompanySchema.PartyRole.PartyId} = p.{LP.Id} AND pr.{CompanyDatabase.CompanySchema.PartyRole.Role} = @withoutRole)");
+                cmd.Parameters.AddWithValue("withoutRole", (short)role);
+            }
             if (!string.IsNullOrWhiteSpace(f.Search))
             {
                 where.Add($"(upper(p.{LP.Code}) LIKE @like OR upper(p.{LP.DisplayName}) LIKE @like)");
@@ -173,26 +179,37 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             if (!PartyValidation.TryIdentity(input.Identity, false, "identity.", out identity, out var identityErrors)) errors.AddRange(identityErrors);
         }
         if (!ok || errors.Count > 0) return ConfigResult<LocalPartyView>.Invalid(errors);
-        var id = Guid.NewGuid();
-        Guid requestId = default;
+        Guid id = default, requestId = default;
         var created = await Mutate(companyId, async work =>
         {
-            var now = Now;
-            await using (var ins = new NpgsqlCommand(
-                $"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.Notes}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) " +
-                "VALUES (@id, @code, @name, @notes, @active, 1, 1, @a, @now, @now)", work.Connection, work.Transaction))
-            {
-                ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("code", local.Code); ins.Parameters.AddWithValue("name", local.DisplayName); ins.Parameters.AddWithValue("notes", Db(local.Notes));
-                ins.Parameters.AddWithValue("active", local.IsActive); ins.Parameters.AddWithValue("a", actor); ins.Parameters.AddWithValue("now", now);
-                await ins.ExecuteNonQueryAsync(ct);
-            }
-            await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.LocalPartyCreated, ActorUserId: actor, SubjectId: id, Detail: $"local party created code={local.Code}"), ct);
-            requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, null, identity, now, ct);
+            (id, requestId) = await CreateInWorkAsync(work, actor, local, identity, ct);
             return true;
         }, ct);
         if (!created.IsOk) return ConfigResult<LocalPartyView>.Fail(created.Status, created.Code!) with { Fields = created.Fields };
         await ProcessAsync(companyId, requestId, actor, ct);
         return ConfigResult<LocalPartyView>.Ok((await GetAsync(companyId, id, ct))!);
+    }
+
+    /// <summary>
+    /// Creates a pending local party and queues the proposal of its shared identity INSIDE the caller's company transaction (the same two writes and audit events as <see cref="CreateAsync"/>), without
+    /// delivering the request: the caller delivers after its own commit (<see cref="SyncAsync"/> is safe to repeat). Used by the party import adapter so a whole approved batch stays all-or-nothing.
+    /// Inputs must already be validated by <see cref="PartyValidation"/>. A code that is already taken surfaces as the unique-code <see cref="PostgresException"/>.
+    /// </summary>
+    internal async Task<(Guid Id, Guid RequestId)> CreateInWorkAsync(CompanyAuditedWork work, Guid actor, PartyValidation.Local local, PartyValidation.Identity identity, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var now = Now;
+        await using (var ins = new NpgsqlCommand(
+            $"INSERT INTO {LP.Table} ({LP.Id}, {LP.Code}, {LP.DisplayName}, {LP.Notes}, {LP.IsActive}, {LP.LinkState}, {LP.Revision}, {LP.CreatedBy}, {LP.CreatedAtUtc}, {LP.UpdatedAtUtc}) " +
+            "VALUES (@id, @code, @name, @notes, @active, 1, 1, @a, @now, @now)", work.Connection, work.Transaction))
+        {
+            ins.Parameters.AddWithValue("id", id); ins.Parameters.AddWithValue("code", local.Code); ins.Parameters.AddWithValue("name", local.DisplayName); ins.Parameters.AddWithValue("notes", Db(local.Notes));
+            ins.Parameters.AddWithValue("active", local.IsActive); ins.Parameters.AddWithValue("a", actor); ins.Parameters.AddWithValue("now", now);
+            await ins.ExecuteNonQueryAsync(ct);
+        }
+        await work.AppendAuditAsync(new AuditEventData(PartyAuditEvents.LocalPartyCreated, ActorUserId: actor, SubjectId: id, Detail: $"local party created code={local.Code}"), ct);
+        var requestId = await QueueRequest(work, actor, id, PartyRequestKind.NewIdentity, null, null, identity, now, ct);
+        return (id, requestId);
     }
 
     /// <summary>Changes the company-local fields only (code, display name, notes, active). The shared identity is changed only by a proposal (<see cref="ProposeAsync"/>).</summary>
@@ -243,6 +260,9 @@ public sealed class PartyService(CompanyDatabaseResolver resolver, CompanyAudite
             if (change)
             {
                 if (!current.TryGetValue(id, out var linkedIdentity) || linkedIdentity.GlobalPartyId != cur.GlobalPartyId) throw new Abort(ConfigStatus.Conflict, "link_missing");
+                // the revision the USER saw is required and must still be current: otherwise the proposal would silently be based on newer shared data
+                if (input?.ViewedSharedRevision is not { } viewed) throw new Abort(ConfigStatus.PreconditionRequired, "shared_revision_required");
+                if (viewed != linkedIdentity.Revision) throw new Abort(ConfigStatus.PreconditionFailed, "shared_revision_conflict", null, linkedIdentity.Revision);
                 basedOn = linkedIdentity.Revision;
             }
             await using (var upd = new NpgsqlCommand(

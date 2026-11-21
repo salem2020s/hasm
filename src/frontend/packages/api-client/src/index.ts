@@ -8,6 +8,8 @@ export interface ApiErrorDetails {
   fields?: { field: string; code: string }[];
   currentRevision?: number;
   retryAfterSeconds?: number;
+  /** Password-policy violations of a weak_password refusal: short codes only, never the password. */
+  problems?: string[];
 }
 
 /** A failed API call. <c>code</c> is the server's short error code (never an exception text). */
@@ -35,7 +37,18 @@ export interface AuthStatus {
   authenticated: boolean;
   user?: SessionUser;
   session?: { client: string; idleExpiresAtUtc: string; absoluteExpiresAtUtc: string };
+  /** Phase 4.1: the second-factor state of the signed-in user. The server decides; the client only shows it. */
+  mfa?: { state: "none" | "enrolmentrequired" | "enrolled" | "recoveryrequired"; verified: boolean; verifiedAtUtc: string | null };
 }
+/** What the password step answers when the account needs more than a password. NO session exists until the steps are completed. */
+export type LoginStep =
+  | { kind: "mfa_required"; challenge: string }
+  | { kind: "mfa_enrolment_required"; challenge: string }
+  | { kind: "mfa_recovery_required" };
+/** A login (or a completed second step) either yields a signed-in user or names the next step. */
+export type LoginResult = { user: SessionUser; step?: undefined } | { user?: undefined; step: LoginStep };
+/** The new authenticator, shown ONCE: the provisioning URI (for a QR code) and the same secret as Base32 text. */
+export interface EnrolmentSecret { otpauthUri: string; secret: string }
 export interface CompanySummary {
   id: string;
   nameAr: string | null;
@@ -366,6 +379,10 @@ export interface ImportSheet { index: number; name: string; rows: number; column
 export interface ImportPlanSummary { total: number; valid: number; exact: number; invalid: number; conflict: number; resolved: number; operations: number; blocking: number }
 export interface ImportPlan { v: number; adapter: string; adapterVersion: number; rowsHash: string; mappingHash: string; baseline: string; summary: ImportPlanSummary; reconciliation: { key: string; value: string }[]; canApply: boolean; operationsHash: string }
 export interface ImportMapping { fields: Record<string, { column: number | null; default: string | null }>; options?: { decimalSeparator?: string; thousandsSeparator?: string; dateFormat?: string } }
+// ---- Reusable import mapping templates (Phase 3.9C): by header name, per company and adapter, versioned.
+export interface ImportTemplate { id: string; adapter: string; name: string; version: number; isRetired: boolean; content: { fields: Record<string, { header?: string; default?: string }>; options?: Record<string, string> }; createdAtUtc: string }
+export interface ImportTemplateApplication { name: string; version: number; mapping: ImportMapping; unmatched: string[] }
+
 export interface ImportBatch {
   id: string; adapter: string; adapterVersion: number; status: ImportStatus; fileName: string; fileKind: "csv" | "xlsx"; fileSize: number; fileSha256: string; keyId: string;
   options: { headers?: string[]; sheet?: number; sheetName?: string; headerRow?: number; encoding?: string; delimiter?: string | null };
@@ -442,6 +459,131 @@ export interface AllocatableCostCenter { id: string; code: string; nameAr: strin
 
 export interface AccountCostCenterRule { accountId: string; code: string; nameAr: string | null; nameEn: string | null; required: boolean; revision: number }
 export interface AccountCostCenterRulesResponse { accounts: AccountCostCenterRule[]; can: { configure: boolean } }
+// ---- Tax configuration (Phase 3.10). Treatment: 1 standard, 2 zero rated, 3 exempt, 4 not applicable. Class kind: 1 item, 2 party. Rounding mode: 1 half away from zero, 2 half even; level: 1 per line, 2 per document.
+export interface TaxRate { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface Tax { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string; rates: TaxRate[] }
+export interface TaxesResponse { taxes: Tax[]; can: { configure: boolean } }
+export interface TaxInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRateInput { effectiveFrom: string; treatment: number; ratePercent: number }
+export interface TaxClass { id: string; kind: number; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number }
+export interface TaxClassesResponse { classes: TaxClass[]; can: { configure: boolean } }
+export interface TaxClassInput { kind: number; code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface TaxRule {
+  id: string; documentType: string; operation: string; itemClassId: string | null; partyClassId: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo: string | null; isActive: boolean; treatmentOverride: number | null; revision: number;
+}
+export interface TaxRulesResponse { rules: TaxRule[]; can: { configure: boolean } }
+export interface TaxRuleInput {
+  documentType: string; operation: string; itemClassId?: string | null; partyClassId?: string | null; taxId: string; priority: number; includesTaxIds: string[];
+  validFrom: string; validTo?: string | null; isActive: boolean; treatmentOverride?: number | null;
+}
+// ---- Attachments (Phase 3.12): files kept on the server, reached only through the authorized endpoints.
+export type AttachmentSubjectKind = "local_party" | "inventory_item";
+export interface Attachment { id: string; subjectKind: string; subjectId: string; fileName: string; contentType: string; sizeBytes: number; sha256: string | null; isSensitive: boolean; revision: number; createdAtUtc: string }
+export interface AttachmentsResponse { items: Attachment[]; can: { upload: boolean; delete: boolean; sensitiveUpload: boolean } }
+/** Retention of removed attachments (Phase R, owner decision D-082): policy versions, legal holds and a read-only eligibility preview. Nothing here deletes anything. */
+export interface RetentionCapabilities { view: boolean; configure: boolean; hold: boolean; approve: boolean; execute: boolean; /** false while the owner has not answered D-109: no item is eligible and purge stays disabled */ basisConfirmed: boolean }
+/** status: 1 draft, 2 approved, 3 revoked, 4 superseded */
+export interface RetentionRuleInfo { subjectKind: string; sensitivity: number; months: number | null; indefinite: boolean }
+export interface RetentionPolicyVersion {
+  id: string; version: number; status: 1 | 2 | 3 | 4; effectiveFrom: string; shortensAnyPeriod: boolean; shorteningAcknowledgement: string | null; note: string | null; draftedBy: string; draftedAtUtc: string;
+  approvedBy: string | null; approvedAtUtc: string | null; revokedBy: string | null; revokedAtUtc: string | null; revokeReason: string | null; endedAtUtc: string | null; revision: number; rules: RetentionRuleInfo[];
+}
+export interface RetentionPolicyInput { effectiveFrom: string; note: string | null; rules: RetentionRuleInfo[] }
+/** scope: 1 company, 2 one record (subjectKind + subjectId), 3 one attachment (attachmentId) */
+export interface LegalHold {
+  id: string; scope: 1 | 2 | 3; subjectKind: string | null; subjectId: string | null; attachmentId: string | null; reason: string; reference: string | null; placedBy: string; placedAtUtc: string;
+  releasedBy: string | null; releasedAtUtc: string | null; releaseReason: string | null; isActive: boolean; revision: number;
+}
+export interface LegalHoldInput { scope: 1 | 2 | 3; subjectKind?: string | null; subjectId?: string | null; attachmentId?: string | null; reason: string; reference?: string | null }
+export interface RetentionPreviewItem { attachmentId: string; subjectKind: string; subjectId: string; isSensitive: boolean; removedAtUtc: string; reason: string; eligibleAtUtc: string | null; holdId: string | null; policyVersion: number | null }
+export interface RetentionPreview { total: number; basisConfirmed: boolean; reasonCounts: Record<string, number>; items: RetentionPreviewItem[] }
+export interface AttachmentCapabilities { view: boolean; upload: boolean; delete: boolean; sensitiveView: boolean; sensitiveUpload: boolean; allowedContentTypes: string[] }
+
+// ---- Customers and suppliers (Phase 3.9B). Role: 1 customer, 2 supplier. Payment mode: 1 cash, 2 credit, 3 mixed.
+export interface PartyRole {
+  id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
+  controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
+}
+export interface PartyRolesResponse {
+  items: PartyRole[];
+  /** The caller's permission. Use it ONLY from the unfiltered list: it is absent from the empty answer of an empty `ids` lookup (no request is made, so nothing is known), and a lookup never needs it. */
+  can?: { configure: boolean };
+  /** present only when the request used search, limit, offset or ids */
+  total?: number;
+}
+/** The optional search and paging of the master-data lists: all absent = the unchanged, unpaged list. */
+export interface ListQuery { search?: string; limit?: number; offset?: number }
+export interface CustomerGroupQuery extends ListQuery { active?: boolean }
+/** `ids` are PARTY ids (at most 100 per request): only those parties' roles come back, up to 500 rows unless `limit` is smaller. */
+export interface PartyRoleQuery extends ListQuery { ids?: string[] }
+/** `ids` (units and item groups): at most 100 per request; only those rows of the caller's company come back, as a page with `total`. NEVER send an empty list: the server reads "no ids" as the unfiltered list, so use the `lookup...` helpers, which skip the call. */
+export interface IdsQuery extends ListQuery { ids?: string[] }
+/** The most ids one by-ids request may carry (the server refuses more with 400 `invalid_request`). */
+export const MAX_LOOKUP_IDS = 100;
+function commercialQuery(q: CommercialDocumentQuery): string {
+  const p = new URLSearchParams();
+  if (q.status !== undefined) p.set("status", String(q.status));
+  if (q.docType) p.set("docType", q.docType);
+  if (q.branchId) p.set("branchId", q.branchId);
+  if (q.partyId) p.set("partyId", q.partyId);
+  if (q.currency) p.set("currency", q.currency);
+  if (q.search) p.set("search", q.search);
+  if (q.offset !== undefined) p.set("offset", String(q.offset));
+  if (q.limit !== undefined) p.set("limit", String(q.limit));
+  const qs = p.toString();
+  return qs ? "?" + qs : "";
+}
+function listQueryString(q?: IdsQuery, extra?: Record<string, string>): string {
+  const p = new URLSearchParams();
+  if (q?.search) p.set("search", q.search);
+  if (q?.limit !== undefined) p.set("limit", String(q.limit));
+  if (q?.offset !== undefined) p.set("offset", String(q.offset));
+  for (const [k, v] of Object.entries(extra ?? {})) p.set(k, v);
+  for (const id of q?.ids ?? []) p.append("ids", id);
+  const qs = p.toString();
+  return qs ? "?" + qs : "";
+}
+export interface PartyRoleInput { partyId?: string; role?: number; paymentMode: number; termDays?: number | null; creditLimit?: number | null; controlAccountId?: string | null; representativeId?: string | null; isActive?: boolean }
+export interface SalesRepresentative { id: string; code: string; nameAr: string; nameEn: string | null; userId: string | null; isActive: boolean; revision: number }
+export interface SalesRepresentativesResponse { items: SalesRepresentative[]; can: { configure: boolean } }
+export interface SalesRepresentativeInput { code?: string; nameAr: string; nameEn?: string | null; userId?: string | null; isActive?: boolean }
+
+export interface TaxAssignment { subjectId: string; classId: string }
+export interface TaxAssignmentsResponse { assignments: TaxAssignment[]; can: { configure: boolean } }
+export interface TaxPolicy { configured: boolean; id?: string; version?: number; moneyDecimals?: number; mode?: number; level?: number; createdAtUtc?: string }
+export interface TaxPolicyResponse { policy: TaxPolicy; can: { configure: boolean } }
+export interface TaxPolicyInput { moneyDecimals: number; mode: number; level: number }
+export interface TaxResolutionComponent { taxId: string; code: string; treatment: number; ratePercent: number; priority: number; includesInBase: string[]; ruleRef: string | null }
+export interface TaxResolution { policyVersion: number; policy: { moneyDecimals: number; mode: number; level: number }; components: TaxResolutionComponent[] }
+
+// ---- Pricing configuration (Phase 3.11). margin action: 1 warn, 2 require approval, 3 block. list precedence: 1 scope then priority (default), 2 priority then scope. discount precedence: 1 specificity then priority (default), 2 priority then specificity.
+export interface PricingPolicy { version: number; isDefault: boolean; priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number; createdAtUtc: string | null }
+export interface PricingPolicyResponse { policy: PricingPolicy; can: { configure: boolean } }
+export interface PricingPolicyInput { priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number }
+export interface PriceList { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; currency: string; validFrom: string; validTo: string | null; isActive: boolean; customerId: string | null; customerGroupId?: string | null; revision: number; updatedAtUtc: string }
+export interface PriceListsResponse { priceLists: PriceList[]; can: { configure: boolean } }
+export interface PriceListInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; currency?: string; validFrom: string; validTo?: string | null; isActive?: boolean; customerId?: string | null; customerGroupId?: string | null }
+export interface PriceEntry { id: string; priceListId: string; itemId: string | null; itemGroupId: string | null; unitId: string; minQuantity: number; unitPrice: number; isActive: boolean; revision: number; updatedAtUtc: string }
+export interface PriceEntriesResponse { entries: PriceEntry[]; can: { configure: boolean } }
+export interface PriceEntryInput { itemId?: string | null; itemGroupId?: string | null; unitId?: string; minQuantity?: number; unitPrice: number; isActive?: boolean }
+export interface DiscountRule { id: string; code: string; nameAr: string; nameEn: string | null; priority: number; validFrom: string; validTo: string | null; isActive: boolean; percent: number; minQuantity: number; customerId: string | null; customerGroupId?: string | null; itemId: string | null; itemGroupId: string | null; revision: number; updatedAtUtc: string }
+export interface DiscountRulesResponse { discounts: DiscountRule[]; can: { configure: boolean } }
+export interface DiscountRuleInput { code?: string; nameAr: string; nameEn?: string | null; priority: number; validFrom: string; validTo?: string | null; isActive?: boolean; percent: number; minQuantity?: number; customerId?: string | null; customerGroupId?: string | null; itemId?: string | null; itemGroupId?: string | null }
+export interface PricingQuoteRequest { date: string; currency: string; itemId: string; itemGroupId?: string | null; unitId: string; quantity: number; customerId?: string | null; unitCost?: number | null; override?: { unitPrice?: number | null; discountPercent?: number | null; reason: string } | null }
+// Customer groups (company migration 0027). A customer belongs to at most one group; the assignment revision 0 means never assigned.
+export interface CustomerGroup { id: string; code: string; nameAr: string; nameEn: string | null; isActive: boolean; revision: number; updatedAtUtc: string }
+export interface CustomerGroupsResponse { customerGroups: CustomerGroup[]; can: { configure: boolean }; /** present only when the request used search, limit or offset */ total?: number }
+export interface CustomerGroupInput { code?: string; nameAr: string; nameEn?: string | null; isActive?: boolean }
+export interface CustomerGroupAssignment { partyId: string; customerGroupId: string | null; customerGroupCode: string | null; revision: number }
+export interface CustomerGroupAssignmentsResponse { assignments: CustomerGroupAssignment[]; can: { configure: boolean } }
+export interface PricingTraceStep { kind: string; ruleRef: string; outcome: string }
+export interface PricingQuote {
+  version: string; contentHash: string;
+  policy: { priceDecimals: number; moneyDecimals: number; minMarginPercent: number | null; marginAction: number; listPrecedence: number; discountPrecedence: number };
+  result: { listUnitPrice: number; priceRuleRef: string; discountPercent: number; discountRuleRef: string | null; netUnitPrice: number; lineNet: number; overridden: boolean; overrideReason: string | null; marginPercent: number | null; margin: number; requiresApproval: boolean; trace: PricingTraceStep[] };
+}
+
 export interface CostCenterBranchRule { costCenterId: string; restricted: boolean; branchIds: string[]; revision: number }
 export interface CostCenterBranchRulesResponse { costCenters: CostCenterBranchRule[]; can: { configure: boolean } }
 export interface JournalLineInput {
@@ -575,6 +717,35 @@ export interface StockWarehouseRef { id: string; branchId: string; code: string;
 export interface StockItemUnit { id: string; code: string; nameAr: string | null; nameEn: string | null; decimals: number; factor: number; isBase: boolean }
 export interface StockItemRef { id: string; code: string; nameAr: string | null; nameEn: string | null; units: StockItemUnit[] }
 
+// ---- Commercial documents (Phase 3.13 S1/S6). Status: 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. Mode: 1 direct, 2 separate. Event kind: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled,
+// 6 approved, 7 rejected, 8 re-approval requested, 9 reopened. Prices, taxes and totals are produced by the SERVER at submit and sealed at approval; a client never sends one.
+export type CommercialStatus = 1 | 2 | 3 | 4 | 5;
+export interface CommercialLine { lineNo: number; itemId: string; unitId: string; quantity: number; warehouseId: string | null; lineNet: number | null; pricingHash: string | null }
+export interface CommercialEvent { kind: number; fromStatus: CommercialStatus | null; toStatus: CommercialStatus; revision: number; actorUserId: string; reason: string | null; atUtc: string }
+export interface CommercialDocument {
+  id: string; docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; status: CommercialStatus; note: string | null; submittedBy: string | null; lastEditedBy: string | null;
+  officialNumber: string | null; approvedBy: string | null; approvedAtUtc: string | null; sealedAtUtc: string | null; exchangeRate: number | null; totalNet: number | null; totalTax: number | null; totalGross: number | null;
+  revision: number; createdBy: string; createdAtUtc: string; updatedAtUtc: string; replayed: boolean; lines: CommercialLine[]; events: CommercialEvent[];
+}
+/** The approval plan of the CURRENT revision of a submitted document (stages in order, with the decisions counted per stage) and the decisions cast on it. An empty plan means no policy matches: the single independent approval applies. */
+export interface CommercialApprovalStage { stage: number; required: number; approved: number; roleId: string | null }
+export interface CommercialApprovalDecision { id: number; revision: number; approver: string; stage: number; decidedAtUtc: string }
+export interface CommercialApprovals { plan: CommercialApprovalStage[]; decisions: CommercialApprovalDecision[] }
+export interface CommercialLineInput { itemId: string; unitId: string; quantity: number; warehouseId?: string | null }
+export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
+/** `partyId`, `currency` and `search` (a literal part of the official number) are applied by the SERVER before paging, so a page and its total are exact. */
+export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; partyId?: string; currency?: string; search?: string; offset?: number; limit?: number }
+export interface CommercialDocumentPage { documents: CommercialDocument[]; total: number }
+
+// ---- Document links (Phase 3.13 S2, shown by S6). Kind: 1 fulfils, 2 invoices, 3 returns, 4 amends. A link goes from a line of an approved SOURCE document to a line of an approved TARGET document (same party, currency and branch);
+// ordered / fulfilled / invoiced / returned are DERIVED by the server from the links. Linking needs the update permission on the target and is append-only.
+export type DocumentLinkKind = 1 | 2 | 3 | 4;
+export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; createdBy: string; createdAtUtc: string; replayed: boolean }
+/** A registered link pair: documents of `source` may be linked into documents of `target` with `kind`. Static registry data; empty in production until the concrete types are activated. */
+export interface CommercialLinkPair { source: string; target: string; kind: DocumentLinkKind }
+export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
+export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
+
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
 export type StocktakeStatus = 1 | 2 | 3 | 4 | 5;
@@ -607,7 +778,7 @@ export interface StocktakeCapabilities { view: string[]; create: string[]; updat
 export type PartyKind = 1 | 2;
 export type PartyLinkState = 1 | 2 | 3;
 export interface SharedIdentity { globalPartyId: string; kind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status: 1 | 2; revision: number }
-export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null }
+export interface SharedIdentityInput { kind: PartyKind | null; legalNameAr: string | null; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null; status?: 1 | 2 | null; note?: string | null; viewedSharedRevision?: number | null }
 export interface PartyRequest {
   id: string; kind: 1 | 2; status: 1 | 2 | 3; outcome: 1 | 2 | 3 | null; partyKind: PartyKind; legalNameAr: string; legalNameEn: string | null; taxNumber: string | null; registrationNumber: string | null;
   proposedStatus: 1 | 2; note: string | null; attempts: number; lastAttemptAtUtc: string | null; lastErrorCode: string | null; createdBy: string; createdAtUtc: string; deliveredAtUtc: string | null; completedAtUtc: string | null;
@@ -698,8 +869,23 @@ export interface ApiClientOptions {
    * localStorage/sessionStorage); a restart of the desktop app asks for the password again.
    */
   client?: ClientKind;
-  /** Called when an authenticated call is answered 401 (the session ended or expired). */
+  /** Called when an authenticated call is answered 401 (the session ended or expired). A 401 `mfa_step_up_required` is NOT a session end and never calls it. */
   onUnauthenticated?: () => void;
+  /**
+   * Phase 4.1 step-up: called when the server refuses an AUTHENTICATED call only because the second-factor proof is not fresh (401 `mfa_step_up_required`). It asks the user for a fresh code (the UI) and resolves
+   * true when the step-up succeeded: the original request is then repeated ONCE, unchanged. False (cancelled, failed) leaves the request undone: the caller gets an ApiError `mfa_step_up_cancelled`. Without a handler the
+   * caller gets the ApiError `mfa_step_up_required` itself.
+   */
+  stepUp?: () => Promise<boolean>;
+}
+
+/** Distinct ids in batches of {@link MAX_LOOKUP_IDS}; nothing to ask means NO request (never an empty `ids`). Results are concatenated in batch order. */
+async function lookupByIds<T>(ids: readonly string[], fetchBatch: (batch: string[]) => Promise<T[]>): Promise<T[]> {
+  const distinct = [...new Set(ids)];
+  if (distinct.length === 0) return [];
+  const batches: string[][] = [];
+  for (let i = 0; i < distinct.length; i += MAX_LOOKUP_IDS) batches.push(distinct.slice(i, i + MAX_LOOKUP_IDS));
+  return (await Promise.all(batches.map(fetchBatch))).flat();
 }
 
 /** Typed HTTP client for the HASM Backend API. It never talks to the database. */
@@ -708,7 +894,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   const kind: ClientKind = options.client ?? "web";
   let bearer: string | null = null;
 
-  async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean } = {}): Promise<T> {
+  async function request<T>(method: string, path: string, opts: { body?: unknown; ifMatch?: number; anonymous?: boolean; keepSessionOn?: readonly string[]; stepUpDone?: boolean } = {}): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (method !== "GET") headers["X-Hasm-Request"] = "1"; // anti-CSRF header required by the API on every state-changing call
     if (opts.body !== undefined) headers["Content-Type"] = "application/json";
@@ -722,17 +908,24 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
     if (!response.ok) {
-      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number } = {};
+      let payload: { error?: string; fields?: { field: string; code: string }[]; currentRevision?: number; problems?: unknown } = {};
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
         /* non-JSON error body */
       }
       const retry = Number(response.headers?.get?.("Retry-After"));
-      if (response.status === 401 && !opts.anonymous) options.onUnauthenticated?.();
+      if (response.status === 401 && payload.error === "mfa_step_up_required") {
+        // the session is fine; only the second-factor proof is stale. Ask once, repeat the identical request once. Never ends the session.
+        if (options.stepUp && !opts.stepUpDone) {
+          if (await options.stepUp()) return request<T>(method, path, { ...opts, stepUpDone: true });
+          throw new ApiError(401, "mfa_step_up_cancelled");
+        }
+      } else if (response.status === 401 && !opts.anonymous && !opts.keepSessionOn?.includes(payload.error ?? "")) options.onUnauthenticated?.();
       throw new ApiError(response.status, payload.error ?? "request_failed", {
         fields: payload.fields,
         currentRevision: payload.currentRevision,
+        problems: Array.isArray(payload.problems) ? payload.problems.filter((x): x is string => typeof x === "string") : undefined,
         retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
       });
     }
@@ -740,12 +933,20 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     return (await response.json()) as T;
   }
 
+  type LoginBody = { user?: SessionUser; token?: string | null; status?: "mfa_required" | "mfa_enrolment_required" | "mfa_recovery_required"; challenge?: string };
+  function interpretLogin(result: LoginBody): LoginResult {
+    if (result.status === "mfa_required" || result.status === "mfa_enrolment_required") return { step: { kind: result.status, challenge: result.challenge ?? "" } };
+    if (result.status === "mfa_recovery_required") return { step: { kind: "mfa_recovery_required" } };
+    bearer = kind === "desktop" ? (result.token ?? null) : null;
+    return { user: result.user! };
+  }
+
   const get = <T>(path: string) => request<T>("GET", path);
   const enc = encodeURIComponent;
 
   /** Downloads a file (CSV report). Same transport rules as every other call; a failure is reported with the server's short error code. */
-  async function download(path: string): Promise<Blob> {
-    const headers: Record<string, string> = { Accept: "text/csv" };
+  async function download(path: string, accept = "text/csv"): Promise<Blob> {
+    const headers: Record<string, string> = { Accept: accept };
     if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
     const response = await fetchImpl(`${root}${path}`, { method: "GET", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store" });
     if (!response.ok) {
@@ -766,14 +967,26 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
   return {
     getHealth: () => get<HealthResponse>("/api/v1/health"),
 
-    async login(login: string, password: string): Promise<{ user: SessionUser }> {
-      const result = await request<{ user: SessionUser; token?: string | null }>("POST", "/api/v1/auth/login", {
+    async login(login: string, password: string): Promise<LoginResult> {
+      const result = await request<LoginBody>("POST", "/api/v1/auth/login", {
         body: { login, password, client: kind },
         anonymous: true,
       });
-      bearer = kind === "desktop" ? (result.token ?? null) : null;
-      return { user: result.user };
+      return interpretLogin(result);
     },
+    /** Second step of a login: the challenge from the password step and the 6-digit code. Every refusal is the same 401. */
+    async verifyMfa(challenge: string, code: string): Promise<LoginResult> {
+      return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/verify", { body: { challenge, code, client: kind }, anonymous: true }));
+    },
+    /** Starts an enrolment: with a challenge and the one-time enrolment code, or (voluntary, in a live session) with the password. */
+    beginEnrolment: (input: { challenge: string; enrolmentCode: string } | { password: string }) =>
+      request<EnrolmentSecret & { otpauthUri: string }>("POST", "/api/v1/auth/mfa/enrol/begin", { body: { ...input, client: kind }, anonymous: true }),
+    /** Confirms the enrolment with a code from the new authenticator. Both modes end in a NEW session like a login (a new cookie or bearer token; the previous session is revoked). */
+    async confirmEnrolment(input: { challenge: string; code: string } | { code: string }): Promise<LoginResult> {
+      return interpretLogin(await request<LoginBody>("POST", "/api/v1/auth/mfa/enrol/confirm", { body: { ...input, client: kind }, anonymous: true }));
+    },
+    /** A fresh second-factor proof for the privileged operations. A wrong or replayed code is 401 `invalid_code` and does NOT end the session; 429 `too_many_attempts` is the shared throttle. The code is never stored. */
+    mfaStepUp: (code: string) => request<{ verifiedAtUtc: string }>("POST", "/api/v1/auth/mfa/step-up", { body: { code }, keepSessionOn: ["invalid_code"] }),
     async logout(): Promise<void> {
       try {
         await request<void>("POST", "/api/v1/auth/logout", { anonymous: true });
@@ -827,12 +1040,20 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getInventoryCapabilities: () => get<InventoryCapabilities>("/api/v1/company/inventory/capabilities"),
     getInventorySettings: () => get<InventorySettings>("/api/v1/company/inventory/settings"),
     putInventorySettings: (defaultValuation: ValuationMethodCode | null, revision: number) => request<InventorySettings>("PUT", "/api/v1/company/inventory/settings", { body: { defaultValuation }, ifMatch: revision }),
-    listInventoryUnits: () => get<{ units: InventoryUnit[] }>("/api/v1/company/inventory/units"),
+    /** Without `q` the list is unchanged (all units, no `total`); with `search` (code or name), `limit` (default 50, at most 500) or `offset` the server answers one page ordered by code and adds `total`. */
+    /** An explicit EMPTY `ids` array is answered locally with an empty page and NO request: sent to the server it would read as "no filter" and return every unit. */
+    listInventoryUnits: (q?: IdsQuery) => q?.ids?.length === 0 ? Promise.resolve({ units: [] as InventoryUnit[], total: 0 }) : get<{ units: InventoryUnit[]; total?: number }>(`/api/v1/company/inventory/units${listQueryString(q)}`),
+    /** The units with these ids (company-scoped, same permission as the list): duplicates removed, batches of at most 100, NO request at all for an empty list (an empty `ids` would mean "everything" over HTTP). Unknown ids are simply absent. */
+    lookupInventoryUnits: (ids: readonly string[]) => lookupByIds(ids, (batch) => get<{ units: InventoryUnit[] }>(`/api/v1/company/inventory/units${listQueryString({ ids: batch })}`).then((r) => r.units)),
     createInventoryUnit: (unit: InventoryUnitInput) => request<InventoryUnit>("POST", "/api/v1/company/inventory/units", { body: unit }),
     updateInventoryUnit: (id: string, unit: InventoryUnitInput, revision: number) => request<InventoryUnit>("PUT", `/api/v1/company/inventory/units/${enc(id)}`, { body: unit, ifMatch: revision }),
     deactivateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/deactivate`, { ifMatch: revision }),
     activateInventoryUnit: (id: string, revision: number) => request<InventoryUnit>("POST", `/api/v1/company/inventory/units/${enc(id)}/activate`, { ifMatch: revision }),
-    listInventoryGroups: () => get<{ groups: InventoryGroup[] }>("/api/v1/company/inventory/groups"),
+    /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
+    /** Same guard as `listInventoryUnits`: an explicit empty `ids` never becomes an unfiltered request. */
+    listInventoryGroups: (q?: IdsQuery) => q?.ids?.length === 0 ? Promise.resolve({ groups: [] as InventoryGroup[], total: 0 }) : get<{ groups: InventoryGroup[]; total?: number }>(`/api/v1/company/inventory/groups${listQueryString(q)}`),
+    /** The item groups with these ids (see `lookupInventoryUnits`); the effective valuation still resolves through ancestors. */
+    lookupInventoryGroups: (ids: readonly string[]) => lookupByIds(ids, (batch) => get<{ groups: InventoryGroup[] }>(`/api/v1/company/inventory/groups${listQueryString({ ids: batch })}`).then((r) => r.groups)),
     createInventoryGroup: (group: InventoryGroupInput) => request<InventoryGroup>("POST", "/api/v1/company/inventory/groups", { body: group }),
     updateInventoryGroup: (id: string, group: InventoryGroupInput, revision: number) => request<InventoryGroup>("PUT", `/api/v1/company/inventory/groups/${enc(id)}`, { body: group, ifMatch: revision }),
     deactivateInventoryGroup: (id: string, revision: number) => request<InventoryGroup>("POST", `/api/v1/company/inventory/groups/${enc(id)}/deactivate`, { ifMatch: revision }),
@@ -907,6 +1128,25 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     /** Posts an approved document: moves the stock, values it and creates the draft journal entry, atomically. A receipt needs the cost amount of every line. Idempotent. */
     postStockDocument: (id: string, revision: number, lines?: StockPostLineInput[]) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/posting`, { ifMatch: revision, body: { lines: lines ?? [] } }),
     reverseStockDocument: (id: string, effectiveDate: string, reason: string) => request<StockPosting>("POST", `/api/v1/company/stock-documents/${enc(id)}/reversal`, { body: { effectiveDate, reason } }),
+    /** The registered commercial document types (names only). Empty in production until the concrete types are activated (3.15/3.16): the screen then offers no creation. */
+    listCommercialDocumentTypes: () => get<{ types: string[] }>("/api/v1/company/commercial-documents/types").then((r) => r.types),
+    listCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`).then((r) => r.documents),
+    /** The same list with the exact `total` of the documents matching every filter (what a paged picker needs). */
+    searchCommercialDocuments: (q: CommercialDocumentQuery = {}) => get<CommercialDocumentPage>(`/api/v1/company/commercial-documents${commercialQuery(q)}`),
+    getCommercialDocument: (id: string) => get<CommercialDocument>(`/api/v1/company/commercial-documents/${enc(id)}`),
+    getCommercialApprovals: (id: string) => get<CommercialApprovals>(`/api/v1/company/commercial-documents/${enc(id)}/approvals`),
+    createCommercialDocument: (doc: CommercialDocumentInput) => request<CommercialDocument>("POST", "/api/v1/company/commercial-documents", { body: doc }),
+    updateCommercialDocument: (id: string, doc: CommercialDocumentInput, revision: number) => request<CommercialDocument>("PUT", `/api/v1/company/commercial-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
+    submitCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/submit`, { ifMatch: revision }),
+    withdrawCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/withdraw`, { ifMatch: revision }),
+    approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
+    rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
+    cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    /** The registered link pairs (the same route as the types; static registry data). The screen offers link creation only for a document whose type is the target of a pair. */
+    listCommercialLinkPairs: () => get<{ types: string[]; linkPairs: CommercialLinkPair[] }>("/api/v1/company/commercial-documents/types").then((r) => r.linkPairs ?? []),
+    createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
+    listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
+    getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),
@@ -942,8 +1182,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     cancelStocktake: (id: string, reason: string, revision: number) => request<Stocktake>("POST", `/api/v1/company/stocktakes/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
     // Party registry (Phase 3.9A). Changes carry the local party (or proposal) revision as If-Match; the company comes only from the session; the central queue is for identity administrators.
     getPartyCapabilities: () => get<PartyCapabilities>("/api/v1/company/parties/capabilities"),
-    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number } = {}) => {
-      const qs = [q.search ? `search=${enc(q.search)}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
+    /** `active` keeps only active (true) or inactive (false) parties; `withoutRole` keeps only parties that hold NO role of that kind yet. Both are applied by the server before paging, so `total` and the page are exact. */
+    listParties: (q: { search?: string; linkState?: PartyLinkState; offset?: number; limit?: number; active?: boolean; withoutRole?: "customer" | "supplier" } = {}) => {
+      const qs = [q.search ? `search=${enc(q.search)}` : "", q.active !== undefined ? `active=${q.active}` : "", q.withoutRole ? `withoutRole=${q.withoutRole}` : "", q.linkState ? `linkState=${q.linkState}` : "", q.offset !== undefined ? `offset=${q.offset}` : "", q.limit !== undefined ? `limit=${q.limit}` : ""].filter(Boolean).join("&");
       return get<{ parties: LocalPartySummary[]; total: number; registryUnavailable?: boolean }>(`/api/v1/company/parties${qs ? "?" + qs : ""}`);
     },
     getParty: (id: string) => get<LocalParty>(`/api/v1/company/parties/${enc(id)}`),
@@ -952,7 +1193,7 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     proposeParty: (id: string, identity: SharedIdentityInput, revision: number) => request<LocalParty>("POST", `/api/v1/company/parties/${enc(id)}/propose`, { body: identity, ifMatch: revision }),
     syncParties: () => request<PartySyncResult>("POST", "/api/v1/company/parties/sync"),
     reconcileParties: (repair: boolean) => request<PartyReconciliation>("POST", `/api/v1/company/parties/reconcile?repair=${repair}`),
-    listPartyProposals: (status?: 1 | 2 | 3) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals${status ? `?status=${status}` : ""}`),
+    listPartyProposals: (status?: 1 | 2 | 3, offset = 0, limit = 25) => get<{ proposals: PartyProposalSummary[]; total: number }>(`/api/v1/admin/parties/proposals?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ""}`),
     getPartyProposal: (id: string) => get<PartyProposal>(`/api/v1/admin/parties/proposals/${enc(id)}`),
     approvePartyProposal: (id: string, linkTo: string | null, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/approve`, { body: { linkTo }, ifMatch: revision }),
     rejectPartyProposal: (id: string, note: string, revision: number) => request<PartyProposal>("POST", `/api/v1/admin/parties/proposals/${enc(id)}/reject`, { body: { note }, ifMatch: revision }),
@@ -1049,6 +1290,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       get<ImportRowsPage>(`/api/v1/company/imports/${enc(id)}/rows?offset=${q.offset ?? 0}&limit=${q.limit ?? 100}${q.status ? `&status=${q.status}` : ""}`),
     importEvents: (id: string) => get<{ events: ImportEvent[] }>(`/api/v1/company/imports/${enc(id)}/events`),
     importFields: (id: string) => get<ImportFieldsResponse>(`/api/v1/company/imports/${enc(id)}/fields`),
+    listImportTemplates: (adapter?: string) => get<{ templates: ImportTemplate[] }>(`/api/v1/company/imports/templates${adapter ? `?adapter=${enc(adapter)}` : ""}`),
+    importTemplateHistory: (adapter: string, name: string) => get<{ versions: ImportTemplate[] }>(`/api/v1/company/imports/templates/${enc(adapter)}/${enc(name)}/history`),
+    saveImportTemplate: (batchId: string, name: string, expectedVersion: number) => request<ImportTemplate>("POST", `/api/v1/company/imports/${enc(batchId)}/mapping/template`, { body: { name, expectedVersion } }),
+    applyImportTemplate: (batchId: string, name: string) => request<ImportTemplateApplication>("POST", `/api/v1/company/imports/${enc(batchId)}/mapping/apply-template`, { body: { name } }),
+    retireImportTemplate: (adapter: string, name: string, expectedVersion: number) => request<ImportTemplate>("POST", `/api/v1/company/imports/templates/${enc(adapter)}/${enc(name)}/retire`, { body: { expectedVersion } }),
     suggestImportMapping: (id: string) => get<{ mapping: ImportMapping }>(`/api/v1/company/imports/${enc(id)}/mapping/suggestion`),
     setImportMapping: (id: string, mapping: ImportMapping, revision: number) => request<ImportBatch>("PUT", `/api/v1/company/imports/${enc(id)}/mapping`, { body: mapping, ifMatch: revision }),
     dryRunImport: (id: string, revision: number) => request<ImportBatch>("POST", `/api/v1/company/imports/${enc(id)}/dry-run`, { ifMatch: revision }),
@@ -1082,6 +1328,91 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     getCostCenterBranchRule: (costCenterId: string) => get<CostCenterBranchRule>(`/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`),
     setCostCenterBranchRule: (costCenterId: string, rule: { restricted: boolean; branchIds: string[] }, revision: number) =>
       request<CostCenterBranchRule>("PUT", `/api/v1/company/cost-center-policies/branches/${enc(costCenterId)}`, { body: rule, ifMatch: revision }),
+    getAttachmentCapabilities: () => get<AttachmentCapabilities>("/api/v1/company/attachments/capabilities"),
+    listAttachments: (subjectKind: AttachmentSubjectKind, subjectId: string) => get<AttachmentsResponse>(`/api/v1/company/attachments?subjectKind=${enc(subjectKind)}&subjectId=${enc(subjectId)}`),
+    uploadAttachment: async (subjectKind: AttachmentSubjectKind, subjectId: string, file: Blob, fileName: string, sensitive: boolean): Promise<Attachment> => {
+      const form = new FormData();
+      form.append("subjectKind", subjectKind); form.append("subjectId", subjectId); form.append("sensitive", sensitive ? "true" : "false"); form.append("file", file, fileName);
+      const headers: Record<string, string> = { Accept: "application/json", "X-Hasm-Request": "1" };      // the browser sets the multipart boundary
+      if (kind === "desktop" && bearer) headers["Authorization"] = `Bearer ${bearer}`;
+      const response = await fetchImpl(`${root}/api/v1/company/attachments`, { method: "POST", headers, credentials: kind === "web" ? "include" : "omit", cache: "no-store", body: form });
+      if (!response.ok) {
+        let payload: { error?: string; fields?: { field: string; code: string }[] } = {};
+        try { payload = (await response.json()) as typeof payload; } catch { /* non-JSON error body */ }
+        if (response.status === 401) options.onUnauthenticated?.();
+        throw new ApiError(response.status, payload.error ?? "request_failed", { fields: payload.fields });
+      }
+      return (await response.json()) as Attachment;
+    },
+    downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
+    getRetentionCapabilities: () => get<RetentionCapabilities>("/api/v1/company/attachment-retention/capabilities"),
+    listRetentionPolicies: () => get<{ policies: RetentionPolicyVersion[] }>("/api/v1/company/attachment-retention/policies"),
+    draftRetentionPolicy: (input: RetentionPolicyInput) => request<RetentionPolicyVersion>("POST", "/api/v1/company/attachment-retention/policies", { body: input }),
+    approveRetentionPolicy: (id: string, revision: number, shorteningAcknowledgement: string | null) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/approve`, { body: { shorteningAcknowledgement }, ifMatch: revision }),
+    revokeRetentionPolicy: (id: string, revision: number, reason: string) => request<RetentionPolicyVersion>("POST", `/api/v1/company/attachment-retention/policies/${enc(id)}/revoke`, { body: { reason }, ifMatch: revision }),
+    listLegalHolds: (includeReleased = false) => get<{ holds: LegalHold[] }>(`/api/v1/company/attachment-retention/holds${includeReleased ? "?includeReleased=true" : ""}`),
+    placeLegalHold: (input: LegalHoldInput) => request<LegalHold>("POST", "/api/v1/company/attachment-retention/holds", { body: input }),
+    releaseLegalHold: (id: string, revision: number, reason: string) => request<LegalHold>("POST", `/api/v1/company/attachment-retention/holds/${enc(id)}/release`, { body: { reason }, ifMatch: revision }),
+    previewRetention: (offset = 0, limit = 50, filter?: { subjectKind?: string; subjectId?: string }) => get<RetentionPreview>(`/api/v1/company/attachment-retention/preview?offset=${offset}&limit=${limit}${filter?.subjectKind ? `&subjectKind=${enc(filter.subjectKind)}` : ""}${filter?.subjectId ? `&subjectId=${enc(filter.subjectId)}` : ""}`),
+    removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
+    /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
+    /**
+     * An EMPTY `ids` array means "no parties named", so it returns an empty page WITHOUT a request (the server treats an absent `ids` as the unfiltered list, and that must never be reached by accident).
+     * The synthetic page has `total: 0` and NO `can` (no request was made, so no permission is known and none is invented): use `can` only from the unfiltered list. The server semantics are unchanged.
+     */
+    listPartyRoles: (kind?: number, q?: PartyRoleQuery) => {
+      if (q?.ids !== undefined && q.ids.length === 0) return Promise.resolve<PartyRolesResponse>({ items: [], total: 0 });
+      const p = new URLSearchParams();
+      if (kind) p.set("kind", String(kind));
+      if (q?.search) p.set("search", q.search);
+      if (q?.limit !== undefined) p.set("limit", String(q.limit));
+      if (q?.offset !== undefined) p.set("offset", String(q.offset));
+      for (const id of q?.ids ?? []) p.append("ids", id);
+      const qs = p.toString();
+      return get<PartyRolesResponse>(`/api/v1/company/party-roles${qs ? "?" + qs : ""}`);
+    },
+    createPartyRole: (r: PartyRoleInput) => request<PartyRole>("POST", "/api/v1/company/party-roles", { body: r }),
+    updatePartyRole: (id: string, r: PartyRoleInput, revision: number) => request<PartyRole>("PUT", `/api/v1/company/party-roles/${enc(id)}`, { body: r, ifMatch: revision }),
+    listSalesRepresentatives: () => get<SalesRepresentativesResponse>("/api/v1/company/sales-representatives"),
+    createSalesRepresentative: (r: SalesRepresentativeInput) => request<SalesRepresentative>("POST", "/api/v1/company/sales-representatives", { body: r }),
+    updateSalesRepresentative: (id: string, r: SalesRepresentativeInput, revision: number) => request<SalesRepresentative>("PUT", `/api/v1/company/sales-representatives/${enc(id)}`, { body: r, ifMatch: revision }),
+    listTaxes: () => get<TaxesResponse>("/api/v1/company/taxes"),
+    createTax: (t: TaxInput) => request<Tax>("POST", "/api/v1/company/taxes", { body: t }),
+    updateTax: (id: string, t: TaxInput, revision: number) => request<Tax>("PUT", `/api/v1/company/taxes/${enc(id)}`, { body: t, ifMatch: revision }),
+    addTaxRate: (id: string, rate: TaxRateInput) => request<Tax>("POST", `/api/v1/company/taxes/${enc(id)}/rates`, { body: rate }),
+    listTaxClasses: () => get<TaxClassesResponse>("/api/v1/company/taxes/classes"),
+    createTaxClass: (c: TaxClassInput) => request<TaxClass>("POST", "/api/v1/company/taxes/classes", { body: c }),
+    updateTaxClass: (id: string, c: TaxClassInput, revision: number) => request<TaxClass>("PUT", `/api/v1/company/taxes/classes/${enc(id)}`, { body: c, ifMatch: revision }),
+    listItemTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/item-classes"),
+    listPartyTaxClasses: () => get<TaxAssignmentsResponse>("/api/v1/company/taxes/party-classes"),
+    assignItemTaxClass: (itemId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/item-classes/${enc(itemId)}`, { body: { classId } }),
+    assignPartyTaxClass: (partyId: string, classId: string | null) => request<{ ok: boolean }>("PUT", `/api/v1/company/taxes/party-classes/${enc(partyId)}`, { body: { classId } }),
+    listTaxRules: () => get<TaxRulesResponse>("/api/v1/company/taxes/rules"),
+    createTaxRule: (r: TaxRuleInput) => request<TaxRule>("POST", "/api/v1/company/taxes/rules", { body: r }),
+    updateTaxRule: (id: string, r: TaxRuleInput, revision: number) => request<TaxRule>("PUT", `/api/v1/company/taxes/rules/${enc(id)}`, { body: r, ifMatch: revision }),
+    getTaxPolicy: () => get<TaxPolicyResponse>("/api/v1/company/taxes/policy"),
+    addTaxPolicy: (p: TaxPolicyInput) => request<TaxPolicy>("POST", "/api/v1/company/taxes/policy", { body: p }),
+    resolveTaxes: (q: { documentType: string; operation: string; taxDate: string; itemId?: string; partyId?: string }) =>
+      get<TaxResolution>(`/api/v1/company/taxes/resolve?documentType=${enc(q.documentType)}&operation=${enc(q.operation)}&taxDate=${enc(q.taxDate)}${q.itemId ? `&itemId=${enc(q.itemId)}` : ""}${q.partyId ? `&partyId=${enc(q.partyId)}` : ""}`),
+    getPricingPolicy: () => get<PricingPolicyResponse>("/api/v1/company/pricing/policy"),
+    savePricingPolicy: (p: PricingPolicyInput, version: number) => request<PricingPolicy>("POST", "/api/v1/company/pricing/policy", { body: p, ifMatch: version }),
+    listPriceLists: () => get<PriceListsResponse>("/api/v1/company/pricing/price-lists"),
+    createPriceList: (l: PriceListInput) => request<PriceList>("POST", "/api/v1/company/pricing/price-lists", { body: l }),
+    updatePriceList: (id: string, l: PriceListInput, revision: number) => request<PriceList>("PUT", `/api/v1/company/pricing/price-lists/${enc(id)}`, { body: l, ifMatch: revision }),
+    listPriceEntries: (listId: string) => get<PriceEntriesResponse>(`/api/v1/company/pricing/price-lists/${enc(listId)}/entries`),
+    createPriceEntry: (listId: string, e: PriceEntryInput) => request<PriceEntry>("POST", `/api/v1/company/pricing/price-lists/${enc(listId)}/entries`, { body: e }),
+    updatePriceEntry: (id: string, e: PriceEntryInput, revision: number) => request<PriceEntry>("PUT", `/api/v1/company/pricing/entries/${enc(id)}`, { body: e, ifMatch: revision }),
+    listDiscountRules: () => get<DiscountRulesResponse>("/api/v1/company/pricing/discounts"),
+    createDiscountRule: (d: DiscountRuleInput) => request<DiscountRule>("POST", "/api/v1/company/pricing/discounts", { body: d }),
+    updateDiscountRule: (id: string, d: DiscountRuleInput, revision: number) => request<DiscountRule>("PUT", `/api/v1/company/pricing/discounts/${enc(id)}`, { body: d, ifMatch: revision }),
+    /** Without `q` the list is unchanged; with `search`, `limit` or `offset` one page ordered by code plus `total` (see `listInventoryUnits`). */
+    /** `active: true` keeps only active groups (false only inactive ones); the server counts the filter in `total`, so the picker never filters on the client. Other parameters as in `listInventoryUnits`. */
+    listCustomerGroups: (q?: CustomerGroupQuery) => get<CustomerGroupsResponse>(`/api/v1/company/pricing/customer-groups${listQueryString(q, q?.active === undefined ? undefined : { active: String(q.active) })}`),
+    createCustomerGroup: (g: CustomerGroupInput) => request<CustomerGroup>("POST", "/api/v1/company/pricing/customer-groups", { body: g }),
+    updateCustomerGroup: (id: string, g: CustomerGroupInput, revision: number) => request<CustomerGroup>("PUT", `/api/v1/company/pricing/customer-groups/${enc(id)}`, { body: g, ifMatch: revision }),
+    listCustomerGroupAssignments: () => get<CustomerGroupAssignmentsResponse>("/api/v1/company/pricing/customer-assignments"),
+    setCustomerGroupAssignment: (partyId: string, customerGroupId: string | null, revision: number) => request<CustomerGroupAssignment>("PUT", `/api/v1/company/pricing/customer-assignments/${enc(partyId)}`, { body: { customerGroupId }, ifMatch: revision }),
+    quotePrice: (q: PricingQuoteRequest) => request<PricingQuote>("POST", "/api/v1/company/pricing/quote", { body: q }),
     createCostCenter: (c: CostCenterInput) => request<CostCenter>("POST", "/api/v1/company/cost-centers", { body: c }),
     updateCostCenter: (id: string, c: CostCenterDetailsInput, revision: number) => request<CostCenter>("PUT", `/api/v1/company/cost-centers/${enc(id)}`, { body: c, ifMatch: revision }),
     recodeCostCenter: (id: string, code: string, revision: number) => request<CostCenter>("POST", `/api/v1/company/cost-centers/${enc(id)}/recode`, { body: { code }, ifMatch: revision }),

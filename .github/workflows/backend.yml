@@ -26,6 +26,30 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Tax schema files match the deterministic generator (Phase 3.10)
+        run: node tools/schema/company-0022-tax.cjs --check
+      - name: Party-role schema files match the deterministic generator (Phase 3.9B)
+        run: node tools/schema/company-0023-party-roles.cjs --check
+      - name: Attachment schema files match the deterministic generator (Phase 3.12)
+        run: node tools/schema/company-0024-attachments.cjs --check
+      - name: Import-template schema files match the deterministic generator (Phase 3.9C)
+        run: node tools/schema/company-0025-import-templates.cjs --check
+      - name: Pricing schema files match the deterministic generator (Phase 3.11 slice 2b)
+        run: node tools/schema/company-0026-pricing.cjs --check
+      - name: Customer-group schema files match the deterministic generator (Phase 3.11 customer groups, company migration 0027)
+        run: node tools/schema/company-0027-customer-groups.cjs --check
+      - name: Commercial-document schema files match the deterministic generator (Phase 3.13 S1a, company migration 0028)
+        run: node tools/schema/company-0028-commercial.cjs --check
+      - name: Commercial-approval schema files match the deterministic generator (Phase 3.13 S1b, company migration 0029)
+        run: node tools/schema/company-0029-commercial-approval.cjs --check
+      - name: Document-links schema files match the deterministic generator (Phase 3.13 S2, company migration 0030)
+        run: node tools/schema/company-0030-document-links.cjs --check
+      - name: Commercial-policies schema files match the deterministic generator (Phase 3.13 S5a, company migration 0032)
+        run: node tools/schema/company-0032-commercial-policies.cjs --check
+      - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
+        run: node tools/schema/company-0031-attachment-retention.cjs --check
+      - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
+        run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
       - run: dotnet test src/backend/Hasm.slnx --no-build --configuration Release
@@ -99,6 +123,16 @@ jobs:
           echo "HASM_TEST_PG_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_admin;Password=${TEST_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
           echo "HASM_TEST_PG_ROLE_ADMIN_CONNECTION=Host=localhost;Port=5432;Username=hasm_test_roleadmin;Password=${ROLE_PW};Database=postgres;SSL Mode=Disable" >> "$GITHUB_ENV"
 
+      - name: PostgreSQL client tools match the server major version (restore drill)
+        run: |
+          set -euo pipefail
+          SERVER_MAJOR="$(PGPASSWORD=ci-bootstrap-throwaway psql -h localhost -U ci_bootstrap -d postgres -At -c "SHOW server_version_num" | cut -c1-2)"
+          for tool in pg_dump pg_restore; do
+            CLIENT_MAJOR="$("${tool}" --version | grep -oE '[0-9]+' | head -1)"
+            echo "${tool} major ${CLIENT_MAJOR}, server major ${SERVER_MAJOR}"
+            [ "${CLIENT_MAJOR}" = "${SERVER_MAJOR}" ] || { echo "::error::${tool} major version does not match the server (the restore drill needs matching tools)"; exit 1; }
+          done
+
       - run: dotnet restore src/backend/Hasm.slnx
       - run: dotnet build src/backend/Hasm.slnx --no-restore --configuration Release
 
@@ -109,13 +143,13 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1202 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1495 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
           EXPECTED_REGISTRY: |
             EXPECTED = {
-                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 17, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
                 "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
                 "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
                 "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
@@ -123,12 +157,12 @@ jobs:
                 "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
                 "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
                 # Phase 2.3C-2 cryptographic audit integrity
-                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 2, "MfaStoreTests": 14, "MfaChallengeStoreTests": 6, "MfaLoginTests": 9, "MfaEnrolmentTests": 9, "MfaApiTests": 3, "MfaStepUpTests": 7, "MfaStepUpApiTests": 3, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
                 "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
                 "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
                 # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
-                "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 10, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
+                "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 11, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
                 "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
                 # Phase 3.1A-2 company configuration (migration 0003, system migration 0006, services, API, projection)
                 "CompanyConfigurationMigrationTests": 4, "CompanyProfileTests": 12, "CompanySettingsTests": 5, "CompanyCurrencyTests": 8,
@@ -155,7 +189,7 @@ jobs:
                 "ApprovalPolicyTests": 4, "ApprovalDecisionTests": 5, "ApprovalDatabaseGuardTests": 3, "ApprovalAccessTests": 2,
                 # slice S5 journal and posting engine (company migration 0008, system migration 0011); slice S6 ledger reports.
                 "JournalLifecycleTests": 9, "JournalPeriodTests": 2, "JournalMultiCurrencyTests": 5, "JournalAllocationTests": 4, "JournalApprovalTests": 7,
-                "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 3, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
+                "JournalReversalTests": 4, "JournalDatabaseInvariantTests": 5, "JournalProbeTests": 3, "JournalAccessTests": 9, "JournalAuditIntegrityTests": 1, "LedgerReportTests": 9,
                 # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
                 "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
                 # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
@@ -163,11 +197,11 @@ jobs:
                 # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
                 "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
                 # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
-                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 9, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
+                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 11, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
                 # Phase 3.3 financial reporting: S1 reporting foundation.
                 "ReportingFoundationTests": 6, "ReportingComparisonTests": 8, "FinancialStatementTests": 13, "ExcelExportTests": 4,
                 # Phase 3.4 inventory master data (company migration 0012, system migration 0015).
-                "InventoryMasterDataTests": 14, "InventoryApiTests": 3, "InventoryImportTests": 13,
+                "InventoryMasterDataTests": 16, "InventoryApiTests": 4, "InventoryImportTests": 13,
                 # Phase 3.5 stock movement documents (company migration 0013, system migration 0016).
                 "StockDocumentTests": 17, "StockDocumentApiTests": 5,
                 # Phase 3.6 inventory costing engine (company migration 0014).
@@ -175,7 +209,7 @@ jobs:
                 # Phase 3.7A inventory accounting configuration (company migration 0015, system migration 0017).
                 "InventoryAccountingTests": 7, "InventoryAccountingApiTests": 1,
                 # Phase 3.7B atomic stock posting (company migration 0016, system migration 0018).
-                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6,
+                "StockPostingTests": 11, "StockPostingApiTests": 1, "StockPostingHardeningTests": 6, "StockPostingInWorkTests": 14,
                 # Phase 3.7C reversal of executed stock documents, valuation close probe (company migration 0017, system migration 0019).
                 "StockReversalTests": 8, "StockReversalApiTests": 1, "StockReversalScenarioTests": 5,
                 # Phase 3.8A stock balances, item ledger and reconciliation (system migration 0020).
@@ -187,7 +221,58 @@ jobs:
                 # Phase 3.8B-3 negative-stock exception: obligations, settlements, reversals, close probe (company migration 0020, system migration 0022).
                 "NegativeStockTests": 15, "NegativeStockReviewTests": 4, "NegativeStockApiTests": 1,
                 # Phase 3.9A party registry: shared identity, central approval, outbox and reconciliation (company migration 0021, system migration 0023).
-                "PartyRegistryTests": 4, "PartyOutboxTests": 3, "PartyAccessTests": 1, "PartyDatabaseGuardTests": 1, "PartyApiTests": 1, "PartyReviewTests": 5,
+                "PartyRegistryTests": 5, "PartyOutboxTests": 3, "PartyAccessTests": 1, "PartyDatabaseGuardTests": 1, "PartyApiTests": 1, "PartyReviewTests": 5,
+                # Phase 3.9C slice 2 party import adapter: creation through the party service, queued proposals, validation and conflicts, atomic rollback, stale plan.
+                "PartyImportTests": 4,
+                # Phase 3.11 slice 2b pricing configuration: policy versions with company-configurable precedences, price lists, entries, discount rules, quote and snapshot, authorization (company migration 0026, system migration 0027).
+                "PricingConfigTests": 6, "PricingApiTests": 5,
+                # Phase 3.11 customer groups (company migration 0027): group master, one-group-per-customer assignment, customer-or-group scope, regroup concurrency, server-derived quote group; HTTP API.
+                "CustomerGroupTests": 7, "CustomerGroupApiTests": 3,
+                # Phase 3.13 S1a commercial document skeleton (company migration 0028, system migration 0028): state machine, create idempotency, branch scope, isolation, HTTP API.
+                "CommercialStateMachineTests": 3, "CommercialIdempotencyTests": 2, "CommercialBranchScopeTests": 1, "CommercialIsolationTests": 2, "CommercialApiTests": 3,
+                # Phase 3.13 S1b commercial approval, numbering and server-produced snapshots (company migration 0029, system migration 0029).
+                "CommercialNumberingTests": 2, "CommercialApprovalTests": 3, "CommercialSnapshotTests": 2, "CommercialHardeningTests": 5, "DocumentLinkTests": 8, "DocumentLinkApiTests": 1, "DocumentLinkRuntimeRoleTests": 1, "CommercialPolicyTests": 11,
+                # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
+                "TaxConfigTests": 12,
+                "TaxApiTests": 4,
+                # Release 1 acceptance, cross-module accounting scenarios: company isolation over HTTP across every read family, the fiscal life cycle to year end, inventory valuation = inventory ledger.
+                "CrossModuleIsolationScenarioTests": 1, "CrossModuleFiscalLifecycleScenarioTests": 1, "CrossModuleInventoryValuationScenarioTests": 1,
+                # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
+                "PartyRoleTests": 10, "PartyRoleApiTests": 8,
+                # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
+                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 4, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1, "ApiInputHardeningTests": 3,
+                # Phase 3.9C reusable import mapping templates (company migration 0025).
+                "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
+                # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
+                "BackupRestoreDrillTests": 2,
+                # Phase 4.3 slice 3: registry-bound backup, trial restore with the 21.8 pre-cutover checks, kept trial databases and the Hasm.Admin commands (no migration).
+                "CompanyBackupServiceTests": 11, "CompanyRestoreIsolationTests": 2,
+                # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
+                "BackupRunTests": 6,
+                # Gapless numbering under failure for stock documents, stocktakes, stock adjustments and journal posting: reuse after a failure after the issue, and a number collision refused as number_already_issued (no migration).
+                "NumberingCollisionTests": 4,
+                # Release 1 acceptance C: parallel writers from one revision, exactly one wins (no migration).
+                "AccountLostUpdateTests": 1, "BranchLostUpdateTests": 1, "WarehouseLostUpdateTests": 1, "PartyLostUpdateTests": 1, "PriceListLostUpdateTests": 1, "TaxLostUpdateTests": 1,
+                # Per-endpoint 403 matrix of every mutating /api/v1/company/** route (no permission, read-only, other branch, cost center or warehouse; route-table completeness).
+                "EndpointPermissionMatrixTests": 5, "EndpointPermissionMatrixWarehouseTests": 1,
+                # Phase 4.3 slice 5: encrypted, signed backups, trial restore with the recovery key, forged-set refusal, backup-keys, the recovery test, encryption by default (no migration).
+                "EncryptedBackupTests": 6,
+                # Release 1 accounting acceptance (gap items 4-5): stock posting racing a period close (race and deterministic), stocktake approval in closed periods (no migration).
+                "InventoryPeriodInvariantTests": 3,
+                # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
+                "BackupRetentionTests": 7,
+                # Release 1 acceptance evidence for owner item 11 (D-088): real encrypted backup, trial restore with the recovery key, tampering and downgrade refusals, key rotation, key-export round trip (no migration).
+                "BackupAcceptanceEvidenceTests": 5,
+                # Acceptance scenario 21.10 and the upgrade test category: opaque physical names and intact schema on a new database, an upgrade from company level 3 and a trial restore (no migration).
+                "PhysicalNamingAcceptanceTests": 3,
+                # Constraint-violation matrix of the mutating company endpoints (planning item 4, part 2): parallel duplicates, transitions and stale revisions end in a mapped 4xx, never a 5xx (no migration).
+                "EndpointConstraintMatrixTests": 4,
+                # Constraint-violation matrix, part 2: the mutating company routes part 1 (#155) left pending; parallel duplicates, transitions and stale revisions end in the expected 4xx (no migration).
+                "EndpointConstraintMatrixPart2Tests": 6,
+                # Constraint-violation matrix, part 2, batch 3: stock documents (posting, reversal, negative-stock exception), stocktakes and stock adjustments on the stock fixture (no migration).
+                "EndpointConstraintMatrixPart2StockTests": 2,
+                # Constraint-violation matrix, part 2, batch 4: commercial documents and imports on their own fixtures (no migration).
+                "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
                 # Phase 3.8D-1 authorized, repeatable-read/read-only ordinary-history snapshots; unsupported histories fail closed.
                 "CostHistorySnapshotTests": 15, "NegativeCostHistorySnapshotTests": 2, "StockDocumentCostHistorySnapshotTests": 4,
                 "CostFlowSnapshotTests": 49, "StockDocumentCostFlowSnapshotTests": 6, "NegativeCostFlowSnapshotTests": 2,

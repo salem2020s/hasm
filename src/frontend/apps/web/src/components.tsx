@@ -73,12 +73,14 @@ interface ConfirmProps {
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Keeps the confirm button disabled until required input in `children` is complete (the server validates again). */
+  confirmDisabled?: boolean;
   /** Extra content between the message and the buttons (for example a choice). */
   children?: ReactNode;
 }
 
 /** Confirmation for sensitive actions. Focus starts on Cancel (the safe choice); Escape cancels. */
-export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, children }: ConfirmProps) {
+export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmDisabled, children }: ConfirmProps) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
@@ -91,7 +93,7 @@ export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onCon
         {children}
         <div className="actions">
           <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel ?? t("cancel")}</button>
-          <button type="button" className="danger" onClick={onConfirm}>{confirmLabel}</button>
+          <button type="button" className="danger" disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -103,7 +105,13 @@ export function errorText(t: (k: string) => string, e: unknown, keyPrefix = "err
   if (e instanceof ApiError) {
     const specific = `${keyPrefix}${e.code}`;
     const translated = t(specific);
-    if (translated !== specific) return translated;
+    if (translated !== specific) {
+      // a weak password lists which rules it broke (server short codes, translated; an unknown code is never shown raw)
+      const rules = e.code === "weak_password" ? (e.details.problems ?? []).map((p) => t(`error.password.${p}`).replace(/^error\.password\..*$/, "")).filter(Boolean) : [];
+      return rules.length > 0 ? `${translated} (${rules.join(t("list.separator"))})` : translated;
+    }
+    if (e.code === "mfa_step_up_cancelled") return t("mfa.step_up.cancelled");                // the action was NOT done: the verification was cancelled or failed
+    if (e.code === "mfa_step_up_required") return t("mfa.step_up.required");
     if (e.status === 403) return t("error.forbidden");
     if (e.status === 401) return t("error.session_expired");
     if (e.status === 503) return t("error.company_unavailable");
@@ -112,11 +120,13 @@ export function errorText(t: (k: string) => string, e: unknown, keyPrefix = "err
   return t("error.network");
 }
 
-export function fieldErrors(t: (k: string) => string, e: unknown): Record<string, string> {
+/** Field refusals by server code. A screen may pass a `scope`: `field.<scope>.<code>` is tried first, then the shared `field.<code>`, so two screens can word the same code differently without colliding in the catalog. */
+export function fieldErrors(t: (k: string) => string, e: unknown, scope?: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (e instanceof ApiError) for (const f of e.details.fields ?? []) {
+    const scoped = scope ? `field.${scope}.${f.code}` : null;
     const key = `field.${f.code}`;
-    out[f.field] = t(key) === key ? t("field.invalid") : t(key);
+    out[f.field] = scoped && t(scoped) !== scoped ? t(scoped) : t(key) === key ? t("field.invalid") : t(key);
   }
   return out;
 }

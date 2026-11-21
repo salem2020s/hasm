@@ -59,7 +59,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
     public async Task A_freshly_provisioned_company_has_the_warehouse_tables_and_no_warehouse_and_no_fabricated_audit_event()
     {
         await Prepare();
-        Assert.Equal(21L, await Count(Company, SystemSchema.MigrationJournalTable));
+        Assert.Equal(32L, await Count(Company, SystemSchema.MigrationJournalTable));
         Assert.Empty(await Warehouses().ListAsync(Company.Id));
         Assert.Equal(0L, await Count(Company, Wh.Table));
         Assert.Equal(0L, await Count(Company, Wr.Table));
@@ -75,7 +75,7 @@ public class WarehouseMigrationTests : WarehouseTestBase
         var branchRowsBefore = await Count(legacy, Br.Table);
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], outcome.Applied);
+        Assert.Equal([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32], outcome.Applied);
         Assert.Equal(7, await Sql<int>("SELECT a FROM zz_existing", legacy));
         Assert.Equal(branchRowsBefore, await Count(legacy, Br.Table));
         Assert.Equal(0L, await Count(legacy, Wh.Table));                          // nothing is seeded

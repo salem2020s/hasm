@@ -1,6 +1,6 @@
 # Internal transfer arithmetic checkpoint
 
-Independent reviewer: separate Codex/GPT-6 context `pr46_review`. Prompt: read-only FULL PR48 diff against main `fe4432113c1c13a62c70ee98c218586d7b424b32`, including new contract, shared state, pure helper and fixtures; verify exact FIFO/average behavior, provenance, resource/cancellation limits and unchanged phase/activation boundaries. Reviewed head `025aca7dcd0785f324318eed5dd5be9c6603a146` plus the four working files and six subsequently added numerical fixtures. Final committed-head confirmation is separate.
+Independent reviewer: separate Codex/GPT context `pr46_review`. Prompt: read-only FULL PR48 diff against main `fe4432113c1c13a62c70ee98c218586d7b424b32`, including new contract, shared state, pure helper and fixtures; verify exact FIFO/average behavior, provenance, resource/cancellation limits and unchanged phase/activation boundaries. Reviewed head `025aca7dcd0785f324318eed5dd5be9c6603a146` plus the four working files and six subsequently added numerical fixtures. Final committed-head confirmation is separate.
 
 Design review found two Medium clarifications: distinguish the two independent collapsed-layer counterexamples, and define the shared component-work budget before row/evidence allocation. Both were corrected and independently confirmed. No remaining Critical/High/Medium in the limited implementation. Reviewer checked source/Git and diff whitespace; did not execute tests or database/network operations. The six added precision/insertion cases were also independently checked numerically.
 

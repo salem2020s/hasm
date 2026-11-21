@@ -1,12 +1,15 @@
 import {
   ApiError, type InventoryBarcode, type InventoryCapabilities, type InventoryGroup, type InventoryItem, type InventoryItemInput, type InventoryUnit, type ItemTypeCode, type ValuationMethodCode,
 } from "@hasm/api-client";
+import { parsePositiveDecimal } from "../numberInput";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Field, Loading, PageHeader } from "../components";
 import { navigate } from "../router";
 import { useReportUnsaved, useUnsaved } from "../unsaved";
+import { AttachmentsPanel } from "./AttachmentsPanel";
+import { TaxClassPicker } from "./TaxClassPicker";
 import { blankToNull, groupTree, invFieldErrors, invName, unitLabel } from "./inventoryCommon";
 
 /**
@@ -213,8 +216,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
       else if (a.unitId === form.baseUnitId) v[`${key}.unitId`] = t("inv.field.equals_base_unit");
       else if (seen.has(a.unitId)) v[`${key}.unitId`] = t("inv.field.duplicate");
       seen.add(a.unitId);
-      const n = Number(a.factor);
-      if (!a.factor.trim() || !Number.isFinite(n) || n <= 0 || !/^\d+(\.\d{1,10})?$/.test(a.factor.trim())) v[`${key}.factor`] = t("inv.field.invalid_factor");
+      if (Number.isNaN(parsePositiveDecimal(a.factor))) v[`${key}.factor`] = t("inv.field.invalid_factor");
     });
     for (const k of ["purchaseUnitId", "salesUnitId"] as const) if (form[k] && form[k] !== form.baseUnitId && !form.alts.some((a) => a.unitId === form[k])) v[k] = t("inv.field.unit_not_defined_for_item");
     return v;
@@ -238,7 +240,7 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
       const body: InventoryItemInput = {
         code: isNew ? blankToNull(form.code.trim().toUpperCase()) : undefined, nameAr: blankToNull(form.nameAr), nameEn: blankToNull(form.nameEn), itemType: form.itemType, groupId: form.groupId, baseUnitId: form.baseUnitId,
         purchaseUnitId: form.purchaseUnitId || null, salesUnitId: form.salesUnitId || null, isLot: goods && form.isLot, isSerial: goods && form.isSerial, hasExpiry: goods && form.hasExpiry, notes: blankToNull(form.notes),
-        alternateUnits: form.alts.map((a) => ({ unitId: a.unitId, factor: Number(a.factor) })),
+        alternateUnits: form.alts.map((a) => ({ unitId: a.unitId, factor: parsePositiveDecimal(a.factor) })),
       };
       if (editor.mode === "new") { await auth.api.createInventoryItem(body); onSaved(t("inv.created")); }
       else { await auth.api.updateInventoryItem(item!.id, body, item!.revision); onSaved(t("inv.updated")); }
@@ -376,6 +378,8 @@ function ItemEditor({ editor, groups, units, caps, onClose, onSaved }: {
     { id: "general", label: t("inv.item.tab.general"), content: general, invalid: invalid.has("general") },
     { id: "units", label: t("inv.item.tab.units"), content: unitsPanel, invalid: invalid.has("units") },
     ...(goods ? [{ id: "tracking", label: t("inv.item.tab.tracking"), content: tracking, invalid: invalid.has("tracking") } as TabItem] : []),
+    ...(item && auth.can("company.tax.view") ? [{ id: "tax", label: t("tax.tab.class"), content: <TaxClassPicker kind="item" subjectId={item.id} /> } as TabItem] : []),
+    ...(item && auth.can("company.attachments.view") ? [{ id: "attachments", label: t("att.tab"), content: <AttachmentsPanel kind="inventory_item" subjectId={item.id} /> } as TabItem] : []),
     ...(item ? [{ id: "barcodes", label: t("inv.item.tab.barcodes"), content: <BarcodesPanel item={item} units={units} canAdd={caps.barcodesCreate} canActivate={caps.barcodesActivate} /> } as TabItem] : []),
   ];
   const activeTab = tabs.some((x) => x.id === tab) ? tab : "general";

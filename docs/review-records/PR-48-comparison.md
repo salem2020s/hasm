@@ -2,7 +2,7 @@
 
 * **Pull request:** #48 (Draft; phase incomplete)
 * **Reviewed baseline:** HEAD dca9aa7dd30aed78873124c7e48040684c5cd019 plus full working diff against origin/main814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb, including all new comparison/contract files. Final pushed-head confirmation remains separate.
-* **Reviewer context/model:** independent separate Codex/GPT-6 context (`pr46_review`), read-only.
+* **Reviewer context/model:** independent separate Codex/GPT context (`pr46_review`), read-only.
 * **Prompt/scope:** adversarial full PR diff, no selected slice; compare exact-cost trajectories, same-date insertion, provenance, unsupported history, immutable inputs, authorization boundaries, D-044/D-045 recording and deterministic cross-conversion accounting contracts with numerical examples. Distinguish proposals from approved bases and enabled execution.
 * **Checks run by reviewer:** source/Git inspection and git diff --check passed; no application tests run by reviewer.
 * **Code findings:** no new Critical, High or Medium in the internal ordinary-history comparison. Baseline/revised trajectories, identity collisions, unsupported kinds, shortage refusal and original entry links were examined. No persistence/API/execution authority is added.

@@ -8,6 +8,7 @@ import { AuthProvider, createSessionBridge, useAuth, type SessionBridge } from "
 import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
+import { StepUpHost, createStepUpBridge, type StepUpBridge } from "./stepUp";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
 import { ImportsPage } from "./pages/Imports";
@@ -17,6 +18,7 @@ import { ReportCenterPage } from "./pages/ReportCenter";
 import { InventoryItemsPage } from "./pages/InventoryItems";
 import { InventoryGroupsPage } from "./pages/InventoryGroups";
 import { InventoryUnitsPage } from "./pages/InventoryUnits";
+import { CommercialDocumentsPage } from "./pages/CommercialDocuments";
 import { StockDocumentsPage } from "./pages/StockDocuments";
 import { InventoryAccountingPage } from "./pages/InventoryAccounting";
 import { StockBalancesPage } from "./pages/StockBalances";
@@ -29,6 +31,10 @@ import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
 import { CostCentersPage } from "./pages/CostCenters";
 import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
+import { PricingPage } from "./pages/Pricing";
+import { AttachmentRetentionPage } from "./pages/AttachmentRetention";
+import { TaxesPage } from "./pages/Taxes";
+import { PartyRolesPage } from "./pages/PartyRoles";
 import { FiscalClosingPage } from "./pages/FiscalClosing";
 import { ExchangeRatesPage } from "./pages/ExchangeRates";
 import { JournalPage } from "./pages/Journal";
@@ -78,6 +84,10 @@ const ROUTES: RouteDef[] = [
   { path: "/company/exchange-rates", permission: "company.exchangerates.view", element: <ExchangeRatesPage /> },
   { path: "/company/cost-centers", permission: "company.costcenters.view", element: <CostCentersPage /> },
   { path: "/company/cost-center-policies", permission: "company.costcenterpolicies.view", element: <CostCenterPoliciesPage /> },
+  { path: "/company/party-roles", anyOf: ["company.partyroles.view", "company.salesreps.view"], element: <PartyRolesPage /> },
+  { path: "/company/taxes", permission: "company.tax.view", element: <TaxesPage /> },
+  { path: "/company/pricing", permission: "company.pricing.view", element: <PricingPage /> },
+  { path: "/company/attachment-retention", permission: "company.attachmentretention.view", element: <AttachmentRetentionPage /> },
   { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
@@ -91,6 +101,7 @@ const ROUTES: RouteDef[] = [
   { path: "/inventory/items", permission: "company.items.view", element: <InventoryItemsPage /> },
   { path: "/inventory/groups", anyOf: ["company.itemgroups.view", "company.items.view"], element: <InventoryGroupsPage /> },
   { path: "/inventory/units", anyOf: ["company.units.view", "company.items.view"], element: <InventoryUnitsPage /> },
+  { path: "/commercial/documents", anyScope: "company.commercialdocs.view", element: <CommercialDocumentsPage /> },
   { path: "/accounting/statements", anyScope: "company.financialstatements.view", element: <FinancialStatementsPage /> },
   { path: "/accounting/statement-mapping", permission: "company.statementmapping.view", element: <StatementMappingPage /> },
   { path: "/company/history", permission: "company.config.view", element: <HistoryPage /> },
@@ -133,6 +144,10 @@ function Shell() {
       { id: "/company/exchange-rates", label: t("nav.exchange_rates"), permission: "company.exchangerates.view" },
       { id: "/company/cost-centers", label: t("nav.cost_centers"), permission: "company.costcenters.view" },
       { id: "/company/cost-center-policies", label: t("nav.cost_center_policies"), permission: "company.costcenterpolicies.view" },
+      { id: "/company/party-roles", label: t("nav.party_roles"), permission: "company.partyroles.view|company.salesreps.view" },
+      { id: "/company/taxes", label: t("nav.taxes"), permission: "company.tax.view" },
+      { id: "/company/pricing", label: t("nav.pricing"), permission: "company.pricing.view" },
+      { id: "/company/attachment-retention", label: t("nav.attachment_retention"), permission: "company.attachmentretention.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
       { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
@@ -156,12 +171,15 @@ function Shell() {
     if (auth.canAny("company.stockbalance.view")) inventory.push({ id: "/inventory/stock-balances", label: t("nav.stock_balances") });
     if (auth.canAny("company.stocktake.view")) inventory.push({ id: "/inventory/stocktakes", label: t("nav.stocktakes") });
     if (auth.canAny("company.stockdocs.view")) inventory.push({ id: "/inventory/negative-stock", label: t("nav.negative_stock") });
+    // Commercial documents (3.13 S6, D-079): shown to anyone who may view them in any scope; the screen itself reports "no document types activated" until the concrete types are activated (3.15/3.16).
+    const commercial: MenuItem[] = auth.canAny("company.commercialdocs.view") || auth.can("company.commercialdocs.view") ? [{ id: "/commercial/documents", label: t("nav.commercial_documents") }] : [];
     // Modules without an implemented business feature are shown disabled with a "Coming soon" badge: no route, no page, never navigable.
     const soon = (id: string, label: string, icon: MenuItem["icon"]): MenuItem => ({ id: `soon:${id}`, label, icon, disabled: true, badge: t("nav.coming_soon") });
     return [
       { id: "/", label: t("nav.home"), icon: <HomeIcon /> },
       ...(accounting.length ? [{ id: "accounting", label: t("nav.accounting"), icon: <AccountingIcon />, children: accounting } as MenuItem] : [soon("accounting", t("nav.accounting"), <AccountingIcon />)]),
       ...(inventory.length ? [{ id: "inventory", label: t("nav.inventory"), icon: <WarehouseIcon />, children: inventory } as MenuItem] : [soon("warehouses", t("nav.warehouses"), <WarehouseIcon />)]),
+      ...(commercial.length ? [{ id: "commercial", label: t("nav.commercial"), icon: <SalesIcon />, children: commercial } as MenuItem] : []),
       soon("sales", t("nav.sales"), <SalesIcon />),
       soon("purchases", t("nav.purchases"), <PurchasesIcon />),
       soon("reports", t("nav.reports"), <ReportsIcon />),
@@ -265,22 +283,24 @@ function Gate() {
       </AuthLayout>
     );
   }
-  if (auth.phase === "anonymous") return <AuthLayout><LoginPage /></AuthLayout>;
+  if (auth.phase === "anonymous" || auth.phase === "mfa") return <AuthLayout><LoginPage /></AuthLayout>;
   if (auth.phase === "needCompany") return <AuthLayout><CompanySelectPage /></AuthLayout>;
   return <Shell />;
 }
 
-export function App({ client, bridge }: { client?: ApiClient; bridge?: SessionBridge }) {
+export function App({ client, bridge, stepUpBridge }: { client?: ApiClient; bridge?: SessionBridge; stepUpBridge?: StepUpBridge }) {
   const { t } = useI18n();
   const own = useMemo(() => {
-    if (client) return { api: client, bridge };
+    const step = stepUpBridge ?? createStepUpBridge();
+    if (client) return { api: client, bridge, step };
     const b = createSessionBridge();
-    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire }), bridge: b };
-  }, [client, bridge]);
+    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, stepUp: step.request }), bridge: b, step };
+  }, [client, bridge, stepUpBridge]);
   return (
     <AuthProvider api={own.api} bridge={own.bridge}>
       <a className="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById("content")?.focus(); }}>{t("skip_to_content")}</a>
       <UnsavedProvider><Gate /></UnsavedProvider>
+      <StepUpHost bridge={own.step} />
     </AuthProvider>
   );
 }

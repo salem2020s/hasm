@@ -93,8 +93,12 @@ public static class PartyEndpoints
     /// <summary>The registry (system database) cannot be reached or the runtime account lacks its grants: a stable 503 with a code the clients translate (review M2).</summary>
     private static IResult Unavailable() => Results.Json(new { error = "registry_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
+    // The shared-identity revision codes stay distinct from the local revision conflict: the 412 body names the CURRENT SHARED revision, not the local party revision.
     private static IResult Map<T>(ConfigResult<T> r, Func<T, object> body, Func<T, long?>? revision = null) =>
-        r.Status == ConfigStatus.Conflict && r.Code == "registry_unavailable" ? Unavailable() : CompanyConfigurationEndpoints.Map(r, body, revision);
+        r.Status == ConfigStatus.Conflict && r.Code == "registry_unavailable" ? Unavailable()
+        : r.Status == ConfigStatus.PreconditionFailed && r.Code == "shared_revision_conflict" ? Results.Json(new { error = r.Code, currentSharedRevision = r.CurrentRevision }, statusCode: 412)
+        : r.Status == ConfigStatus.PreconditionRequired && r.Code == "shared_revision_required" ? CompanyConfigurationEndpoints.Error(428, r.Code)
+        : CompanyConfigurationEndpoints.Map(r, body, revision);
 
     private static async Task<IResult> Central(Func<Task<IResult>> run)
     {
@@ -123,11 +127,14 @@ public static class PartyEndpoints
         return Results.Json(new { view = c.View, create = c.Create, update = c.Update, submit = c.Submit, configure = c.Configure });
     }
 
-    private static async Task<IResult> List(HttpContext http, AccessService access, PartyManagementService svc, string? search, int? linkState, int? offset, int? limit)
+    /// <summary>Optional <c>active</c> (true/false) and <c>withoutRole</c> (customer/supplier: only parties holding no role of that kind) filters are applied in SQL before paging, so <c>total</c> and the page are exact. An unknown value answers the standard <c>invalid_request</c> 400 naming the parameter. Same permission and company scope as the unfiltered list.</summary>
+    private static async Task<IResult> List(HttpContext http, AccessService access, PartyManagementService svc, string? search, int? linkState, int? offset, int? limit, string? active, string? withoutRole)
     {
+        if (ListParameters.TryParseActive(active, out var onlyActive) is { } badActive) return ListParameters.Invalid(badActive);
+        if (ListParameters.TryParseWithoutRole(withoutRole, out var roleKind) is { } badRole) return ListParameters.Invalid(badRole);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        var r = await svc.ListAsync(actor!.UserId, actor.CompanyId, new PartyFilter(search, linkState, offset ?? 0, limit ?? 50), http.RequestAborted);
+        var r = await svc.ListAsync(actor!.UserId, actor.CompanyId, new PartyFilter(search, linkState, offset ?? 0, limit ?? 50, onlyActive, roleKind is { } k ? (PartyRoleKind)k : null), http.RequestAborted);
         return CompanyConfigurationEndpoints.Map(r, p => new
         {
             total = p.Total,

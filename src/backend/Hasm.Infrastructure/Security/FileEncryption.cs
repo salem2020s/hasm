@@ -72,6 +72,10 @@ public sealed class KekHandle
         return dek;
     }
 
+    /// <summary>A purpose-bound subkey (HKDF-SHA-256 over the wrapping key, label <c>hasm-purpose/v1/&lt;purpose&gt;/&lt;keyId&gt;</c>), so other protected data (TOTP secrets) never uses the file-wrapping key itself.</summary>
+    internal byte[] DeriveSubkey(string purpose) =>
+        HKDF.DeriveKey(HashAlgorithmName.SHA256, wrapKey, 32, info: Encoding.ASCII.GetBytes($"hasm-purpose/v1/{purpose}/{Id}"));
+
     public override string ToString() => $"EncryptionKey({Id})"; // never prints material
 }
 

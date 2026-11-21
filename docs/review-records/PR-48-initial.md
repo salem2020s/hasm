@@ -2,7 +2,7 @@
 
 * **Pull request:** #48 (Draft; phase incomplete)
 * **Initial head SHA reviewed:** b22cbe0d23634209b0885a6a50ff9dc1a892e2ed, followed by the complete uncommitted arithmetic/design delta against origin/main at 814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb. Final pushed-head confirmation is pending.
-* **Reviewer context:** separate Codex/GPT-6 agent (`pr46_review`), independent of the author.
+* **Reviewer context:** separate Codex/GPT agent (`pr46_review`), independent of the author.
 * **Prompt/scope:** adversarial full-PR design/code review of costing/closed-period invariants, transfer/reversal/obligation semantics, authorization, stale plans, accounting-policy boundaries, immutable arithmetic and tests. No cherry-picked diff.
 * **Checks run by reviewer:** read-only source/Git inspection and git diff --check passed; no application tests executed.
 * **High design finding, fixed in proposal:** ordinary adjustment drafts might post before their source event. The revised proposal permits non-postable proposal storage only until guarded execution-group materialization commits source and complete adjustment set atomically; every posting path must honor the binding, and a stale group invalidates all approvals. No executable write path existed or was changed.

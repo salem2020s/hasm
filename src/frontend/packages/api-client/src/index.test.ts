@@ -8,6 +8,55 @@ const json = (body: unknown, init: ResponseInit = {}) => new Response(JSON.strin
 const call = (fetchMock: ReturnType<typeof vi.fn>, n = 0) => ({ url: fetchMock.mock.calls[n][0] as string, init: fetchMock.mock.calls[n][1] as RequestInit });
 
 describe("api client", () => {
+  it("lists party roles unchanged without a query and builds the optional search and paging parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [], can: { configure: false } })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listPartyRoles();
+    await client.listPartyRoles(1);
+    await client.listPartyRoles(undefined, { search: "a&b c", limit: 25, offset: 0 });
+    await client.listPartyRoles(2, { search: "" });
+    const B = "https://x/api/v1/company/party-roles";
+    expect([0, 1, 2, 3].map((n) => call(fetchMock, n).url)).toEqual([B, B + "?kind=1", B + "?search=a%26b+c&limit=25&offset=0", B + "?kind=2"]);
+  });
+
+  it("looks party roles up by party ids with repeated ids parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [], can: { configure: false }, total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listPartyRoles(1, { ids: ["p1", "p 2"] });
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/party-roles?kind=1&ids=p1&ids=p+2");
+  });
+
+  it("answers an empty party-id lookup with an empty page and NO request, so it can never fall back to the unfiltered list", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [{ id: "everything" }], can: { configure: true } })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const empty = await client.listPartyRoles(1, { ids: [] });
+    expect(empty).toEqual({ items: [], total: 0 });
+    expect(empty.can).toBeUndefined();                                               // no request, so no permission is known and none is invented
+    expect(fetchMock).not.toHaveBeenCalled();
+    await client.listPartyRoles(1, { search: "a" });                                   // other forms still call the server
+    await client.listPartyRoles(undefined, {});                                        // ids absent is the unfiltered list
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect([0, 1].map((n) => call(fetchMock, n).url)).toEqual(["https://x/api/v1/company/party-roles?kind=1&search=a", "https://x/api/v1/company/party-roles"]);
+  });
+
+  it("lists units, item groups and customer groups unchanged without a query and with the optional search and paging", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({})));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listInventoryUnits();
+    await client.listInventoryUnits({ search: "pc s", limit: 20, offset: 40 });
+    await client.listInventoryGroups();
+    await client.listInventoryGroups({ search: "a&b" });
+    await client.listCustomerGroups();
+    await client.listCustomerGroups({ limit: 5, offset: 0 });
+    await client.listCustomerGroups({ active: true });
+    await client.listCustomerGroups({ search: "v", active: false, limit: 10 });
+    const I = "https://x/api/v1/company/inventory", P = "https://x/api/v1/company/pricing";
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map((n) => call(fetchMock, n).url)).toEqual([
+      I + "/units", I + "/units?search=pc+s&limit=20&offset=40", I + "/groups", I + "/groups?search=a%26b", P + "/customer-groups", P + "/customer-groups?limit=5&offset=0",
+      P + "/customer-groups?active=true", P + "/customer-groups?search=v&limit=10&active=false",
+    ]);
+  });
+
   it("requests the health endpoint under the base url", async () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ status: "healthy", service: "hasm-api", version: "1.0.0" }));
     const client = createApiClient("https://localhost:7241/", fetchMock as unknown as typeof fetch);
@@ -66,6 +115,12 @@ describe("api client", () => {
     await expect(client.login("a", "b")).rejects.toBeInstanceOf(ApiError);
     await expect(client.status()).rejects.toBeInstanceOf(ApiError);
     expect(onUnauthenticated).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the password-policy problems of a weak_password refusal (strings only)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "weak_password", problems: ["too_short", 5, "too_repetitive"] }, { status: 400 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await expect(client.login("a", "b")).rejects.toMatchObject({ status: 400, code: "weak_password", details: { problems: ["too_short", "too_repetitive"] } });
   });
 
   it("reports Retry-After for throttled logins", async () => {
@@ -461,5 +516,212 @@ describe("ledger endpoints (Phase 3.2B)", () => {
     await client.getTrialBalance({ from: "2026-01-01", to: "2026-12-31", excludeClosing: true });
     expect(JSON.parse(call(fetchMock, 0).init.body as string)).toMatchObject({ journalType: "reversal", rateOverride: true, closingKind: "closing", stages: [{ required: 1 }, { required: 2 }] });
     expect(call(fetchMock, 1).url).toContain("excludeClosing=true");
+  });
+});
+
+describe("api client: import template routes (odd names)", () => {
+  it("encodes / % ? # and spaces in template names and adapter codes for retire", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "t" })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    for (const name of ["a/b", "50%", "why?", "tag#1", "two words"]) await client.retireImportTemplate("chart/of?accounts", name, 3);
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string);
+    expect(urls).toEqual([
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/a%2Fb/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/50%25/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/why%3F/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/tag%231/retire",
+      "https://x/api/v1/company/imports/templates/chart%2Fof%3Faccounts/two%20words/retire",
+    ]);
+    for (const u of urls) { const parsed = new URL(u); expect(parsed.search).toBe(""); expect(parsed.hash).toBe(""); expect(parsed.pathname.split("/").length).toBe(9); }
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toEqual({ expectedVersion: 3 });
+  });
+});
+
+describe("api client: by-ids lookup of units and item groups", () => {
+  const unitRow = (id: string) => ({ id, code: id.toUpperCase() });
+  const idsOf = (url: string) => new URL(url).searchParams.getAll("ids");
+
+  it("sends repeated ids on the list call and nothing else changes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ units: [], groups: [], total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listInventoryUnits({ ids: ["a", "b"], limit: 5 });
+    await client.listInventoryGroups({ ids: ["c"] });
+    await client.listInventoryUnits();
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/inventory/units?limit=5&ids=a&ids=b");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/inventory/groups?ids=c");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/inventory/units");
+  });
+
+  it("answers an explicit empty ids array locally with an empty page and sends NO request, for units and for groups (it must never become the unfiltered list)", async () => {
+    const fetchMock = vi.fn();
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listInventoryUnits({ ids: [] })).toEqual({ units: [], total: 0 });
+    expect(await client.listInventoryUnits({ ids: [], search: "a", limit: 5 })).toEqual({ units: [], total: 0 });
+    expect(await client.listInventoryGroups({ ids: [] })).toEqual({ groups: [], total: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    // an ABSENT ids is still the ordinary list
+    const ok = vi.fn().mockImplementation(() => Promise.resolve(json({ units: [], groups: [] })));
+    const live = createApiClient("https://x", ok as unknown as typeof fetch);
+    await live.listInventoryUnits({});
+    await live.listInventoryGroups();
+    expect(ok).toHaveBeenCalledTimes(2);
+  });
+
+  it("never sends a request for an empty id list (an empty ids would mean everything over HTTP)", async () => {
+    const fetchMock = vi.fn();
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.lookupInventoryUnits([])).toEqual([]);
+    expect(await client.lookupInventoryGroups([])).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("removes duplicates, batches at most 100 ids per request and merges the rows", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json({ units: idsOf(url).map(unitRow) })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const ids = Array.from({ length: 150 }, (_, n) => `id-${n}`);
+    const rows = await client.lookupInventoryUnits([...ids, ids[0]!, ids[1]!]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(idsOf(call(fetchMock, 0).url)).toHaveLength(100);
+    expect(idsOf(call(fetchMock, 1).url)).toHaveLength(50);
+    expect(rows.map((r) => r.id)).toEqual(ids);                                       // every id once, in batch order
+  });
+
+  it("uses the same endpoint, credentials and no state-changing header for groups, and surfaces the server's refusal", async () => {
+    const fetchMock = vi.fn().mockImplementationOnce(() => Promise.resolve(json({ groups: [{ id: "g1" }] }))).mockImplementationOnce(() => Promise.resolve(json({ error: "forbidden" }, { status: 403 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.lookupInventoryGroups(["g1"])).toEqual([{ id: "g1" }]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/inventory/groups?ids=g1");
+    expect((call(fetchMock, 0).init.headers as Record<string, string>)["X-Hasm-Request"]).toBeUndefined();      // a read, not a state change
+    await expect(client.lookupInventoryGroups(["g2"])).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("api client: commercial documents (S6)", () => {
+  it("reads the registered types as names only and builds the list query without any client-supplied price or total", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/types") ? { types: ["a_type"] } : { documents: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listCommercialDocumentTypes()).toEqual(["a_type"]);
+    await client.listCommercialDocuments({ status: 2, docType: "a_type", branchId: "b", offset: 25, limit: 25 });
+    await client.listCommercialDocuments();
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/types");
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents?status=2&docType=a_type&branchId=b&offset=25&limit=25");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents");
+  });
+
+  it("sends the party, currency and number search to the server and reads the exact total", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ documents: [{ id: "d" }], total: 7 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    const page = await client.searchCommercialDocuments({ status: 3, branchId: "b", partyId: "p", currency: "JOD", docType: "t", search: "07 7", offset: 50, limit: 50 });
+    expect(page.total).toBe(7);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents?status=3&docType=t&branchId=b&partyId=p&currency=JOD&search=07+7&offset=50&limit=50");
+    expect(await client.listCommercialDocuments({ partyId: "p" })).toEqual([{ id: "d" }]);
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents?partyId=p");
+  });
+
+  it("sends the revision as If-Match on every change and the reason in the body of reject and cancel", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ id: "d" })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.submitCommercialDocument("d", 3);
+    await client.approveCommercialDocument("d", 4);
+    await client.rejectCommercialDocument("d", "no", 5);
+    await client.cancelCommercialDocument("d", "gone", 6);
+    const heads = [0, 1, 2, 3].map((i) => (call(fetchMock, i).init.headers as Record<string, string>)["If-Match"]);
+    expect(heads).toEqual(['"3"', '"4"', '"5"', '"6"']);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/d/submit");
+    expect(JSON.parse(call(fetchMock, 2).init.body as string)).toEqual({ reason: "no" });
+    expect(JSON.parse(call(fetchMock, 3).init.body as string)).toEqual({ reason: "gone" });
+  });
+});
+
+describe("api client: party list filters", () => {
+  it("sends active and withoutRole next to search, limit and offset, and nothing when absent", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ parties: [], total: 0 })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.listParties({ search: "a b", limit: 50, active: true, withoutRole: "customer" });
+    await client.listParties({ active: false, withoutRole: "supplier", offset: 5 });
+    await client.listParties();
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("active")).toBe("true");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("withoutRole")).toBe("customer");
+    expect(new URL(call(fetchMock, 0).url).searchParams.get("search")).toBe("a b");
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("active")).toBe("false");   // false is sent, not dropped
+    expect(new URL(call(fetchMock, 1).url).searchParams.get("withoutRole")).toBe("supplier");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/parties");
+  });
+});
+
+describe("api client: document links (S6 follow-up)", () => {
+  it("posts a link to the links route, reads the links and the derived line quantities of a document", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/links") && !url.includes("/d/") ? { id: "l" } : url.endsWith("/line-quantities") ? { lines: [{ lineNo: 1 }] } : { links: [{ id: "l" }] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.createDocumentLink({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(await client.listDocumentLinks("d")).toEqual([{ id: "l" }]);
+    expect(await client.getLineQuantities("d")).toEqual([{ lineNo: 1 }]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/links");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents/d/links");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/d/line-quantities");
+  });
+
+  it("reads the registered link pairs from the types route and treats an absent field as none", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ types: ["a"], linkPairs: [{ source: "a", target: "a", kind: 1 }] })).mockResolvedValueOnce(json({ types: [] }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect(await client.listCommercialLinkPairs()).toEqual([{ source: "a", target: "a", kind: 1 }]);
+    expect(await client.listCommercialLinkPairs()).toEqual([]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/types");
+  });
+});
+
+describe("api client: the second factor (Phase 4.1; one implementation for Web and Desktop)", () => {
+  it("names the next step when the password is not enough, and keeps no bearer token", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ status: "mfa_required", challenge: "c1", challengeExpiresAtUtc: "2026-11-21T12:00:00Z" }))
+      .mockResolvedValueOnce(json({ status: "mfa_enrolment_required", challenge: "c2" }))
+      .mockResolvedValueOnce(json({ status: "mfa_recovery_required" }))
+      .mockImplementation(() => Promise.resolve(json({ companies: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_required", challenge: "c1" } });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_enrolment_required", challenge: "c2" } });
+    expect(await client.login("l", "p")).toEqual({ step: { kind: "mfa_recovery_required" } });
+    await client.listCompanies();
+    expect((call(fetchMock, 3).init.headers as Record<string, string>)["Authorization"]).toBeUndefined();   // no session was created by any of them
+  });
+
+  it("completes a login with the challenge and the code, anonymously, and the desktop keeps the new token in memory", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: "tok" }))
+      .mockImplementation(() => Promise.resolve(json({ companies: [] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { client: "desktop" });
+    const result = await client.verifyMfa("c1", "123456");
+    expect(result).toMatchObject({ user: { id: "u" } });
+    expect(call(fetchMock).url).toBe("https://x/api/v1/auth/mfa/verify");
+    expect(JSON.parse(call(fetchMock).init.body as string)).toEqual({ challenge: "c1", code: "123456", client: "desktop" });
+    await client.listCompanies();
+    expect((call(fetchMock, 1).init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok");
+  });
+
+  it("does not notify the session-ended handler for a refused second step", async () => {
+    const onUnauthenticated = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue(json({ error: "invalid_credentials" }, { status: 401 }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch, { onUnauthenticated });
+    await expect(client.verifyMfa("c", "000000")).rejects.toMatchObject({ status: 401 });
+    await expect(client.beginEnrolment({ challenge: "c", enrolmentCode: "x" })).rejects.toMatchObject({ status: 401 });
+    await expect(client.confirmEnrolment({ challenge: "c", code: "000000" })).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthenticated).not.toHaveBeenCalled();
+  });
+
+  it("begins an enrolment with the one-time code or, voluntarily, with the password, and confirms it", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=AAAA", secret: "AAAA" }))
+      .mockResolvedValueOnce(json({ otpauthUri: "otpauth://totp/x?secret=BBBB", secret: "BBBB" }))
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: null }))
+      .mockResolvedValueOnce(json({ user: { id: "u", login: "l", displayName: "d", isIdentityAdministrator: false }, token: null }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect((await client.beginEnrolment({ challenge: "c", enrolmentCode: "CODE" })).secret).toBe("AAAA");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ challenge: "c", enrolmentCode: "CODE", client: "web" });
+    expect((await client.beginEnrolment({ password: "pw" })).secret).toBe("BBBB");
+    expect(JSON.parse(call(fetchMock, 1).init.body as string)).toEqual({ password: "pw", client: "web" });
+    expect(await client.confirmEnrolment({ code: "123456" })).toMatchObject({ user: { id: "u" } });                 // a voluntary enrolment also ends in a NEW session
+    expect(await client.confirmEnrolment({ challenge: "c", code: "123456" })).toMatchObject({ user: { id: "u" } });
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/auth/mfa/enrol/confirm");
   });
 });

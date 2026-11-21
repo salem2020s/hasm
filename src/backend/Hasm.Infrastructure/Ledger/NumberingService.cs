@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using LH = Hasm.Infrastructure.CompanyDatabase.CompanySchema.LedgerHistory;
@@ -56,6 +57,29 @@ public static class LedgerAuditEvents
 /// </summary>
 public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
 {
+    /// <summary>
+    /// Whether a failure is the number-issue uniqueness guard refusing a number that is already issued (the counter and the issued numbers disagree, e.g. after a direct write). Callers map it to the stable,
+    /// retryable refusal <c>concurrent_change</c>: the whole transaction rolls back, so the counter does not move and no number is consumed. Narrowed to that one index so no other unique violation is masked.
+    /// </summary>
+    public static bool IsNumberCollision(PostgresException ex) => ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == NI.UniqueNumber;
+
+    /// <summary>
+    /// Runs an issue and turns a number collision into the caller's refusal (<c>number_already_issued</c>, not retryable: the counter and the issued numbers disagree until an administrator repairs them), logging a
+    /// warning that names only the document type. The caller's transaction still rolls back, so nothing is consumed.
+    /// </summary>
+    public static async Task<IssuedNumber> IssueOrRefuseAsync(Func<Task<IssuedNumber>> issue, string docType, ILogger? logger, Func<Exception> refusal)
+    {
+        try { return await issue(); }
+        catch (PostgresException ex) when (IsNumberCollision(ex))
+        {
+            logger?.LogWarning("numbering.number_already_issued docType={DocType}", docType);
+            throw refusal();
+        }
+    }
+
+    /// <summary>The stable refusal code of a number collision.</summary>
+    public const string NumberAlreadyIssued = "number_already_issued";
+
     internal const int LockKey1 = 0x48434E52;   // "HCNR": advisory-lock namespace of numbering configuration
     internal const int LockKey2 = 1;
     internal static readonly Guid None = Guid.Empty;
@@ -149,9 +173,18 @@ public sealed class NumberingService(CompanyDatabaseResolver resolver, CompanyAu
     /// Issues the next official number for a document inside the CALLER's transaction. The scope decides the counter: a per-branch rule needs a branch,
     /// a per-fiscal-year rule needs a fiscal year; a scope the rule does not use is ignored (the all-zero uuid stands for "none").
     /// </summary>
-    public static async Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
+    public static Task<IssuedNumber> IssueAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
     {
         if (!DocumentTypes.IsKnown(docType)) throw new ArgumentException("unknown document type", nameof(docType));
+        return IssueCoreAsync(conn, tx, docType, scope, documentId, actor, nowUtc, ct);
+    }
+
+    /// <summary>Same issue for a type the CALLER vouches for from its own registry (commercial documents: the internal test type is registered only in the test composition, D-049). Not part of the public surface.</summary>
+    internal static Task<IssuedNumber> IssueForRegisteredTypeAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct) =>
+        IssueCoreAsync(conn, tx, docType, scope, documentId, actor, nowUtc, ct);
+
+    private static async Task<IssuedNumber> IssueCoreAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string docType, NumberScope scope, Guid documentId, Guid actor, DateTime nowUtc, CancellationToken ct)
+    {
         var rule = await ReadAsync(conn, tx, docType, false, ct);
         if (rule.PerBranch && (scope.BranchId is null || string.IsNullOrWhiteSpace(scope.BranchCode))) throw new InvalidOperationException("a branch is required to number this document");
         if (rule.PerFiscalYear && (scope.FiscalYearId is null || string.IsNullOrWhiteSpace(scope.FiscalYearLabel))) throw new InvalidOperationException("a fiscal year is required to number this document");

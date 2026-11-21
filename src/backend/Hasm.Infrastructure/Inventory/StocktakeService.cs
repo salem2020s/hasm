@@ -4,6 +4,7 @@ using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Ledger;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using S = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Stocktake;
@@ -28,7 +29,7 @@ namespace Hasm.Infrastructure.Inventory;
 /// Every mutation runs in <see cref="CompanyAuditedTransactions"/> (change, history row and authenticated audit event commit or roll back together) after the warehouse-structure advisory lock, and every transition
 /// is fenced by the revision (a repeated or concurrent request fails with a precondition failure and does nothing twice).
 /// </summary>
-public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock)
+public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ILogger? logger = null)
 {
     private sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
@@ -493,7 +494,8 @@ public sealed class StocktakeService(CompanyDatabaseResolver resolver, CompanyAu
                 await r.ReadAsync(ct);
                 yearId = r.GetGuid(0); yearLabel = r.GetInt32(1);
             }
-            var number = await NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.Stocktake, new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, Now, ct);
+            var number = await NumberingService.IssueOrRefuseAsync(() => NumberingService.IssueAsync(work.Connection, work.Transaction, DocumentTypes.Stocktake, new NumberScope(cur.BranchId, branchCode, yearId, yearLabel.ToString(CultureInfo.InvariantCulture)), id, actor, Now, ct),
+                DocumentTypes.Stocktake, logger, () => new Abort(ConfigStatus.Conflict, NumberingService.NumberAlreadyIssued));
             await SetStatus(work, id, StocktakeStatus.Approved, Now, $"{S.Number} = @num, {S.FiscalYearId} = @fy, {S.DecidedBy} = @who, {S.DecidedAtUtc} = @now", c => { c.Parameters.AddWithValue("num", number.Number); c.Parameters.AddWithValue("fy", yearId); c.Parameters.AddWithValue("who", actor); }, ct);
             await RecordAsync(work, StocktakeEventKind.Approved, actor, id, StocktakeStatus.Submitted, StocktakeStatus.Approved, null, $"stocktake approved number={number.Number}", ct);
         }, ct);

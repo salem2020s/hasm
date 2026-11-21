@@ -53,7 +53,8 @@ public static class PartyAuditEvents
 }
 
 /// <summary>Proposed identifying data of a shared identity. <see cref="Status"/> is used only by a change proposal (a new identity is always active); <see cref="Note"/> justifies the proposal.</summary>
-public sealed record SharedIdentityInput(int? Kind, string? LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int? Status = null, string? Note = null);
+/// <summary><see cref="ViewedSharedRevision"/>: the revision of the shared identity the user was looking at. A CHANGE proposal must carry it and it must still be the current revision (review follow-up of 3.9A: a change is never silently based on newer data than the user saw).</summary>
+public sealed record SharedIdentityInput(int? Kind, string? LegalNameAr, string? LegalNameEn, string? TaxNumber, string? RegistrationNumber, int? Status = null, string? Note = null, long? ViewedSharedRevision = null);
 
 /// <summary>A company-local party record. <see cref="Identity"/> is required on creation (every new local party proposes its shared identity) and refused on update.</summary>
 public sealed record LocalPartyInput(string? Code, string? DisplayName, string? Notes, bool? IsActive, SharedIdentityInput? Identity = null);
@@ -71,7 +72,8 @@ public sealed record LocalPartyView(Guid Id, string Code, string DisplayName, st
 }
 
 public sealed record LocalPartySummary(Guid Id, string Code, string DisplayName, bool IsActive, int LinkState, string? LegalNameAr, string? LegalNameEn, bool HasOpenRequest, long Revision, DateTimeOffset UpdatedAtUtc);
-public sealed record PartyFilter(string? Search, int? LinkState, int Offset, int Limit);
+/// <summary>The list filter. <paramref name="Active"/> keeps only active (true) or inactive (false) parties; <paramref name="WithoutRole"/> keeps only parties that hold NO role of that kind yet (a role row of either status blocks a new one), so a picker for a new role is exact in page and total.</summary>
+public sealed record PartyFilter(string? Search, int? LinkState, int Offset, int Limit, bool? Active = null, PartyRoleKind? WithoutRole = null);
 /// <summary><see cref="RegistryUnavailable"/>: the registry could not be read; the list is shown without the shared legal names (review M2).</summary>
 public sealed record PartyPage(IReadOnlyList<LocalPartySummary> Items, long Total, bool RegistryUnavailable = false);
 public sealed record PartyCapabilities(bool View, bool Create, bool Update, bool Submit, bool Configure);

@@ -2,7 +2,7 @@
 
 * **Pull request:** #47 - roadmap/checkpoint reconciliation
 * **Head SHA reviewed:** 8b1913b2dc3782312d6f1d5865956f3a448b3f37
-* **Reviewer context:** separate Codex/GPT-6 agent (`pr46_review`), independent of the author.
+* **Reviewer context:** separate Codex/GPT agent (`pr46_review`), independent of the author.
 * **Scope read:** full nine-file diff against origin/main at bd56a25a5e5096c3ab867ddffd13803b8ce3b6eb, including generator sources, generated documentation, checkpoint twins, Phase 3.9A completion evidence and the final PR #46 review record.
 * **Prompt:** adversarial review of the FULL PR diff, checking accounting/requirements preservation, OPEN decisions, scope claims, generated-doc consistency and evidence accuracy.
 * **Checks run:** reviewer ran node tools/roadmap/generate.js --check (127 items, 23 MERGED, 38 PARTIAL, 58 NOT STARTED, 100 mandatory items incomplete), and git diff --check; both passed. No application tests run by reviewer.

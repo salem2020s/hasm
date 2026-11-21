@@ -2,7 +2,7 @@
 
 * **Pull request:** #48 (Draft; phase incomplete)
 * **Reviewed baseline:** HEAD 2344d4fc18360e712e1427ff6d1febac2e0f662d plus the full working diff against origin/main 814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb, including both new snapshot source/test files. Final committed-head confirmation is required separately.
-* **Reviewer context:** separate Codex/GPT-6 agent (`pr46_review`), independent of the author.
+* **Reviewer context:** separate Codex/GPT agent (`pr46_review`), independent of the author.
 * **Prompt/scope:** adversarial full PR diff, never a selected slice; review source provenance, authorization/revocation, cross-company isolation, repeatable-read/read-only semantics, costing reconciliation, unsupported-history completeness, numeric/resource bounds and tests. No edits by reviewer.
 * **Checks run by reviewer:** source/Git inspection and git diff --check passed. No application tests run by reviewer.
 * **Medium finding, fixed:** stock-document source metadata alone did not prove an authentic posting. Require matching document type and exact StockPosting.CostOperationId, with real posted receipt/issue and unposted/wrong-operation/wrong-type regression cases.

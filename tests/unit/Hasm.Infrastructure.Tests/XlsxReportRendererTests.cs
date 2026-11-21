@@ -9,6 +9,7 @@ using Hasm.Infrastructure.Reporting;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>The real XLSX export: typed cells, text safety, Excel's numeric precision, structure validity (checked by the Open XML validator and an independent reader) and bounded-memory streaming.</summary>
+[Collection(SerialMeasurementCollection.Name)]   // the memory test measures the whole process heap: nothing else may run beside it (D-063)
 public class XlsxReportRendererTests
 {
     private static readonly XNamespace Ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";

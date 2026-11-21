@@ -145,4 +145,28 @@ public class CostingMathTests
         Assert.Equal(0m, UnitCost(5m, 0m));
         Assert.Equal(2.5m, UnitCost(10m, 4m));
     }
+
+    [Fact]
+    public void Scale_rejects_negative_amount_and_invalid_quantities()
+    {
+        // negative amount is never allowed
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Scale(Amt(-1m), Qty(1m), Qty(1m), 2)).Code);
+        // part quantity must be positive
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(0m), Qty(1m), 2)).Code);
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(-1m), Qty(1m), 2)).Code);
+        // whole quantity must be positive
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(1m), Qty(0m), 2)).Code);
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Scale(Amt(1m), Qty(1m), Qty(-1m), 2)).Code);
+    }
+
+    [Fact]
+    public void Proportion_rejects_negative_amount_negative_part_and_part_exceeding_whole()
+    {
+        // negative amount is never allowed
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Proportion(Amt(-1m), Qty(1m), Qty(2m), 2)).Code);
+        // negative part is never allowed
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Proportion(Amt(10m), Qty(-1m), Qty(2m), 2)).Code);
+        // part may not exceed the whole (unlike Scale, which is provisional)
+        Assert.Equal("invalid_proportion", Assert.Throws<CostingException>(() => Proportion(Amt(10m), Qty(3m), Qty(2m), 2)).Code);
+    }
 }

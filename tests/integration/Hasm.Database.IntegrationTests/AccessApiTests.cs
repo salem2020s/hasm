@@ -505,7 +505,7 @@ public class AccessApiTests : AccessTestBase
         Assert.DoesNotContain("Npgsql", text);
         Assert.DoesNotContain("   at ", text);
         Assert.DoesNotContain("SELECT", text);
-        Assert.Equal(6L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.Role.Table}"));    // no role was created by any hostile request
+        Assert.Equal(8L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.Role.Table}"));    // no role was created by any hostile request
     }
 
     [PostgresFact]

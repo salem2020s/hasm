@@ -180,7 +180,7 @@ function GroupForm({ editor, groups, canEdit, onClose, onSaved }: { editor: Edit
   async function reloadLatest() {
     if (editor.mode !== "edit") return;
     try {
-      const latest = (await auth.api.listInventoryGroups()).groups.find((g) => g.id === editor.group.id);
+      const [latest] = await auth.api.lookupInventoryGroups([editor.group.id]);   // this one group by id, not the whole list
       if (!latest) return;
       const next = toForm(latest);
       setRevision(latest.revision); setBase(next); setForm(next); setErrors({}); setConflict(false);

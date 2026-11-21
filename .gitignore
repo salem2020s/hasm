@@ -46,3 +46,19 @@
 # Playwright output
 test-results/
 playwright-report/
+
+# Disposable test PostgreSQL cluster harness (scripts/test-pg): its data, logs, secrets, env file, TRX output and lock live OUTSIDE the repository by design;
+# these entries are a safety net should a root ever be placed inside a checkout (the scripts refuse that).
+/scripts/test-pg/test-env.sh
+/scripts/test-pg/*.pw
+/scripts/test-pg/superuser.txt
+**/hasm-test/
+**/pgdata/
+**/.hasm-disposable-test-cluster
+**/.run.holder
+**/hasm-test.lock
+test-env.sh
+superuser.txt
+
+# Load-test harness output (never committed: measurements are only evidence on the reference environment)
+loadtest-results/

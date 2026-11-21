@@ -2,6 +2,7 @@ import type { InventoryBarcode, InventoryCapabilities, InventoryGroup, Inventory
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { catalog } from "./messages";
 import { ALL_PERMISSIONS, apiError, renderApp, signedIn } from "./test-utils";
 
 const go = async (hash: string) => {
@@ -27,7 +28,7 @@ const item = (over: Partial<InventoryItem> = {}): InventoryItem => ({
 });
 const barcode = (over: Partial<InventoryBarcode> = {}): InventoryBarcode => ({ id: "b-1", itemId: "i-1", unitId: "u-pcs", barcode: "4006381333931", kind: 1, isActive: true, ...stamp, ...over });
 
-const setup = (extra: Record<string, unknown> = {}, caps = allCaps, items: InventoryItem[] = [item()]) => {
+const setup = (extra: Record<string, unknown> = {}, caps = allCaps, items: InventoryItem[] = [item()], perms: string[] = PERMS) => {
   const client = signedIn({
     getInventoryCapabilities: vi.fn().mockResolvedValue(caps),
     listInventoryGroups: vi.fn().mockResolvedValue({ groups: [group(), group({ id: "g-fruit", code: "FRUIT", nameAr: "فواكه", nameEn: "Fruit", parentId: "g-food", valuation: null })] }),
@@ -38,7 +39,7 @@ const setup = (extra: Record<string, unknown> = {}, caps = allCaps, items: Inven
     getInventorySettings: vi.fn().mockResolvedValue({ defaultValuation: null, revision: 0 }),
     createInventoryItem: vi.fn(), updateInventoryItem: vi.fn(),
     ...extra,
-  }, PERMS);
+  }, perms);
   renderApp(client);
   return client;
 };
@@ -316,6 +317,51 @@ describe("units and item groups screens", () => {
     expect(await screen.findByText("رمز الوحدة مستخدم.")).toBeInTheDocument();
   });
 
+  it("reloads the latest version of THE edited unit by its id after a revision conflict (no full-list read)", async () => {
+    const latest = unit({ revision: 7, nameAr: "قطعة جديدة" });
+    const client = setup({ updateInventoryUnit: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryUnits: vi.fn().mockResolvedValue([latest]) });
+    await go("#/inventory/units");
+    await userEvent.click(await within(await screen.findByTestId("unit-PCS")).findByRole("button", { name: "تعديل" }));
+    const fullListReads = vi.mocked(client.listInventoryUnits).mock.calls.length;
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    const conflict = await screen.findByTestId("form-conflict");
+    expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("تعديلي");                 // the user's edit survives until the reload is chosen
+    await userEvent.click(within(conflict).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    await waitFor(() => expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("قطعة جديدة"));
+    expect(client.lookupInventoryUnits).toHaveBeenCalledWith(["u-pcs"]);
+    expect(vi.mocked(client.listInventoryUnits).mock.calls.length).toBe(fullListReads);              // only this unit was asked for
+  });
+
+  it("reloads the latest version of THE edited group by its id after a revision conflict (no full-list read)", async () => {
+    const latest = group({ revision: 4, nameAr: "أغذية جديدة" });
+    const client = setup({ updateInventoryGroup: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryGroups: vi.fn().mockResolvedValue([latest]) });
+    await go("#/inventory/groups");
+    await userEvent.click(await within(await screen.findByTestId("group-FOOD")).findByRole("button", { name: "تعديل" }));
+    const fullListReads = vi.mocked(client.listInventoryGroups).mock.calls.length;
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getAllByRole("button", { name: "حفظ" }).at(-1)!);
+    const conflict = await screen.findByTestId("form-conflict");
+    await userEvent.click(within(conflict).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    await waitFor(() => expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("أغذية جديدة"));
+    expect(client.lookupInventoryGroups).toHaveBeenCalledWith(["g-food"]);
+    expect(vi.mocked(client.listInventoryGroups).mock.calls.length).toBe(fullListReads);
+  });
+
+  it("keeps the editor as it is when the lookup finds nothing (the unit was removed or is not visible)", async () => {
+    setup({ updateInventoryUnit: vi.fn().mockRejectedValue(apiError(412, "revision_conflict")), lookupInventoryUnits: vi.fn().mockResolvedValue([]) });
+    await go("#/inventory/units");
+    await userEvent.click(await within(await screen.findByTestId("unit-PCS")).findByRole("button", { name: "تعديل" }));
+    await userEvent.clear(screen.getByLabelText("الاسم بالعربية"));
+    await userEvent.type(screen.getByLabelText("الاسم بالعربية"), "تعديلي");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await userEvent.click(within(await screen.findByTestId("form-conflict")).getByRole("button", { name: "تحميل أحدث نسخة" }));
+    expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("تعديلي");
+    expect(screen.getByTestId("form-conflict")).toBeInTheDocument();
+  });
+
   it("shows the group tree with inherited valuation and saves the company default valuation with the revision", async () => {
     const client = setup({ putInventorySettings: vi.fn().mockResolvedValue({ defaultValuation: 2, revision: 1 }) });
     await go("#/inventory/groups");
@@ -336,5 +382,118 @@ describe("units and item groups screens", () => {
     await userEvent.selectOptions(screen.getByLabelText("طريقة التقييم", { selector: "#g-valuation" }), "2");
     await userEvent.click(screen.getAllByRole("button", { name: "حفظ" }).at(-1)!);
     await waitFor(() => expect(client.createInventoryGroup).toHaveBeenCalledWith({ code: "DAIRY", nameAr: null, nameEn: "Dairy", parentId: "g-food", valuation: 2 }));
+  });
+});
+
+describe("tax class tab of the item editor", () => {
+  const cls = { id: "k1", kind: 1, code: "FOOD", nameAr: "غذاء", nameEn: "Food", isActive: true, revision: 1 };
+  const partyCls = { id: "k2", kind: 2, code: "EXPORTER", nameAr: "مصدّر", nameEn: "Exporter", isActive: true, revision: 1 };
+  const taxMocks = (configure = true) => ({
+    listTaxClasses: vi.fn().mockResolvedValue({ classes: [cls, partyCls], can: { configure } }),
+    listItemTaxClasses: vi.fn().mockResolvedValue({ assignments: [], can: { configure } }),
+    assignItemTaxClass: vi.fn().mockResolvedValue({ ok: true }),
+  });
+  const openItem = async () => {
+    await go("#/inventory/items");
+    await userEvent.click(await screen.findByRole("button", { name: "تعديل" }));
+    await screen.findByTestId("item-editor");
+  };
+
+  it("has no tax tab without the tax view permission", async () => {
+    setup(taxMocks());
+    await openItem();
+    expect(screen.queryByRole("tab", { name: /^التصنيف الضريبي/ })).not.toBeInTheDocument();
+  });
+
+  it("offers only item classes, saves the class on its own and leaves the item form untouched", async () => {
+    const extra = taxMocks();
+    const client = setup(extra, allCaps, [item()], [...PERMS, "company.tax.view"]);
+    await openItem();
+    await userEvent.click(screen.getByRole("tab", { name: /^التصنيف الضريبي/ }));
+    const picker = within(await screen.findByTestId("tax-class-picker"));
+    const select = picker.getByLabelText("الفئة الضريبية") as HTMLSelectElement;
+    const labels = Array.from(select.options).map((o) => o.textContent ?? "");
+    expect(labels.some((l) => l.includes("FOOD"))).toBe(true);
+    expect(labels.some((l) => l.includes("EXPORTER"))).toBe(false);                      // a party class is never offered to an item
+    await userEvent.selectOptions(select, "k1");
+    await userEvent.click(picker.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(extra.assignItemTaxClass).toHaveBeenCalledWith("i-1", "k1"));
+    expect(client.updateInventoryItem).not.toHaveBeenCalled();
+  });
+
+  it("is read-only without the configure permission", async () => {
+    setup(taxMocks(false), allCaps, [item()], [...PERMS, "company.tax.view"]);
+    await openItem();
+    await userEvent.click(screen.getByRole("tab", { name: /^التصنيف الضريبي/ }));
+    expect(await within(await screen.findByTestId("tax-class-picker")).findByLabelText("الفئة الضريبية")).toBeDisabled();
+    expect(within(screen.getByTestId("tax-class-picker")).queryByRole("button", { name: "حفظ" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Arabic-Indic digits in numeric fields", () => {
+  it("converts an alternate-unit factor typed as ١٢٫٥ to 12.5", async () => {
+    const client = setup({ createInventoryItem: vi.fn().mockResolvedValue(item({ id: "i-2" })) });
+    await openNew();
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Pear");
+    await userEvent.selectOptions(screen.getByLabelText(/^المجموعة/), "g-fruit");
+    await userEvent.click(tab("الوحدات والتحويلات"));
+    await userEvent.selectOptions(screen.getByLabelText(/^الوحدة الأساسية/), "u-pcs");
+    await userEvent.click(screen.getByRole("button", { name: "إضافة وحدة بديلة" }));
+    await userEvent.selectOptions(within(screen.getByTestId("alt-0")).getByLabelText("الوحدة"), "u-box");
+    await userEvent.type(within(screen.getByTestId("alt-0")).getByLabelText("معامل التحويل"), "١٢٫٥");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryItem).toHaveBeenCalledTimes(1));
+    expect(client.createInventoryItem).toHaveBeenCalledWith(expect.objectContaining({ alternateUnits: [{ unitId: "u-box", factor: 12.5 }] }));
+  });
+
+  it("converts unit decimals typed as ٣ to 3", async () => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), "٣");
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
+  });
+
+  it.each([["۳", "Persian"], ["٣", "Arabic-Indic"]])("accepts the decimals digit %s (%s) and sends 3", async (text) => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), text);
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    await waitFor(() => expect(client.createInventoryUnit).toHaveBeenCalledWith({ code: "KG", nameAr: null, nameEn: "Kilogram", decimals: 3 }));
+  });
+
+  it.each(["٧", "x"])("refuses the invalid decimals value %s: nothing is sent", async (text) => {
+    const client = setup({ createInventoryUnit: vi.fn().mockResolvedValue(unit({ id: "u-new", code: "KG", decimals: 3 })) });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.type(screen.getByLabelText(/^الخانات العشرية/), text);
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(await screen.findByText(catalog.ar["inv.field.out_of_range"]!)).toBeInTheDocument();
+    expect(client.createInventoryUnit).not.toHaveBeenCalled();
+  });
+});
+
+describe("unit decimals are never defaulted", () => {
+  it("refuses a blank decimals value instead of saving it as 0", async () => {
+    const client = setup({ createInventoryUnit: vi.fn() });
+    await go("#/inventory/units");
+    await userEvent.click(await screen.findByRole("button", { name: "وحدة جديدة" }));
+    await userEvent.type(screen.getByLabelText(/^الرمز/), "kg");
+    await userEvent.type(screen.getByLabelText("الاسم بالإنجليزية"), "Kilogram");
+    await userEvent.clear(screen.getByLabelText(/^الخانات العشرية/));
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(client.createInventoryUnit).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/^الخانات العشرية/)).toHaveAttribute("aria-invalid", "true");
   });
 });

@@ -22,11 +22,14 @@ public sealed class AuthOptions
     public int MaxFailuresPerSource { get; init; } = 20;
     public int FailureWindowMinutes { get; init; } = 15;
     public int BlockMinutes { get; init; } = 15;
+    /// <summary>How long a second-factor proof (login or step-up) stays fresh for operations that require fresh MFA (D-103: default 15, bounded 5..60; D-160).</summary>
+    public int MfaFreshnessMinutes { get; init; } = 15;
 
     public TimeSpan SessionIdle => TimeSpan.FromMinutes(SessionIdleMinutes);
     public TimeSpan SessionAbsolute => TimeSpan.FromHours(SessionAbsoluteHours);
     public TimeSpan FailureWindow => TimeSpan.FromMinutes(FailureWindowMinutes);
     public TimeSpan Block => TimeSpan.FromMinutes(BlockMinutes);
+    public TimeSpan MfaFreshness => TimeSpan.FromMinutes(MfaFreshnessMinutes);
 
     public static AuthOptions FromConfiguration(IConfiguration configuration)
     {
@@ -41,6 +44,7 @@ public sealed class AuthOptions
             MaxFailuresPerSource = Int(s, nameof(MaxFailuresPerSource), 20),
             FailureWindowMinutes = Int(s, nameof(FailureWindowMinutes), 15),
             BlockMinutes = Int(s, nameof(BlockMinutes), 15),
+            MfaFreshnessMinutes = Int(s, nameof(MfaFreshnessMinutes), 15),
         };
         o.EnsureValid();
         return o;
@@ -69,6 +73,7 @@ public sealed class AuthOptions
         Range(nameof(MaxFailuresPerSource), MaxFailuresPerSource, 5, 10_000);
         Range(nameof(FailureWindowMinutes), FailureWindowMinutes, 1, 24 * 60);
         Range(nameof(BlockMinutes), BlockMinutes, 1, 24 * 60);
+        Range(nameof(MfaFreshnessMinutes), MfaFreshnessMinutes, 5, 60);
         if (errors.Count > 0) throw new AuthConfigurationException("Invalid authentication configuration: " + string.Join(" ", errors));
     }
 }

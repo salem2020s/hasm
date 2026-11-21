@@ -105,11 +105,16 @@ public static class InventoryEndpoints
     }
 
     // ---- units
-    private static async Task<IResult> ListUnits(HttpContext http, AccessService access, InventoryManagementService svc)
+    /// <summary>Without <c>search</c>, <c>offset</c>, <c>limit</c> or <c>ids</c> exactly the unpaged list (no <c>total</c>); with any of them one bounded page (default 50, at most 500, ordered by code) plus <c>total</c>. <c>ids</c> (repeated, at most 100, every value a GUID, else the standard <c>invalid_request</c> 400) is a by-ids lookup: only those units of the caller's company come back (page default 500). Same permission in every form.</summary>
+    private static async Task<IResult> ListUnits(string? search, string? offset, string? limit, string[]? ids, HttpContext http, AccessService access, InventoryManagementService svc)
     {
+        if (ListParameters.TryParse(search, offset, limit, out var q) is { } bad) return ListParameters.Invalid(bad);
+        if (ListParameters.TryParseIds(ids, out var unitIds) is { } badIds) return ListParameters.Invalid(badIds);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return List(await svc.ListUnitsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "units", u => Body(u));
+        if (!q.Requested && unitIds is null) return List(await svc.ListUnitsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "units", u => Body(u));
+        var r = await svc.SearchUnitsAsync(actor!.UserId, actor.CompanyId, q.Search, q.Offset, q.Limit, unitIds, http.RequestAborted);
+        return r.IsOk ? Results.Json(new { units = r.Value!.Items.Select(u => Body(u)).ToList(), total = r.Value.Total }) : CompanyConfigurationEndpoints.Map(r, _ => new { });
     }
 
     private static async Task<IResult> CreateUnit(UnitInput? body, HttpContext http, AccessService access, InventoryManagementService svc)
@@ -137,11 +142,16 @@ public static class InventoryEndpoints
     }
 
     // ---- groups
-    private static async Task<IResult> ListGroups(HttpContext http, AccessService access, InventoryManagementService svc)
+    /// <summary>Without <c>search</c>, <c>offset</c>, <c>limit</c> or <c>ids</c> exactly the unpaged list (no <c>total</c>); with any of them one bounded page (default 50, at most 500, ordered by code) plus <c>total</c>. <c>ids</c> (repeated, at most 100, every value a GUID, else the standard <c>invalid_request</c> 400) is a by-ids lookup: only those groups of the caller's company come back (page default 500; the effective valuation still resolves through ancestors). Same permission in every form.</summary>
+    private static async Task<IResult> ListGroups(string? search, string? offset, string? limit, string[]? ids, HttpContext http, AccessService access, InventoryManagementService svc)
     {
+        if (ListParameters.TryParse(search, offset, limit, out var q) is { } bad) return ListParameters.Invalid(bad);
+        if (ListParameters.TryParseIds(ids, out var groupIds) is { } badIds) return ListParameters.Invalid(badIds);
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return List(await svc.ListGroupsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "groups", g => Body(g));
+        if (!q.Requested && groupIds is null) return List(await svc.ListGroupsAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), "groups", g => Body(g));
+        var r = await svc.SearchGroupsAsync(actor!.UserId, actor.CompanyId, q.Search, q.Offset, q.Limit, groupIds, http.RequestAborted);
+        return r.IsOk ? Results.Json(new { groups = r.Value!.Items.Select(g => Body(g)).ToList(), total = r.Value.Total }) : CompanyConfigurationEndpoints.Map(r, _ => new { });
     }
 
     private static async Task<IResult> CreateGroup(ItemGroupInput? body, HttpContext http, AccessService access, InventoryManagementService svc)

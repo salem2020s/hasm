@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Hasm.Infrastructure.Audit;
@@ -20,6 +22,10 @@ public static class AuthDefaults
     /// <summary>Required on every state-changing API request (CSRF defence: forces a CORS preflight cross-origin).</summary>
     public const string RequestHeader = "X-Hasm-Request";
     public const string AdministratorPolicy = "IdentityAdministrator";
+    /// <summary>Phase 4.1 S3a (D-160): the session carries a second-factor proof (pass-through for users without MFA, D-161).</summary>
+    public const string MfaVerifiedPolicy = "MfaVerified";
+    /// <summary>Phase 4.1 S3a (D-160): the proof is within the freshness window (pass-through for users without MFA, D-161).</summary>
+    public const string MfaFreshPolicy = "MfaFresh";
     public const string AdministratorClaim = "hasm:identity_admin";
     public const string SessionIdClaim = "hasm:session";
     public const string SessionItemKey = "hasm.session";
@@ -63,6 +69,13 @@ public sealed class SessionAuthenticationHandler(
 
 public static class AuthenticationSetup
 {
+    /// <summary>Stands in when no key ring is registered: every MFA operation that needs a secret fails closed, and users without MFA are not affected (the singleton graph still builds).</summary>
+    private sealed class NoKeyRing : KekRing
+    {
+        public override KekHandle GetActive() => throw new EncryptionUnavailableException("encryption_key_unavailable", "No encryption key ring is configured.");
+        public override KekHandle? Find(string keyId) => null;
+    }
+
     public static IServiceCollection AddHasmAuthentication(this IServiceCollection services, IConfiguration configuration)
     {
         var auth = AuthOptions.FromConfiguration(configuration);
@@ -80,12 +93,27 @@ public static class AuthenticationSetup
             },
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<AuditTrail>()));
+        // Phase 4.1: the second factor. The secrets are protected by the existing key ring (KekRing, fail closed when it is not configured); every component uses the same runtime connection as the identity store.
+        string SystemConnection() { var options = HasmDatabaseOptions.FromConfiguration(configuration); options.EnsureValid(requireAdmin: false); return options.BuildSystemConnectionString(admin: false); }
+        services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing())));
+        services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IMfaAttemptLimiter>(sp => new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new MfaVerifier(sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>(), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new MfaLoginServices(sp.GetRequiredService<MfaChallengeStore>(), sp.GetRequiredService<MfaVerifier>(), sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>()));
         services.AddSingleton<AuthService>();
         services.AddHostedService<IdentityHousekeepingService>();
 
         services.AddAuthentication(AuthDefaults.Scheme).AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(AuthDefaults.Scheme, null);
-        services.AddAuthorizationBuilder().AddPolicy(AuthDefaults.AdministratorPolicy, p =>
-            p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"));
+        services.AddSingleton<IAuthorizationHandler, MfaVerifiedHandler>();
+        services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
+        services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
+        services.AddAuthorizationBuilder()
+            .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
+            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()))
+            .AddPolicy(AuthDefaults.MfaFreshPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()));
         return services;
     }
 
@@ -149,6 +177,7 @@ public static class AuthenticationSetup
             AuditUnavailableException a => Audit(context, a),
             EncryptionUnavailableException e => Encryption(context, e),
             CompanyDatabaseException c => Company(context, c),
+            _ when Hasm.Api.Hosting.HasmExceptionMapping.IsInvalidCharacter(error) => (StatusCodes.Status400BadRequest, "invalid_request"),   // defence in depth: a character the database cannot store (22021) is the caller's data, not an outage
             DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };

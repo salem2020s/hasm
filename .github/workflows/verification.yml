@@ -90,7 +90,7 @@ jobs:
       - name: Dependency-policy regression tests
         if: always()
         run: node --test tools/verify/dependency-audit-policy.test.cjs
-      - name: Full npm audit with owner-approved exact development exception
+      - name: Full npm audit (strict; temporary exception retired)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}

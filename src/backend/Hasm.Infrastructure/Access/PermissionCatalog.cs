@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Hasm.Infrastructure.Access;
 
 /// <summary>What a permission allows. Names are persisted as lower-case suffixes of permission codes; never rename.</summary>
-public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel, NegativeException }
+public enum PermissionAction { View, Create, Update, Delete, Approve, Post, Export, Print, Activate, Designate, Close, FinalClose, Reopen, Recode, Restructure, Configure, Submit, Reverse, Override, Upload, Apply, Cancel, NegativeException, Hold, Execute }
 
 /// <summary>
 /// Granularity at which a role assignment applies. Numeric values are persisted; never renumber.
@@ -149,6 +149,18 @@ public sealed partial class PermissionCatalog
         // update the company-local fields; submit a proposal to change shared data (or to propose again after a rejection); configure = synchronize the request log and run the reconciliation.
         // No company permission approves: the central approval belongs to identity administrators (docs/PHASE-3.9A.md D1).
         new("company.parties", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Configure]),
+        // Tax engine configuration (3.10, system migration 0024): company-wide. View taxes, rate versions, classes, rules and the rounding policy; configure = create and change them (audited; rate and policy versions are append-only).
+        new("company.tax", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.partyroles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
+        new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
+        // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to the Commercial Approver preset role (system migration 0029), which is granted offline (AccessService.GrantCommercialApproverOfflineAsync) or copied into custom roles.
+        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
+        new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
+        new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
+        // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
+        // plan) is NOT in the Company Administrator preset: it belongs to the Retention Approver preset (a sensitive grant, offline through the administrative tool; separation of duties).
+        new("company.attachmentretention", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Hold, PermissionAction.Approve, PermissionAction.Execute]),
     ]);
 
     public static class Codes
@@ -266,6 +278,31 @@ public sealed partial class PermissionCatalog
         public const string PartiesUpdate = "company.parties.update";
         public const string PartiesSubmit = "company.parties.submit";
         public const string PartiesConfigure = "company.parties.configure";
+        public const string PricingView = "company.pricing.view";
+        public const string PricingConfigure = "company.pricing.configure";
+        public const string PricingOverride = "company.pricing.override";
+        public const string CommercialView = "company.commercialdocs.view";
+        public const string CommercialCreate = "company.commercialdocs.create";
+        public const string CommercialUpdate = "company.commercialdocs.update";
+        public const string CommercialSubmit = "company.commercialdocs.submit";
+        public const string CommercialCancel = "company.commercialdocs.cancel";
+        public const string CommercialApprove = "company.commercialdocs.approve";
+        public const string TaxView = "company.tax.view";
+        public const string TaxConfigure = "company.tax.configure";
+        public const string PartyRolesView = "company.partyroles.view";
+        public const string PartyRolesConfigure = "company.partyroles.configure";
+        public const string SalesRepsView = "company.salesreps.view";
+        public const string SalesRepsConfigure = "company.salesreps.configure";
+        public const string AttachmentsView = "company.attachments.view";
+        public const string AttachmentsUpload = "company.attachments.upload";
+        public const string AttachmentsDelete = "company.attachments.delete";
+        public const string AttachmentsSensitiveView = "company.attachmentssensitive.view";
+        public const string AttachmentsSensitiveUpload = "company.attachmentssensitive.upload";
+        public const string RetentionView = "company.attachmentretention.view";
+        public const string RetentionConfigure = "company.attachmentretention.configure";
+        public const string RetentionHold = "company.attachmentretention.hold";
+        public const string RetentionApprove = "company.attachmentretention.approve";
+        public const string RetentionExecute = "company.attachmentretention.execute";
         public const string CostCenterPoliciesView = "company.costcenterpolicies.view";
         public const string CostCenterPoliciesConfigure = "company.costcenterpolicies.configure";
         public const string FiscalClosingView = "company.fiscalclosing.view";
@@ -294,6 +331,8 @@ public static class PresetRoles
     public static readonly Guid FiscalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000004");
     public static readonly Guid JournalApproverId = new("5c1b0f6e-0000-4a00-8000-000000000005");
     public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
+    public static readonly Guid CommercialApproverId = new("5c1b0f6e-0000-4a00-8000-000000000007");
+    public static readonly Guid RetentionApproverId = new("5c1b0f6e-0000-4a00-8000-000000000008");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -301,7 +340,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -314,6 +353,8 @@ public static class PresetRoles
             }),
             [JournalApproverId] = ("journal-approver", new HashSet<string> { PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove }),
             [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
+            [CommercialApproverId] = ("commercial-approver", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialApprove }),
+            [RetentionApproverId] = ("retention-approver", new HashSet<string> { PermissionCatalog.Codes.RetentionView, PermissionCatalog.Codes.RetentionApprove }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,

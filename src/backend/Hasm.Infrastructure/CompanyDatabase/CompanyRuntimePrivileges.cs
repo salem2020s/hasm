@@ -124,6 +124,33 @@ public static class CompanyRuntimePrivileges
         // Party registry (Phase 3.9A): local parties and the request log (outbox) are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates.
         (CompanySchema.LocalParty.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.PartyRequest.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Tax engine configuration (Phase 3.10 slice 2b): taxes, classes and rules are never deleted (PostgreSQL refuses it); rate and policy versions are append-only; assignments and rule bases may be replaced.
+        (CompanySchema.TaxDefinition.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxRateVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.TaxClass.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxItemClass.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.TaxPartyClass.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (CompanySchema.TaxRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.TaxRuleBase.Table, ["SELECT", "INSERT", "DELETE"]),
+        (CompanySchema.TaxPolicyVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.SalesRepresentative.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.PartyRole.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.Attachment.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.ImportMappingTemplate.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.PricingPolicyVersion.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.PriceList.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.PriceEntry.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.DiscountRule.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CustomerGroup.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CustomerGroupMember.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CommercialDocument.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CommercialDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),   // lines are replaceable ONLY while the document is a draft (PostgreSQL trigger); every replacement is audited
+        (CompanySchema.CommercialDocumentEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.DocumentLink.Table, ["SELECT", "INSERT"]),   // Phase 3.13 S2 (company 0030): links are append-only, so never UPDATE, DELETE or TRUNCATE
+        // Phase R slice R1 (company migration 0031): never DELETE or TRUNCATE (append-only guards in PostgreSQL as well). The rules of a version are written once with it.
+        (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
+        (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.LegalHold.Table, ["SELECT", "INSERT", "UPDATE"]),   // placed, then released once
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

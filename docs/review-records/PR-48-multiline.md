@@ -1,6 +1,6 @@
 # Multiline operation/range checkpoint
 
-Independent reviewer: separate Codex/GPT-6 context `pr46_review`, applying hasm-pr. Prompt: read-only FULL current PR48 diff against origin/mainfe4432113c1c13a62c70ee98c218586d7b424b32, including multiline contract, scheduler/block code, fixtures and registry; verify exact child rounding/layer identity, atomic ranges, parent/child/proposal linkage and resource/cancellation bounds. Reviewed starting head95ea79975c0a01d9f8ab52a74365e35c4d5a6d32 plus working changes. Final committed-head confirmation is separate.
+Independent reviewer: separate Codex/GPT context `pr46_review`, applying hasm-pr. Prompt: read-only FULL current PR48 diff against origin/mainfe4432113c1c13a62c70ee98c218586d7b424b32, including multiline contract, scheduler/block code, fixtures and registry; verify exact child rounding/layer identity, atomic ranges, parent/child/proposal linkage and resource/cancellation bounds. Reviewed starting head95ea79975c0a01d9f8ab52a74365e35c4d5a6d32 plus working changes. Final committed-head confirmation is separate.
 
 Design and implementation review found no Critical/High/Medium. The reviewer also inspected all four new PostgreSQL cases and registry increase; tests were not executed by the reviewer. Source/Git/diff whitespace checks passed. This approves a limited internal checkpoint only, not a general snapshot adapter, activation, whole phase or merge.
 

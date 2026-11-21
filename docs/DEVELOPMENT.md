@@ -111,6 +111,33 @@ dotnet test tests/integration/Hasm.Database.IntegrationTests
 
 **Disposable local test cluster and the cluster-identity gate (since Phase 3.1B, Checkpoint A).** The permanent development cluster (`127.0.0.1:5432`) must never be a test target. Local destructive tests use a separate native cluster: `127.0.0.1:5433`, data directory `C:\HasmTest\pgdata`, **not a Windows service**, controlled by `scripts/test-pg/` (`new-test-cluster.ps1` once, then `start-`/`stop-`/`status-test-cluster.ps1`; override locations with `HASM_TEST_ROOT`/`HASM_PG_BIN`). Credentials are random, test-only (`hasm_test_admin` CREATEDB, `hasm_test_roleadmin` CREATEROLE, a cluster superuser used only by the creation script) and live outside the repository in `C:\HasmTest\secrets` under an owner-only ACL; before running tests dot-source `C:\HasmTest\secrets\test-env.ps1`. Besides the existing checks (connection variable, acknowledgement string, loopback host, `hasm_test_` names, role gate) the destructive tests now require the **server itself to prove it is the disposable instance** (`PostgresClusterIdentity`): (1) the connection port is 5433, or 5432 only inside a GitHub-hosted Actions job (`GITHUB_ACTIONS=true`, `GITHUB_RUN_ID`, `RUNNER_ENVIRONMENT=github-hosted`) - and a disallowed port is refused before any connection is made; (2) the server reports that same port; (3) every database on the instance is built-in or `hasm_test_*`; (4) the marker database `hasm_test_cluster_identity` holds a 256-bit fingerprint equal to `HASM_TEST_PG_CLUSTER_FINGERPRINT` (written when the cluster/container was created; a different cluster cannot produce it). Any error, including an unreachable server, refuses. The CI job writes the marker into its job-local container with a per-run secret, so a locally spoofed CI flag alone opens nothing: the development cluster fails checks (3) and (4) regardless.
 
+**Linux/bash twin of the disposable test cluster (dev tooling, D-048).** `scripts/test-pg/*.sh` give the same safety properties as the PowerShell scripts, for Linux agents and developers: a native cluster (`initdb`/`pg_ctl` from `/usr/lib/postgresql/16/bin`, override `HASM_PG_BIN`), `127.0.0.1:5433` ONLY (the port is hard-coded and `HASM_TEST_PORT` with any other value is refused; the listen address and port are also forced on the server command line, and Unix-domain sockets are switched off), data, logs and secrets under `HASM_TEST_ROOT` (default `/tmp/hasm-test`), data directory 700, secrets directory and files 700/600, random 256-bit passwords for `hasm_test_admin` (`CREATEDB`), `hasm_test_roleadmin` (`CREATEROLE`, no superuser, no `CREATEDB`) and a cluster superuser used only by the creation script, the marker database `hasm_test_cluster_identity` with a fresh 256-bit fingerprint, and a sourceable `secrets/test-env.sh` exporting exactly `HASM_TEST_PG_DISPOSABLE=yes-this-server-is-disposable`, `HASM_TEST_PG_CLUSTER_FINGERPRINT`, `HASM_TEST_PG_ADMIN_CONNECTION` and `HASM_TEST_PG_ROLE_ADMIN_CONNECTION`. PostgreSQL refuses to run as root: when the scripts run as root the server commands run as the `postgres` account through `runuser` (override `HASM_PG_RUN_AS`). Nothing is a service and no credential, data or env file lives in the repository. **The root is protected:** `new-test-cluster.sh` creates it (it must be ABSENT, or a root a previous run of the script created, recognised by its marker file) and never chmods or reuses a pre-existing directory; the path is resolved first and a symbolic link anywhere in it is refused; broad directories (`/`, `/tmp`, `/var`, `/var/tmp`, `/home`, `/srv`, `/opt`, `/mnt`, `/run`, `/root`, `$HOME` and its parent, `/usr/local`) are never the root itself (a sub-directory such as `/tmp/hasm-test` is fine), system and PostgreSQL locations are refused at any depth, and the root must be outside EVERY checkout of the repository (the current worktree, the main checkout found through `git rev-parse --git-common-dir` and every `git worktree list` path - agent worktrees live inside the main checkout) and must not contain one. `/tmp` is pruned by `systemd-tmpfiles` on many distributions (default root, age based): a long-lived cluster belongs in a root such as `/var/tmp/hasm-test` or under another dedicated directory, and a pruned root simply means: run `new-test-cluster.sh` again. `destroy-test-cluster.sh` deletes only the known entries of a root that still carries the marker file and therefore refuses a second time.
+
+**Only one agent or developer may use the cluster at a time, and nobody but `run-pg-tests.sh` should source `secrets/test-env.sh`.** The suites create and drop databases and roles cluster-wide, so two runs on one cluster corrupt each other (observed: random `InProgressElsewhere`, missing credential-file and login failures; the port is fixed at 5433 by the gate, so a second cluster cannot run beside it). Every script that changes the cluster or runs the suite (`new-`, `start-`, `stop-`, `destroy-test-cluster.sh`, `run-pg-tests.sh`) therefore takes the same exclusive `flock` on `$HASM_TEST_ROOT.lock` - a file BESIDE the root, so deleting the root never deletes it and no script ever deletes it - and refuses while another holder has it; `run-pg-tests.sh` holds it for the whole run and records the holder (pid, worktree, start time) in `.run.holder`. A script started by a holder inherits the lock descriptor; the lock descriptor is closed for the PostgreSQL daemon and for build servers so they cannot keep it. `run-pg-tests.sh` also refuses to start, and `destroy-test-cluster.sh` refuses to delete, while any test session (`hasm_test_admin`, `hasm_test_roleadmin` or a `hasm_test_*` database) is connected to the cluster, and the run prints a post-run activity check (expected 0 sessions left). There is no override: a run on a shared cluster is never trustworthy. `status-test-cluster.sh` is read-only and takes no lock. The credentials are test-only and random per cluster, but the files are readable by every process of the same OS user: in a shared container (several agents as root) any of them can read the secrets file, which is acceptable only because the cluster is disposable and loopback-only; destroy it after use.
+```
+scripts/test-pg/new-test-cluster.sh                 # once: creates, starts and prepares the cluster (refuses if the data directory exists)
+scripts/test-pg/start-test-cluster.sh | stop-test-cluster.sh | status-test-cluster.sh
+dotnet build src/backend/Hasm.slnx -c Release
+scripts/test-pg/run-pg-tests.sh                     # sources test-env.sh, sets HASM_REQUIRE_PG_TESTS=1 and HASM_REQUIRE_PG_ROLE_TESTS=1, runs the suite,
+                                                    # then requires 0 failed and 0 skipped from the TRX counters (add --build to build first; extra arguments go to dotnet test)
+scripts/test-pg/destroy-test-cluster.sh             # stops the cluster and deletes data, logs and secrets (only a root that carries the marker file written by new-test-cluster.sh)
+```
+
+**Isolated parallel workers (Linux, root; dev tooling).** `scripts/test-pg/run-isolated.sh` lets two (at most three) agents run the PostgreSQL integration suite at the same time, each against its OWN throw-away cluster, without changing anything in the safety chain above: the port stays exactly `127.0.0.1:5433`; `PostgresClusterIdentity`, the acknowledgement string, the restricted roles and the marker/fingerprint flow are untouched and simply see a valid disposable cluster. Isolation comes from a **private Linux network namespace per run** (`unshare --net`): the worker's cluster listens on `127.0.0.1:5433` inside its namespace only and `dotnet test` runs in that same namespace, so no other TCP listener of the machine is reachable from it - not the shared `/tmp/hasm-test` cluster, not another worker, nothing on 5432 - and the worker is not reachable from outside. The namespace isolates TCP/IP only: filesystem Unix-domain sockets are not network-namespaced and stay reachable, so the protection against the development cluster is unchanged and still comes from `PostgresClusterIdentity`, the generated `Host=127.0.0.1;Port=5433` connection strings and `unix_socket_directories = ''` of every test cluster. If `unshare --net` is not permitted (no root/`CAP_SYS_ADMIN`, or a container that forbids new namespaces) the script refuses with that message; use the shared cluster instead. Per run:
+- a **capacity token** (1..`HASM_ISO_WORKERS`, default 2; values above 3 are refused) is taken with an exclusive `flock` on `/tmp/hasm-iso-capacity/slotN.lock` (never deleted); when all are taken the script waits. The build (`--build`; it needs the network for restore) happens first, outside the namespace;
+- everything of the run lives in its own `mktemp -d` directory `W=/tmp/hasm-pgw-XXXXXX` (`root:postgres 0710`: the server account may only traverse it to its `0700` data directory): the cluster root `W/cluster` (data, logs, secrets, TRX), its lock `W/cluster.lock`, and the tests' `TMPDIR` `W/tmp`. Override the parent with `HASM_ISO_TMP`;
+- the worktree's own unchanged `new-test-cluster.sh` and `run-pg-tests.sh` run inside the namespace with `HASM_TEST_ROOT=W/cluster` (same root checks as always): a fresh cluster with new random passwords and a new 256-bit fingerprint every run, the same `HASM_REQUIRE_PG_TESTS=1`/`HASM_REQUIRE_PG_ROLE_TESTS=1` strictness and 0-failed/0-skipped check;
+- results are copied to `HASM_ISO_RESULTS/<W name>/` (or a kept `mktemp -d` directory `/tmp/hasm-pgw-results-XXXXXX`): `run.log`, `pg-integration.trx`, `postgres.log`. A full run (no extra arguments) is also verified against the per-class registry (`node tools/verify/pg-trx-check.js ... .github/workflows/backend.yml`);
+- cleanup always runs (success, failure, Ctrl-C, SIGTERM, SIGHUP): every process of the run's namespace is terminated (found through a namespace descriptor the script holds, never by name; the outer namespace is never targeted), `destroy-test-cluster.sh` deletes the cluster, and `W` - only `W`, after a pattern and ownership check - is removed. A run killed with SIGKILL records its `W` in `/tmp/hasm-iso-capacity/slotN.owner`; the next run on that token, or `run-isolated.sh --recover`, stops that run's namespace (found through the live server of that data directory or a process started with `HASM_TEST_ROOT=W/cluster`, held through a descriptor and re-verified before anything is killed) and removes it. Before the unchanged `destroy-test-cluster.sh` runs, a `postmaster.pid` whose PID is not a live process of that data directory is moved aside inside `W`, so `pg_ctl` can never signal a reused PID (for example another worker's server running as the same account). `scripts/test-pg/test-run-isolated-recovery.sh` (root, no server started) checks this with a live decoy process of the server account behind a stale `postmaster.pid`, and checks that an orphan left in a private namespace is stopped.
+```
+scripts/test-pg/run-isolated.sh "$PWD" --build                       # from your own worktree: build, then the full suite + registry check, isolated
+scripts/test-pg/run-isolated.sh "$PWD" --filter "FullyQualifiedName~PricingApiTests"   # a subset (no registry check)
+HASM_ISO_RESULTS="$D/pg" scripts/test-pg/run-isolated.sh "$PWD"      # keep results under your own mktemp -d directory
+scripts/test-pg/run-isolated.sh --recover                            # clean up runs killed with SIGKILL (busy tokens are skipped)
+```
+Measured on the shared 4-CPU/15 GB container (full suite, 1167 tests incl. 56 SafetyGate, registry 1111; other agents kept the load average at 15-50, so the numbers are indicative): one worker 1003 s wall, 1942 CPU-s, 2.1 GiB peak; two at once 1342 s for both (about 1.5x the throughput of running them one after the other), 4133 CPU-s, 4.0 GiB; three at once 2851 s for all three, 6441 CPU-s, 5.9 GiB, under a load average of 40-53 - not clearly better than two. The default is therefore 2.
+Rules for agents: prefer `run-isolated.sh` to the shared cluster; one run per agent at a time; never create, read or delete another run's `/tmp/hasm-pgw-*` directory, and never touch the capacity tokens or `/tmp/hasm-test*`; do not raise `HASM_ISO_WORKERS` above the value the lead sets (2 on a 4-CPU machine; 3 only when nothing else is building or testing). Requirements: root (network namespaces, `runuser`), `unshare`, `flock`, `python3` or `perl` (to bring the private loopback up; no `ip` needed), `node` for the registry check. Limits: the namespaces isolate the network only - every root process on the machine can still read `W/cluster/secrets` (acceptable for random, test-only, loopback-only credentials, exactly as for the shared cluster); CPU, memory and disk are shared, so each run gets slower as more run; build outputs are per worktree (`bin/obj`), so two workers must use two worktrees (a second isolated run on the same worktree is refused through an `flock` on the worktree directory).
+
 **CI** (`.github/workflows/backend.yml`, job `postgres-integration`, Ubuntu): starts an ephemeral `postgres:16` service container, creates a restricted `hasm_test_admin` role (`CREATEDB`, no superuser/role/replication) and, for the per-company runtime-role tests only, a separate `hasm_test_roleadmin` (`CREATEROLE`, no superuser, no `CREATEDB`), each with a random per-run password that is masked in logs and never committed, runs the tests with `HASM_REQUIRE_PG_TESTS=1`, then verifies from the TRX results that the per-class expected number of database tests ran (per-class counts) and all passed (skipped or missing tests fail the job). Non-TLS (`SSL Mode=Disable`) exists only in that disposable job's loopback connection string; the only literal credential in the workflow is the throwaway bootstrap password of that job-local container. The `build-test` job still runs these tests as skipped.
 
 ## Identity and local authentication (Phase 2.3A)
@@ -484,6 +511,208 @@ React + TypeScript; one build serves the web app and the Tauri window (hash rout
 6. **No per-user language field on the server**; the preference is a local setting.
 7. **CI** has not run on GitHub for this phase (see CI below); the CREATEROLE-dependent role suites (`CompanyRuntimeIsolationTests`, `CompanyAdminToolRoleTests`) were executed in Phase 3.1A-1 on an isolated, role-capable PostgreSQL instance; in Phase 3.1A-2 they were skipped locally (no CREATEROLE environment) and have not yet been verified on GitHub CI.
 
+## Company backup and trial restore (Phase 4.3)
+These administrative commands back up ONE company and trial-restore it. Decisions D-053 and D-058..D-062 apply; the design is in `docs/PHASE-4.3.md`.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-company <company-id> <destination-dir>
+dotnet run --project src/backend/Hasm.Admin -- trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep]
+dotnet run --project src/backend/Hasm.Admin -- drop-trial-restore <kept-file>
+```
+* **Configuration.** As for every command, configuration comes only from the environment:
+  * the admin database account;
+  * `Hasm__Attachments__StorageDirectory`, which is **required: without it no backup is possible, and there is no override.** A run with a missing setting must never produce a set without the attachments;
+  * `Hasm__Encryption__KeyDirectory`, for key coverage and for decrypting sensitive attachments during the trial restore.
+
+  `pg_dump`/`pg_restore` are taken from `PATH` (the same major version as the server). Every path argument must be absolute.
+* **Output.** Stable codes, counts, the company id and the files given by or created for the operator. A physical database name, a password or tool output is never printed.
+* **Exit codes:**
+  * 0: ok;
+  * 1: refused or failed (the code is printed);
+  * 2: usage;
+  * 3: configuration (for example `attachment_storage_not_configured`);
+  * 4: the company is busy (provisioning, migration or runtime grant holding its lock);
+  * 8: completed with warnings (missing key ids, an older migration level, a stale row key id, a registry link missing locally).
+* **`backup-company`:**
+  * The company comes only from the registry, and only in state Ready.
+  * Its provisioning lock is held for the whole backup.
+  * An ICU/builtin locale is refused before the dump (`locale_unsupported`).
+  * The dump goes into a fresh private staging folder `<destination>.staging-<32 hex>/` (owner-only 0700 on Linux, verified; on Windows it inherits the parent's ACL, so choose a destination parent only the service account can read), which is removed afterwards. Staging folders of that exact pattern older than 24 hours, left by an interrupted run, are swept by the next run (never a symbolic link), and nothing else is touched.
+  * The trial attachment target must also be outside the key directory (`target_overlaps_keys`). `drop-trial-restore` waits at most 5 seconds for the registry lock and then reports `company_busy`.
+  * The set (`database.dump`, `attachments/`, `manifest.json` with the locale and the company migration level) is verified before the command reports success.
+  * **Back up the key directories separately** with `backup-keys` (decision K, D-087). From slice 5 the set is encrypted and signed (see "Encrypted, signed backups" below).
+* **`trial-restore-company`:**
+  * The set is restored into a NEW, unregistered database and into `<attachment-target-dir>`, which must be empty and outside the live attachment storage.
+  * Then the read-only pre-cutover checks run:
+    * the locale and the company migration journal (level and checksums);
+    * every linked local party must resolve in `Hasm_System`;
+    * every attachment row must have its file, with a matching hash, and must be decryptable when its key is present.
+  * A set from a newer installation is refused before anything is created (`set_newer_than_installation`).
+  * The database is dropped afterwards. With `--keep` it stays, and an owner-only file `<set-dir>.trial-<random>.json` records it. Nothing is registered, granted or cut over.
+* **`drop-trial-restore <kept-file>`** drops only a database that:
+  * the file names;
+  * is not a registered company, system, maintenance or built-in database;
+  * carries the file's token in its comment.
+  The registry is locked against changes until the drop has completed. This is the only supported way to remove a kept trial database.
+* **Not available yet:** the cutover (replacing a live company database or folder) and the audited restore acknowledgement with a new checkpoint epoch are decided (D-081) and planned in `docs/PHASE-4.3.md` slice 7 (D-143..D-153); cutovers stay unavailable until that slice, the Phase 4.1 approval framework and an owner-instructed activation exist. Until then the procedure under "Restore limitations" above still applies to any real restore. A trial restore does not meet Scenario 21.8 by itself.
+
+### Backup runs of the whole installation, monitoring and retention preview (Phase 4.3 slice 4)
+Decisions D-069..D-073; the design is in `docs/PHASE-4.3.md` slice 4.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-run <root>
+dotnet run --project src/backend/Hasm.Admin -- backup-status <root> [--max-age-hours N]
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-preview <root> --keep-last N [--keep-days D]
+```
+* **`backup-run <root>`** writes one run into a new owner-only folder `<root>/<yyyyMMddTHHmmssZ-8hex>/`:
+  * `system/`: the system database dump and its manifest. The table of contents is checked readable; integrity comes from the SHA-256 in the manifest.
+  * `companies/<company id>/`: one verified set per Ready company, with the same checks as `backup-company`.
+  * `run.json`, written LAST: outcomes, codes, the start and end of every dump, sizes, missing key ids, the excluded data and `encrypted: false`.
+  * A folder without `run.json` is an incomplete run (interrupted). It is reported, never deleted.
+  * One company's failure never stops the others, and only one run can be in progress. That rule is enforced by a session lock that a periodic no-op keeps alive.
+    * If the lock connection is lost, the run is reported `partial` with the warning `run_lock_lost`.
+    * Set `idle_session_timeout` of the admin role to 0 (off), or to more than 60 seconds. The per-company locks of the company dumps are held the same way.
+  * The configuration is the same as `backup-company`; the attachment storage setting is required.
+  * Exit codes: 0 ok, 8 partial (a company busy or failed, or key ids missing), 1 failed (the system dump failed or no set was written), 4 another run in progress, 3 configuration.
+* **The system dump is the most sensitive file of a run.** It holds password hashes, memberships and roles, shared-party personal data and the system audit chain.
+  * The DATA of the session and login-throttle tables is left out, and later the TOTP secrets too: listed under "excluded" in `run.json` and the manifest. A restored installation therefore starts with no sessions.
+  * Slice 5 encrypts and signs every run (see below); an unencrypted run exists only under the DEV/TEST acknowledgement. Back up the key directories with `backup-keys`, never alongside the sets.
+* **A run is not one point in time across databases.** The system database is dumped first, then each company. Registry rows, party links, memberships and migration levels can therefore differ between them. A single-company restore compares with the live system database; a full-installation restore (not built) must reconcile.
+* **`backup-status <root>`** is read only and needs no database settings: it is meant for the monitor. It reads the newest complete run.
+  * Exit 0: ok and younger than `--max-age-hours` (default 26).
+  * Exit 8: partial, a company missed two or more consecutive runs (`company_missed_runs`), or a run's `run.json` is unreadable (`unreadable_reports`: damaged or altered; it is never used, and the status stays fail-closed).
+  * Exit 1: failed, no run (`backup_missing`), or too old (`backup_stale`).
+  * Incomplete runs older than 24 hours are listed (information).
+* **`backup-retention-preview <root> --keep-last N [--keep-days D]`** is read only. It lists the complete runs a policy WOULD remove; a run kept by either rule is kept. The newest complete run and incomplete or unreadable runs are never listed. **Nothing is deleted**: deleting backups is an owner decision (package 4.3-2).
+* **Scheduling** uses the operating system, under the service account (HASM has no scheduler, and the API never runs a backup). Examples; replace the paths and run with the same `Hasm__*` environment as the other commands:
+  * systemd: `/etc/systemd/system/hasm-backup.service`
+    ```
+    [Service]
+    Type=oneshot
+    User=hasm
+    EnvironmentFile=/etc/hasm/admin.env
+    ExecStart=/usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups
+    ```
+    and `/etc/systemd/system/hasm-backup.timer`
+    ```
+    [Timer]
+    OnCalendar=*-*-* 02:17
+    Persistent=true
+    [Install]
+    WantedBy=timers.target
+    ```
+    then run `systemctl enable --now hasm-backup.timer`. For monitoring, a second timer runs `backup-status /srv/hasm-backups` and alerts on a non-zero exit.
+  * cron, for the service account (`set -a` exports the variables to `dotnet`; a plain `.` would not, and the run would exit 3): `17 2 * * * set -a; . /etc/hasm/admin.env; set +a; /usr/bin/dotnet /opt/hasm/admin/Hasm.Admin.dll backup-run /srv/hasm-backups`
+  * Windows Task Scheduler:
+    ```
+    schtasks /Create /TN "HASM backup" /SC DAILY /ST 02:17 /RU "<service account>" /TR "\"C:\Program Files\dotnet\dotnet.exe\" \"C:\HASM\Admin\Hasm.Admin.dll\" backup-run D:\HasmBackups"
+    ```
+    The `Hasm__*` variables are set as machine or user environment variables of the service account.
+  * These examples are NOT exercised by an automated test. Verify them in a manual drill: run once, then check that `backup-status` exits 0.
+* **Measured RPO/RTO (no promised values, SRS 16).** Record in the drill log:
+  * the run's `durationMs` and each company's dump window from `run.json`;
+  * the "Measured trial restore time" printed by `trial-restore-company` for that set.
+
+  RPO is at most the schedule interval plus the run duration. RTO is the measured trial-restore time plus the cutover procedure, once that exists (BLOCKED).
+
+### Encrypted, signed backups, key export and recovery test (Phase 4.3 slice 5)
+Decisions D-089..D-095 and D-116..D-118 (plus D-120 for the TOTP table); the design is in `docs/PHASE-4.3.md` slice 5.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin]     (OFFLINE workstation)
+dotnet run --project src/backend/Hasm.Admin -- backup-signing-keygen                                                              (server)
+dotnet run --project src/backend/Hasm.Admin -- backup-keys <destination-dir>                                                      (server)
+dotnet run --project src/backend/Hasm.Admin -- trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] --recovery-key <file> --signing-trust <signing-trust.json> [--passphrase-stdin]
+dotnet run --project src/backend/Hasm.Admin -- backup-recovery-test <run-dir> --recovery-key <file> --signing-trust <signing-trust.json> [--keys-export <dir>] [--passphrase-stdin]
+```
+* **Encryption is the default.** `backup-run` and `backup-company` write encrypted, signed sets when these are configured, and refuse otherwise (`backup_encryption_not_configured`, exit 3):
+  * `Hasm__Backup__RecoveryPublicKeyFile`: the recovery PUBLIC key (`rk-*.pub.pem`); the private key never reaches the server;
+  * `Hasm__Backup__SigningKeyDirectory` and `Hasm__Backup__SigningKeyId`: the server's backup signing key (`sk-*`), in its own owner-only directory.
+* **Set-up, once:**
+  1. On an OFFLINE workstation without `Hasm__Database__*` settings: `backup-recovery-keygen <out-dir>`. The passphrase (at least 20 characters, entered twice) comes from a prompt or, with `--passphrase-stdin`, from standard input; never from an argument or a variable. Put ONLY `rk-*.pub.pem` on the server. Move `copy-1` and `copy-2` (with `rk-*.sha256`) to two separate offline media; with `--separate-passphrases` each copy has its own passphrase and custodian.
+  2. On the server: `backup-signing-keygen`. It writes `sk-<id>.key.pem` (private, never exported) and `sk-<id>.pub.pem`, prints the public key's SHA-256 for the recovery kit and writes system audit event 2013. Set `Hasm__Backup__SigningKeyId` to the printed id.
+  3. `backup-keys <destination>`: see below. Then take a first `backup-run` and run `backup-recovery-test` on it: until a test passes, `backup-status` reports `recovery_untested` (exit 8) and the recovery key is NOT production-ready (D-085).
+* **What an encrypted run contains.** Only `.hbe` files (HBE1: encrypted to the recovery key, authenticated chunk by chunk), their signed manifests (`manifest.json.hbe` + `.sig`), `canary.hbe` and the readable, signed `run.status.json` (verdict, counts, times, key ids, the canary hash; no names). `pg_dump` is piped straight into the encryptor: no plaintext dump exists at any time. `backup-status` verifies `run.status.json` with the server's signing PUBLIC keys; an unsigned or altered status counts as a FAILED run (`status_unsigned`, exit 1).
+* **The system dump of an encrypted run** still leaves out the session and login-throttle data (no recovery value). Once Phase 4.1 adds the TOTP-secret table, its rows are INCLUDED in encrypted runs only (they are ciphertext under the key ring; D-120), so a full restore needs the key export.
+* **`backup-keys <destination>`** writes ONE encrypted, signed export of every key directory: the encryption master keys (`Hasm__Encryption__KeyDirectory`), the audit key ring (`Hasm__Audit__KeyDirectory`) and the backup signing PUBLIC keys. Signing PRIVATE keys are never exported; after a disaster a new signing key is generated, and old sets still verify with the public keys in the kit.
+  * The destination must be absolute and empty, and must not overlap the attachment storage, any key directory, a backup run folder or a folder holding run folders.
+  * It holds `keys.hbe`, `key-export.json` + `.sig` (the key ids) and `signing-trust.json`: the trust list of signing public keys, all `active`. Keep a copy of `signing-trust.json` with every recovery kit and mark a key `retired` (with `retiredUtc`) or `compromised` there when that happens; never trust a key carried inside a set.
+  * It writes system audit event 2012 and fails closed (the export is removed) when the event cannot be written. Run it after every key generation or rotation.
+* **Trial restore and recovery test bring the private key in.** Bring the private-key file on removable media, give its passphrase at the prompt (or `--passphrase-stdin`), and remove the file from the machine afterwards; never copy it to the server's disks (runbook, review L3). `--signing-trust <signing-trust.json>` is the kit's trust list; `--signing-public-key <sk-*.pub.pem>` trusts one key as active.
+  * Every signature and stored digest is verified BEFORE anything is decrypted; the dump is decrypted streaming into `pg_restore` and only authenticated chunks are released (D-116). A forged, unsigned, swapped or altered set is refused before anything is created (`signature_missing`, `signing_key_unknown`, `signing_key_compromised`, `backup_set_not_clean`).
+  * An UNENCRYPTED (DEV/TEST) set is restored only when this reader's own environment carries the acknowledgement (`unencrypted_set_refused` otherwise); a field inside the set never decides it.
+  * `trial-restore-company` writes system audit event 2010 (the operator, key ids, the company and a TAG of the trial database, never its name); `backup-recovery-test` writes 2011. When the event cannot be written the command reports FAILED (D-118).
+* **`backup-recovery-test <run-dir>`** verifies the signed status, the run manifest and the canary, restores the system dump and every company set of the run into NEW disposable databases (dropped afterwards; the live databases are never touched), runs the slice 3 checks, and with `--keys-export` decrypts the export and checks that it holds every attachment and audit key id the run needs (TOTP rows are never decrypted).
+  * Passed: it writes `recovery-test.json` into the run folder with the decrypted canary (single-purpose random bytes); `backup-status` accepts it only when it hashes to the signed canary hash. Exit 0, or 8 when it passed with warnings (for example `key_export_not_checked`).
+  * Failed: exit 1, no proof is written. An unencrypted run is refused (`unencrypted_run`: there is no recovery key to test).
+* **DEV/TEST only: unencrypted sets.** `Hasm__Backup__UnencryptedDevTestOnly=yes-this-is-not-production` (exactly) permits unencrypted sets; any other value is a configuration error, and it is refused while a recovery public key is configured. Every output then shows `DEGRADED: unencrypted backups (DEV/TEST only)`, sets and runs carry the file `UNENCRYPTED-DEV-TEST-ONLY`, and `backup-status` exits 8 (`unencrypted_dev_test`). Never set it in production (D-088).
+* **Interim mode (dated limitations in RELEASE1-ACCEPTANCE G).** Until Phase 4.1 delivers the administrative-tool login (D-099) and the approval framework, these commands run under operating-system access to the service account; the audit events record the operating-system account (`os:<account>`). Trial restore and the recovery test are restore operations that will then need independent approval (D-118).
+
+### Retention of backup runs and backup legal holds (Phase 4.3 slice 6)
+Owner decision D-086; decisions D-130..D-139; the design is in `docs/PHASE-4.3.md` slice 6.
+```
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-plan <root> [--json <file>]
+dotnet run --project src/backend/Hasm.Admin -- backup-retention-apply <root>          (INACTIVE: refuses, see below)
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text>
+dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
+```
+* **Configuration (`Hasm__Backup__Retention__*`):**
+  * `InstallationTimeZone` (required; an IANA id such as `Asia/Riyadh`). It classifies the system part. The server's local time zone is never used.
+  * `DailyKeep` (default 7) and `WeeklyKeep` (default 4). These are the D-086 minimums: they can be raised, never lowered. A lower or unreadable value stops the command with exit 3 (`retention_below_minimum`, `retention_config_invalid`); it is never clamped.
+  * `WeekStart` (default `Monday`, ISO 8601).
+  * `MaxDeletionsPerRun` (default 7, at most 31).
+* **`backup-retention-plan <root>`** classifies every run of the root and prints, per run, either its keep reasons or `ELIGIBLE`. Nothing is deleted.
+  * It reads each run's signed `run.status.json` with the server's signing public keys and never decrypts anything.
+  * It also reads each company's configured time zone and fiscal calendar, and the backup legal holds and pins.
+  * It ends with the plan hash and the key inventory of the retained runs (D-138). While the inventory is incomplete, no key may be retired.
+  * It writes system audit event 2014. With `--json` it writes the plan to a new file.
+* **Keep reasons:**
+  * `minimum_daily`, `minimum_weekly`: the newest recoverable run of each of the latest 7 days and 4 weeks that HAVE a run.
+  * `last_recoverable`, `newest`, `recovery_test_proof`: always kept.
+  * `period_end`, `year_end`: the last run before and the first run after every fiscal period end, calendar month end and fiscal year end. They are never deleted automatically until the owner decides the legal policy.
+  * `classification_unknown`: a company whose time zone is not configured or unknown, a run outside every fiscal year, or a company that is not Ready or cannot be read.
+  * `legal_hold`, `attachment_hold`, `d114_hold`, `hold_check_failed`: a hold on the run.
+  * `recovery_chain`: a pin, or a kept trial restore inside the run.
+  * `incomplete`, `status_unverifiable`, `unencrypted`, `recovery_key_untested`: the run is not recoverable. It never counts toward a minimum and is never deleted automatically.
+  * `run_not_clean`: the run holds an unexpected file or a symbolic link.
+* **Backup legal holds.** `backup-hold-place` takes effect at once and writes system audit event 2018 (the reason is stored in the hold, not in the event). A hold covers either one run, or one company's runs started within the given local dates.
+  * **A hold cannot be released with this tool.** Release needs a named administrator and independent approval (Phase 4.1). The database refuses every change to a hold except a single release.
+* **Automatic deletion is INACTIVE (D-137).** `backup-retention-apply` writes audit event 2017 and stops with exit 3 (`retention_deletion_inactive`); nothing is deleted. Three independent layers enforce this:
+  1. a code gate that is `false` in this release;
+  2. runtime prerequisites checked on every execution;
+  3. an exact opt-in, `Hasm__Backup__Retention__AutomaticDeletion=yes-delete-eligible-backups`, that no shipped configuration sets.
+
+  Only an activation PR merged on an explicit owner instruction can change the gate. **Until then backups accumulate:** watch the free space of the backup root. Never delete a run folder by hand while a trial restore, recovery test or backup runs. Never delete a run that the plan shows with a keep reason.
+* **Trial restores and recovery tests** hold a shared restore lock for their duration. A deletion, once activated, takes that lock exclusively, so the two never overlap. A restore started during a deletion stops with `retention_in_progress`.
+* **What a deletion will do once activated** (D-136):
+  * it runs only when `backup-status` is `ok`, the clock is consistent, and no more than `MaxDeletionsPerRun` runs, and never more than half of the complete runs, are eligible;
+  * it re-validates every run just before touching it;
+  * it writes audit event 2015 first;
+  * it keeps a tombstone (the run's signed status and signature, plus `deleted.json`) under `<root>/.retention/tombstones/`;
+  * it renames the run to `<run id>.deleting-<hex>`, deletes it without following links, and writes audit event 2016.
+
+  An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
+
+## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
+
+`tools/loadtest/` is tooling only: no migration, no change to the PostgreSQL registry. It talks to the REAL HTTP API as ordinary users, so every server rule (validation, RBAC, numbering, audit, period and approval rules, optimistic concurrency) applies. Stage 2 (the 60-minute, 50-session runner) is separate and later.
+
+**Safety.** It refuses to run unless `HASM_LOADTEST_DISPOSABLE=this-installation-is-disposable` is set (the operator's statement that the installation and its database are disposable), refuses a non-loopback API unless it is https and `--environment <file>` is given, refuses port 5432 (`--database-port`, `PGPORT`), and refuses a company that holds anything that is not load-test data: an item or party whose code does not START with `LT-` (case-sensitive), a journal entry not described `LT entry ...` or a stock document not referenced `LT-S-...` (read through the API, so a user with a narrower scope sees less: use a company-wide user). `seed` AND `run` make this check before their first write. It cannot see the PostgreSQL cluster behind the API, so these are best-effort protections, not proof: point it only at an installation on the isolated runner's cluster (`scripts/test-pg/`) or the dedicated reference machine. Credentials come only from the environment (`HASM_LT_LOGIN`, `HASM_LT_PASSWORD`; `HASM_LT_APPROVER_LOGIN`, `HASM_LT_APPROVER_PASSWORD` for stock-document approval, which needs a second user). A development certificate is trusted through `NODE_EXTRA_CA_CERTS`; validation is never disabled.
+
+**Prerequisites in the target company** (the seeder checks and names what is missing): a fiscal year covering `--year`, the base currency selected, at least two active postable base-currency accounts, at least one active warehouse (stock documents). It creates its own unit and group (`LT-PCS`, `LT-G`).
+
+```
+node tools/loadtest/loadtest.js plan --items 20000 --parties 10000 --journals N --stock-docs N   # the plan digest, no API
+node tools/loadtest/loadtest.js seed --api http://127.0.0.1:PORT --company <id> --items 20000 --parties 10000 --journals N --stock-docs N --year 2026 --concurrency 4 > seed-manifest.json
+node tools/loadtest/loadtest.js run  --api ... --company <id> --items ... --parties ... --iterations 100 [--duration-seconds S] [--environment env.json] [--out results.json]
+node --test tools/loadtest/tests/smoke.test.js                                                     # no database, no real API
+```
+
+**Data.** Deterministic: record i of kind k depends only on (`--seed`, k, i) (default seed `hasm-loadtest-1`), so the same seed and counts give the same data and the same plan digest on any machine. Items and parties (Latin and Arabic names; about 60% of parties get a customer role) are idempotent by code. Journal entries (create, submit, post by the maker; found again by their description) and stock documents (receipts first, then issues and transfers; create, submit, approve by a second user; found again by their reference) are idempotent too. A multi-step flow is driven by the state the API reports, one step at a time: a failed or ambiguous call is answered by re-reading the state, never by repeating the chain or creating a second record. Item k is only ever stocked in warehouse (k-1) mod W, so an issue draws only items its warehouse can have received; quantities are not tracked. Approving a stock document changes no stock figure by itself (posting is a later stage), and invoices are not seeded in stage 1: both are listed as missing in every results file, never omitted.
+
+**Scenarios.** Item search, party search, customer search (P95 target 1 s), ordinary screen-load calls (2 s), save and post a journal entry (3 s), trial balance and general ledger (5 s). Declared but not implemented: invoice save/post and the stock balance report; they appear with `implemented: false`.
+
+**Results and the verdict.** A results file records the tool, seed, data counts, load shape, the load generator's host facts and the operator-declared reference environment (`--environment`: `vcpu`, `ramGb`, `diskGb`, `ssd`, `backendAndPostgresTogether`, `companies`; the tool cannot verify it). Samples are measured, never estimated; a scenario without samples shows `null`. The data counts in the verdict are MEASURED from the API at run start (the declared counts are recorded beside them but never used). Only the six documented keys of `--environment` reach the results file. A scenario is within target when p95 is at most (inclusive) its target. The verdict is **NOT VERIFIED** unless every reference condition (8 vCPU/32 GB/500 GB SSD declared, 5 companies, 20,000 items, 10,000 parties, 100,000 invoices, 500,000 entries and stock movements, 50 sessions, 3,600 s, every scenario implemented) is met; the file lists each unmet reason. Stage 1 cannot meet them, so its output is mechanics validation and never acceptance evidence. `loadtest-results/` is git-ignored.
+
+**Validation.** `tools/loadtest/tests/smoke.test.js` (Node, no database): determinism, the guard, the verdict rule, a contract check of every route, request field, query parameter, enum value and response key against the backend sources, and a seed plus short run against an in-process stub. It runs in the hosted `backend-build-test` job of `.github/workflows/backend.yml` (an added step; the workflow's path filter is mirrored by the protected `required-checks.json`, so it runs when `src/backend/**` or `tests/**` change, which is when the contract can break, and on every push to `main`, not on a change that only touches `tools/loadtest/`; the self-hosted twin is unchanged). Beyond the smoke test, the harness was run once end to end against the real API in-process on the isolated runner (60 items, 30 parties, 15 journal entries posted, 10 stock documents approved by two users, 80 scenario iterations, 0 errors); those numbers are meaningless and not recorded.
+
 ## Checks
 ```
 dotnet test src/backend/Hasm.slnx
@@ -528,3 +757,19 @@ One React + TypeScript frontend serves the Web app and the Windows Desktop app (
 System migration **0007** adds the activation epoch to role assignments and the branch permissions (run `init-system-db`; the order for an existing installation is: `init-system-db` -> `migrate-companies` -> `grant-company-runtime <id>`). A branch-scoped grant is effective only while the branch is active and its epoch equals the epoch recorded at assignment (evaluated on every request, no cache; unavailable branch data drops the grant, never widens it). `/api/v1/company/branches` serves both clients; the shared frontend screen is `apps/web/src/pages/Branches.tsx` (tests: `branches.test.tsx`, `packages/api-client`). PostgreSQL/API tests: `BranchAccessTests`, `BranchEpochTests`, `BranchApiTests`. Details and limitations: `docs/PHASE-3.1B-PROPOSAL.md` section 9.
 ## Git workflow and GitHub persistence (permanent, owner-approved)
 Branches: `main` (protected, owner-merged) and one `feature/<phase-name>` branch per approved phase; backup branches are discontinued. Logical commits per slice are pushed to the feature branch regularly and without asking (after every verified slice, plus work-in-progress commits labelled `wip(...)` to preserve substantial unfinished progress); do not wait until phase end. Never force-push, push to `main`, delete the active feature branch or merge automatically; the owner merges after reviewing GitHub Actions. After an interruption: `git status`, `git fetch`, compare with `origin/<feature>`, continue from the most recent safe commit. CI: after each push the agent monitors Actions with `gh` (`gh pr checks`, `gh run view --log-failed`), repairs failures at the root cause without weakening tests, checks or expected counts, and repeats until green; `gh pr ready` only when the phase is complete and checks pass. Pull Requests: one Draft PR to `main` is opened automatically with `gh` after the first pushed buildable checkpoint of a phase (no duplicates; the description is kept current), marked ready for review after the full regression at phase end; merging, auto-merge and bypassing Actions stay with the owner. Full rules: root `CLAUDE.md`.
+
+## Scratch files and PR-body hygiene (multi-agent)
+
+Several agents work in one environment at the same time, so temporary files must never collide and a pull-request description must never be overwritten with another task's text (owner instruction, 2026-11-21). Documentation only; this adds no protected policy.
+
+**Why (2026-11-21 incident):** a reviewer cleaning its files ran a glob (`*.md`) in the shared scratchpad and deleted 45 files of other agents. Nothing in git was lost, but unpushed drafts were. Hence: never glob-delete, and remove only your own `mktemp` directory by its exact path.
+
+1. **One own directory per task.** At the start of a task create it: `D=$(mktemp -d "${TMPDIR:-/tmp}/hasm-<agentLetter>-<task>-XXXXXX"); chmod 700 "$D"`. Every temporary file of that task (PR bodies, review text, test output, patches, TRX copies) goes inside it. Never use the shared scratchpad root or a fixed file name.
+2. **No fixed names.** Never reuse a name such as `pr-body.md`, `review.txt`, `out.log` or `pg.out` in a shared place; inside your own `$D` the names are yours alone.
+3. **Stay out of other agents' space.** Keep temporary output out of other agents' worktrees and directories. Never read, write or delete anything you did not create.
+4. **Cleanup.** Remove only the `$D` you created (`rm -rf -- "$D"`, after checking that it starts with your own `hasm-<letter>-` prefix). Never glob-delete in a shared location and never touch lock files.
+5. **Atomic writes for anything sent to GitHub.** Write to `$D/body.tmp`, then `mv "$D/body.tmp" "$D/body.md"` before using it.
+6. **Verify before any PR title or description update.** Re-read the pull request (`gh api repos/salem2020s/hasm/pulls/<n>`); check the number, that `head.ref` and `head.sha` are the pull request you intend, and that the first line of the body file matches that pull request's title or topic. Only then PATCH.
+7. **Never commit scratch files, credentials or temporary test artifacts.** Review `git status` and the staged file list before every commit.
+8. **No protected policy changes** are made through this convention.
+9. **Review records name the model family only, never a model identifier.**

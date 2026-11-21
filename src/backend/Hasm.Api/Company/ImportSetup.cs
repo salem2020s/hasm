@@ -5,6 +5,7 @@ using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Imports;
 using Hasm.Infrastructure.Inventory;
+using Hasm.Infrastructure.Parties;
 using Hasm.Infrastructure.Security;
 
 namespace Hasm.Api.Company;
@@ -23,10 +24,12 @@ public static class ImportSetup
         services.AddSingleton<IImportAdapter>(sp => new InventoryUnitsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
         services.AddSingleton<IImportAdapter>(sp => new InventoryGroupsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
         services.AddSingleton<IImportAdapter>(sp => new InventoryItemsImportAdapter(sp.GetRequiredService<CompanyInventoryService>()));
+        services.AddSingleton<IImportAdapter>(sp => new PartyImportAdapter(sp.GetRequiredService<PartyService>()));
         services.AddSingleton(sp => new ImportAdapterRegistry(sp.GetServices<IImportAdapter>()));
         services.AddSingleton(sp => new ImportService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<EnvelopeEncryptor>(),
             sp.GetRequiredService<EncryptedFileStore>(), sp.GetRequiredService<ImportOptions>(), sp.GetRequiredService<ImportAdapterRegistry>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new ImportManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<ImportService>(), sp.GetRequiredService<ImportAdapterRegistry>()));
+        services.AddSingleton(sp => new ImportTemplateService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<ImportService>(), sp.GetRequiredService<ImportAdapterRegistry>(), sp.GetRequiredService<TimeProvider>()));
         services.AddHostedService(sp => new ImportMaintenanceHostedService(configuration, sp, sp.GetRequiredService<ILoggerFactory>().CreateLogger("Hasm.Imports")));
         return services;
     }
