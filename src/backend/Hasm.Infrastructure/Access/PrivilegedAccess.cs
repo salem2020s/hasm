@@ -16,6 +16,8 @@ public static class PrivilegedAccess
         "company.attachmentssensitive", "company.journalsoftclosed",
         // Phase R slice R1: retention policy, legal holds and the approval and execution of attachment deletion are destructive controls (D-096: when in doubt, privileged)
         "company.attachmentretention",
+        // review L2 of PR #172 (when in doubt, privileged): the ledger settings and the cost-center policies configure which controls apply to postings (the journal controls and the cost-center requirement), so changing them changes what the ledger lets through
+        "company.ledgersettings", "company.costcenterpolicies",
     };
 
     /// <summary>Individual permissions that are privileged although their resource is ordinary (review M3): <c>company.imports.configure</c> authorizes the import maintenance, including the encryption-key rewrap of imported files.</summary>
@@ -26,7 +28,7 @@ public static class PrivilegedAccess
     {
         "company.profile", "company.currencies", "company.config", "company.branches", "company.branchstructure", "company.warehouses", "company.warehousestructure",
         "company.fiscalyears", "company.fiscalperiods", "company.fiscalreopen", "company.accounts", "company.numbering", "company.exchangerates", "company.costcenters",
-        "company.journal", "company.journalrate", "company.ledgersettings", "company.ledgerreports", "company.costcenterpolicies", "company.fiscalclosing",
+        "company.journal", "company.journalrate", "company.ledgerreports", "company.fiscalclosing",
         "company.imports", "company.financialstatements", "company.statementmapping", "company.units", "company.itemgroups", "company.items", "company.barcodes",
         "company.inventorysettings", "company.inventoryaccounting", "company.stockdocs", "company.stockbalance", "company.stocktake", "company.parties", "company.tax",
         "company.partyroles", "company.salesreps", "company.pricing", "company.commercialdocs", "company.attachments",
