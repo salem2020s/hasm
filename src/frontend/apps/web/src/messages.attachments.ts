@@ -11,7 +11,7 @@ export const attachmentsAr: Record<string, string> = {
   "att.error.attachment_storage_not_configured": "مجلد المرفقات غير مُعدّ على الخادم.", "att.error.already_removed": "أُزيل المرفق مسبقاً.", "att.error.revision_conflict": "تغيّر المرفق في مكان آخر.",
   "att.error.invalid_request": "الطلب غير مكتمل.", "att.error.concurrent_change": "تعارض تغيير متزامن: أعد المحاولة.", "att.error.precondition_required": "تعذّر التحقق من نسخة السجل.",
   "field.file_empty": "الملف فارغ.", "field.file_too_large": "الملف أكبر من الحد المسموح.", "field.content_type_mismatch": "محتوى الملف لا يطابق نوعه.", "field.content_type_not_allowed": "نوع الملف غير مسموح.",
-  "field.subject_not_found": "السجل غير موجود.", "field.subject_kind_invalid": "نوع السجل غير صالح.", "field.file_name_invalid": "اسم الملف غير صالح.", "field.too_long": "النص أطول من الحد المسموح.",
+  "field.subject_not_found": "السجل غير موجود.", "field.subject_kind_invalid": "نوع السجل غير صالح.", "field.file_name_invalid": "اسم الملف غير صالح.", "field.att.too_long": "النص أطول من الحد المسموح.",
 };
 
 export const attachmentsEn: Record<string, string> = {
@@ -26,5 +26,5 @@ export const attachmentsEn: Record<string, string> = {
   "att.error.attachment_storage_not_configured": "The attachments folder is not configured on the server.", "att.error.already_removed": "The attachment was already removed.", "att.error.revision_conflict": "The attachment was changed elsewhere.",
   "att.error.invalid_request": "The request is incomplete.", "att.error.concurrent_change": "A concurrent change conflicted: try again.", "att.error.precondition_required": "The record revision could not be verified.",
   "field.file_empty": "The file is empty.", "field.file_too_large": "The file is larger than the allowed limit.", "field.content_type_mismatch": "The file content does not match its type.", "field.content_type_not_allowed": "This file type is not allowed.",
-  "field.subject_not_found": "The record does not exist.", "field.subject_kind_invalid": "Invalid record kind.", "field.file_name_invalid": "Invalid file name.", "field.too_long": "The text is longer than allowed.",
+  "field.subject_not_found": "The record does not exist.", "field.subject_kind_invalid": "Invalid record kind.", "field.file_name_invalid": "Invalid file name.", "field.att.too_long": "The text is longer than allowed.",
 };
