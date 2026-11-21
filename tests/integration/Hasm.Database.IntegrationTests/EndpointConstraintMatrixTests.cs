@@ -92,144 +92,11 @@ public class EndpointConstraintMatrixTests : JournalTestBase
     };
 
     /// <summary>
-    /// Mutating company routes NOT probed yet (part 2 of the matrix), listed EXPLICITLY by family (review M1 of #155): a route the API adds must be classified here or in
-    /// <see cref="Probed"/>, or <see cref="Every_mutating_company_endpoint_is_probed_or_listed_as_pending"/> fails.
+    /// Mutating company routes this class does NOT probe: part 2 (<see cref="EndpointConstraintMatrixPart2Tests"/>) probes them or lists them as pending there, explicitly by family, so a
+    /// route the API adds must be classified in <see cref="Probed"/> or in part 2, or <see cref="Every_mutating_company_endpoint_is_probed_or_listed_as_pending"/> fails.
     /// </summary>
-    public static readonly IReadOnlyList<string> Pending =
-    [
-        // accounts
-        "POST /api/v1/company/accounts/apply-template",
-        "POST /api/v1/company/accounts/{id:guid}/move",
-        "PUT /api/v1/company/accounts/settings",
-        // approval-policies
-        "POST /api/v1/company/approval-policies/",
-        "POST /api/v1/company/approval-policies/{id:guid}/activate",
-        "POST /api/v1/company/approval-policies/{id:guid}/deactivate",
-        "PUT /api/v1/company/approval-policies/{id:guid}",
-        // attachment-retention
-        "POST /api/v1/company/attachment-retention/holds",
-        "POST /api/v1/company/attachment-retention/holds/{id:guid}/release",
-        "POST /api/v1/company/attachment-retention/policies",
-        "POST /api/v1/company/attachment-retention/policies/{id:guid}/approve",
-        "POST /api/v1/company/attachment-retention/policies/{id:guid}/revoke",
-        // attachments
-        "POST /api/v1/company/attachments/",
-        "POST /api/v1/company/attachments/maintenance/rewrap",
-        "POST /api/v1/company/attachments/maintenance/sweep",
-        "POST /api/v1/company/attachments/maintenance/verify",
-        "POST /api/v1/company/attachments/{id:guid}/remove",
-        // branches
-        "POST /api/v1/company/branches/{id:guid}/make-main",
-        // commercial-documents
-        "POST /api/v1/company/commercial-documents/",
-        "POST /api/v1/company/commercial-documents/links",
-        "POST /api/v1/company/commercial-documents/{id:guid}/approve",
-        "POST /api/v1/company/commercial-documents/{id:guid}/cancel",
-        "POST /api/v1/company/commercial-documents/{id:guid}/reject",
-        "POST /api/v1/company/commercial-documents/{id:guid}/submit",
-        "POST /api/v1/company/commercial-documents/{id:guid}/withdraw",
-        "PUT /api/v1/company/commercial-documents/{id:guid}",
-        // cost-center-policies
-        "PUT /api/v1/company/cost-center-policies/accounts/{accountId:guid}",
-        "PUT /api/v1/company/cost-center-policies/branches/{costCenterId:guid}",
-        // currencies
-        "PUT /api/v1/company/currencies/{code}",
-        // fiscal-closing
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/carry-forward",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/close",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-closing",
-        "POST /api/v1/company/fiscal-closing/years/{yearId:guid}/reverse-opening",
-        "PUT /api/v1/company/fiscal-closing/settings",
-        // fiscal-periods
-        "POST /api/v1/company/fiscal-periods/{id:guid}/final-close",
-        "POST /api/v1/company/fiscal-periods/{id:guid}/reopen-requests",
-        // fiscal-reopen-requests
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/approve",
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/cancel",
-        "POST /api/v1/company/fiscal-reopen-requests/{id:guid}/deny",
-        // fiscal-years
-        "POST /api/v1/company/fiscal-years/{id:guid}/close",
-        "POST /api/v1/company/fiscal-years/{id:guid}/reopen-requests",
-        // imports
-        "POST /api/v1/company/imports/",
-        "POST /api/v1/company/imports/maintenance/rewrap",
-        "POST /api/v1/company/imports/maintenance/run",
-        "POST /api/v1/company/imports/templates/{adapter}/{name}/retire",
-        "POST /api/v1/company/imports/{id:guid}/apply",
-        "POST /api/v1/company/imports/{id:guid}/approve",
-        "POST /api/v1/company/imports/{id:guid}/cancel",
-        "POST /api/v1/company/imports/{id:guid}/dry-run",
-        "POST /api/v1/company/imports/{id:guid}/mapping/apply-template",
-        "POST /api/v1/company/imports/{id:guid}/mapping/template",
-        "POST /api/v1/company/imports/{id:guid}/reject",
-        "POST /api/v1/company/imports/{id:guid}/renew",
-        "POST /api/v1/company/imports/{id:guid}/resolutions",
-        "POST /api/v1/company/imports/{id:guid}/stage",
-        "POST /api/v1/company/imports/{id:guid}/submit",
-        "POST /api/v1/company/imports/{id:guid}/withdraw",
-        "PUT /api/v1/company/imports/settings",
-        "PUT /api/v1/company/imports/{id:guid}/mapping",
-        // inventory
-        "PUT /api/v1/company/inventory/accounting/",
-        "PUT /api/v1/company/inventory/settings",
-        // journal
-        "POST /api/v1/company/journal/",
-        "POST /api/v1/company/journal/{id:guid}/decision",
-        "POST /api/v1/company/journal/{id:guid}/post",
-        "POST /api/v1/company/journal/{id:guid}/reverse",
-        "PUT /api/v1/company/journal/{id:guid}",
-        // ledger-settings
-        "PUT /api/v1/company/ledger-settings/",
-        // negative-stock
-        "PUT /api/v1/company/negative-stock/items/{itemId:guid}",
-        "PUT /api/v1/company/negative-stock/settings",
-        // numbering
-        "PUT /api/v1/company/numbering/{docType}",
-        // parties
-        "POST /api/v1/company/parties/reconcile",
-        "POST /api/v1/company/parties/sync",
-        "POST /api/v1/company/parties/{id:guid}/propose",
-        "PUT /api/v1/company/parties/{id:guid}",
-        // pricing
-        "POST /api/v1/company/pricing/policy",
-        "POST /api/v1/company/pricing/quote",
-        "PUT /api/v1/company/pricing/customer-assignments/{partyId:guid}",
-        // profile
-        "POST /api/v1/company/profile/display-name-sync",
-        "PUT /api/v1/company/profile",
-        // statements
-        "PUT /api/v1/company/statements/mapping",
-        // stock-adjustments
-        "POST /api/v1/company/stock-adjustments/{id:guid}/posting",
-        "POST /api/v1/company/stock-adjustments/{id:guid}/reversal",
-        // stock-documents
-        "POST /api/v1/company/stock-documents/",
-        "POST /api/v1/company/stock-documents/{id:guid}/approve",
-        "POST /api/v1/company/stock-documents/{id:guid}/cancel",
-        "POST /api/v1/company/stock-documents/{id:guid}/negative-exception/approvals",
-        "POST /api/v1/company/stock-documents/{id:guid}/posting/",
-        "POST /api/v1/company/stock-documents/{id:guid}/reject",
-        "POST /api/v1/company/stock-documents/{id:guid}/reversal",
-        "POST /api/v1/company/stock-documents/{id:guid}/submit",
-        "POST /api/v1/company/stock-documents/{id:guid}/withdraw",
-        "PUT /api/v1/company/stock-documents/{id:guid}",
-        // stocktakes
-        "POST /api/v1/company/stocktakes/",
-        "POST /api/v1/company/stocktakes/{id:guid}/adjustment",
-        "POST /api/v1/company/stocktakes/{id:guid}/approve",
-        "POST /api/v1/company/stocktakes/{id:guid}/cancel",
-        "POST /api/v1/company/stocktakes/{id:guid}/generate-sheet",
-        "POST /api/v1/company/stocktakes/{id:guid}/reject",
-        "POST /api/v1/company/stocktakes/{id:guid}/submit",
-        "POST /api/v1/company/stocktakes/{id:guid}/withdraw",
-        "PUT /api/v1/company/stocktakes/{id:guid}",
-        // taxes
-        "POST /api/v1/company/taxes/policy",
-        "POST /api/v1/company/taxes/rules",
-        "PUT /api/v1/company/taxes/item-classes/{itemId:guid}",
-        "PUT /api/v1/company/taxes/party-classes/{partyId:guid}",
-        "PUT /api/v1/company/taxes/rules/{id:guid}",
-    ];
+    /// <remarks>A property, not a field initializer: the two classes refer to each other's lists, and static field initializers would depend on which type initializes first.</remarks>
+    public static IReadOnlyList<string> Pending => [.. EndpointConstraintMatrixPart2Tests.Probed.Keys, .. EndpointConstraintMatrixPart2Tests.Pending];
 
     // ------------------------------------------------------------------------------------------------------------------------------- engine
 
@@ -303,7 +170,7 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         Assert.True(both.Count == 0, "routes both probed and pending:\n" + string.Join("\n", both));
         var listed = Probed.Keys.Concat(Pending).ToHashSet(StringComparer.Ordinal);
         var unclassified = all.Except(listed).Order(StringComparer.Ordinal).ToList();
-        Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixTests):\n" + string.Join("\n", unclassified));
+        Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixTests or EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
         Assert.Equal(60, Probed.Count);
