@@ -149,8 +149,15 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
 
     // ================================================================================================================ party roles
 
-    private const string RoleSelect = $"SELECT r.{PR.Id}, r.{PR.PartyId}, p.{LP.Code}, p.{LP.DisplayName}, r.{PR.Role}, r.{PR.IsActive}, r.{PR.PaymentMode}, r.{PR.TermDays}, r.{PR.CreditLimit}, r.{PR.ControlAccountId}, a.{A.Code}, r.{PR.RepresentativeId}, r.{PR.Revision} " +
-        $"FROM {PR.Table} r JOIN {LP.Table} p ON p.{LP.Id} = r.{PR.PartyId} LEFT JOIN {A.Table} a ON a.{A.Id} = r.{PR.ControlAccountId}";
+    /// <summary>The role columns, in the order <see cref="ReadRole"/> reads them (ordinals 0 to <see cref="RoleColumnCount"/> - 1).</summary>
+    private const string RoleColumns = $"r.{PR.Id}, r.{PR.PartyId}, p.{LP.Code}, p.{LP.DisplayName}, r.{PR.Role}, r.{PR.IsActive}, r.{PR.PaymentMode}, r.{PR.TermDays}, r.{PR.CreditLimit}, r.{PR.ControlAccountId}, a.{A.Code}, r.{PR.RepresentativeId}, r.{PR.Revision}";
+    private const int RoleColumnCount = 13;
+    private const string RoleFrom = $"FROM {PR.Table} r JOIN {LP.Table} p ON p.{LP.Id} = r.{PR.PartyId} LEFT JOIN {A.Table} a ON a.{A.Id} = r.{PR.ControlAccountId}";
+    private const string RoleSelect = $"SELECT {RoleColumns} {RoleFrom}";
+
+    private static PartyRoleView ReadRole(NpgsqlDataReader r) =>
+        new(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), (PartyRoleKind)r.GetInt16(4), r.GetBoolean(5), (PartyPaymentMode)r.GetInt16(6), r.GetInt32(7), r.IsDBNull(8) ? null : r.GetDecimal(8),
+            r.IsDBNull(9) ? null : r.GetGuid(9), r.IsDBNull(10) ? null : r.GetString(10), r.IsDBNull(11) ? null : r.GetGuid(11), r.GetInt64(12));
 
     private static async Task<List<PartyRoleView>> LoadRoles(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid? id, PartyRoleKind? kind, bool forUpdate, CancellationToken ct)
     {
@@ -161,9 +168,7 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
         if (kind is { } k) { where.Add($"r.{PR.Role} = @k"); q.Parameters.AddWithValue("k", (short)k); }
         q.CommandText = RoleSelect + (where.Count == 0 ? "" : " WHERE " + string.Join(" AND ", where)) + $" ORDER BY p.{LP.Code}, r.{PR.Role}" + (forUpdate ? $" FOR UPDATE OF r" : "");
         await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct))
-            rows.Add(new PartyRoleView(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), (PartyRoleKind)r.GetInt16(4), r.GetBoolean(5), (PartyPaymentMode)r.GetInt16(6), r.GetInt32(7), r.IsDBNull(8) ? null : r.GetDecimal(8),
-                r.IsDBNull(9) ? null : r.GetGuid(9), r.IsDBNull(10) ? null : r.GetString(10), r.IsDBNull(11) ? null : r.GetGuid(11), r.GetInt64(12)));
+        while (await r.ReadAsync(ct)) rows.Add(ReadRole(r));
         return rows;
     }
 
@@ -201,15 +206,14 @@ public sealed partial class PartyRoleService(CompanyDatabaseResolver resolver, C
         var off = ListPaging.ClampOffset(offset);
         q.Parameters.AddWithValue("lim", lim);
         q.Parameters.AddWithValue("off", off);
-        q.CommandText = RoleSelect.Replace("SELECT r.", "SELECT count(*) OVER (), r.") + w + $" ORDER BY p.{LP.Code}, r.{PR.Role} LIMIT @lim OFFSET @off";
+        q.CommandText = $"SELECT {RoleColumns}, count(*) OVER () {RoleFrom}{w} ORDER BY p.{LP.Code}, r.{PR.Role} LIMIT @lim OFFSET @off";
         var rows = new List<PartyRoleView>();
         long total = 0;
         await using (var r = await q.ExecuteReaderAsync(ct))
             while (await r.ReadAsync(ct))
             {
-                total = r.GetInt64(0);
-                rows.Add(new PartyRoleView(r.GetGuid(1), r.GetGuid(2), r.GetString(3), r.GetString(4), (PartyRoleKind)r.GetInt16(5), r.GetBoolean(6), (PartyPaymentMode)r.GetInt16(7), r.GetInt32(8), r.IsDBNull(9) ? null : r.GetDecimal(9),
-                    r.IsDBNull(10) ? null : r.GetGuid(10), r.IsDBNull(11) ? null : r.GetString(11), r.IsDBNull(12) ? null : r.GetGuid(12), r.GetInt64(13)));
+                rows.Add(ReadRole(r));
+                total = r.GetInt64(RoleColumnCount);      // the window total follows the role columns
             }
         if (rows.Count == 0 && off > 0)    // the window count needs a row: an offset beyond the last one asks again for the total only
             total = await PagedSql.TotalAsync(conn, $"FROM {PR.Table} r JOIN {LP.Table} p ON p.{LP.Id} = r.{PR.PartyId}{w}", q.Parameters, ct);

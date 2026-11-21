@@ -475,7 +475,13 @@ export interface PartyRole {
   id: string; partyId: string; partyCode: string; partyName: string; role: number; isActive: boolean; paymentMode: number; termDays: number; creditLimit: number | null;
   controlAccountId: string | null; controlAccountCode: string | null; representativeId: string | null; revision: number;
 }
-export interface PartyRolesResponse { items: PartyRole[]; can: { configure: boolean }; /** present only when the request used search, limit or offset */ total?: number }
+export interface PartyRolesResponse {
+  items: PartyRole[];
+  /** The caller's permission. Use it ONLY from the unfiltered list: it is absent from the empty answer of an empty `ids` lookup (no request is made, so nothing is known), and a lookup never needs it. */
+  can?: { configure: boolean };
+  /** present only when the request used search, limit, offset or ids */
+  total?: number;
+}
 /** The optional search and paging of the master-data lists: all absent = the unchanged, unpaged list. */
 export interface ListQuery { search?: string; limit?: number; offset?: number }
 /** `ids` are PARTY ids (at most 100 per request): only those parties' roles come back, up to 500 rows unless `limit` is smaller. */
@@ -1194,7 +1200,12 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     downloadAttachment: (id: string) => download(`/api/v1/company/attachments/${enc(id)}/content`, "*/*"),
     removeAttachment: (id: string, reason: string, revision: number) => request<Attachment>("POST", `/api/v1/company/attachments/${enc(id)}/remove`, { body: { reason }, ifMatch: revision }),
     /** Without `q` the list is unchanged (all roles, no `total`). With `search` (party code or name), `limit` (default 50, at most 500), `offset` or `ids` (party ids, at most 100) the server answers one page and adds `total`. */
+    /**
+     * An EMPTY `ids` array means "no parties named", so it returns an empty page WITHOUT a request (the server treats an absent `ids` as the unfiltered list, and that must never be reached by accident).
+     * The synthetic page has `total: 0` and NO `can` (no request was made, so no permission is known and none is invented): use `can` only from the unfiltered list. The server semantics are unchanged.
+     */
     listPartyRoles: (kind?: number, q?: PartyRoleQuery) => {
+      if (q?.ids !== undefined && q.ids.length === 0) return Promise.resolve<PartyRolesResponse>({ items: [], total: 0 });
       const p = new URLSearchParams();
       if (kind) p.set("kind", String(kind));
       if (q?.search) p.set("search", q.search);
