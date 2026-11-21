@@ -9,3 +9,9 @@
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** hosted CI beyond the verification check-runs on the head (docs-only change; path-filtered workflows not triggered); review status of #168; the "highest code 1908" sentence (unchanged context); that the duplicate D-130..D-139 rows differ only in their status text (first 60 characters compared and the planned/implemented wording seen, not every row diffed); I did not run the PostgreSQL test, only read it and confirmed its registry entry.
 * **Verdict:** request changes
+* **Resolutions (author, in the commit after `719a0a3`; for R's delta confirmation):**
+  * **M1 fixed:** the #157 L3 bullet now reads DONE in #166, names the test `MfaStepUpApiTests.Session_mode_enrolment_refuses_a_transport_that_differs_from_the_sessions_client` and cross-references the #166 record ("S2 L1") and D-163; the false "not mentioned" and "no dedicated test" claims are removed.
+  * **L1 fixed:** the follow-ups heading reads "status at `afbf5f3`".
+  * **L2 fixed:** the open Lows of #151 (negative controls use `Record.ExceptionAsync`), #153 (F-L1..F-L3) and #155 (table-wide barcode audit count; the fiscal-year race should accept `409:fiscal_year_name_taken`) are added to the follow-ups and to the JSON `next`.
+  * **L3 fixed:** the 4.1-1..6 register row now says S1 (#133), S2 (#157) and S3a (#166) are merged and S3b is open.
+  * **L4 recorded, not fixed here (lead decision):** `docs/DECISIONS.md` is not edited in this PR; a follow-up records that D-130..D-139 appear twice (planned and implemented rows) since #157's merge `a20b925`, to be deduplicated in a dedicated reviewed PR next session (also in the JSON `next`).

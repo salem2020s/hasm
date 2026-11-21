@@ -283,7 +283,7 @@
     ]
   },
   "next": [
-    "Next session: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #158, #161, #163, #164 and #165).",
+    "Next session: 4.1 S3b, plus the open follow-ups recorded in docs/INTEGRATION-STATUS.md (load test stage 2; the Lows of #151, #153 (F-L1..F-L3), #155, #158, #161, #163, #164 and #165; dedupe of DECISIONS.md D-130..D-139, duplicated since a20b925, in a dedicated reviewed PR).",
     "#168 (pending-3 constraint matrix, Draft awaiting review) takes the next registry turn unless merged earlier; re-reconcile the registry, migration numbers, decision and audit ranges and the exact head at merge.",
     "Keep owner-pending decisions fail-closed and record them once in docs/INTEGRATION-STATUS.md."
   ],
