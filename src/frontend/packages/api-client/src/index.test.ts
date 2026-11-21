@@ -638,3 +638,17 @@ describe("api client: party list filters", () => {
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/parties");
   });
 });
+
+describe("api client: document links (S6 follow-up)", () => {
+  it("posts a link to the links route, reads the links and the derived line quantities of a document", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(json(url.endsWith("/links") && !url.includes("/d/") ? { id: "l" } : url.endsWith("/line-quantities") ? { lines: [{ lineNo: 1 }] } : { links: [{ id: "l" }] })));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    await client.createDocumentLink({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(await client.listDocumentLinks("d")).toEqual([{ id: "l" }]);
+    expect(await client.getLineQuantities("d")).toEqual([{ lineNo: 1 }]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/links");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ fromDocumentId: "a", fromLineNo: 1, toDocumentId: "b", toLineNo: 2, kind: 1, quantity: 3, idempotencyKey: "key-00001" });
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents/d/links");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/d/line-quantities");
+  });
+});

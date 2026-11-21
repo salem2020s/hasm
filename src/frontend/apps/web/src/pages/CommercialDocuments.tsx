@@ -1,4 +1,4 @@
-import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialStatus, type InventoryItem, type PartyRole } from "@hasm/api-client";
+import { ApiError, type Branch, type CommercialDocument, type CommercialDocumentInput, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
 import { Tabs, useI18n, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -329,6 +329,10 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
       ),
     },
     ...(doc ? [{
+      id: "links", label: t("commdoc.tab.links"),
+      content: <LinksPanel doc={doc} canLink={can("company.commercialdocs.update")} />,
+    } as TabItem] : []),
+    ...(doc ? [{
       id: "history", label: t("commdoc.tab.history"),
       content: (
         <div className="table-wrap">
@@ -452,6 +456,150 @@ function ItemPicker({ id, item, disabled, error, onPick }: { id: string; item: I
         </select>
       )}
       {disabled && error && <p className="field-error">{error}</p>}
+    </div>
+  );
+}
+
+const LINK_KINDS: DocumentLinkKind[] = [1, 2, 3, 4];
+/** The server field of a refusal to the form field that shows it (the target document is this one, so its refusal is shown on the source). */
+const LINK_FIELD: Record<string, string> = { fromDocumentId: "fromDocumentId", toDocumentId: "fromDocumentId", fromLineNo: "fromLineNo", toLineNo: "toLineNo", kind: "kind", quantity: "quantity", idempotencyKey: "quantity" };
+
+/**
+ * The Links tab (Phase 3.13 S2 API, S6 screen): the derived line quantities (ordered, fulfilled, invoiced, returned, computed by the server from the links), the links of this document in both directions and, for an APPROVED
+ * document and a user who may update it, a form that links a line of another approved document (the SOURCE) to a line of THIS document (the TARGET: the server authorizes on the target's branch). The form never sends a
+ * creator, a total or a price. One idempotency key belongs to one form attempt: a retry of the same submit replays the same link, and a new key starts after a success. Every refusal is translated; in production no
+ * type pair is registered yet, so the server refuses with `link_not_allowed` and the empty state explains that links appear when linkable types are activated. Links are append-only: there is no remove button.
+ */
+function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolean }) {
+  const { t } = useI18n();
+  const auth = useAuth();
+  const approved = doc.status === 3;
+  const [links, setLinks] = useState<DocumentLink[] | null>(null);
+  const [quantities, setQuantities] = useState<LineQuantity[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<CommercialDocument[]>([]);
+  const [sourceId, setSourceId] = useState("");
+  const [source, setSource] = useState<CommercialDocument | null>(null);
+  const [sourceLine, setSourceLine] = useState("");
+  const [targetLine, setTargetLine] = useState("");
+  const [kind, setKind] = useState<DocumentLinkKind>(1);
+  const [quantity, setQuantity] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [key, setKey] = useState(newKey);
+
+  const reload = useCallback(async () => {
+    if (!approved) { setLinks([]); return; }
+    try {
+      const [l, q] = await Promise.all([auth.api.listDocumentLinks(doc.id), auth.api.getLineQuantities(doc.id)]);
+      setLinks(l); setQuantities(q); setLoadError(null);
+    } catch (e) { if (!auth.handleError(e)) setLoadError(errorText(t, e, "commdoc.links.error.")); setLinks([]); }
+  }, [auth.api, auth.handleError, doc.id, approved, t]);
+  useEffect(() => { void reload(); }, [reload]);
+
+  // the candidate sources: approved documents of the same branch, party and currency (the server checks the same rules again)
+  useEffect(() => {
+    if (!approved || !canLink) return;
+    void auth.api.listCommercialDocuments({ status: 3, branchId: doc.branchId, limit: 100 }).then((list) => setCandidates(list.filter((d) => d.id !== doc.id && d.partyId === doc.partyId && d.currency === doc.currency))).catch(() => setCandidates([]));
+  }, [auth.api, approved, canLink, doc.id, doc.branchId, doc.partyId, doc.currency]);
+
+  async function chooseSource(id: string) {
+    setSourceId(id); setSource(null); setSourceLine(""); setErrors({}); setError(null);
+    if (!id) return;
+    try { setSource(await auth.api.getCommercialDocument(id)); } catch (e) { if (!auth.handleError(e)) setError(errorText(t, e, "commdoc.links.error.")); }
+  }
+
+  async function create() {
+    const v: Record<string, string> = {};
+    if (!sourceId) v.fromDocumentId = t("commdoc.links.field.required");
+    if (!sourceLine) v.fromLineNo = t("commdoc.links.field.required");
+    if (!targetLine) v.toLineNo = t("commdoc.links.field.required");
+    if (Number.isNaN(parsePositiveDecimal(quantity))) v.quantity = t("commdoc.field.invalid_quantity");
+    setErrors(v);
+    if (Object.keys(v).length > 0) { setError(t("commdoc.links.fix")); return; }
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      await auth.api.createDocumentLink({ fromDocumentId: sourceId, fromLineNo: Number(sourceLine), toDocumentId: doc.id, toLineNo: Number(targetLine), kind, quantity: parsePositiveDecimal(quantity), idempotencyKey: key });
+      setNotice(t("commdoc.links.created")); setKey(newKey()); setQuantity(""); setErrors({});
+      await reload();
+    } catch (err) {
+      if (auth.handleError(err)) return;
+      if (err instanceof ApiError && err.status === 400) {
+        const out: Record<string, string> = {};
+        for (const f of err.details.fields ?? []) { const k = `commdoc.links.field.${f.code}`; out[LINK_FIELD[f.field] ?? "quantity"] = t(k) === k ? t("field.invalid") : t(k); }
+        setErrors(out); setError(t("commdoc.links.fix"));
+      } else setError(errorText(t, err, "commdoc.links.error."));
+    } finally { setBusy(false); }
+  }
+
+  const lineOf = (d: CommercialDocument | null, no: string) => d?.lines.find((l) => String(l.lineNo) === no);
+  const clean = (e: Record<string, string>, k: string) => (e[k] ? e[k] : undefined);
+  const otherLabel = (l: DocumentLink) => { const id = l.toDocumentId === doc.id ? l.fromDocumentId : l.toDocumentId; return candidates.find((c) => c.id === id)?.officialNumber ?? shortId(id); };
+  return (
+    <div data-testid="links-panel">
+      <p className="hint">{t("commdoc.links.intro")}</p>
+      {loadError && <Banner kind="error" testId="links-load-error">{loadError}</Banner>}
+      {!approved && <Banner kind="info" testId="links-not-approved">{t("commdoc.links.not_approved")}</Banner>}
+      {approved && (
+        <Card title={t("commdoc.links.quantities")}>
+          <div className="table-wrap">
+            <table className="data-table" data-testid="line-quantities">
+              <caption className="visually-hidden">{t("commdoc.links.quantities")}</caption>
+              <thead><tr><th scope="col">#</th><th scope="col">{t("commdoc.links.ordered")}</th><th scope="col">{t("commdoc.links.fulfilled")}</th><th scope="col">{t("commdoc.links.invoiced")}</th><th scope="col">{t("commdoc.links.returned")}</th><th scope="col">{t("commdoc.links.remaining")}</th></tr></thead>
+              <tbody>{quantities.map((q) => <tr key={q.lineNo} data-testid={`qty-${q.lineNo}`}><td>{q.lineNo}</td><td className="num"><bdi dir="ltr">{q.ordered}</bdi></td><td className="num"><bdi dir="ltr">{q.fulfilled}</bdi></td><td className="num"><bdi dir="ltr">{q.invoiced}</bdi></td><td className="num"><bdi dir="ltr">{q.returned}</bdi></td><td className="num"><bdi dir="ltr">{q.remainingToFulfil}</bdi></td></tr>)}</tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <Card title={t("commdoc.links.list")}>
+        <div className="table-wrap">
+          <table className="data-table" data-testid="links-table">
+            <caption className="visually-hidden">{t("commdoc.links.list")}</caption>
+            <thead><tr><th scope="col">{t("commdoc.links.direction")}</th><th scope="col">{t("commdoc.links.other")}</th><th scope="col">{t("commdoc.links.line")}</th><th scope="col">{t("commdoc.links.kind")}</th><th scope="col">{t("commdoc.links.quantity")}</th><th scope="col">{t("commdoc.links.at")}</th></tr></thead>
+            <tbody>
+              {links !== null && links.length === 0 && <tr><td colSpan={6} data-testid="links-empty">{t("commdoc.links.none")} {t("commdoc.links.none_hint")}</td></tr>}
+              {(links ?? []).map((l) => {
+                const outgoing = l.fromDocumentId === doc.id;
+                return (
+                  <tr key={l.id} data-testid={`link-${l.id}`}>
+                    <td>{outgoing ? t("commdoc.links.out") : t("commdoc.links.in")}</td><td><bdi dir="ltr">{otherLabel(l)}</bdi></td>
+                    <td><bdi dir="ltr">{outgoing ? `${l.fromLineNo} → ${l.toLineNo}` : `${l.toLineNo} ← ${l.fromLineNo}`}</bdi></td><td>{t(`commdoc.links.kind.${l.kind}`)}</td>
+                    <td className="num"><bdi dir="ltr">{l.quantity}</bdi></td><td><bdi dir="ltr">{l.createdAtUtc.slice(0, 19).replace("T", " ")}</bdi></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      {approved && canLink && (
+        <Card title={t("commdoc.links.create")} hint={t("commdoc.links.create_hint")}>
+          {notice && <Banner kind="success" testId="link-created">{notice}</Banner>}
+          {error && <Banner kind="error" testId="link-error">{error}</Banner>}
+          {candidates.length === 0 && <p className="hint" data-testid="no-sources">{t("commdoc.links.source_none")}</p>}
+          <div className="fields">
+            <Field id="cl-source" label={t("commdoc.links.source")} error={clean(errors, "fromDocumentId")} required>
+              {(aria) => <select {...aria} value={sourceId} onChange={(e) => void chooseSource(e.target.value)}><option value="">{t("form.select")}</option>{candidates.map((c) => <option key={c.id} value={c.id}>{c.officialNumber ?? shortId(c.id)} — {c.docType}</option>)}</select>}
+            </Field>
+            <Field id="cl-source-line" label={t("commdoc.links.source_line")} error={clean(errors, "fromLineNo")} required>
+              {(aria) => <select {...aria} value={sourceLine} disabled={!source} onChange={(e) => setSourceLine(e.target.value)}><option value="">{t("form.select")}</option>{(source?.lines ?? []).map((l) => <option key={l.lineNo} value={l.lineNo}>#{l.lineNo} — {l.quantity}</option>)}</select>}
+            </Field>
+            <Field id="cl-target-line" label={t("commdoc.links.target_line")} error={clean(errors, "toLineNo")} required>
+              {(aria) => <select {...aria} value={targetLine} onChange={(e) => setTargetLine(e.target.value)}><option value="">{t("form.select")}</option>{doc.lines.map((l) => <option key={l.lineNo} value={l.lineNo}>#{l.lineNo} — {l.quantity}</option>)}</select>}
+            </Field>
+            <Field id="cl-kind" label={t("commdoc.links.kind")} error={clean(errors, "kind")} required>
+              {(aria) => <select {...aria} value={kind} onChange={(e) => setKind(Number(e.target.value) as DocumentLinkKind)}>{LINK_KINDS.map((k) => <option key={k} value={k}>{t(`commdoc.links.kind.${k}`)}</option>)}</select>}
+            </Field>
+            <Field id="cl-quantity" label={t("commdoc.links.quantity")} error={clean(errors, "quantity")} required>
+              {(aria) => <input {...aria} value={quantity} inputMode="decimal" dir="ltr" autoComplete="off" onChange={(e) => setQuantity(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} />}
+            </Field>
+          </div>
+          {lineOf(source, sourceLine) && <p className="hint" data-testid="source-line-hint">{t("commdoc.links.ordered")}: <bdi dir="ltr">{lineOf(source, sourceLine)!.quantity}</bdi></p>}
+          <div className="actions"><button type="button" className="primary" data-testid="create-link" disabled={busy} onClick={() => void create()}>{busy ? t("loading") : t("commdoc.links.submit")}</button></div>
+        </Card>
+      )}
     </div>
   );
 }

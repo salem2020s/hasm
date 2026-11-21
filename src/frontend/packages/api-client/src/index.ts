@@ -690,6 +690,13 @@ export interface CommercialLineInput { itemId: string; unitId: string; quantity:
 export interface CommercialDocumentInput { docType: string; branchId: string; partyId: string; currency: string; documentDate: string; mode: 1 | 2; note: string | null; idempotencyKey: string; lines: CommercialLineInput[] }
 export interface CommercialDocumentQuery { status?: CommercialStatus; docType?: string; branchId?: string; offset?: number; limit?: number }
 
+// ---- Document links (Phase 3.13 S2, shown by S6). Kind: 1 fulfils, 2 invoices, 3 returns, 4 amends. A link goes from a line of an approved SOURCE document to a line of an approved TARGET document (same party, currency and branch);
+// ordered / fulfilled / invoiced / returned are DERIVED by the server from the links. Linking needs the update permission on the target and is append-only.
+export type DocumentLinkKind = 1 | 2 | 3 | 4;
+export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; createdBy: string; createdAtUtc: string; replayed: boolean }
+export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
+export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
+
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
 export type StocktakeStatus = 1 | 2 | 3 | 4 | 5;
@@ -1060,6 +1067,9 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     approveCommercialDocument: (id: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/approve`, { ifMatch: revision }),
     rejectCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/reject`, { body: { reason }, ifMatch: revision }),
     cancelCommercialDocument: (id: string, reason: string, revision: number) => request<CommercialDocument>("POST", `/api/v1/company/commercial-documents/${enc(id)}/cancel`, { body: { reason }, ifMatch: revision }),
+    createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
+    listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
+    getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),
     submitStockDocument: (id: string, revision: number) => request<StockDocument>("POST", `/api/v1/company/stock-documents/${enc(id)}/submit`, { ifMatch: revision }),

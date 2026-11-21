@@ -17,6 +17,8 @@ public static class CommercialSetup
         services.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([]));
         services.AddSingleton(sp => new CommercialDocumentService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ICommercialDocumentTypeRegistry>(), sp.GetRequiredService<PricingConfigService>(), sp.GetRequiredService<TaxConfigService>()));
         services.AddSingleton(sp => new CommercialDocumentManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CommercialDocumentService>()));
+        services.AddSingleton(sp => new DocumentLinkService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ICommercialDocumentTypeRegistry>()));
+        services.AddSingleton(sp => new DocumentLinkManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<DocumentLinkService>(), sp.GetRequiredService<CommercialDocumentService>()));
         return services;
     }
 }
@@ -44,6 +46,10 @@ public static class CommercialEndpoints
         g.MapPost("/{id:guid}/approve", Approve);
         g.MapPost("/{id:guid}/reject", Reject).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(new BodyLimit());
+        // S2: links between approved documents (company.commercialdocs.update on the TARGET document's branch; reading needs view). No DELETE or PUT: a link is append-only. Production registers no link pair until 3.15/3.16.
+        g.MapPost("/links", CreateLink).WithMetadata(new BodyLimit());
+        g.MapGet("/{id:guid}/links", ListLinks);
+        g.MapGet("/{id:guid}/line-quantities", LineQuantities);
     }
 
     private static object Body(CommercialDocumentView d) => new
@@ -84,4 +90,13 @@ public static class CommercialEndpoints
         Run(http, access, true, (u, c, rev) => svc.RejectAsync(u, c, id, rev, body?.Reason, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Cancel(Guid id, CancelBody? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, true, (u, c, rev) => svc.CancelAsync(u, c, id, rev, body?.Reason, http.RequestAborted), Body, d => d.Revision);
+
+    private static object LinkBody(DocumentLinkView l) => new { id = l.Id, fromDocumentId = l.FromDocumentId, fromLineNo = l.FromLineNo, toDocumentId = l.ToDocumentId, toLineNo = l.ToLineNo, kind = (short)l.Kind, quantity = l.Quantity, createdBy = l.CreatedBy, createdAtUtc = l.CreatedAtUtc, replayed = l.Replayed };
+    private static Task<IResult> CreateLink(DocumentLinkInput? body, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.CreateAsync(u, c, body, http.RequestAborted), LinkBody, null);
+    private static Task<IResult> ListLinks(Guid id, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, id, http.RequestAborted), v => new { links = v.Select(LinkBody) }, null);
+    private static Task<IResult> LineQuantities(Guid id, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.QuantitiesAsync(u, c, id, http.RequestAborted),
+            v => new { lines = v.Select(q => new { lineNo = q.LineNo, ordered = q.Ordered, fulfilled = q.Fulfilled, invoiced = q.Invoiced, returned = q.Returned, remainingToFulfil = q.RemainingToFulfil, remainingToInvoice = q.RemainingToInvoice, remainingToReturn = q.RemainingToReturn }) }, null);
 }

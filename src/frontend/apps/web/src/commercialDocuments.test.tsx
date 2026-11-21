@@ -44,6 +44,7 @@ function setup(over: Record<string, unknown> = {}, perms = PERMS, types = ["comm
     listInventoryItems: vi.fn().mockResolvedValue({ items: [apple], total: 1 }),
     getInventoryItem: vi.fn().mockResolvedValue(apple),
     lookupInventoryUnits: vi.fn().mockResolvedValue(unitRows),
+    listDocumentLinks: vi.fn().mockResolvedValue([]), getLineQuantities: vi.fn().mockResolvedValue([]), createDocumentLink: vi.fn(),
     createCommercialDocument: vi.fn(), updateCommercialDocument: vi.fn(),
     ...over,
   }, perms);
@@ -268,7 +269,7 @@ describe("commercial document life cycle", () => {
     const rows = within(screen.getByTestId("history")).getAllByRole("row");
     expect(rows).toHaveLength(3);
     expect(within(rows[2]!).getByText("اعتُمد")).toBeInTheDocument();
-    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual(["المستند", "السطور", "السجل"]);
+    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual(["المستند", "السطور", "الروابط", "السجل"]);
   });
 });
 
@@ -279,7 +280,7 @@ describe("commercial documents in English and the Tauri shell", () => {
     await go("#/commercial/documents");
     await userEvent.click(await screen.findByRole("button", { name: "View" }));
     await screen.findByTestId("commercial-editor");
-    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual(["Document", "Lines", "History"]);
+    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual(["Document", "Lines", "Links", "History"]);
     expect(document.documentElement.dir).toBe("ltr");
     screen.getByRole("tab", { name: /^Document/ }).focus();
     await userEvent.keyboard("{ArrowRight}");
@@ -303,5 +304,133 @@ describe("commercial documents in English and the Tauri shell", () => {
       await userEvent.click(tab("المستند"));
       expect(screen.getByLabelText("ملاحظة")).toHaveValue("T");
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+});
+
+const link = (over: Record<string, unknown> = {}) => ({ id: "l1", fromDocumentId: "src", fromLineNo: 1, toDocumentId: "d1", toLineNo: 1, kind: 1, quantity: 4, createdBy: "u1", createdAtUtc: STAMP, replayed: false, ...over });
+const qty = (over: Record<string, unknown> = {}) => ({ lineNo: 1, ordered: 10, fulfilled: 4, invoiced: 0, returned: 0, remainingToFulfil: 6, remainingToInvoice: 10, remainingToReturn: 10, ...over });
+const source = approved({ id: "src", officialNumber: "2026-000002", lines: [{ lineNo: 1, itemId: "i1", unitId: "u-box", quantity: 10, warehouseId: null, lineNet: 100, pricingHash: "b".repeat(64) }, { lineNo: 2, itemId: "i1", unitId: "u-box", quantity: 3, warehouseId: null, lineNet: 30, pricingHash: "c".repeat(64) }] });
+const openLinks = async (over: Record<string, unknown> = {}, perms = PERMS, current: CommercialDocument = approved()) => {
+  const client = setup({
+    getCommercialDocument: vi.fn().mockImplementation((id: string) => Promise.resolve(id === "src" ? source : current)),
+    listCommercialDocuments: vi.fn().mockResolvedValue([current, source, approved({ id: "other-party", partyId: "p2", officialNumber: "2026-000003" }), approved({ id: "other-ccy", currency: "USD", officialNumber: "2026-000004" })]),
+    ...over,
+  }, perms, ["commercial_test"], [current], current);
+  await go("#/commercial/documents");
+  await userEvent.click(within(await screen.findByTestId("doc-d1")).getByRole("button", { name: "عرض" }));
+  await screen.findByTestId("commercial-editor");
+  await userEvent.click(tab("الروابط"));
+  return client;
+};
+
+describe("commercial document links (S2 API on the screen)", () => {
+  it("shows the derived line quantities and the links in both directions of an approved document", async () => {
+    await openLinks({
+      listDocumentLinks: vi.fn().mockResolvedValue([link(), link({ id: "l2", fromDocumentId: "d1", toDocumentId: "next", fromLineNo: 1, toLineNo: 2, kind: 2, quantity: 1 })]),
+      getLineQuantities: vi.fn().mockResolvedValue([qty()]),
+    });
+    const row = await screen.findByTestId("qty-1");
+    expect(within(row).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1", "10", "4", "0", "0", "6"]);
+    expect(within(screen.getByTestId("link-l1")).getByText("إلى هذا المستند")).toBeInTheDocument();
+    expect(within(screen.getByTestId("link-l1")).getByText("ينفّذ")).toBeInTheDocument();
+    expect(within(screen.getByTestId("link-l2")).getByText("من هذا المستند")).toBeInTheDocument();
+    expect(within(screen.getByTestId("link-l2")).getByText("يفوتر")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /حذف|إزالة/ })).toBeNull();                              // append-only: no remove button
+  });
+
+  it("explains the empty state (no type pair is activated in production) and a draft document is not linkable and asks the server for nothing", async () => {
+    const client = await openLinks();
+    expect(await screen.findByTestId("links-empty")).toHaveTextContent("لا توجد روابط لهذا المستند.");
+    expect(screen.getByTestId("links-empty")).toHaveTextContent("لا يوجد في الإنتاج أي زوج أنواع مفعّل");
+    document.body.innerHTML = "";
+    window.location.hash = "";
+    const draftClient = setup({}, PERMS, ["commercial_test"], [doc()], doc());
+    await openDoc();
+    await userEvent.click(tab("الروابط"));
+    expect(screen.getByTestId("links-not-approved")).toHaveTextContent("لا يُربط إلا المستند المعتمد");
+    expect(draftClient.listDocumentLinks).not.toHaveBeenCalled();
+    expect(draftClient.getLineQuantities).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("create-link")).toBeNull();
+    expect(client.listDocumentLinks).toHaveBeenCalledWith("d1");
+  });
+
+  it("creates a link with this document as the target, offers only valid sources, sends no creator or total, and starts a new idempotency key after a success", async () => {
+    const create = vi.fn().mockResolvedValue(link());
+    const client = await openLinks({ createDocumentLink: create });
+    const sources = within(await screen.findByLabelText(/^المستند المصدر/)).getAllByRole("option").map((o) => o.textContent);
+    expect(sources.join("|")).toContain("2026-000002");
+    expect(sources.join("|")).not.toContain("2026-000003");                                              // another party
+    expect(sources.join("|")).not.toContain("2026-000004");                                              // another currency
+    expect(sources.join("|")).not.toContain("2026-000001");                                              // the document itself
+    await userEvent.selectOptions(screen.getByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
+    await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
+    await userEvent.selectOptions(screen.getByLabelText(/^نوع الرابط/), "2");
+    await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "٣");
+    await userEvent.click(screen.getByTestId("create-link"));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const first = create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(first).toEqual({ fromDocumentId: "src", fromLineNo: 1, toDocumentId: "d1", toLineNo: 1, kind: 2, quantity: 3, idempotencyKey: expect.stringMatching(/.{8,}/) });
+    expect(JSON.stringify(first)).not.toMatch(/createdBy|price|total|tax/i);
+    expect(await screen.findByTestId("link-created")).toHaveTextContent("تم إنشاء الرابط.");
+    expect(client.listDocumentLinks).toHaveBeenCalledTimes(2);                                            // reloaded after the success
+    await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "1");
+    await userEvent.click(screen.getByTestId("create-link"));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect((create.mock.calls[1]![0] as { idempotencyKey: string }).idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it("keeps the same idempotency key when the same attempt is retried after a failure, and refuses a bad quantity before sending", async () => {
+    const create = vi.fn().mockRejectedValueOnce(apiError(409, "over_fulfilment")).mockResolvedValueOnce(link());
+    await openLinks({ createDocumentLink: create });
+    await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
+    await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
+    await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "1,500");
+    await userEvent.click(screen.getByTestId("create-link"));
+    expect(await screen.findByText(/كمية غير صالحة/)).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+    await userEvent.clear(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/));
+    await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "20");
+    await userEvent.click(screen.getByTestId("create-link"));
+    expect(await screen.findByTestId("link-error")).toHaveTextContent("تتجاوز الكمية المتبقية في أحد السطرين.");
+    await userEvent.click(screen.getByTestId("create-link"));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect((create.mock.calls[1]![0] as { idempotencyKey: string }).idempotencyKey).toBe((create.mock.calls[0]![0] as { idempotencyKey: string }).idempotencyKey);
+  });
+
+  it("translates every refusal code of the server, on the field when it names one", async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(apiError(400, "invalid_request", { fields: [{ field: "kind", code: "link_not_allowed" }] }))
+      .mockRejectedValueOnce(apiError(409, "party_mismatch")).mockRejectedValueOnce(apiError(409, "link_exists")).mockRejectedValueOnce(apiError(409, "document_not_approved"));
+    await openLinks({ createDocumentLink: create });
+    await userEvent.selectOptions(await screen.findByLabelText(/^المستند المصدر/), "src");
+    await userEvent.selectOptions(await screen.findByLabelText(/^سطر المصدر/), "1");
+    await userEvent.selectOptions(screen.getByLabelText(/^سطر هذا المستند/), "1");
+    await userEvent.type(within(screen.getByTestId("links-panel")).getByLabelText(/^الكمية/), "1");
+    await userEvent.click(screen.getByTestId("create-link"));
+    expect(await screen.findByText("لا يُسمح بالربط بين هذين النوعين بهذا النوع من الروابط.")).toBeInTheDocument();
+    for (const text of ["المستندان لطرفين مختلفين.", "يوجد رابط من هذا النوع بين هذين السطرين.", "لا يُربط إلا بمستندات معتمدة."]) {
+      await userEvent.click(screen.getByTestId("create-link"));
+      expect(await within(screen.getByTestId("link-error")).findByText(text)).toBeInTheDocument();
+    }
+  });
+
+  it("offers no link form to a user without the update permission (reading is still allowed)", async () => {
+    await openLinks({ listDocumentLinks: vi.fn().mockResolvedValue([link()]) }, PERMS.filter((p) => p !== "company.commercialdocs.update"));
+    expect(await screen.findByTestId("link-l1")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-link")).toBeNull();
+  });
+
+  it("works in English (LTR)", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    setup({ listDocumentLinks: vi.fn().mockResolvedValue([link()]), getLineQuantities: vi.fn().mockResolvedValue([qty()]) }, PERMS, ["commercial_test"], [approved()], approved());
+    await go("#/commercial/documents");
+    await userEvent.click(await screen.findByRole("button", { name: "View" }));
+    await userEvent.click(await screen.findByRole("tab", { name: /^Links/ }));
+    expect(await screen.findByTestId("line-quantities")).toBeInTheDocument();
+    expect(within(screen.getByTestId("link-l1")).getByText("Into this document")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Link to another document" })).toBeInTheDocument();
+    expect(document.documentElement.dir).toBe("ltr");
   });
 });
