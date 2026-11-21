@@ -523,7 +523,8 @@ Builds on slice 4 (PR #104, approved, in final CI). Decision ids D-089..D-095 an
      * Restoring TOTP secrets therefore needs the key-directory export (D-087), so MFA enrolment survives a full restore.
      * Unencrypted DEV/TEST runs keep excluding the TOTP data.
      * The slice 4 pinning test is extended so that every flagged table is either excluded, or included only in encrypted runs (a per-table rule in `SystemSchema`).
-     * **Coordination with Phase 4.1 S1 (lead note).** 4.1 S1 ships first with `user_totp` in `SystemDumpExclusions`, which means always excluded.
+     * **Coordination with Phase 4.1 S1 (D-120, PR #120).** Whichever of 4.1 S1 and the slice 5 implementation merges SECOND switches `user_totp` to "included only in encrypted runs". Until both are on main, it stays always excluded (in `SystemDumpExclusions`).
+       * The slice 5 implementation PR also replaces the #104 pin test, set-equality with `SystemDumpExclusions`, by a per-table rule.
        * The slice 5 implementation PR introduces the per-table rule and switches `user_totp` to "included only in encrypted runs".
        * Unencrypted DEV/TEST runs still exclude it.
        * The pinning test changes to match: session and login throttle always excluded; `user_totp` excluded in unencrypted runs and included, as ring ciphertext under `HBE1`, in encrypted runs.
