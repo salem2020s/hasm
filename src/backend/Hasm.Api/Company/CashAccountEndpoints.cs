@@ -15,7 +15,7 @@ public static class CashAccountSetup
         // S1 has no vouchers or transfers: nothing can refer to a cash account yet. S2 and S3 replace this probe with the real one.
         services.AddSingleton<ICashAccountUsageProbe, NoCashDocuments>();
         services.AddSingleton(sp => new CashAccountService(sp.GetRequiredService<CompanyDatabaseResolver>(), sp.GetRequiredService<CompanyAuditedTransactions>(),
-            sp.GetRequiredService<EnvelopeEncryptor>(), sp.GetRequiredService<ICashAccountUsageProbe>(), sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<EnvelopeEncryptor>(), sp.GetRequiredService<ICashAccountUsageProbe>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Hasm.Cash")));
         services.AddSingleton(sp => new CashAccountManagementService(sp.GetRequiredService<AccessService>(), sp.GetRequiredService<CashAccountService>()));
         return services;
     }
