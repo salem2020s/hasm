@@ -45,7 +45,8 @@ using Npgsql;
 //               symbolic link or without a complete, verified run is a blocker, and so is any entry of a root that is not a run folder, a .deleting-* folder or .retention (a run moved or
 //               copied under another name is not read; write --json outside the roots). It reads ONLY the given roots: other destinations, copies and standalone backup-company sets are not seen, so
 //               without --all-backup-copies-listed (the operator's attestation that the given roots are every place a backup is kept) the report is incomplete)
-//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
+//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale;
+//              slice 8: with Hasm__Backup__Destinations configured, also each destination's contribution and the OVERALL status, combined 1 > 8 > 0 (D-186); on a destination folder its root status only)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
@@ -146,6 +147,49 @@ if (command is "backup-status" or "backup-retention-preview")
         Console.WriteLine($"Never selected: the newest complete run; incomplete run(s): {runs.Count(r => !r.IsComplete && !r.HasReportFile)}; unreadable report(s): {runs.Count(r => r.IsUnreadable)}.");
         return Ok;
     }
+    // slice 8 (D-183, D-184): the destinations are read and checked FIRST; an invalid or unsafe configuration is a refusal (exit 3) returned alone, never a skipped destination.
+    // backup-status on a destination folder gives that folder's ROOT status only (D-186): it has no view of the primary or of the other destinations.
+    IReadOnlyList<CheckedDestination> destinations;
+    bool onDestination;
+    try
+    {
+        var configured = BackupDestinations.FromConfiguration(configuration);
+        onDestination = BackupDestinations.IsDestinationPath(args[1], configured);
+        destinations = BackupDestinations.Check(configured, onDestination ? null : args[1],
+            [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, auditOptions.KeyDirectory, statusOptions.SigningKeyDirectory]);
+    }
+    catch (BackupException ex)
+    {
+        Console.Error.WriteLine($"backup-status refused ({ex.Code}{(ex.Cause is null ? "" : $": {ex.Cause}")}). Fix Hasm__Backup__Destinations; no destination is ever skipped.");
+        return BadConfig;
+    }
+    var rootExit = RootStatus();
+    if (onDestination)
+    {
+        Console.WriteLine("This folder is a configured backup destination: its ROOT status only (no view of the primary or of the other destinations).");
+        return rootExit;
+    }
+    if (destinations.Count == 0) { Console.WriteLine("Replicas: none (no backup destination configured)."); return rootExit; }
+    var serverTrust = BackupMaterialLoader.ServerTrust(statusOptions);
+    var primaryRuns = RetentionInventory.Scan(args[1], serverTrust).Runs;
+    var primaryNewest = primaryRuns.Where(ReplicaStatus.IsReplicable).OrderByDescending(r => r.RunId, StringComparer.Ordinal).FirstOrDefault()?.RunId;
+    var contributions = new List<IReadOnlyList<ReplicaFinding>>();
+    foreach (var d in destinations)
+    {
+        var state = ReplicaStatus.Inspect(d, primaryRuns, serverTrust, now);
+        var findings = ReplicaStatus.Contribution(state, primaryNewest, now, TimeSpan.FromHours(maxAgeHours));
+        contributions.Add(findings);
+        Console.WriteLine($"Destination {d.Destination.Id} ({d.Destination.KindName}): {(state.Reachable ? "reachable" : "NOT reachable or missing")}; newest verified copy "
+            + (state.NewestCopyRunId is { } copy ? $"{copy}, finished {(now - state.NewestCopyFinishedUtc!.Value).TotalHours:0.0} hour(s) ago" : "none")
+            + $"; primary's newest replicable run {(primaryNewest is null ? "none" : state.HoldsPrimaryNewest ? "present" : "NOT present")}; result exit {BackupSeverity.Worst(findings.Select(f => f.ExitCode))}.");
+        foreach (var f in findings) Console.WriteLine($"  [{(f.ExitCode == 1 ? "FAILURE" : "WARNING")}] {f.Code} destination={d.Destination.Id}");
+    }
+    var overall = ReplicaStatus.Overall(rootExit, contributions);
+    Console.WriteLine($"Overall backup status (primary root and every configured destination, D-186): exit {overall}.");
+    return overall;
+
+    int RootStatus()
+    {
     var status = BackupRunStatus.Evaluate(runs, now, TimeSpan.FromHours(maxAgeHours));
     Console.WriteLine($"Backup status: {status.Code} (exit {status.ExitCode}).");
     if (status.Latest is { } latest)
@@ -164,6 +208,7 @@ if (command is "backup-status" or "backup-retention-preview")
         if (status.ExitCode == 0) { Console.WriteLine("Backup status: retention_deletion_incomplete (exit 8)."); return 8; }
     }
     return status.ExitCode;
+    }
 }
 
 if (command == "backup-recovery-keygen")
@@ -543,6 +588,9 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
             case "trial-restore-company":
             {
                 // slice 5: an encrypted set needs the operator's recovery key and trust list; an unencrypted set is accepted only under THIS reader's DEV/TEST acknowledgement (D-095, review M1)
+                // slice 8 (D-184): a trial restore never writes its attachment staging into, or around, a configured backup destination
+                BackupDestinations.RefuseInsideDestination(args[3], BackupDestinations.FromConfiguration(configuration));
+                // (checked before any key is loaded or anything is restored)
                 RestoreKeys? keys = null;
                 if (CompanyBackupService.IsEncryptedSet(args[1])) keys = restore.RecoveryKeyFile is null ? throw new BackupException("recovery_key_required") : LoadRestoreKeys(restore);
                 else if (!BackupGuard.UnencryptedReadAllowed(backupOptions)) throw new BackupException("unencrypted_set_refused");
@@ -615,7 +663,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 $"recovery test operator={BackupAudit.Operator()} run={(BackupRunFiles.IsRunId(Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1]))) ? Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1])) : "unknown")} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}");
         return ex.Code switch
         {
-            "attachment_storage_not_configured" or "database_not_configured" => BadConfig,
+            "attachment_storage_not_configured" or "database_not_configured" or "destination_config_invalid" or "retention_below_minimum" => BadConfig,
             // slice 5 (D-095): encryption is the default; a missing or contradictory configuration is a configuration error, never a silent fallback
             "backup_encryption_not_configured" or "unencrypted_ack_invalid" or "unencrypted_ack_with_recovery_key" or "recovery_key_invalid" or "signing_key_unavailable" => BadConfig,
             "company_busy" or "run_in_progress" => InProgress,
@@ -661,6 +709,8 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
         if (BackupGuard.Resolve(backupOptions) != BackupProtection.Encrypted) throw new BackupException("backup_encryption_not_configured");
         if (encryption.KeyDirectory is null) { Console.Error.WriteLine("Hasm__Encryption__KeyDirectory is required."); return BadConfig; }
         var destination = KeyExport.CheckDestination(args[1], [attachments.StorageDirectory, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory]);
+        // slice 8 (D-184, D-087): the key export never lies inside, or contains, a configured backup destination
+        BackupDestinations.RefuseInsideDestination(destination, BackupDestinations.FromConfiguration(configuration));
         var material = BackupMaterialLoader.Load(backupOptions);
         KeyExportManifest m;
         try { m = await KeyExport.WriteAsync(destination, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory!, material, DateTimeOffset.UtcNow); }
@@ -678,7 +728,7 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
     catch (BackupException ex)
     {
         Console.Error.WriteLine($"{command} stopped ({ex.Code}); nothing usable was written.");
-        return ex.Code is "backup_encryption_not_configured" or "recovery_key_invalid" or "signing_key_unavailable" ? BadConfig : Failed;
+        return ex.Code is "backup_encryption_not_configured" or "recovery_key_invalid" or "signing_key_unavailable" or "destination_config_invalid" or "retention_below_minimum" ? BadConfig : Failed;
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     {
