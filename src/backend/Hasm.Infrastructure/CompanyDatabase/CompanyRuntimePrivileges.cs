@@ -151,6 +151,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
         (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),
         (CompanySchema.LegalHold.Table, ["SELECT", "INSERT", "UPDATE"]),   // placed, then released once
+        // Company migration 0033: one identity per approval policy, written only THROUGH the deferred triggers of the policy and stage tables (they run as the writer). Whatever is written, the guard trigger stores
+        // the fingerprint PostgreSQL computes; rows are never removed.
+        (CompanySchema.ApprovalPolicyIdentity.Table, ["SELECT", "INSERT", "UPDATE"]),
         // Phase 3.14 slice S1 (company migration 0033, provisional): cash and bank accounts are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates. The migration creates no other table.
         (CompanySchema.CashAccount.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
