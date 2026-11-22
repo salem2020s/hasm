@@ -199,7 +199,6 @@ public static class AuthenticationSetup
     }));
 }
 
-/// <summary>Hourly removal of long-expired sessions and stale throttle rows. Failures never log more than the error type.</summary>
 /// <summary>
 /// Start-up half of the least-privilege gate (owner decision D-235): when the system database is reachable and the runtime account or the TOTP secret store violates least privilege, the API
 /// does NOT start. When the database is not configured or not reachable the API starts as before (anonymous endpoints work without a database); the MFA store then applies the same gate on its
@@ -227,6 +226,7 @@ public sealed class SystemRuntimeGateService(Func<string> connectionStringFactor
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
+/// <summary>Hourly removal of long-expired sessions and stale throttle rows. Failures never log more than the error type.</summary>
 public sealed class IdentityHousekeepingService(IdentityStore store, ILogger<IdentityHousekeepingService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
