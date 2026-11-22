@@ -31,14 +31,32 @@ public static class ReplicaAuditReader
     public static ReplicaAuditState Build(IEnumerable<(short Type, string Detail, DateTimeOffset At)> rows)
     {
         var last = new Dictionary<(string, string), short>();
+        var before = new Dictionary<(string, string), short?>();      // what the last word was before the current 2040 (review L2 of #214)
         var reverified = new Dictionary<string, DateTimeOffset>();
         foreach (var (type, detail, at) in rows)
         {
-            var expected = type == BackupAuditEvents.ReplicaVerified ? "replica verified " : type == BackupAuditEvents.ReplicaCorrupt ? "replica corrupt " : null;
+            var expected = type switch
+            {
+                BackupAuditEvents.ReplicaVerified => "replica verified ",
+                BackupAuditEvents.ReplicaCorrupt => "replica corrupt ",
+                BackupAuditEvents.ReplicaFailed => "replica failed ",
+                _ => null,
+            };
             if (expected is null || !detail.Contains(expected, StringComparison.Ordinal)) continue;
             var destination = Token(detail, "destination"); var run = Token(detail, "run");
             if (destination is null || run is null || !BackupRunFiles.IsRunId(run)) continue;
-            last[(destination, run)] = type;
+            var key = (destination, run);
+            if (type == BackupAuditEvents.ReplicaFailed)
+            {
+                // a 2041 that carries `status=` compensates a 2040 whose publish failed (D-185 step 5): that 2040 never produced a copy, so it is not the last word and clears nothing
+                if (Token(detail, "reason") == "replica_publish_failed" && Token(detail, "status") is not null && last.TryGetValue(key, out var kind) && kind == BackupAuditEvents.ReplicaVerified)
+                {
+                    if (before.TryGetValue(key, out var previous) && previous is { } p) last[key] = p; else last.Remove(key);
+                }
+                continue;
+            }
+            before[key] = last.TryGetValue(key, out var prior) ? prior : null;
+            last[key] = type;
             if (type == BackupAuditEvents.ReplicaVerified && Token(detail, "reverified") == "true") reverified[destination] = at;
         }
         return new(last, reverified);
@@ -51,10 +69,14 @@ public static class ReplicaAuditReader
         {
             await using var conn = new NpgsqlConnection(systemConnectionString);
             await conn.OpenAsync(ct);
-            await using var cmd = new NpgsqlCommand($"SELECT {E.EventType}, {E.Detail}, {E.OccurredAtUtc} FROM {E.Table} WHERE {E.StreamKey} = @s AND {E.EventType} IN (@v, @c) ORDER BY {E.Seq}", conn);
+            // read-only by construction (review L3 of #214): a READ ONLY transaction. The rows are read as stored: the audit chain is NOT verified here (`audit-verify` does that); see docs/DEVELOPMENT.md
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            await using (var ro = new NpgsqlCommand("SET TRANSACTION READ ONLY", conn, tx)) await ro.ExecuteNonQueryAsync(ct);
+            await using var cmd = new NpgsqlCommand($"SELECT {E.EventType}, {E.Detail}, {E.OccurredAtUtc} FROM {E.Table} WHERE {E.StreamKey} = @s AND {E.EventType} IN (@v, @c, @f) ORDER BY {E.Seq}", conn, tx);
             cmd.Parameters.AddWithValue("s", AuditStream.SystemKey);
             cmd.Parameters.AddWithValue("v", BackupAuditEvents.ReplicaVerified);
             cmd.Parameters.AddWithValue("c", BackupAuditEvents.ReplicaCorrupt);
+            cmd.Parameters.AddWithValue("f", BackupAuditEvents.ReplicaFailed);
             var rows = new List<(short, string, DateTimeOffset)>();
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) rows.Add((r.GetInt16(0), r.IsDBNull(1) ? "" : r.GetString(1), r.GetFieldValue<DateTimeOffset>(2)));

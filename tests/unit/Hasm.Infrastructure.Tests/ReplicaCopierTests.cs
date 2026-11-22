@@ -491,4 +491,89 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         Assert.Equal("nas-1", ReplicaAuditReader.Token("destination=nas-1 run=x", "destination"));
         Assert.Null(ReplicaAuditReader.Token("xdestination=nas-1", "destination"));
     }
+
+    [Fact]
+    public async Task A_run_folder_that_is_a_link_or_holds_a_hard_linked_file_is_never_a_verified_copy()
+    {
+        // review M1 of #214: the destination's run folder replaced by a symbolic link to the primary's own run
+        var copy = await PublishedCopyAsync();
+        Assert.Null((await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        var moved = copy + ".moved";
+        Directory.Move(copy, moved);
+        Directory.CreateSymbolicLink(copy, Path.Combine(Primary, RunA));
+        Assert.Equal("link", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);   // the primary's run verifies by itself; as a "copy" it is none
+        Directory.Delete(copy); Directory.Move(moved, copy);
+        Assert.Null((await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        if (!OperatingSystem.IsLinux()) return;
+        // a file of the copy that is hard-linked to the primary's file shares its storage with it
+        var theirs = Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName);
+        var ours = Path.Combine(copy, "system", EncryptedSets.DumpName);
+        Assert.Equal(1L, ReplicaCopier.HardLinkCount(ours));
+        File.Delete(ours);
+        using (var ln = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ln") { ArgumentList = { theirs, ours }, UseShellExecute = false })!) { ln.WaitForExit(); Assert.Equal(0, ln.ExitCode); }
+        Assert.Equal(2L, ReplicaCopier.HardLinkCount(ours));
+        Assert.Equal("link", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+    }
+
+    [Fact]
+    public void A_proc_mount_is_a_mount_point_and_an_ordinary_folder_is_not()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Assert.True(BackupDestinations.IsMountPoint("/proc"));
+        Assert.False(BackupDestinations.IsMountPoint(Dest));
+    }
+
+    [Fact]
+    public void The_default_selection_adds_held_companies_the_newest_proven_copy_per_key_and_the_newest_recoverable_copy_per_company()
+    {
+        Guid a = Guid.NewGuid(), b = Guid.NewGuid();
+        RetentionRun R(string id, string key, bool proof, params (Guid Company, string Outcome)[] companies) =>
+            Run(id, companies) with { RecoveryKeyId = key, ProofValid = proof };
+        string[] Ids(IEnumerable<RetentionRun> runs) => [.. runs.Select(r => r.RunId)];
+        // held companies: every copy that contains the held company is selected, however old
+        var h1 = R("20261101T020000Z-00000001", "k1", false, (a, "ok"));
+        var h2 = R("20261102T020000Z-00000002", "k1", false, (b, "ok"));
+        var h3 = R("20261103T020000Z-00000003", "k1", false, (b, "ok"));
+        var h4 = R("20261104T020000Z-00000004", "k1", false, (b, "ok"));
+        Assert.Equal([h1.RunId, h4.RunId], Ids(ReplicaVerifyService.Select([h1, h2, h3, h4], [], false)).Concat([]).Where(x => x == h1.RunId || x == h4.RunId).ToArray());
+        Assert.DoesNotContain(h2.RunId, Ids(ReplicaVerifyService.Select([h1, h2, h3, h4], [], false)));
+        Assert.Contains(h2.RunId, Ids(ReplicaVerifyService.Select([h1, h2, h3, h4], [], false, heldCompanies: [b])));
+        Assert.Contains(h3.RunId, Ids(ReplicaVerifyService.Select([h1, h2, h3, h4], [], false, heldCompanies: [b])));
+        // the newest copy with a valid recovery proof, per recovery key (older, other key, proofs on both)
+        var p1 = R("20261101T020000Z-00000011", "k1", true, (a, "failed"));
+        var p2 = R("20261102T020000Z-00000012", "k1", false, (a, "failed"));
+        var p3 = R("20261103T020000Z-00000013", "k2", true, (a, "failed"));
+        var p4 = R("20261104T020000Z-00000014", "k2", false, (a, "failed"));
+        var proven = Ids(ReplicaVerifyService.Select([p1, p2, p3, p4], [], false));
+        Assert.Contains(p1.RunId, proven); Assert.Contains(p3.RunId, proven); Assert.Contains(p4.RunId, proven);   // p4 is the newest copy overall
+        Assert.DoesNotContain(p2.RunId, proven);
+        // the newest RECOVERABLE copy per company: the newest copy's key was never tested, an older run of a tested key is the one that can be restored
+        var q1 = R("20261101T020000Z-00000021", "k1", true, (a, "ok"), (b, "ok"));
+        var q2 = R("20261102T020000Z-00000022", "k1", false, (a, "ok"));
+        var q3 = R("20261103T020000Z-00000023", "k2", false, (a, "ok"), (b, "ok"));
+        var recoverable = Ids(ReplicaVerifyService.Select([q1, q2, q3], [], false));
+        Assert.Contains(q1.RunId, recoverable);                                                 // k1 is tested through q1: q2 and q1 are recoverable, q2 is the newest recoverable for a
+        Assert.Contains(q2.RunId, recoverable);
+        Assert.Contains(q3.RunId, recoverable);                                                 // the newest copy (and the newest of both companies)
+    }
+
+    [Fact]
+    public void A_2040_compensated_by_a_2041_is_not_the_last_word_and_clears_no_corrupt_report()
+    {
+        var t = DateTimeOffset.UtcNow; var r = "20261121T020000Z-0011aabb";
+        string V(bool re) => $"replica verified operator=os:x run={r} destination=nas kind=network status=abc files=1 bytes=1 duration_ms=1 reverified={(re ? "true" : "false")}";
+        var corrupt = $"replica corrupt operator=os:x run={r} destination=nas check=hash";
+        string F(string reason, bool status) => $"replica failed operator=os:x run={r} destination=nas reason={reason}{(status ? " status=abc" : "")}";
+        // corrupt, then a 2040 whose publish failed (compensated): still corrupt
+        var state = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaCorrupt, corrupt, t.AddHours(-3)), (BackupAuditEvents.ReplicaVerified, V(false), t.AddHours(-2)), (BackupAuditEvents.ReplicaFailed, F("replica_publish_failed", true), t.AddHours(-1))]);
+        Assert.True(state.ReportedCorrupt("nas", r));
+        // an ordinary 2041 (no status) and a 2041 of another reason change nothing; a real 2040 after them clears the report
+        var plain = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaCorrupt, corrupt, t.AddHours(-3)), (BackupAuditEvents.ReplicaFailed, F("destination_unreachable", false), t.AddHours(-2))]);
+        Assert.True(plain.ReportedCorrupt("nas", r));
+        var cleared = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaCorrupt, corrupt, t.AddHours(-3)), (BackupAuditEvents.ReplicaVerified, V(false), t.AddHours(-2))]);
+        Assert.False(cleared.ReportedCorrupt("nas", r));
+        // a compensated first copy leaves no last word at all
+        var none = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaVerified, V(false), t.AddHours(-2)), (BackupAuditEvents.ReplicaFailed, F("replica_publish_failed", true), t.AddHours(-1))]);
+        Assert.False(none.LastKind.ContainsKey(("nas", r)));
+    }
 }

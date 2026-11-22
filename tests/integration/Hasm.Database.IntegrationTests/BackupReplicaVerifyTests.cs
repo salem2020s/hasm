@@ -248,6 +248,40 @@ public class BackupReplicaVerifyTests : PostgresTestBase
         Assert.False(string.IsNullOrEmpty(refused.Code));
     }
 
+    [PostgresFact]
+    public async Task A_destination_run_folder_that_is_a_link_to_the_primarys_run_is_corrupt_not_verified()
+    {
+        await Init();
+        var run = await RunAsync();
+        Directory.CreateDirectory(Nas);
+        await Replicate(run);
+        Directory.Move(Path.Combine(Nas, run), Path.Combine(work, "real-copy"));
+        Directory.CreateSymbolicLink(Path.Combine(Nas, run), Path.Combine(Root, run));              // review M1 of #214: a "copy" that is the primary itself
+        var before = (await Events(BackupAuditEvents.ReplicaVerified)).Count;
+        var verify = await AdminTool.RunWith(Options, NasOnly(), "backup-replica-verify");
+        Assert.True(verify.Exit == 1, verify.All);
+        Assert.Contains("CORRUPT (link)", verify.Out);
+        Assert.Equal("link", Token(Assert.Single(await Events(BackupAuditEvents.ReplicaCorrupt)), "check"));
+        Assert.Equal(before, (await Events(BackupAuditEvents.ReplicaVerified)).Count);                // no 2040 for it
+        var status = await AdminTool.RunWith(Options, NasOnly(), "backup-status", Root);
+        Assert.Equal(1, status.Exit);                                                                  // the status agrees with the verification
+    }
+
+    [PostgresFact]
+    public async Task Without_a_trusted_signing_key_the_verification_is_a_configuration_error_and_reports_no_copy_corrupt()
+    {
+        await Init();
+        var run = await RunAsync();
+        Directory.CreateDirectory(Nas);
+        await Replicate(run);
+        var noKey = NasOnly(); noKey["Hasm__Backup__SigningKeyDirectory"] = Path.Combine(work, "no-such-signing-dir");
+        var verify = await AdminTool.RunWith(Options, noKey, "backup-replica-verify", "--all");
+        Assert.Equal(3, verify.Exit);                                                                   // review L1 of #214
+        Assert.Empty(await Events(BackupAuditEvents.ReplicaCorrupt));
+        Assert.Single(await Events(BackupAuditEvents.ReplicaVerified));                                 // only the copy itself: nothing was re-verified or reported
+        Assert.Equal(3, (await AdminTool.RunWith(Options, noKey, "backup-replicate", Root)).Exit);
+    }
+
     private static async Task<string> DigestOf(string connectionString)
     {
         await using var conn = new NpgsqlConnection(connectionString);

@@ -52,7 +52,7 @@ using Npgsql;
 //   Hasm.Admin backup-replica-verify [--destination <id>] [--all]  (slice 8, S8c: re-verifies copies already published, each alone against its own SIGNED ciphertext inventory (no primary, never decrypts);
 //              by default the newest copy, the newest copy of every company and the copies a legal hold or retention pin names; --all every run folder; a copy that verifies writes 2040 reverified=true, one that
 //              does not writes 2042 (once) and is left exactly as it is; exit 0 all verified, 1 a copy corrupt or a destination unreadable, 3 invalid destination configuration, 4 destination busy)
-//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale;
+//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY; no database unless backup destinations are configured, then the system audit stream is read in a READ ONLY transaction (S8c): newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale;
 //              slice 8: with Hasm__Backup__Destinations configured, also each destination's contribution and the OVERALL status, combined 1 > 8 > 0 (D-186); on a destination folder its root status only)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
@@ -667,7 +667,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                     Console.Error.WriteLine("backup-replica-verify: no backup destination is configured (Hasm__Backup__Destinations); nothing to verify.");
                     return BadConfig;
                 }
-                var trust = BackupMaterialLoader.ServerTrust(backupOptions) ?? new SigningTrust([]);
+                var trust = RequireTrust(backupOptions);
                 var outcomes = await new ReplicaVerifyService(options, trust, new SystemReplicaEvents(systemConnection, trail)).VerifyAsync(destinations, new ReplicaVerifyRequest(replicate.Destination, replicate.All));
                 foreach (var o in outcomes)
                     Console.WriteLine($"Re-verification {o.RunId} at destination {o.DestinationId}: {o.Result.ToUpperInvariant()}{(o.Check is { } c ? $" ({c})" : "")}"
@@ -684,7 +684,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                     Console.Error.WriteLine("backup-replicate: no backup destination is configured (Hasm__Backup__Destinations); nothing to copy.");
                     return BadConfig;
                 }
-                var trust = BackupMaterialLoader.ServerTrust(backupOptions) ?? new SigningTrust([]);
+                var trust = RequireTrust(backupOptions);
                 var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)) { ProtectedDirectories = ProtectedDirectoriesOf(configuration, backupOptions) }
                     .ReplicateAsync(args[1], destinations, new ReplicationRequest(replicate.Run, replicate.Destination, replicate.NewestFirst));
                 PrintOutcomes(result.Outcomes);
@@ -745,6 +745,14 @@ static async Task<IReadOnlyList<CheckedDestination>> CheckedDestinationsAsync(st
         catch (Exception audit) when (audit is AuditConfigurationException or AuditUnavailableException or NpgsqlException or InvalidOperationException) { Console.Error.WriteLine("The system audit event 2043 could not be written; the refusal stands."); }
         throw;
     }
+}
+
+// review L1 of #214: without a trusted signing key nothing can be verified; a command that needs verification refuses as a configuration error instead of reporting every copy corrupt
+static SigningTrust RequireTrust(BackupOptions backupOptions)
+{
+    var trust = BackupMaterialLoader.ServerTrust(backupOptions);
+    if (trust is null || trust.Count == 0) throw new BackupException("signing_key_unavailable");
+    return trust;
 }
 
 static IReadOnlyList<string?> ProtectedDirectoriesOf(IConfiguration configuration, BackupOptions backupOptions) =>

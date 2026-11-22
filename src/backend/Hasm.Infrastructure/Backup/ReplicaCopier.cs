@@ -352,6 +352,10 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
     /// </summary>
     internal static async Task<(string? Check, int Files, long Bytes, string? StatusSha256)> VerifyStoredAsync(string dir, SigningTrust trust, CancellationToken ct)
     {
+        // review M1 of #214: the run folder itself must be a real folder of this destination. A symbolic link, a junction (reparse point) or a mount point (a bind mount) there can lead to the primary's own run or
+        // to any genuine signed run, which would verify as a "copy" that is no independent copy at all. Checked before anything is read.
+        var folder = new DirectoryInfo(dir);
+        if (folder.LinkTarget is not null || folder.Attributes.HasFlag(FileAttributes.ReparsePoint) || BackupDestinations.IsMountPoint(dir)) return ("link", 0, 0, null);
         RunStatus status;
         try { status = SignedDocuments.ReadRunStatus(dir, trust); }
         catch (BackupException) { return ("status", 0, 0, null); }
@@ -362,6 +366,9 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
         try
         {
             var names = Names(dir);
+            // a file with more than one hard link may be the very file of the primary's run (or of another run): never an independent copy (Linux; where the link count cannot be read nothing is claimed)
+            foreach (var n in names)
+                if (HardLinkCount(Path.Combine(dir, n.Replace('/', Path.DirectorySeparatorChar))) is > 1) return ("link", 0, 0, statusSha);
             if (!RetentionInventory.Inspect(dir).Clean) return ("unexpected_file", 0, 0, statusSha);
             var encrypted = names.Where(n => n.EndsWith(".hbe", StringComparison.Ordinal)).ToList();
             if (!encrypted.Order(StringComparer.Ordinal).SequenceEqual(list.Files.Select(f => f.Name).Order(StringComparer.Ordinal), StringComparer.Ordinal)) return ("file_set", 0, 0, statusSha);
@@ -483,8 +490,29 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { /* best effort, never relied on */ }
     }
 
+    /// <summary>The number of hard links of a file (Linux x86-64 and arm64 through <c>stat</c>), or null when it cannot be read. Best effort; a null never counts as a link.</summary>
+    internal static long? HardLinkCount(string path)
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        var offset = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.X64 => 16,     // struct stat: st_dev 0, st_ino 8, st_nlink 16 (8 bytes)
+            System.Runtime.InteropServices.Architecture.Arm64 => 20,   // struct stat: st_dev 0, st_ino 8, st_mode 16, st_nlink 20 (4 bytes)
+            _ => -1,
+        };
+        if (offset < 0) return null;
+        var buffer = new byte[512];
+        try
+        {
+            if (Native.stat(path, buffer) != 0) return null;
+            return offset == 16 ? BitConverter.ToInt64(buffer, 16) : BitConverter.ToUInt32(buffer, 20);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return null; }
+    }
+
     private static class Native
     {
+        [DllImport("libc", SetLastError = true)] internal static extern int stat([MarshalAs(UnmanagedType.LPUTF8Str)] string path, byte[] buf);
         [DllImport("libc", SetLastError = true)] internal static extern int open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
         [DllImport("libc", SetLastError = true)] internal static extern int fsync(int fd);
         [DllImport("libc", SetLastError = true)] internal static extern int close(int fd);
