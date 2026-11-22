@@ -48,8 +48,8 @@ public static class PartyEndpoints
         g.MapGet("/capabilities", Capabilities);
         g.MapGet("", List);
         g.MapPost("", Create).WithMetadata(new BodyLimit());
-        g.MapPost("/sync", Sync).WithMetadata(new BodyLimit());
-        g.MapPost("/reconcile", Reconcile).WithMetadata(new BodyLimit());
+        g.MapPost("/sync", Sync).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/reconcile", Reconcile).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/propose", Propose).WithMetadata(new BodyLimit());
@@ -58,8 +58,8 @@ public static class PartyEndpoints
         var a = app.MapGroup("/api/v1/admin/parties").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.AuthenticatedPolicy);
         a.MapGet("/proposals", ListProposals);
         a.MapGet("/proposals/{id:guid}", GetProposal);
-        a.MapPost("/proposals/{id:guid}/approve", Approve).WithMetadata(new BodyLimit());
-        a.MapPost("/proposals/{id:guid}/reject", Reject).WithMetadata(new BodyLimit());
+        a.MapPost("/proposals/{id:guid}/approve", Approve).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        a.MapPost("/proposals/{id:guid}/reject", Reject).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         a.MapGet("/search", Search);
     }
 
