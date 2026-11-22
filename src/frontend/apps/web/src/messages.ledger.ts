@@ -388,7 +388,7 @@ export const ledgerAr: Record<string, string> = {
   "jrn.plan_stage": "المرحلة {n}",
   "jrn.plan_done": "مكتملة",
   "jrn.plan_open": "مفتوحة الآن",
-  "jrn.plan_waiting": "بانتظار المرحلة السابقة",
+  "jrn.plan_waiting": "بانتظار المرحلة السابقة", "jrn.stage_role_missing": "المرحلة الحالية تتطلب دوراً لا تملكه لما يشمله هذا القيد.",
   "jrn.error.approver_role_required": "المرحلة المفتوحة مخصصة لحاملي دور محدد لا تملكه.",
   "jrn.error.approval_stage_complete": "اكتملت المرحلة المفتوحة بالفعل.",
   // Phase 3.2C S3: fiscal-year closing and opening balances
@@ -932,7 +932,7 @@ export const ledgerEn: Record<string, string> = {
   "jrn.plan_stage": "Stage {n}",
   "jrn.plan_done": "complete",
   "jrn.plan_open": "open now",
-  "jrn.plan_waiting": "waiting for the previous stage",
+  "jrn.plan_waiting": "waiting for the previous stage", "jrn.stage_role_missing": "The current stage needs a role you do not hold for what this entry covers.",
   "jrn.error.approver_role_required": "The open stage is reserved for holders of a role you do not hold.",
   "jrn.error.approval_stage_complete": "The open stage is already complete.",
   // Phase 3.2C S3: fiscal-year closing and opening balances
