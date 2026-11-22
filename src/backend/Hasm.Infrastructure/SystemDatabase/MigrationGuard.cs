@@ -65,6 +65,23 @@ public static partial class MigrationGuard
     [GeneratedRegex(@"^(?:GRANT|REVOKE|ALTER\s+DEFAULT\s+PRIVILEGES)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PrivilegeStatement();
 
+    // Every NAME that starts with "pg_" (system catalogs, the pg_catalog and pg_temp schemas, system functions), quoted or not. The bare
+    // prefix "pg_" with nothing after it names nothing and is not matched: system migration 0001 uses it in the pattern ('^pg_') that keeps
+    // company database names out of the reserved prefix.
+    [GeneratedRegex(@"\bpg_\w+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SystemName();
+
+    /// <summary>
+    /// The ONLY "pg_" names a migration may mention, each as an unquoted, unqualified function call "name(". Read-only built-in
+    /// functions that the queued migrations need; no catalog relation is ever listed, so no view or statement can be built on one.
+    /// Extending this list is a change of the guard (docs/MIGRATION-GUARD.md, "System names").
+    /// </summary>
+    internal static readonly IReadOnlySet<string> AllowedSystemFunctions = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "pg_current_xact_id",   // the id of the current transaction: binds a row to the transaction that wrote it (plan execution, Phase 3.8D)
+        "pg_has_role",          // role-membership test in a trigger (planned TOTP guard); reads, never changes
+    };
+
     [GeneratedRegex(@"\b(?:COPY|MERGE)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopyOrMerge();
 
@@ -86,10 +103,11 @@ public static partial class MigrationGuard
         (new(@"\bCREATE\s+OR\s+REPLACE\s+(?:CONSTRAINT\s+)?TRIGGER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE OR REPLACE TRIGGER (it can re-bind an existing guard trigger; use CREATE TRIGGER)"),
         (new(@"\bCREATE\s+(?:OR\s+REPLACE\s+)?RULE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE RULE (a rewrite rule can route statements around a guard trigger)"),
         (new(@"\bsearch_path\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "changes or mentions search_path (it decides which function or operator an unqualified name means)"),
-        (new(@"\bset_config\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "calls set_config (a setting changed through a function call cannot be judged by the guard)"),
+        (new(@"\bset_config\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions set_config, quoted or not (a setting changed through a function call cannot be judged by the guard)"),
+        (new(@"\b(?:query_to_xml\w*|cursor_to_xml\w*|ts_stat|ts_rewrite)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions a function that runs a query given as text (dynamic SQL without EXECUTE)"),
+        (new(@"\bdblink\w*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions dblink (statements sent over another connection cannot be read by the guard)"),
         (new(@"\bCREATE\s+OPERATOR\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE OPERATOR (an operator can shadow a built-in one)"),
         (new(@"\bCREATE\s+EXTENSION\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE EXTENSION (code the guard cannot read)"),
-        (new(@"\b(?:INSERT\s+INTO|UPDATE(?:\s+ONLY)?)\s+(?:""?pg_catalog""?\s*\.|""?pg_)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "writes to a system catalog (pg_*)"),
         (new(@"\bBEGIN\s+ATOMIC\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains a BEGIN ATOMIC function body (the guard cannot read it; use a dollar-quoted body)"),
     ];
 
@@ -150,6 +168,14 @@ public static partial class MigrationGuard
         foreach (var (pattern, reason) in Neutralizers)
             if (pattern.IsMatch(lexed.Scan)) return Refuse($"{reason}; not allowed.");
 
+        foreach (Match m in SystemName().Matches(lexed.Scan))
+        {
+            var quoted = m.Index > 0 && lexed.Scan[m.Index - 1] == '"';
+            var qualified = lexed.Scan.AsSpan(0, m.Index).TrimEnd().EndsWith(".");
+            var called = lexed.Scan.AsSpan(m.Index + m.Length).TrimStart().StartsWith("(");
+            if (quoted || qualified || !called || !AllowedSystemFunctions.Contains(m.Value.ToLowerInvariant()))
+                return Refuse($"mentions the system name {m.Value} (every name starting with pg_ is refused, in code and in strings alike, except a plain call of: {string.Join(", ", AllowedSystemFunctions.Order(StringComparer.Ordinal))}); not allowed.");
+        }
         if (CopyOrMerge().IsMatch(lexed.Code))
             return Refuse("contains COPY or MERGE (bulk or conditional data changes, including deletion and file access, that the guard does not judge); not allowed.");
         if (ForeignLanguage().IsMatch(lexed.Code))

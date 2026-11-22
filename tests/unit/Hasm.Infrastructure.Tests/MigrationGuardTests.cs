@@ -258,6 +258,93 @@ public class MigrationGuardTests
         MigrationScript.Validate([first, P("CREATE OR REPLACE FUNCTION \"x.f_guard\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;", "0002_b.sql")]);
     }
 
+    // ---------------------------------------------------------------- review round 2 (residuals of M2 and M3, L9)
+
+    [Theory]
+    // M2 residual: the function name in quotes is still the function
+    [InlineData("SELECT \"set_config\"('session_' || 'replication_role', 'replica', true);")]
+    [InlineData("SELECT pg_catalog.\"set_config\"('session_' || 'replication_role', 'replica', true);")]
+    [InlineData("DO $$ BEGIN PERFORM \"set_config\"('session_' || 'replication_role', 'replica', true); END $$;")]
+    [InlineData("SELECT \"set_config\" ('a' || 'b', 'c', true);")]
+    [InlineData("SELECT f FROM (VALUES ('set_config')) v(f);")]                                  // even as data: the word is refused wherever it stands
+    public void Set_config_is_refused_in_every_spelling(string sql) => Assert.Contains("set_config", Refused(sql));
+
+    [Theory]
+    // M3 residual: a catalog written through an auto-updatable view never names the catalog in the UPDATE itself
+    [InlineData("CREATE VIEW vt AS SELECT * FROM pg_trigger; UPDATE vt SET tgenabled = 'D';")]
+    [InlineData("CREATE VIEW vp AS SELECT * FROM pg_proc; UPDATE vp SET prosrc = 'begin return new; end';")]
+    [InlineData("CREATE VIEW vt AS SELECT * FROM pg_catalog.pg_trigger;")]
+    [InlineData("CREATE VIEW vt AS SELECT * FROM \"pg_trigger\";")]
+    [InlineData("CREATE VIEW vt AS SELECT * FROM \"pg_catalog\".\"pg_trigger\";")]
+    [InlineData("CREATE VIEW vt AS TABLE pg_trigger;")]
+    [InlineData("CREATE TEMP VIEW vt AS SELECT * FROM pg_event_trigger;")]
+    [InlineData("CREATE MATERIALIZED VIEW m AS SELECT * FROM pg_class;")]
+    [InlineData("DO $$ BEGIN CREATE VIEW vt AS SELECT * FROM pg_trigger; UPDATE vt SET tgenabled = 'D'; END $$;")]
+    [InlineData("WITH t AS (UPDATE pg_trigger SET tgenabled = 'D' RETURNING 1) SELECT 1;")]
+    // any other system name: catalogs read in a body, system schemas, system functions that are not on the list
+    [InlineData("CREATE FUNCTION f() RETURNS bigint LANGUAGE sql AS $$ SELECT count(*) FROM pg_trigger $$;")]
+    [InlineData("SELECT 1 FROM pg_class;")]
+    [InlineData("CREATE TABLE pg_temp.x (a int);")]
+    [InlineData("SELECT pg_catalog.now();")]
+    [InlineData("SELECT pg_advisory_xact_lock(1);")]
+    [InlineData("SELECT pg_reload_conf();")]
+    [InlineData("SELECT pg_read_file('/etc/passwd');")]
+    [InlineData("SELECT lo_import('/etc/passwd'), pg_ls_dir('.');")]
+    [InlineData("SELECT 'pg_trigger'::regclass;")]                                                 // also inside a string: it may become a name
+    // the two allowed functions only as a plain call: not quoted, not schema-qualified, not as a bare name, not as a relation
+    [InlineData("SELECT \"pg_current_xact_id\"();")]
+    [InlineData("SELECT pg_catalog.pg_current_xact_id();")]
+    [InlineData("SELECT x.pg_has_role('a', 'b', 'MEMBER');")]
+    [InlineData("SELECT * FROM pg_has_role;")]
+    [InlineData("CREATE VIEW v AS SELECT * FROM pg_current_xact_id;")]
+    [InlineData("SELECT pg_current_xact_id_if_assigned();")]
+    [InlineData("SELECT pg_has_role_x('a', 'b');")]
+    public void Every_system_name_is_refused_except_a_plain_call_of_an_allowed_function(string sql) => Assert.Contains("system name", Refused(sql));
+
+    [Theory]
+    [InlineData("CREATE FUNCTION f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.x := pg_current_xact_id(); RETURN NEW; END; $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.x = PG_CURRENT_XACT_ID () THEN RETURN NEW; END IF; RETURN OLD; END; $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NOT pg_has_role(current_user, 'r', 'MEMBER') THEN RAISE EXCEPTION 'no'; END IF; RETURN NEW; END; $$;")]
+    [InlineData("-- reads pg_trigger? no: this is a comment\nSELECT 1; /* pg_catalog.pg_proc */")]
+    public void The_allowed_system_functions_are_accepted_as_plain_calls_and_comments_do_not_count(string sql) => P(sql);
+
+    [Fact]
+    public void The_list_of_allowed_system_functions_is_pinned_and_no_existing_migration_mentions_a_system_name()
+    {
+        // Extending the list is a change of the guard (docs/MIGRATION-GUARD.md, "System names"); no catalog relation is ever on it.
+        Assert.Equal(new[] { "pg_current_xact_id", "pg_has_role" }, MigrationGuard.AllowedSystemFunctions.Order(StringComparer.Ordinal));
+        foreach (var script in MigrationScript.LoadEmbedded().Concat(MigrationScript.LoadEmbeddedCompany()))
+            Assert.DoesNotMatch(@"(?i)\bpg_\w+|\bdblink|\bset_config\b", System.Text.RegularExpressions.Regex.Replace(script.Sql, "--[^\n]*", ""));
+    }
+
+    [Theory]
+    // functions that run a query given as text are dynamic SQL without the word EXECUTE
+    [InlineData("SELECT query_to_xml('select set_' || 'config(''a'', ''b'', true)', true, true, '');")]
+    [InlineData("SELECT query_to_xml_and_xmlschema('select 1', true, true, '');")]
+    [InlineData("SELECT \"query_to_xml\"('select 1', true, true, '');")]
+    [InlineData("SELECT cursor_to_xml('c', 1, true, true, '');")]
+    [InlineData("SELECT * FROM ts_stat('select ' || 'x()');")]
+    [InlineData("SELECT ts_rewrite('a'::tsquery, 'select ' || 'x()');")]
+    [InlineData("DO $$ BEGIN PERFORM query_to_xml('select 1', true, true, ''); END $$;")]
+    public void Functions_that_run_a_query_given_as_text_are_refused(string sql) => Assert.Contains("query given as text", Refused(sql));
+
+    [Fact]
+    public void The_bare_reserved_prefix_in_a_pattern_is_not_a_system_name()
+    {
+        P("ALTER TABLE t ADD CONSTRAINT k CHECK (name !~ '^pg_');");                  // system migration 0001 keeps company database names out of the reserved prefix this way
+        P("ALTER TABLE t ADD CONSTRAINT k CHECK (name NOT LIKE 'pg_%');");
+        Assert.Contains("system name", Refused("ALTER TABLE t ADD CONSTRAINT k CHECK (name !~ '^pg_t');"));
+    }
+
+    [Theory]
+    // L9: statements sent over another connection (the extension may have been installed out of band)
+    [InlineData("SELECT dblink_exec('dbname=x', 'ALTER TABLE t DISABLE TRIGGER r');")]
+    [InlineData("SELECT * FROM dblink('dbname=x', 'SELECT 1') AS t(a int);")]
+    [InlineData("SELECT \"dblink_exec\"('c', 'x');")]
+    [InlineData("SELECT public.dblink_connect('c', 'dbname=x');")]
+    [InlineData("DO $$ BEGIN PERFORM dblink_send_query('c', 'x'); END $$;")]
+    public void Dblink_is_refused(string sql) => Assert.Contains("dblink", Refused(sql));
+
     // ---------------------------------------------------------------- the runner's decisions (pure parts)
 
     private static MigrationRunner.TriggerState T(uint table, string name, uint function, char enabled = 'O') => new(table, $"t{table}", name, function, enabled);
