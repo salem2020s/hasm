@@ -76,7 +76,9 @@ public class PlanExecutionDisabledTests : JournalTestBase
         var types = assemblies.SelectMany(a => a.GetTypes()).Where(t => t.DeclaringType != typeof(CompanySchema) && !t.Name.StartsWith('<') && t.Namespace?.Contains(".Backup", StringComparison.Ordinal) != true).ToList();   // the backup retention sweep has its own executor, unrelated to plans
         // the services of this PR: the only plan types that may exist (storage, approval, their stored shape, bindings and inputs), none of which executes
         var allowed = new HashSet<string> { nameof(CompensationPlanService), nameof(CompensationPlanApprovalService), nameof(CompensationPlanStore), nameof(CompensationPlanBinding), nameof(CompensationPlanInput),
-            nameof(StoredCompensationPlan), nameof(CompensationPlanFingerprints), nameof(CompensationPlan), nameof(CompensationPlanResult), nameof(CompensationLine), nameof(CompensationCalculator), nameof(CompensationDateGuard) };
+            nameof(StoredCompensationPlan), nameof(CompensationPlanFingerprints), nameof(CompensationPlan), nameof(CompensationPlanResult), nameof(CompensationLine), nameof(CompensationCalculator), nameof(CompensationDateGuard),
+            // slice E1 (pure derivation of an epoch's write plan: no database, no clock, no caller; pinned by EpochScheduleReachabilityTests): values and one static function, nothing that executes
+            nameof(EpochSchedule), nameof(EpochScheduleResult), nameof(EpochOperationPlan), nameof(EpochEntryPlan), nameof(EpochLineagePlan), nameof(EpochRole) };
         var offenders = types.Where(t => PlanTypeName.IsMatch(t.Name) && !allowed.Contains(t.Name) && !t.Name.StartsWith("DocumentState", StringComparison.Ordinal)).Select(t => t.FullName).ToList();
         Assert.Empty(offenders);
         // no method of the services or of anything in a Costing/plan namespace is an execution entry point
