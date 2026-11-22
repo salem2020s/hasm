@@ -50,10 +50,17 @@ internal sealed class ReplicaCopyHooks
     public Action<string>? AfterCopy { get; init; }
     /// <summary>Runs after 2040 and before the rename (staging folder, final folder): throw <see cref="IOException"/> to simulate a failed publish, or <see cref="ReplicaCrashSimulation"/> to simulate a crash.</summary>
     public Action<string, string>? BeforePublish { get; init; }
+    /// <summary>Runs for every folder that is flushed (staging subfolders, staging, the destination root).</summary>
+    public Action<string>? OnFlushDirectory { get; init; }
 }
 
 /// <summary>Test only: stops the copy exactly where a crash would, leaving the staging folder in place and writing nothing else.</summary>
 internal sealed class ReplicaCrashSimulation : Exception;
+
+internal sealed class ReplicaDigestException(string check) : Exception("replica digest mismatch")
+{
+    public string Check { get; } = check;
+}
 
 internal sealed class ReplicaVerificationException(string check) : Exception("replica verification failed")
 {
@@ -75,6 +82,12 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
 {
     private readonly TimeProvider time = clock ?? TimeProvider.System;
     internal ReplicaCopyHooks? Hooks { get; init; }
+    /// <summary>
+    /// Repeats the link, overlap and duplicate checks of the destination (D-184); throws <see cref="BackupException"/> with the refusal code. Called before the copy starts, before the event 2040 and immediately
+    /// before the rename, so a destination swapped for a link after the first check is not written through (review L2 of #213).
+    /// </summary>
+    public Action<CheckedDestination>? Recheck { get; init; }
+    private static bool IsDestinationRefusal(string code) => code is "symbolic_link_refused" or "destination_overlaps_source" or "destination_duplicate";
 
     private sealed record FileRecord(string Name, long Size, string Sha256);
 
@@ -85,8 +98,17 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
         var runDir = Path.Combine(primaryRoot, run.RunId);
         var final = Path.Combine(d.ResolvedPath, run.RunId);
         string? staging = null;
+        CiphertextDigestList list;
         try
         {
+            // the signed inventory of the run's encrypted files, bound to the signed status: nothing is copied or reported verified without it (D-185 as amended)
+            list = CiphertextDigests.ReadVerified(runDir, run.RunId, SignedDocuments.ReadRunStatus(runDir, trust).DigestListSha256, trust);
+        }
+        catch (BackupException ex) { return await FailAsync(d, run, ex.Code is "replica_digest_list_missing" or "replica_digest_list_invalid" ? ex.Code : "replica_verification_failed", watch, ct); }
+        try
+        {
+            try { Recheck?.Invoke(d); }
+            catch (BackupException ex) when (IsDestinationRefusal(ex.Code)) { return await RefuseAsync(d, run, ex.Code, watch, ct); }
             if (!EnsureDestinationFolder(d)) return await FailAsync(d, run, "destination_unreachable", watch, ct);
             SweepStaleStaging(d.ResolvedPath);
 
@@ -95,26 +117,31 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
                 var existing = RetentionInventory.Read(new DirectoryInfo(final), trust);
                 // a folder under this run id that is not the primary's verified run is evidence and is never touched (D-185 step 2)
                 if (!ReplicaStatus.IsReplicable(existing) || !string.Equals(existing.StatusSha256, run.StatusSha256, StringComparison.Ordinal)) return await FailAsync(d, run, "replica_conflict", watch, ct);
-                return await ReverifyAsync(d, runDir, final, run, watch, ct);
+                return await ReverifyAsync(d, runDir, final, run, list, watch, ct);
             }
 
             staging = Path.Combine(d.ResolvedPath, $"{run.RunId}.incoming-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}");
             CreateOwnerOnlyDirectory(staging);
             var copied = await CopyFilesAsync(runDir, staging, ct);
-            FlushDirectory(staging);
+            // the bytes READ from the primary must be the ones the signed inventory names: ciphertext altered after the run is never copied as "verified" (review M1 of #213)
+            CheckAgainstList(copied, list);
+            FlushTree(staging);
             Hooks?.AfterCopy?.Invoke(staging);
-            await VerifyCopyAsync(staging, copied, run.StatusSha256!, ct);
+            await VerifyCopyAsync(staging, copied, run.StatusSha256!, ct);   // the copy equals what was read from the primary, and so (by the check above) the signed inventory
 
+            try { Recheck?.Invoke(d); }
+            catch (BackupException ex) when (IsDestinationRefusal(ex.Code)) { RemoveBestEffort(staging); return await RefuseAsync(d, run, ex.Code, watch, ct); }
             // D-188: nothing is renamed into place before the event of its verification is committed; an event that cannot be written fails the copy closed
             await WriteEventAsync(() => events.VerifiedAsync(run.RunId, run.StatusSha256!, d.Destination, copied.Count, copied.Sum(f => f.Size), (long)watch.Elapsed.TotalMilliseconds, false, ct));
             try
             {
                 Hooks?.BeforePublish?.Invoke(staging, final);
+                Recheck?.Invoke(d);                                                         // immediately before the rename
                 Directory.Move(staging, final);
                 staging = null;
-                FlushDirectory(d.ResolvedPath);
+                FlushDir(d.ResolvedPath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException || (ex is BackupException be && IsDestinationRefusal(be.Code)))
             {
                 // compensating event of D-185 step 5: the order stays audit first, so a failed publish is answered by 2041 and no run folder is left under the run id
                 if (staging is null) TryMove(final, Path.Combine(d.ResolvedPath, $"{run.RunId}.incoming-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}"), out staging);
@@ -125,6 +152,7 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
             return new(d.Destination.Id, run.RunId, "verified", null, copied.Count, copied.Sum(f => f.Size), (long)watch.Elapsed.TotalMilliseconds);
         }
         catch (ReplicaCrashSimulation) { throw; }                                           // a simulated crash leaves everything exactly as it is
+        catch (ReplicaDigestException) { RemoveBestEffort(staging); return await FailAsync(d, run, "replica_digest_mismatch", watch, ct); }
         catch (ReplicaVerificationException) { RemoveBestEffort(staging); return await FailAsync(d, run, "replica_verification_failed", watch, ct); }
         catch (IOException ex) { RemoveBestEffort(staging); return await FailAsync(d, run, IsDiskFull(ex) ? "destination_full" : "destination_unreachable", watch, ct); }
         catch (UnauthorizedAccessException) { RemoveBestEffort(staging); return await FailAsync(d, run, "destination_unreachable", watch, ct); }
@@ -133,17 +161,19 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
     }
 
     /// <summary>The copy is already there with the primary's status hash: it is verified again (every file against the primary's) and a later <c>recovery-test.json</c> is brought over through staging.</summary>
-    private async Task<ReplicaOutcome> ReverifyAsync(CheckedDestination d, string runDir, string final, RetentionRun run, Stopwatch watch, CancellationToken ct)
+    private async Task<ReplicaOutcome> ReverifyAsync(CheckedDestination d, string runDir, string final, RetentionRun run, CiphertextDigestList list, Stopwatch watch, CancellationToken ct)
     {
         string? staging = null;
         try
         {
             await BringProofAsync(d, Path.GetDirectoryName(runDir)!, run, ct);
             var records = await DescribeAsync(runDir, ct);
+            CheckAgainstList(records, list);                                                // the primary against the signed inventory, then the copy against the primary
             await VerifyCopyAsync(final, records, run.StatusSha256!, ct);
             await WriteEventAsync(() => events.VerifiedAsync(run.RunId, run.StatusSha256!, d.Destination, records.Count, records.Sum(f => f.Size), (long)watch.Elapsed.TotalMilliseconds, true, ct));
             return new(d.Destination.Id, run.RunId, "reverified", null, records.Count, records.Sum(f => f.Size), (long)watch.Elapsed.TotalMilliseconds);
         }
+        catch (ReplicaDigestException) { RemoveBestEffort(staging); return await FailAsync(d, run, "replica_digest_mismatch", watch, ct); }
         catch (ReplicaVerificationException) { RemoveBestEffort(staging); return await FailAsync(d, run, "replica_verification_failed", watch, ct); }
         catch (IOException ex) { RemoveBestEffort(staging); return await FailAsync(d, run, IsDiskFull(ex) ? "destination_full" : "destination_unreachable", watch, ct); }
         catch (UnauthorizedAccessException) { RemoveBestEffort(staging); return await FailAsync(d, run, "destination_unreachable", watch, ct); }
@@ -170,10 +200,10 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
             CreateOwnerOnlyDirectory(staging);
             var staged = Path.Combine(staging, RetentionProofName);
             var rec = await CopyOneAsync(proof, staged, RetentionProofName, ct);
-            FlushDirectory(staging);
+            FlushDir(staging);
             if (!string.Equals(await HashFileAsync(staged, ct), rec.Sha256, StringComparison.Ordinal)) throw new ReplicaVerificationException("proof_hash");
             File.Move(staged, copyProof, true);
-            FlushDirectory(final);
+            FlushDir(final);
             return true;
         }
         finally { RemoveBestEffort(staging); }
@@ -184,6 +214,34 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
         await WriteEventAsync(() => events.FailedAsync(run.RunId, d.Destination, code, null, ct));
         return new(d.Destination.Id, run.RunId, "failed", code, 0, 0, (long)watch.Elapsed.TotalMilliseconds);
     }
+
+    /// <summary>A destination that failed the repeated safety check: 2043 (refused) and a failed outcome with the refusal code; nothing is written to or through it.</summary>
+    private async Task<ReplicaOutcome> RefuseAsync(CheckedDestination d, RetentionRun run, string code, Stopwatch watch, CancellationToken ct)
+    {
+        await WriteEventAsync(() => events.RefusedAsync(d.Destination.Id, code, ct));
+        return new(d.Destination.Id, run.RunId, "failed", code, 0, 0, (long)watch.Elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// The encrypted files read from the primary must be exactly the ones the signed inventory names, with its sizes and SHA-256 (D-185 as amended): a listed file that is absent or different, or an
+    /// encrypted file the inventory does not list, is <c>replica_digest_mismatch</c>.
+    /// </summary>
+    private static void CheckAgainstList(IReadOnlyList<FileRecord> records, CiphertextDigestList list)
+    {
+        var encrypted = records.Where(r => r.Name.EndsWith(".hbe", StringComparison.Ordinal)).ToDictionary(r => r.Name, StringComparer.Ordinal);
+        if (encrypted.Count != list.Files.Count) throw new ReplicaDigestException("file_set");
+        foreach (var e in list.Files)
+            if (!encrypted.TryGetValue(e.Name, out var r) || r.Size != e.Size || !string.Equals(r.Sha256, e.Sha256, StringComparison.Ordinal)) throw new ReplicaDigestException("hash");
+    }
+
+    /// <summary>Flushes every folder created inside <paramref name="root"/> (deepest first) and then the folder itself, so no entry of a published copy can be missing after a power loss (review L1 of #213).</summary>
+    private void FlushTree(string root)
+    {
+        foreach (var dir in new DirectoryInfo(root).EnumerateDirectories("*", SearchOption.AllDirectories).Select(x => x.FullName).OrderByDescending(x => x.Length)) FlushDir(dir);
+        FlushDir(root);
+    }
+
+    private void FlushDir(string path) { Hooks?.OnFlushDirectory?.Invoke(path); FlushDirectory(path); }
 
     /// <summary>An audit event that cannot be written fails the command closed (D-188): never a copy reported without its event.</summary>
     private static async Task WriteEventAsync(Func<Task> write)

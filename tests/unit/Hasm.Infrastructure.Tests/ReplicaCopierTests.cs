@@ -55,17 +55,25 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         public Task RefusedAsync(string? destinationId, string reason, CancellationToken ct) { Log.Add($"2043 {destinationId} {reason}"); return Task.CompletedTask; }
     }
 
-    private async Task<RetentionRun> MakeRunAsync(string runId, int dumpBytes = 200_000)
+    /// <summary>
+    /// A real signed encrypted run. <paramref name="beforeList"/> runs after the encrypted files are written and before the signed ciphertext inventory is made (the inventory then describes the altered
+    /// state); <paramref name="withList"/> false writes the run as it was before the inventory existed (the status names none).
+    /// </summary>
+    private async Task<RetentionRun> MakeRunAsync(string runId, int dumpBytes = 200_000, Action<string>? beforeList = null, bool withList = true)
     {
         var dir = Path.Combine(Primary, runId);
         var system = Path.Combine(dir, "system"); Directory.CreateDirectory(system);
         var entry = await EncryptedSets.EncryptToFileAsync(new MemoryStream(RandomNumberGenerator.GetBytes(dumpBytes)), system, EncryptedSets.DumpName, EncryptedSets.SystemDumpPurpose, pub, default);
         var manifest = new ManifestV2(ManifestV2.CurrentVersion, EncryptedSets.SystemKind, runId, null, T0, pub.KeyId, signer.KeyId, [entry], null, new SystemDetails(null, 34, []));
         await SignedDocuments.WriteManifestAsync(system, manifest, pub, signer);
+        beforeList?.Invoke(dir);
+        var listSha = withList ? await CiphertextDigests.WriteAsync(dir, runId, signer, default) : null;
         SignedDocuments.WriteRunStatus(dir, new RunStatus(RunStatus.CurrentVersion, RunStatus.KindValue, runId, T0, T0.AddMinutes(3), 180000, "ok", 0, 0, 0, 0, 0, pub.KeyId, signer.KeyId,
-            Convert.ToHexStringLower(SHA256.HashData(RandomNumberGenerator.GetBytes(32))), ["session"], [], true, [], ["a1"]), signer);
+            Convert.ToHexStringLower(SHA256.HashData(RandomNumberGenerator.GetBytes(32))), ["session"], [], true, [], ["a1"], listSha), signer);
         return RetentionInventory.Read(new DirectoryInfo(dir), trust);
     }
+
+    private static void FlipBit(string path) { var b = File.ReadAllBytes(path); b[b.Length / 2] ^= 0x01; File.WriteAllBytes(path, b); }
 
     private CheckedDestination Destination(string? path = null) => new(new BackupDestination("nas", path ?? Dest, BackupDestinationKind.Network, null, null, null), path ?? Dest, true, false);
     private ReplicaCopier Copier(ReplicaCopyHooks? hooks = null) => new(trust, events) { Hooks = hooks };
@@ -87,7 +95,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         Assert.False(folderAtEvent);                                                         // the event is committed BEFORE the rename (D-188)
         Assert.Equal(TreeHash(Path.Combine(Primary, RunA)), TreeHash(Path.Combine(Dest, RunA)));
         Assert.Empty(Staging());
-        Assert.Equal([$"2040 {RunA} nas reverified=False files=5"], events.Log);
+        Assert.Equal([$"2040 {RunA} nas reverified=False files=7"], events.Log);
         var copy = RetentionInventory.Read(new DirectoryInfo(Path.Combine(Dest, RunA)), trust);
         Assert.True(ReplicaStatus.IsReplicable(copy));
         Assert.Equal(run.StatusSha256, copy.StatusSha256);                                  // the same signed status: one run, one signed unit
@@ -103,7 +111,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         events.Log.Clear();
         var outcome = await Copier().ReplicateAsync(Destination(), Primary, run, default);
         Assert.Equal("reverified", outcome.Result);
-        Assert.Equal([$"2040 {RunA} nas reverified=True files=5"], events.Log);
+        Assert.Equal([$"2040 {RunA} nas reverified=True files=7"], events.Log);
         Assert.Equal(before, TreeHash(Path.Combine(Dest, RunA)));
         Assert.Empty(Staging());
         // a copy that has since been damaged at the destination is not "reverified": it fails and is left in place as evidence
@@ -161,7 +169,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         Assert.Equal(("failed", "replica_publish_failed"), (outcome.Result, outcome.Code));
         Assert.False(Directory.Exists(Path.Combine(Dest, RunA)));
         Assert.Empty(Staging());
-        Assert.Equal([$"2040 {RunA} nas reverified=False files=5", $"2041 {RunA} nas replica_publish_failed status"], events.Log);   // the compensating event carries the 2040's status hash
+        Assert.Equal([$"2040 {RunA} nas reverified=False files=7", $"2041 {RunA} nas replica_publish_failed status"], events.Log);   // the compensating event carries the 2040's status hash
     }
 
     [Fact]
@@ -226,22 +234,126 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_damaged_primary_is_not_copied_a_bad_signature_a_bad_encrypted_file_and_a_status_that_changed_all_fail_verification()
+    public async Task A_primary_with_a_malformed_encrypted_file_or_a_manifest_that_does_not_verify_is_not_copied_even_when_its_inventory_describes_it()
     {
-        // an encrypted file that is not a valid HBE1 stream
-        var run = await MakeRunAsync(RunA);
-        File.WriteAllBytes(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName), RandomNumberGenerator.GetBytes(4096));
+        // an encrypted file that is not a valid HBE1 stream, listed as it is: the inventory matches, the structure check refuses
+        var run = await MakeRunAsync(RunA, beforeList: dir => File.WriteAllBytes(Path.Combine(dir, "system", EncryptedSets.DumpName), RandomNumberGenerator.GetBytes(4096)));
         var outcome = await Copier().ReplicateAsync(Destination(), Primary, run, default);
         Assert.Equal(("failed", "replica_verification_failed"), (outcome.Result, outcome.Code));
         Assert.False(Directory.Exists(Path.Combine(Dest, RunA)));
-        // a manifest whose signature does not verify (the primary's own file altered after signing)
-        var run2 = await MakeRunAsync(RunB);
-        var manifest = Path.Combine(Primary, RunB, "system", SignedDocuments.ManifestFileName);
-        var bytes = File.ReadAllBytes(manifest); bytes[^1] ^= 0x01; File.WriteAllBytes(manifest, bytes);
+        // a manifest whose signature does not verify (altered after signing, and listed as altered)
+        var run2 = await MakeRunAsync(RunB, beforeList: dir => FlipBit(Path.Combine(dir, "system", SignedDocuments.ManifestFileName)));
         var outcome2 = await Copier().ReplicateAsync(Destination(), Primary, run2, default);
         Assert.Equal(("failed", "replica_verification_failed"), (outcome2.Result, outcome2.Code));
         Assert.False(Directory.Exists(Path.Combine(Dest, RunB)));
         Assert.Empty(Staging());
+    }
+
+    [Fact]
+    public async Task Ciphertext_altered_in_the_primary_after_signing_is_refused_and_nothing_is_published()
+    {
+        // review M1 of #213: one bit flipped in the middle of the primary's encrypted dump, HBE1 framing intact
+        var run = await MakeRunAsync(RunA);
+        FlipBit(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName));
+        var outcome = await Copier().ReplicateAsync(Destination(), Primary, run, default);
+        Assert.Equal(("failed", "replica_digest_mismatch"), (outcome.Result, outcome.Code));
+        Assert.False(Directory.Exists(Path.Combine(Dest, RunA)));
+        Assert.Empty(Staging());
+        Assert.Equal([$"2041 {RunA} nas replica_digest_mismatch"], events.Log);                // no 2040: nothing was verified
+        // an encrypted file that the inventory does not list (added after the run) is refused as well
+        var run2 = await MakeRunAsync(RunB);
+        File.Copy(Path.Combine(Primary, RunB, "system", EncryptedSets.DumpName), Path.Combine(Primary, RunB, "canary.hbe"));
+        Assert.Equal("replica_digest_mismatch", (await Copier().ReplicateAsync(Destination(), Primary, run2, default)).Code);
+        Assert.False(Directory.Exists(Path.Combine(Dest, RunB)));
+    }
+
+    [Fact]
+    public async Task A_copy_made_earlier_is_not_verified_again_when_the_primary_was_altered_since()
+    {
+        var run = await MakeRunAsync(RunA);
+        Assert.Equal("verified", (await Copier().ReplicateAsync(Destination(), Primary, run, default)).Result);
+        FlipBit(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName));
+        events.Log.Clear();
+        var again = await Copier().ReplicateAsync(Destination(), Primary, run, default);
+        Assert.Equal(("failed", "replica_digest_mismatch"), (again.Result, again.Code));
+        Assert.Equal([$"2041 {RunA} nas replica_digest_mismatch"], events.Log);
+    }
+
+    [Fact]
+    public async Task A_tampered_or_foreign_or_missing_inventory_fails_closed_with_its_own_code()
+    {
+        string List(string id) => Path.Combine(Primary, id, CiphertextDigests.FileName);
+        // bad signature
+        var a = await MakeRunAsync(RunA);
+        FlipBit(List(RunA) + ".sig");
+        Assert.Equal("replica_digest_list_invalid", (await Copier().ReplicateAsync(Destination(), Primary, a, default)).Code);
+        // an altered entry without a new signature
+        var b = await MakeRunAsync(RunB);
+        File.WriteAllText(List(RunB), File.ReadAllText(List(RunB)).Replace("\"size\": ", "\"size\": 1"));
+        Assert.Equal("replica_digest_list_invalid", (await Copier().ReplicateAsync(Destination(), Primary, b, default)).Code);
+        // an altered entry re-signed by the signing key: the signed status names the hash of the original, so the swap is found
+        var c = await MakeRunAsync("20261123T020000Z-0011aabd");
+        var path = List("20261123T020000Z-0011aabd");
+        var altered = System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(path).Replace("\"size\": ", "\"size\": 1"));
+        File.Delete(path); File.Delete(path + ".sig");
+        SignedDocuments.WriteSigned(path, altered, signer);
+        Assert.Equal("replica_digest_list_invalid", (await Copier().ReplicateAsync(Destination(), Primary, c, default)).Code);
+        // the list of ANOTHER run (a valid signature, the wrong run)
+        var d1 = await MakeRunAsync("20261124T020000Z-0011aabe");
+        var d2 = await MakeRunAsync("20261125T020000Z-0011aabf");
+        File.Copy(List("20261125T020000Z-0011aabf"), List("20261124T020000Z-0011aabe"), true);
+        File.Copy(List("20261125T020000Z-0011aabf") + ".sig", List("20261124T020000Z-0011aabe") + ".sig", true);
+        Assert.Equal("replica_digest_list_invalid", (await Copier().ReplicateAsync(Destination(), Primary, d1, default)).Code);
+        // a missing inventory file, and a run written before the inventory existed (its status names none): never verified, never copied
+        var e = await MakeRunAsync("20261126T020000Z-0011aac0");
+        File.Delete(List("20261126T020000Z-0011aac0"));
+        Assert.Equal("replica_digest_list_missing", (await Copier().ReplicateAsync(Destination(), Primary, e, default)).Code);
+        var old = await MakeRunAsync("20261127T020000Z-0011aac1", withList: false);
+        var o = await Copier().ReplicateAsync(Destination(), Primary, old, default);
+        Assert.Equal(("failed", "replica_digest_list_missing"), (o.Result, o.Code));
+        Assert.Empty(Directory.GetDirectories(Dest));                                          // nothing was published or staged for any of them
+        Assert.DoesNotContain(events.Log, l => l.StartsWith("2040", StringComparison.Ordinal));
+        Assert.Equal(6, events.Log.Count(l => l.StartsWith("2041", StringComparison.Ordinal)));
+        Assert.Equal(d2.RunId, "20261125T020000Z-0011aabf");
+    }
+
+    [Fact]
+    public async Task Every_folder_created_inside_staging_is_flushed_before_the_copy_is_published()
+    {
+        var run = await MakeRunAsync(RunA);
+        var flushed = new List<string>();
+        var hooks = new ReplicaCopyHooks { OnFlushDirectory = p => flushed.Add(p), BeforePublish = (_, _) => flushed.Add("PUBLISH") };
+        Assert.Equal("verified", (await Copier(hooks).ReplicateAsync(Destination(), Primary, run, default)).Result);
+        var publish = flushed.IndexOf("PUBLISH");
+        var before = flushed.Take(publish).Select(p => Path.GetFileName(p)).ToList();
+        Assert.Contains("system", before);                                                     // the subfolder of the set
+        Assert.Contains(before, n => n.Contains(".incoming-"));                                // and the staging folder itself
+        Assert.True(before.IndexOf("system") < before.FindIndex(n => n.Contains(".incoming-")));   // deepest first
+        Assert.Equal("nas", Path.GetFileName(flushed[^1]));                                    // and the destination root after the rename
+    }
+
+    [Fact]
+    public async Task A_destination_swapped_for_a_link_after_the_first_check_is_refused_before_anything_is_written_and_again_before_the_rename()
+    {
+        var run = await MakeRunAsync(RunA);
+        var other = Path.Combine(root, "elsewhere"); Directory.CreateDirectory(other);
+        var all = new[] { Destination().Destination };
+        ReplicaCopier WithRecheck(ReplicaCopyHooks? hooks = null) => new(trust, events) { Hooks = hooks, Recheck = _ => BackupDestinations.Check(all, Primary, []) };
+        // swapped before the copy starts
+        Directory.Delete(Dest); Directory.CreateSymbolicLink(Dest, other);
+        var first = await WithRecheck().ReplicateAsync(Destination(), Primary, run, default);
+        Assert.Equal(("failed", "symbolic_link_refused"), (first.Result, first.Code));
+        Assert.Empty(Directory.GetFileSystemEntries(other));                                   // nothing was written through the link
+        Assert.Equal(["2043 nas symbolic_link_refused"], events.Log);
+        // swapped between the verification and the rename (after 2040)
+        Directory.Delete(Dest); Directory.CreateDirectory(Dest); events.Log.Clear();
+        var real = Path.Combine(root, "nas-real");
+        var hooks = new ReplicaCopyHooks { BeforePublish = (_, _) => { Directory.Move(Dest, real); Directory.CreateSymbolicLink(Dest, real); } };
+        var second = await WithRecheck(hooks).ReplicateAsync(Destination(), Primary, run, default);
+        Assert.Equal(("failed", "replica_publish_failed"), (second.Result, second.Code));
+        Assert.False(Directory.Exists(Path.Combine(real, RunA)));
+        Assert.Empty(Directory.GetDirectories(real));
+        Assert.Equal([$"2040 {RunA} nas reverified=False files=7", $"2041 {RunA} nas replica_publish_failed status"], events.Log);
     }
 
     [Fact]
@@ -264,7 +376,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
             Assert.Equal(o, DestinationLock.ObjectOf(id));
         }
         Assert.NotEqual(DestinationLock.ObjectOf("nas-1"), DestinationLock.ObjectOf("nas-10"));   // these two happen not to collide; a collision would only serialise two destinations
-        ReplicaOutcome Ok(string d) => new(d, RunA, "verified", null, 5, 1, 1);
+        ReplicaOutcome Ok(string d) => new(d, RunA, "verified", null, 7, 1, 1);
         ReplicaOutcome Bad(string d) => new(d, RunA, "failed", "destination_unreachable", 0, 0, 1);
         Assert.Equal(0, ReplicationService.ReplicationCode([Ok("a"), Ok("b")], RunA, 2));
         Assert.Equal(8, ReplicationService.ReplicationCode([Ok("a"), Bad("b")], RunA, 2));

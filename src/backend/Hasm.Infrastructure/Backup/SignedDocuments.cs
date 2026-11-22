@@ -30,7 +30,7 @@ public sealed record ManifestV2(int Version, string Kind, string? RunId, Guid? C
 /// </summary>
 public sealed record RunStatus(int Version, string Kind, string RunId, DateTimeOffset StartedUtc, DateTimeOffset FinishedUtc, long DurationMs, string Verdict,
     int CompaniesOk, int CompaniesMissingKeys, int CompaniesBusy, int CompaniesFailed, int Skipped, string RecoveryKeyId, string SigningKeyId, string CanarySha256,
-    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted, IReadOnlyList<RunStatusCompany> Companies, IReadOnlyList<string>? AuditKeyIds = null)
+    IReadOnlyList<string> Excluded, IReadOnlyList<string> Warnings, bool Encrypted, IReadOnlyList<RunStatusCompany> Companies, IReadOnlyList<string>? AuditKeyIds = null, string? DigestListSha256 = null)
 {
     /// <summary>Version 2 (slice 6, D-138) adds the key inventory: per company the attachment master-key ids its set needs, and the audit key ids of the run. Version 1 stays readable (key needs unknown).</summary>
     public const int CurrentVersion = 2;
@@ -117,7 +117,7 @@ public static class SignedDocuments
         catch (JsonException) { throw new BackupException("status_invalid"); }
         if (s is null || s.Version is not (1 or RunStatus.CurrentVersion) || s.Kind != RunStatus.KindValue || s.RunId != Path.GetFileName(Path.TrimEndingDirectorySeparator(runDirectory))
             || !BackupRunFiles.Verdicts.Contains(s.Verdict) || s.SigningKeyId != key.KeyId || !RecoveryKeys.IsKeyId(s.RecoveryKeyId) || s.CanarySha256 is not { Length: 64 }
-            || s.Excluded is null || s.Warnings is null || !s.Encrypted || s.Companies is null
+            || s.Excluded is null || s.Warnings is null || !s.Encrypted || s.Companies is null || (s.DigestListSha256 is not null && (s.DigestListSha256.Length != 64 || !s.DigestListSha256.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))))
             || s.Companies.Any(c => c is null || c.CompanyId == Guid.Empty || !BackupRunFiles.CompanyOutcomes.Contains(c.Outcome)) || s.Warnings.Any(w => !BackupRunFiles.IsCode(w)) || s.Excluded.Any(e => !BackupRunFiles.IsCode(e)))
             throw new BackupException("status_invalid");
         // version 2 carries a complete key inventory (D-138); version 1 carries none

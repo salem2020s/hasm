@@ -300,4 +300,54 @@ public class BackupReplicaCopyTests : PostgresTestBase
         Assert.Equal(2, (await AdminTool.RunWith(Options, NasOnly(), "backup-replicate", Root, "--destination", "NAS")).Exit);
         Assert.Equal(3, (await AdminTool.RunWith(Options, NasOnly(), "backup-replicate", Root, "--destination", "other")).Exit);
     }
+
+    [PostgresFact]
+    public async Task A_destination_swapped_for_a_link_is_refused_with_2043_and_written_through_never_even_between_verification_and_rename()
+    {
+        await Init();
+        var run = await RunAsync();
+        var other = Path.Combine(work, "elsewhere"); Directory.CreateDirectory(other);
+        Directory.CreateDirectory(Nas);
+        var dest = Destination("nas", Nas);                                                     // checked while Nas was a real folder
+        Directory.Delete(Nas); Directory.CreateSymbolicLink(Nas, other);                        // swapped after the check, before the copy
+        var first = await Service().ReplicateAsync(Root, [dest], new ReplicationRequest(run));
+        Assert.Equal(("failed", "symbolic_link_refused"), (first.Outcomes.Single().Result, first.Outcomes.Single().Code));
+        Assert.Empty(Directory.GetFileSystemEntries(other));
+        var refused = Assert.Single(await Events(BackupAuditEvents.DestinationRefused));
+        Assert.Equal(("nas", "symbolic_link_refused"), (Token(refused, "destination"), Token(refused, "reason")));
+        // swapped between verification and the rename: 2040 is written, the publish is refused and answered by 2041, nothing appears in the real folder
+        Directory.Delete(Nas); Directory.CreateDirectory(Nas);
+        var real = Path.Combine(work, "nas-real");
+        var hooks = new ReplicaCopyHooks { BeforePublish = (_, _) => { Directory.Move(Nas, real); Directory.CreateSymbolicLink(Nas, real); } };
+        var second = await Service(hooks: hooks).ReplicateAsync(Root, [Destination("nas", Nas)], new ReplicationRequest(run));
+        Assert.Equal(("failed", "replica_publish_failed"), (second.Outcomes.Single().Result, second.Outcomes.Single().Code));
+        Assert.Empty(Directory.GetDirectories(real));
+        Assert.Equal("replica_publish_failed", Token(Assert.Single(await Events(BackupAuditEvents.ReplicaFailed)), "reason"));
+    }
+
+    [PostgresFact]
+    public async Task A_real_run_carries_the_signed_ciphertext_inventory_and_a_bit_flipped_in_the_primary_after_the_run_is_never_published()
+    {
+        await Init();
+        var run = await RunAsync();
+        var runDir = Path.Combine(Root, run);
+        Assert.True(File.Exists(Path.Combine(runDir, CiphertextDigests.FileName)) && File.Exists(Path.Combine(runDir, CiphertextDigests.FileName + ".sig")));
+        var list = CiphertextDigests.ReadVerified(runDir, run, SignedDocuments.ReadRunStatus(runDir, Trust).DigestListSha256, Trust);
+        Assert.Equal(Directory.GetFiles(runDir, "*.hbe", SearchOption.AllDirectories).Length, list.Files.Count);   // every encrypted file, the canary and the manifests included
+        Assert.True(RetentionInventory.Inspect(runDir).Clean);
+        Directory.CreateDirectory(Nas);
+        var dest = Destination("nas", Nas);
+        var dump = Directory.GetFiles(runDir, "database.dump.hbe", SearchOption.AllDirectories).First();
+        var bytes = File.ReadAllBytes(dump); bytes[bytes.Length / 2] ^= 0x01; File.WriteAllBytes(dump, bytes);   // after the run was signed, HBE1 framing intact
+        var refused = await Service().ReplicateAsync(Root, [dest], new ReplicationRequest(run));
+        Assert.Equal(("failed", "replica_digest_mismatch"), (refused.Outcomes.Single().Result, refused.Outcomes.Single().Code));
+        Assert.Empty(Directory.GetFileSystemEntries(Nas));
+        Assert.Empty(await Events(BackupAuditEvents.ReplicaVerified));
+        Assert.Equal("replica_digest_mismatch", Token(Assert.Single(await Events(BackupAuditEvents.ReplicaFailed)), "reason"));
+        // catch-up reports the same and copies nothing
+        var catchUp = await AdminTool.RunWith(Options, NasOnly(), "backup-replicate", Root);
+        Assert.True(catchUp.Exit == 1, catchUp.All);
+        Assert.Contains("replica_digest_mismatch", catchUp.Out);
+        Assert.Empty(Directory.GetFileSystemEntries(Nas));
+    }
 }

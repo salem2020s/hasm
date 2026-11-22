@@ -21,6 +21,8 @@ public sealed class ReplicationService(HasmDatabaseOptions options, SigningTrust
     /// <summary>How long a destination lock is waited for before <c>destination_busy</c> (exit 4).</summary>
     public TimeSpan LockWait { get; init; } = TimeSpan.FromSeconds(30);
     internal ReplicaCopyHooks? Hooks { get; init; }
+    /// <summary>The attachment root and the encryption, audit and signing key directories the destination checks are repeated against (D-184, review L2 of #213).</summary>
+    public IReadOnlyList<string?> ProtectedDirectories { get; init; } = [];
 
     public async Task<ReplicationResult> ReplicateAsync(string primaryRoot, IReadOnlyList<CheckedDestination> destinations, ReplicationRequest request, CancellationToken ct = default)
     {
@@ -36,7 +38,8 @@ public sealed class ReplicationService(HasmDatabaseOptions options, SigningTrust
         if (request.RunId is not null) explicitRun = runs.SingleOrDefault(r => r.RunId == request.RunId) ?? throw new BackupException("run_not_found");
         var notReplicable = runs.Count(r => !ReplicaStatus.IsReplicable(r));
         var outcomes = new List<ReplicaOutcome>();
-        var copier = new ReplicaCopier(trust, events, clock) { Hooks = Hooks };
+        var allDestinations = destinations.Select(x => x.Destination).ToList();
+        var copier = new ReplicaCopier(trust, events, clock) { Hooks = Hooks, Recheck = _ => BackupDestinations.Check(allDestinations, root, ProtectedDirectories) };
         foreach (var d in selected)
         {
             await using var guard = await DestinationLock.AcquireAsync(options, d.Destination.Id, LockWait, ct);

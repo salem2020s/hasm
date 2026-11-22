@@ -644,7 +644,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                     : $"{BackupGuard.DegradedStatus}: the run is NOT encrypted; DEV/TEST only. The run is not one point in time across databases.");
                 var runExit = report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
                 if (destinations.Count == 0) return runExit;
-                return BackupSeverity.Worst(runExit, await ReplicateAfterRunAsync(destinations, args[1], report, material is not null, options, backupOptions, systemConnection, trail));
+                return BackupSeverity.Worst(runExit, await ReplicateAfterRunAsync(destinations, args[1], report, material is not null, options, backupOptions, ProtectedDirectoriesOf(configuration, backupOptions), systemConnection, trail));
             }
             case "backup-replicate":
             {
@@ -655,7 +655,7 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                     return BadConfig;
                 }
                 var trust = BackupMaterialLoader.ServerTrust(backupOptions) ?? new SigningTrust([]);
-                var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail))
+                var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)) { ProtectedDirectories = ProtectedDirectoriesOf(configuration, backupOptions) }
                     .ReplicateAsync(args[1], destinations, new ReplicationRequest(replicate.Run, replicate.Destination, replicate.NewestFirst));
                 PrintOutcomes(result.Outcomes);
                 Console.WriteLine($"Replication pass: {result.Outcomes.Count(o => o.IsVerified)} copy(ies) verified, {result.Outcomes.Count(o => !o.IsVerified)} failed; {result.NotReplicable} run(s) of the primary are never replicated (failed, unsigned, unencrypted or unclean).");
@@ -705,8 +705,7 @@ static async Task<IReadOnlyList<CheckedDestination>> CheckedDestinationsAsync(st
     try
     {
         var configured = BackupDestinations.FromConfiguration(configuration);
-        return BackupDestinations.Check(configured, primaryRoot,
-            [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, AuditOptions.FromConfiguration(configuration).KeyDirectory, backupOptions.SigningKeyDirectory]);
+        return BackupDestinations.Check(configured, primaryRoot, ProtectedDirectoriesOf(configuration, backupOptions));
     }
     catch (BackupException ex) when (ex.Code is "destination_config_invalid" or "retention_below_minimum" or "symbolic_link_refused" or "destination_duplicate" or "destination_overlaps_source")
     {
@@ -718,6 +717,9 @@ static async Task<IReadOnlyList<CheckedDestination>> CheckedDestinationsAsync(st
     }
 }
 
+static IReadOnlyList<string?> ProtectedDirectoriesOf(IConfiguration configuration, BackupOptions backupOptions) =>
+    [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, AuditOptions.FromConfiguration(configuration).KeyDirectory, backupOptions.SigningKeyDirectory];
+
 static void PrintOutcomes(IEnumerable<ReplicaOutcome> outcomes)
 {
     foreach (var o in outcomes)
@@ -726,14 +728,14 @@ static void PrintOutcomes(IEnumerable<ReplicaOutcome> outcomes)
 }
 
 // After a run: copy it to every destination, then the exit code is the worst (1 > 8 > 0) of the replication result of THIS run and the destinations' status after the copy (D-186); the run's own code is combined by the caller.
-static async Task<int> ReplicateAfterRunAsync(IReadOnlyList<CheckedDestination> destinations, string primaryRoot, BackupRunReport report, bool encrypted, HasmDatabaseOptions options, BackupOptions backupOptions, string systemConnection, AuditTrail trail)
+static async Task<int> ReplicateAfterRunAsync(IReadOnlyList<CheckedDestination> destinations, string primaryRoot, BackupRunReport report, bool encrypted, HasmDatabaseOptions options, BackupOptions backupOptions, IReadOnlyList<string?> protectedDirectories, string systemConnection, AuditTrail trail)
 {
     var trust = BackupMaterialLoader.ServerTrust(backupOptions) ?? new SigningTrust([]);
     var replicationExit = 0;
     if (report.Verdict == "failed") Console.WriteLine("The run failed and is not replicated (D-182); the destinations are reported as they are.");
     else
     {
-        var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)).ReplicateAsync(primaryRoot, destinations, new ReplicationRequest(report.RunId));
+        var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)) { ProtectedDirectories = protectedDirectories }.ReplicateAsync(primaryRoot, destinations, new ReplicationRequest(report.RunId));
         PrintOutcomes(result.Outcomes);
         replicationExit = ReplicationService.ReplicationCode(result.Outcomes, report.RunId, destinations.Count);
         if (replicationExit != 0) Console.Error.WriteLine($"WARNING {(replicationExit == 1 ? "replication_failed" : "replication_incomplete")}: not every configured destination holds a verified copy of run {report.RunId}.");
