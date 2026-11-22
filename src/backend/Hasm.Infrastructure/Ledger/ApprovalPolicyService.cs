@@ -16,6 +16,7 @@ using AB = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentApprovalBin
 using AG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalStaging;
 using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ClosingLogic;
+using PI = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ApprovalPolicyIdentity;
 
 namespace Hasm.Infrastructure.Ledger;
 
@@ -99,6 +100,7 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
             await ExecAsync(work, $"INSERT INTO {AP.Table} ({AP.Id}, {AP.DocType}, {AP.Source}, {AP.BranchId}, {AP.MinAmount}, {AP.RequiredApprovals}, {AP.NameAr}, {AP.NameEn}, {AP.IsActive}, {AP.Revision}, {AP.CreatedAtUtc}, {AP.UpdatedAtUtc}, {AC.JournalType}, {AC.RateOverride}, {AC.SoftClosed}, {CL.PolicyClosingKind}) VALUES (@id, @doc, @src, @branch, @min, @req, @ar, @en, true, 1, @now, @now, @jt, @ro, @sc, @ck)",
                 p => { Bind(p, id, docType, source, input.BranchId, min, required, nameAr, nameEn, now); BindConditions(p, np); });
             await InsertStagesAsync(work, id, 1, np.Stages, ct);
+            await RefuseDuplicateAsync(work, ct);
             var changes = new JsonObject { ["docType"] = docType, ["source"] = source.ToString(), ["branchId"] = input.BranchId?.ToString(), ["minAmount"] = min.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), ["requiredApprovals"] = np.Total, ["nameAr"] = nameAr, ["nameEn"] = nameEn,
                 ["journalType"] = JournalTypeName(np.JournalType), ["rateOverride"] = np.RateOverride?.ToString(), ["softClosed"] = np.SoftClosed?.ToString(), ["closingKind"] = ClosingKindName(np.ClosingKind), ["stages"] = StagesText(np.Stages) };
             await RecordAsync(work, LedgerAuditEvents.ApprovalPolicyCreated, actor, id, 1, changes, "approval policy created", ct);
@@ -131,6 +133,7 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
             await ExecAsync(work, $"UPDATE {AP.Table} SET {AP.Source} = @src, {AP.BranchId} = @branch, {AP.MinAmount} = @min, {AP.RequiredApprovals} = @req, {AP.NameAr} = @ar, {AP.NameEn} = @en, {AC.JournalType} = @jt, {AC.RateOverride} = @ro, {AC.SoftClosed} = @sc, {CL.PolicyClosingKind} = @ck, {AP.Revision} = {AP.Revision} + 1, {AP.UpdatedAtUtc} = @now WHERE {AP.Id} = @id",
                 p => { Bind(p, id, cur.DocType, source, input.BranchId, min, required, nameAr, nameEn, clock.GetUtcNow().UtcDateTime); BindConditions(p, np); });
             await InsertStagesAsync(work, id, cur.Revision + 1, np.Stages, ct);
+            await RefuseDuplicateAsync(work, ct);
             var changes = new JsonObject();
             Diff(changes, "source", cur.Source.ToString(), source.ToString()); Diff(changes, "branchId", cur.BranchId?.ToString(), input.BranchId?.ToString());
             Diff(changes, "minAmount", cur.MinAmount.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), min.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture));
@@ -157,6 +160,7 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
             await ExecAsync(work, $"UPDATE {AP.Table} SET {AP.IsActive} = @a, {AP.Revision} = {AP.Revision} + 1, {AP.UpdatedAtUtc} = @now WHERE {AP.Id} = @id",
                 p => { p.AddWithValue("id", id); p.AddWithValue("a", active); p.AddWithValue("now", clock.GetUtcNow().UtcDateTime); });
             await InsertStagesAsync(work, id, cur.Revision + 1, cur.Stages ?? [], ct);   // the stage set follows every revision of the policy
+            await RefuseDuplicateAsync(work, ct);                                        // a reactivation must not bring back a policy identical to an active one
             var changes = new JsonObject(); Diff(changes, "isActive", cur.IsActive.ToString(), active.ToString());
             await RecordAsync(work, active ? LedgerAuditEvents.ApprovalPolicyReactivated : LedgerAuditEvents.ApprovalPolicyDeactivated, actor, id, cur.Revision + 1, changes, active ? "approval policy reactivated" : "approval policy deactivated", ct);
             return (await LoadAsync(work.Connection, work.Transaction, id, false, ct)).Single();
@@ -206,6 +210,27 @@ public sealed class ApprovalPolicyService(CompanyDatabaseResolver resolver, Comp
         try { return ConfigResult<T>.Ok(await transactions.ExecuteAsync(companyId, work, ct)); }
         catch (Abort abort) when (abort.Message == "unchanged" && onUnchanged is not null) { return ConfigResult<T>.Ok((await onUnchanged())!); }
         catch (Abort abort) { return abort.To<T>(); }
+        catch (PostgresException ex) when (IsDuplicatePolicy(ex)) { return ConfigResult<T>.Fail(ConfigStatus.Conflict, DuplicateCode); }   // refused at commit (a writer outside this service's lock won the race)
+    }
+
+    /// <summary>The refusal code of a policy that is semantically identical to another ACTIVE policy (company migration 0033; owner decision of 2026-11-21).</summary>
+    public const string DuplicateCode = "approval_policy_duplicate";
+
+    /// <summary>PostgreSQL's refusal of an identical active policy: the unique index of the policy identities, or the guard trigger raising the same error for a pre-existing duplicate.</summary>
+    internal static bool IsDuplicatePolicy(PostgresException ex) => ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == PI.UqActive;
+
+    /// <summary>
+    /// Asks PostgreSQL to decide NOW, inside the transaction and before anything is audited, whether the policy just written is identical to another active policy. The identity is computed by the database from the
+    /// stored rows at this point (the policy row and the stages of its revision are in place); without this call the same check runs at commit. Nothing is decided here: the database refuses, this turns it into 409.
+    /// </summary>
+    private static async Task RefuseDuplicateAsync(CompanyAuditedWork work, CancellationToken ct)
+    {
+        try
+        {
+            await using var cmd = new NpgsqlCommand($"SET CONSTRAINTS {PI.TrOnPolicy}, {PI.TrOnStage} IMMEDIATE", work.Connection, work.Transaction);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (PostgresException ex) when (IsDuplicatePolicy(ex)) { throw new Abort(ConfigStatus.Conflict, DuplicateCode); }
     }
 
     private static async Task LockAsync(CompanyAuditedWork work, CancellationToken ct)

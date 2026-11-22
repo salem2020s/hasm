@@ -262,6 +262,21 @@ describe("approval policies screen", () => {
     expect(client.createApprovalPolicy).not.toHaveBeenCalled();
   });
 
+  it.each(["ar", "en"] as const)("shows the translated message when the server refuses an identical active policy with 409 approval_policy_duplicate (%s)", async (lang) => {
+    localStorage.setItem("hasm.locale", lang);
+    const C = (k: string) => catalog[lang][k]!;
+    const client = render();
+    (client.createApprovalPolicy as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(apiError(409, "approval_policy_duplicate"));
+    await go("#/company/approval-policies");
+    await userEvent.click(await screen.findByRole("button", { name: C("pol.new") }));
+    await userEvent.type(screen.getByLabelText(new RegExp(`^${esc(C("cc.name_en"))}\\s*\\*?$`)), "Same");
+    await userEvent.click(screen.getByRole("button", { name: C("common.save") }));
+    expect(await screen.findByText(C("pol.error.approval_policy_duplicate"))).toBeInTheDocument();
+    expect(C("pol.error.approval_policy_duplicate")).not.toBe(catalog[lang === "ar" ? "en" : "ar"]["pol.error.approval_policy_duplicate"]);
+    expect(client.createApprovalPolicy).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(new RegExp(`^${esc(C("cc.name_en"))}\\s*\\*?$`))).toHaveValue("Same");   // what was typed is kept
+  });
+
   it("edits and deactivates with the policy revision", async () => {
     const client = render();
     await go("#/company/approval-policies");
