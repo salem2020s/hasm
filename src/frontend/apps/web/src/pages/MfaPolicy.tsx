@@ -1,7 +1,7 @@
 import { ApiError, type AccessRole, type MfaPolicy, type MfaPolicyKind } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAuth } from "../auth";
+import { isCompanyContextChanged, useAuth } from "../auth";
 import { Banner, Card, ConfirmDialog, errorText, Loading, PageHeader } from "../components";
 import { useReportUnsaved } from "../unsaved";
 
@@ -32,7 +32,7 @@ export function MfaPolicyPage() {
   const [error, setError] = useState<unknown>(null);
   const [needOwnEnrolment, setNeedOwnEnrolment] = useState(false);
   const [conflict, setConflict] = useState(false);
-  const [notice, setNotice] = useState<"saved" | "reloaded" | null>(null);
+  const [notice, setNotice] = useState<"saved" | "reloaded" | "context" | null>(null);
   const [rolesRefreshed, setRolesRefreshed] = useState<number | null>(null);          // after `unknown_role`: how many chosen roles no longer exist and were removed from the choice
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -91,6 +91,7 @@ export function MfaPolicyPage() {
       setSaved(result); setKind(result.policy); setChosen(result.roleIds);
       setNotice("saved");
     } catch (e) {
+      if (isCompanyContextChanged(e)) setNotice("context");                                   // not served: the session context is reloaded by handleError (no error shown)
       if (handleError(e)) return;
       if (e instanceof ApiError && e.status === 409 && e.code === "mfa_policy_requires_own_enrolment") setNeedOwnEnrolment(true);
       else if (e instanceof ApiError && e.status === 412) setConflict(true);                  // someone else changed the policy: the edit stays, nothing is fetched until the user asks
@@ -114,6 +115,7 @@ export function MfaPolicyPage() {
       <PageHeader title={t("mfapolicy.title")} description={t("mfapolicy.subtitle")} />
       {loadError != null && <Banner kind="error" testId="mfapolicy-load-error">{errorText(t, loadError, "mfapolicy.error.")} <button type="button" className="link" onClick={() => void load()}>{t("picker.retry")}</button></Banner>}
       {notice === "saved" && <Banner kind="success" testId="mfapolicy-notice">{t("mfapolicy.saved")}</Banner>}
+      {notice === "context" && <Banner kind="info" testId="mfapolicy-context">{t("mfapolicy.context_reloaded")}</Banner>}
       {notice === "reloaded" && saved && <Banner kind="info" testId="mfapolicy-reloaded">{t("mfapolicy.reloaded", { policy: t(`mfapolicy.kind.${saved.policy}`) })}{dirty ? ` ${t("mfapolicy.reloaded.kept")}` : ""}</Banner>}
       {conflict && (
         <Banner kind="warning" testId="mfapolicy-conflict">{t("mfapolicy.conflict")} <button type="button" className="link" disabled={busy} onClick={() => void reload()} data-testid="mfapolicy-reload">{t("mfapolicy.conflict.reload")}</button></Banner>

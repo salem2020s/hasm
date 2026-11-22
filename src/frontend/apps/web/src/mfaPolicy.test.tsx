@@ -752,4 +752,180 @@ describe("the policy save with the real api client", () => {
     await goPolicy().catch(() => undefined);
     expect(await screen.findByTestId("enrolment-required")).toBeInTheDocument();
   });
+  // ---- contract as merged (backend PR 181): first write, invalid If-Match, the 409 context answers, the actor without an authenticator, the lock, keyboard, English LTR
+
+  it("first write: a company with no stored policy reads revision 0 and the save sends If-Match \"0\" (never omitted), then the answer's revision", async () => {
+    const s = startApp({
+      companies: [TWO[0]!], perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json({ policy: "off", roleIds: [], revision: 0, updatedAtUtc: null })],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ policy: "all", roleIds: [], updatedAtUtc: "2026-11-21T10:00:00Z", revision: 1 }), () => json({ policy: "off", roleIds: [], updatedAtUtc: "2026-11-21T10:01:00Z", revision: 2 })],
+      },
+    });
+    await goPolicy();
+    await saveAll();
+    expect(await screen.findByTestId("mfapolicy-notice")).toHaveTextContent(A("mfapolicy.saved"));
+    expect(s.count("PUT", "/api/v1/access/mfa-policy").map((c) => c.ifMatch)).toEqual(['"0"']);
+    await userEvent.click(kindRadio("off"));
+    await userEvent.click(screen.getByTestId("mfapolicy-save"));
+    await waitFor(() => expect(s.count("PUT", "/api/v1/access/mfa-policy")).toHaveLength(2));
+    expect(s.count("PUT", "/api/v1/access/mfa-policy")[1]!.ifMatch).toBe('"1"');
+  });
+
+  it("400 invalid_if_match is worded as an application error in Arabic and in English; nothing is saved, the choice stays, the session stays", async () => {
+    startApp({
+      companies: [TWO[0]!], perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json(OFF)],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ error: "invalid_if_match" }, 400)],
+      },
+    });
+    await goPolicy();
+    await saveAll();
+    expect(await screen.findByTestId("mfapolicy-error")).toHaveTextContent(A("mfapolicy.error.invalid_if_match"));
+    expect(screen.queryByTestId("mfapolicy-notice")).toBeNull();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    expect(kindRadio("all")).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    await waitFor(() => expect(screen.getByTestId("mfapolicy-error")).toHaveTextContent(E("mfapolicy.error.invalid_if_match")));
+  });
+
+  it("a caller without an authenticator: 409 mfa_policy_requires_own_enrolment also for switching the policy OFF; link to the security settings, choice kept, no sign-out, no prompt", async () => {
+    startApp({
+      companies: [TWO[0]!], perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json({ policy: "all", roleIds: [], revision: 6, updatedAtUtc: "2026-11-20T09:00:00Z" })],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ error: "mfa_policy_requires_own_enrolment" }, 409)],
+      },
+    });
+    await goPolicy();
+    await userEvent.click(kindRadio("off"));
+    await userEvent.click(screen.getByTestId("mfapolicy-save"));                                        // 'off': no confirmation dialog
+    const banner = await screen.findByTestId("mfapolicy-own-enrolment");
+    expect(banner).toHaveTextContent(A("mfapolicy.error.mfa_policy_requires_own_enrolment"));
+    expect(within(banner).getByTestId("mfapolicy-security-link")).toHaveAttribute("href", "#/account/security");
+    expect(kindRadio("off")).toBeChecked();
+    expect(screen.queryByTestId("enrolment-required")).toBeNull();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+  });
+
+  it("409 company_selection_changed: not an error. The save was not served, no error is shown, the session context is read again, and the same company keeps the input", async () => {
+    const s = startApp({
+      companies: TWO, perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json(OFF)],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ error: "company_selection_changed" }, 409), () => json({ policy: "all", roleIds: [], updatedAtUtc: "2026-11-21T10:00:00Z", revision: 4 })],
+      },
+    });
+    await goPolicy();
+    const meBefore = s.count("GET", "/api/v1/access/me").length;
+    await saveAll();
+    expect(await screen.findByTestId("mfapolicy-context")).toHaveTextContent(A("mfapolicy.context_reloaded"));
+    expect(screen.queryByTestId("mfapolicy-error")).toBeNull();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    await waitFor(() => expect(s.count("GET", "/api/v1/access/me").length).toBe(meBefore + 1));
+    expect(kindRadio("all")).toBeChecked();                                                             // same company: the input stays
+    await userEvent.click(screen.getByTestId("mfapolicy-save"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("mfapolicy.confirm") }));
+    expect(await screen.findByTestId("mfapolicy-notice")).toHaveTextContent(A("mfapolicy.saved"));
+    expect(s.count("PUT", "/api/v1/access/mfa-policy").map((c) => c.ifMatch)).toEqual(['"3"', '"3"']);
+  });
+
+  it("409 company_selection_changed when the session now has ANOTHER company: the shell is a new instance, the old company's edit is gone, and the other company's policy is loaded", async () => {
+    const s = startApp({
+      companies: TWO, perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json(OFF), () => json({ policy: "all", roleIds: [], revision: 12, updatedAtUtc: "2026-11-21T09:00:00Z" })],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ error: "company_selection_changed" }, 409)],
+        "GET /api/v1/access/me": [() => json({ companyId: "c1", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: PERMS }] }), () => json({ companyId: "c2", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: PERMS }] })],
+      },
+    });
+    await goPolicy();
+    await userEvent.click(kindRadio("roles"));                                                          // an unsaved edit of company 1
+    await userEvent.click(kindRadio("off"));
+    await userEvent.click(kindRadio("all"));
+    await userEvent.click(screen.getByTestId("mfapolicy-save"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("mfapolicy.confirm") }));
+    await waitFor(() => expect(s.count("GET", "/api/v1/access/mfa-policy")).toHaveLength(2));
+    expect(await screen.findByRole("heading", { name: A("mfapolicy.title"), level: 1 })).toBeInTheDocument();
+    await waitFor(() => expect(kindRadio("all")).toBeChecked());
+    expect(screen.getByTestId("mfapolicy-save")).toBeDisabled();                                        // nothing unsaved: the screen shows company 2's saved policy
+    expect(screen.queryByTestId("mfapolicy-error")).toBeNull();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+  });
+
+  it("409 company_not_selected: back to company selection (no error, no sign-out)", async () => {
+    startApp({
+      companies: TWO, perms: PERMS,
+      routes: {
+        "GET /api/v1/access/mfa-policy": [() => json(OFF)],
+        "GET /api/v1/access/roles": [() => json({ roles: [] })],
+        "PUT /api/v1/access/mfa-policy": [() => json({ error: "company_not_selected" }, 409)],
+        "GET /api/v1/access/me": [() => json({ companyId: "c1", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: PERMS }] }), () => json({ error: "company_not_selected" }, 409)],
+      },
+    });
+    await goPolicy();
+    await saveAll();
+    expect(await screen.findByRole("heading", { name: A("companies.title") })).toBeInTheDocument();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    expect(screen.queryByTestId("mfapolicy-error")).toBeNull();
+  });
+
+  it("English: the screen is left-to-right with English wording; Arabic: right-to-left", async () => {
+    setupScreen();
+    await openByHash();
+    expect(document.documentElement.dir).toBe("rtl");
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(await screen.findByRole("heading", { name: E("mfapolicy.title"), level: 1 })).toBeInTheDocument();
+    expect(document.documentElement.dir).toBe("ltr");
+    expect(screen.getByText(E("mfapolicy.kind.all"))).toBeInTheDocument();
+    expect(screen.getByLabelText(new RegExp(E("mfapolicy.kind.off")))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "العربية" }));
+    await screen.findByRole("heading", { name: A("mfapolicy.title"), level: 1 });
+    expect(document.documentElement.dir).toBe("rtl");
+  });
+
+  it("keyboard: the kinds are one radio group (arrows move the choice), Tab reaches Save, Enter opens the confirmation, Escape-free: the confirm button saves", async () => {
+    const client = setupScreen();
+    await openByHash();
+    kindRadio("off").focus();
+    await userEvent.keyboard("{ArrowDown}");                                                           // off -> roles
+    await userEvent.keyboard("{ArrowDown}");                                                           // roles -> all
+    expect(kindRadio("all")).toBeChecked();
+    expect(kindRadio("all")).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByTestId("mfapolicy-save")).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: A("mfapolicy.confirm") }));
+    await waitFor(() => expect(client.putMfaPolicy).toHaveBeenCalledWith({ policy: "all", roleIds: [] }, 3));
+  });
+
+  it("D-236: an unsaved policy choice survives a session end (locked, hidden), is restored after the same user signs in again, nothing is stored, and the save is not re-sent by itself", async () => {
+    const client = setupScreen({ putMfaPolicy: vi.fn().mockRejectedValue(new ApiError(401, "unauthenticated")) });
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    await openByHash();
+    await userEvent.click(kindRadio("roles"));
+    await userEvent.click(within(screen.getByTestId(`mfapolicy-role-${R2.id}`)).getByRole("checkbox"));
+    await userEvent.click(screen.getByTestId("mfapolicy-save"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: A("mfapolicy.confirm") }));
+    await screen.findByTestId("reauth-dialog");
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("hidden");
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("inert");
+    const dialog = within(screen.getByTestId("reauth-dialog"));
+    await userEvent.type(dialog.getByLabelText(/اسم المستخدم/), "amal");
+    await userEvent.type(dialog.getByLabelText(/كلمة المرور/), "secret-password");
+    await userEvent.click(dialog.getByRole("button", { name: "دخول" }));
+    await waitFor(() => expect(screen.queryByTestId("reauth-dialog")).toBeNull());
+    expect(kindRadio("roles")).toBeChecked();
+    expect(within(screen.getByTestId(`mfapolicy-role-${R2.id}`)).getByRole("checkbox")).toBeChecked();
+    expect(client.putMfaPolicy).toHaveBeenCalledTimes(1);
+    for (const c of writes.mock.calls) expect(String(c[0])).toMatch(/lang|locale/i);
+    writes.mockRestore();
+  });
 });
