@@ -58,16 +58,32 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
         Assert.DoesNotContain(after, k => k.Key.StartsWith("trigger ") && !k.Value.Contains(" | enabled=O "));
         Assert.DoesNotContain(before, k => k.Key.StartsWith("trigger ") && !k.Value.Contains(" | enabled=O "));
 
-        // what the migration ADDED to tables that already existed: exactly three insert guards, plus the internal foreign-key triggers of the new tables' references; no column, constraint or index
+        // what the migration ADDED to tables that already existed: exactly four triggers (three insert guards and the deferred position check of review M2; a constraint trigger also has a constraint row), plus the internal foreign-key triggers of the new tables' references; no column, constraint or index
         var oldTables = before.Keys.Where(k => k.StartsWith("table ")).Select(k => k["table ".Length..]).ToHashSet();
         var addedToOld = after.Keys.Except(before.Keys).Where(k => !k.StartsWith("function ") && !k.StartsWith("table ") && oldTables.Contains(k.Split(' ')[1].Split('.')[0])).ToList();
-        Assert.Equal(new[] { $"trigger {EN.Table}.{EG.TrEntry}", $"trigger {OP.Table}.{EG.TrOperation}", $"trigger {CompanySchema.StockPosting.Table}.{EG.TrPosting}" }.Order(StringComparer.Ordinal),
+        Assert.Equal(new[] { $"constraint {EN.Table}.{EG.TrEntryCommit}", $"trigger {EN.Table}.{EG.TrEntry}", $"trigger {EN.Table}.{EG.TrEntryCommit}", $"trigger {OP.Table}.{EG.TrOperation}", $"trigger {CompanySchema.StockPosting.Table}.{EG.TrPosting}" }.Order(StringComparer.Ordinal),
             addedToOld.Where(k => !k.Contains(".internal:")).Order(StringComparer.Ordinal));
         Assert.All(addedToOld.Where(k => k.Contains(".internal:")), k => Assert.StartsWith("trigger ", k));
         Assert.Equal(9, after.Keys.Count(k => k.StartsWith("table ")) - oldTables.Count);
         // every function the migration added is new by name: none of the earlier names was redefined (CREATE OR REPLACE would have changed a definition above)
-        Assert.Equal(20, after.Keys.Except(before.Keys).Count(k => k.StartsWith("function ")));
+        Assert.Equal(21, after.Keys.Except(before.Keys).Count(k => k.StartsWith("function ")));
     }
+
+    /// <summary>The CHECK constraints (all of earlier migrations) whose printed text changes in a dump and restore: PostgreSQL re-parses the expression. None belongs to migration 0033. Pinned by review L4.</summary>
+    private static readonly string[] CosmeticCheckDifferences = [
+        "constraint t_28e40627.k_d6ad16bf",
+        "constraint t_3069b85b.k_d070c05a",
+        "constraint t_33fca2e4.k_62b3d49c",
+        "constraint t_6eec2227.k_2d8d01ee",
+        "constraint t_8176e273.k_101d5d5c",
+        "constraint t_91632385.k_5c6c576e",
+        "constraint t_9ff18b1b.k_70ff0005",
+        "constraint t_a8b39266.k_5d1e394e",
+        "constraint t_b6491d4d.k_2e340a81",
+        "constraint t_b9231a6b.k_851f3da2",
+        "constraint t_c0e5f7b5.k_85514d93",
+        "constraint t_f3158869.k_eb8d49c6",
+    ];
 
     [PostgresRoleFact]
     public async Task N18_a_dump_with_an_executed_epoch_restores_with_an_identical_catalog_and_identical_data_and_the_guards_work_in_the_restored_copy()
@@ -89,10 +105,16 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
             var source = await Catalog(Company.PhysicalDatabaseName);
             var copy = await Catalog(restored);
             Assert.Equal(source.Keys, copy.Keys);
-            // A CHECK expression is re-parsed by the restore and PostgreSQL may print it differently afterwards (an IN list, a cast); that is true of the checks of every earlier migration too. So a CHECK is compared
-            // by its existence, validity and deferrability, and everything else (functions, triggers with their enabled state, keys, foreign keys, indexes, columns) byte for byte.
-            static string Stable(string key, string definition) => key.StartsWith("constraint ") && definition.StartsWith("CHECK ") ? "CHECK" + definition[definition.LastIndexOf(" | ", StringComparison.Ordinal)..] : definition;
-            foreach (var (key, definition) in source) Assert.True(Stable(key, definition) == Stable(key, copy[key]), "differs after restore: " + key);
+            // A CHECK expression is re-parsed by the restore and PostgreSQL prints it differently afterwards (an expanded BETWEEN, parentheses, ARRAY casts). That is true of exactly the pinned CHECKs of earlier migrations
+            // below (review L4); every other entry (functions, triggers with their enabled state, keys, foreign keys, indexes, columns) and every CHECK of migration 0033 is compared byte for byte, and for the pinned
+            // CHECKs the validity and deferrability must be identical.
+            var differing = source.Where(kv => kv.Value != copy[kv.Key]).Select(kv => kv.Key).Order(StringComparer.Ordinal).ToList();
+            Assert.Equal(CosmeticCheckDifferences.Order(StringComparer.Ordinal), differing);
+            foreach (var key in differing)
+            {
+                Assert.StartsWith("CHECK ", source[key]);
+                Assert.Equal(source[key][source[key].LastIndexOf(" | ", StringComparison.Ordinal)..], copy[key][copy[key].LastIndexOf(" | ", StringComparison.Ordinal)..]);
+            }
             Assert.DoesNotContain(copy, k => k.Key.StartsWith("trigger ") && !k.Value.Contains(" | enabled=O "));
             foreach (var table in source.Keys.Where(k => k.StartsWith("table ")).Select(k => k["table ".Length..]))
                 Assert.True(await Digest(table) == await Digest(table, database: restored), "data differs after restore: " + table);

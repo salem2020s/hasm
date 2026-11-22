@@ -11,6 +11,7 @@ using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using JE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalEntry;
 using JL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.JournalLine;
 using OP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostOperation;
+using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 
 namespace Hasm.Database.IntegrationTests;
@@ -24,6 +25,13 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     private const string Random = "gen_random_uuid()";
     private Task<short> Status(Plan p) => Sql<short>($"SELECT {CP.Status} FROM {CP.Table} WHERE {CP.Id} = '{p.Id}'");
     private async Task<(long Executions, long Members, long Lineage)> EpochRows() => (await Rows(CX.Table), await Rows(EM.Table), await Rows(EL.Table));
+
+    private static Script Copy(Script s)
+    {
+        var c = new Script { AuditSubject = s.AuditSubject, AuditTarget = s.AuditTarget };
+        c.AddRange(s);
+        return c;
+    }
 
     private static async Task<string> Outcome<T>(Func<Task<ConfigResult<T>>> action)
     {
@@ -125,6 +133,20 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
         Assert.Contains(CX.FkPosting, incomplete);
         Assert.Equal(before, (await EpochRows(), await Digest(EN.Table)));
         Assert.Equal((short)2, await Status(t.Plan));                                                                           // still approved: nothing of the failed execution persisted
+    }
+
+    [PostgresRoleFact]
+    public async Task N09_a_rolled_back_event_savepoint_with_a_posting_that_still_exists_is_answered_by_the_epoch_check_not_by_the_deferred_reference()
+    {
+        await PrepareRuntime();
+        var t = await SimpleEpoch(Avg2);
+        // the member event is rolled back, but the document's posting names an ORDINARY operation written outside the savepoint, so the execution's deferred reference to its posting is satisfied and the epoch check answers
+        var ordinary = Guid.NewGuid();
+        t.Script.Set("event", ["SAVEPOINT ev", .. t.Script.Of("event")[..^1], "ROLLBACK TO SAVEPOINT ev", Op(ordinary, 1, D3), .. Move(ordinary, Avg2.Id, W1.Id, 1, 1, D3, 10m, 200m), PostingRow(t.Plan, ordinary, D3, 200m)]);
+        var before = (await EpochRows(), await Digest(EN.Table));
+        RefusedWith("an execution has members and exactly one event", await Run(t.Script));
+        Assert.Equal(before, (await EpochRows(), await Digest(EN.Table)));
+        Assert.Equal((short)2, await Status(t.Plan));
     }
 
     [PostgresRoleFact]
@@ -338,6 +360,29 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     }
 
     [PostgresRoleFact]
+    public async Task N27_an_entry_level_reversal_of_an_epoch_entry_through_an_unrelated_reversal_operation_is_refused_for_the_storno_event_and_rebook_entry()
+    {
+        // review M1 (probe ODB1): a kind-4 operation of an UNTOUCHED operation, whose entry names an entry of the epoch, used to commit. Each variant has its own fresh reversed operation, so the unique reversal
+        // index cannot answer first.
+        await PrepareRuntime();
+        var s = await SimpleEpoch();
+        Assert.Null(await Run(s.Script));
+        var targets = new (string Name, long Entry)[] { ("rebook", await EntryOf(s.Rebook)), ("event", await EntryOf(s.Event)), ("storno", await EntryOf(s.Storno)) };
+        var fresh = new[] { (await ReceiveDoc(Avg2, 5m, 50m, "2026-03-12")).CostOperationId, (await ReceiveDoc(Fifo, 5m, 50m, "2026-03-12")).CostOperationId, (await ReceiveDoc(Avg, 5m, 50m, "2026-03-12", W2)).CostOperationId };
+        var before = (await Digest(EN.Table), await Digest(OP.Table), await Digest(PO.Table));
+        for (var i = 0; i < targets.Length; i++)
+        {
+            var reversal = Guid.NewGuid();
+            var direction = targets[i].Name == "event" ? -1 : 1;
+            RefusedWith("a reversal entry takes back an entry of the operation that its reversal operation names",
+                await Rt([Op(reversal, 4, D3, fresh[i]), .. Move(reversal, Avg.Id, W1.Id, 2, direction, D3, 4m, 40m, targets[i].Entry)]));
+        }
+        Assert.Equal(before, (await Digest(EN.Table), await Digest(OP.Table), await Digest(PO.Table)));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {EN.Table} WHERE {EN.ReversesEntryId} IN ({string.Join(",", targets.Select(t => t.Entry))}) AND {EN.OperationId} NOT IN ('{s.Storno}')"));
+        Assert.Empty(await Cost.ReconcileAsync(Company.Id));
+    }
+
+    [PostgresRoleFact]
     public async Task N29_a_two_way_equal_date_transfer_chain_is_stornoed_and_rebooked_in_its_original_sequence_and_ends_at_the_replayed_figures()
     {
         await PrepareRuntime();
@@ -416,5 +461,126 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
         (t.Script.AuditSubject, t.Script.AuditTarget) = (t.Plan.Id, t.Plan.Execution);
         Assert.Null(await Run(t.Script));
         Assert.Equal((2L, 6L, 2L), await EpochRows());
+    }
+
+    // ------------------------------------------------------------------------------------------------------------ design 3.4: one negative test per end-of-transaction completeness rule (review M3)
+    // Each case starts from the complete epoch script that commits (the first test of this class) and removes or breaks exactly one thing; the text asserted is the rule's own message.
+
+    private async Task<(Simple S, long Before, (long, long, long) Rows)> Incomplete()
+    {
+        await PrepareRuntime();
+        var s = await SimpleEpoch();
+        return (s, await Sql<long>($"SELECT count(*) FROM {EN.Table}"), await EpochRows());
+    }
+
+    private async Task NothingPersisted((Simple S, long Before, (long, long, long) Rows) c)
+    {
+        Assert.Equal(c.Rows, await EpochRows());
+        Assert.Equal(c.Before, await Sql<long>($"SELECT count(*) FROM {EN.Table}"));
+        Assert.Equal((short)2, await Status(c.S.Plan));
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_an_execution_whose_plan_is_not_marked_executed_in_the_same_transaction_is_refused_at_the_commit()
+    {
+        var c = await Incomplete();
+        RefusedWith("an execution is committed together with the executed status of its plan", await Run(Copy(c.S.Script).Without("executed")));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_a_storno_member_without_its_rebook_member_is_refused_at_the_commit()
+    {
+        var c = await Incomplete();
+        // no rebook member, entry or lineage row: the pairing rule answers before the lineage rule
+        RefusedWith("every storno member has its rebook member for the same original operation", await Run(Copy(c.S.Script).Without("rebook").Without("lineage")));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_a_storno_or_rebook_entry_without_its_lineage_row_is_refused_at_the_commit()
+    {
+        var c = await Incomplete();
+        RefusedWith("every storno and rebook entry has its lineage row", await Run(Copy(c.S.Script).Without("lineage")));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_an_execution_without_an_event_member_is_refused_even_when_the_document_is_posted_by_an_ordinary_operation()
+    {
+        var c = await Incomplete();
+        var e = c.S.Event;
+        RefusedWith("an execution has members and exactly one event", await Run(Copy(c.S.Script).Set("event", [Op(e, 1, D3), .. Move(e, Avg.Id, W1.Id, 1, 1, D3, 10m, 200m), PostingRow(c.S.Plan, e, D3, 200m)])));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_the_event_of_an_execution_must_be_the_posting_of_the_document_of_its_plan()
+    {
+        var c = await Incomplete();
+        Guid e = c.S.Event, other = Guid.NewGuid();
+        // the event member exists, but the plan's document is posted by another, ordinary operation
+        RefusedWith("the event of an execution is the posting of the document of its plan",
+            await Run(Copy(c.S.Script).Set("event", [Op(e, 1, D2), Member(e, c.S.Plan.Execution, 2, null), .. Move(e, Avg.Id, W1.Id, 1, 1, D2, 10m, 200m), Op(other, 1, D3), .. Move(other, Avg.Id, W1.Id, 1, 1, D3, 1m, 10m), PostingRow(c.S.Plan, other, D3, 10m)])));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_a_paired_storno_and_rebook_member_without_any_entry_is_refused_at_the_commit()
+    {
+        var c = await Incomplete();
+        Guid z = Guid.NewGuid(), z2 = Guid.NewGuid();
+        RefusedWith("every epoch member has at least one entry",
+            await Run(Copy(c.S.Script).After("event", "empty", Op(z, 1, D1), Member(z, c.S.Plan.Execution, 1, c.S.Receipt.CostOperationId), Op(z2, 1, D1), Member(z2, c.S.Plan.Execution, 3, c.S.Receipt.CostOperationId))));
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_a_lineage_row_that_names_the_wrong_entries_is_refused()
+    {
+        var c = await Incomplete();
+        var receiptEntry = await EntryOf(c.S.Receipt.CostOperationId);
+        string Row(long original, Guid storno, Guid rebook) => $"INSERT INTO {EL.Table} ({EL.OriginalEntryId}, {EL.StornoEntryId}, {EL.RebookEntryId}, {EL.ExecutionId}) VALUES ({original}, (SELECT {EN.Id} FROM {EN.Table} WHERE {EN.OperationId} = '{storno}'), (SELECT {EN.Id} FROM {EN.Table} WHERE {EN.OperationId} = '{rebook}'), '{c.S.Plan.Execution}')";
+        var wrongOriginal = await Run(Copy(c.S.Script).Set("lineage", Row(receiptEntry, c.S.Storno, c.S.Rebook)));
+        var wrongRebook = await Run(Copy(c.S.Script).Set("lineage", Row(c.S.IssueEntry, c.S.Storno, c.S.Event)));
+        RefusedWith("the storno entry of a lineage row takes back its original entry", wrongOriginal);
+        RefusedWith("the storno and rebook entries of a lineage row belong to the storno and rebook members of the same execution and original operation", wrongRebook);
+        await NothingPersisted(c);
+    }
+
+    [PostgresRoleFact]
+    public async Task M3_an_execution_row_alone_and_an_execution_in_a_rolled_back_savepoint_do_not_commit()
+    {
+        var c = await Incomplete();
+        // the execution row with its genuine audit event and nothing else: its deferred reference to the (missing) posting answers
+        Assert.StartsWith("23503", await Run(Copy(c.S.Script).Until("execution")));
+        // the execution row is written inside a savepoint that is rolled back: the epoch rows that follow have no live execution
+        RefusedWith("an epoch member belongs to the execution, written in this transaction, of an approved compensation plan",
+            await Run(Copy(c.S.Script).Set("execution", ["SAVEPOINT x", .. c.S.Script.Of("execution"), "ROLLBACK TO SAVEPOINT x"])));
+        await NothingPersisted(c);
+        // control: the unmodified script commits
+        Assert.Null(await Run(Copy(c.S.Script)));
+    }
+
+    // ------------------------------------------------------------------------------------------------------------ X5 at entry level (review L5)
+    [PostgresRoleFact]
+    public async Task L5_the_entry_level_check_refuses_an_epoch_entry_on_a_position_already_rewritten_by_another_executed_plan_for_a_raw_writer()
+    {
+        await PrepareRuntime();
+        var a = await SimpleEpoch();
+        var b = await ApprovedPlan(Avg, "2026-03-11");   // a second approved plan over the same position, with its own document
+        await using var conn = await AsRuntime();
+        await using var tx = await conn.BeginTransactionAsync();
+        async Task Exec(string sql) { await using var cmd = new Npgsql.NpgsqlCommand(sql, conn, tx); await cmd.ExecuteNonQueryAsync(); }
+        // the raw writer inserts its execution row BEFORE the first plan's execution exists, so the execution-insert check cannot see an executed plan; the first plan then executes and commits (the audited path)
+        await Exec(ExecutionInsert(b, audit: "gen_random_uuid()"));
+        Assert.Null(await Run(a.Script));
+        // its first entry is now refused by the entry-level check, which sees the committed execution of the other plan
+        var e = Guid.NewGuid();
+        await Exec(Op(e, 1, D2));
+        await Exec(Member(e, b.Execution, 2, null));
+        var ex = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => Exec(Move(e, Avg.Id, W1.Id, 1, 1, D2, 10m, 200m)[0]));
+        Assert.Equal(Refusal, ex.SqlState);
+        Assert.Contains("plan_on_epoch_position: the position was already rewritten by another executed plan", ex.MessageText);
     }
 }

@@ -45,6 +45,35 @@ public class PlanExecutionGuardTests : PlanExecutionTestBase
     }
 
     [PostgresRoleFact]
+    public async Task N01_the_back_dated_guard_does_not_rely_on_a_position_date_that_the_writer_alone_maintains_an_entry_without_the_move_of_its_position_is_refused_by_sequence_and_at_the_commit()
+    {
+        // review M2 (probes ODB8 and its variants). Position of AVG1/W1: last date 12 March, last sequence 2.
+        await History();
+        var before = (await Digest(EN.Table), await Digest(PO.Table), await Digest(OP.Table));
+        var late = new DateOnly(2026, 3, 20);
+        var earlier = new DateOnly(2026, 3, 15);
+        Guid a = Guid.NewGuid(), b = Guid.NewGuid();
+        // (1) the probe: an ordinary entry dated 20 March with its sequence far ahead and the position NOT moved, then an ordinary 15 March entry written exactly as the engine writes it
+        var ahead = Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m)[0].Replace($"{PO.LastSeq} + 1", $"{PO.LastSeq} + 100");
+        RefusedWith("seq_not_next", await Rt([Op(a, 1, late), ahead, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m)]));
+        // (2) the entry takes the next sequence number but the position is not moved at all: the sequence check passes, the commit refuses
+        var unmoved = Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m)[0];
+        RefusedWith("position_not_moved", await Rt(Op(a, 1, late), unmoved));
+        // a second entry with the same next number cannot follow: the unique (position, sequence) index of 0014 refuses it
+        Assert.StartsWith("23505", await Rt([Op(a, 1, late), unmoved, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m).Take(1)]));
+        // (3) the quantities, the values and the sequence are moved but the date is kept (not a decrease, so the unchanged trigger of 0014 accepts it): refused at the commit
+        var keepsDate = Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m);
+        keepsDate[1] = keepsDate[1].Replace($"GREATEST({PO.LastEffectiveDate}, DATE '2026-03-20')", PO.LastEffectiveDate);
+        RefusedWith("position_not_moved", await Rt([Op(a, 1, late), .. keepsDate]));
+        RefusedWith("position_not_moved", await Rt([Op(a, 1, late), .. keepsDate, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m)]));
+        Assert.Equal(before, (await Digest(EN.Table), await Digest(PO.Table), await Digest(OP.Table)));                       // nothing of any attempt was written
+        // the engine's own way (next sequence, position moved with the date) still commits
+        Assert.Null(await Rt([Op(a, 1, late), .. Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m)]));
+        RefusedWith(BackDated, await Rt([Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m)]));
+        Assert.Empty(await Cost.ReconcileAsync(Company.Id));
+    }
+
+    [PostgresRoleFact]
     public async Task N04_a_member_or_a_back_dated_entry_without_an_execution_is_refused_even_while_an_approved_plan_exists_for_the_position()
     {
         await History();

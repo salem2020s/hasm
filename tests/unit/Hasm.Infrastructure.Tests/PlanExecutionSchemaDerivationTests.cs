@@ -66,12 +66,12 @@ public class PlanExecutionSchemaDerivationTests
         foreach (Match m in Regex.Matches(sql, @"CREATE\s+(?:CONSTRAINT\s+)?TRIGGER\s+(\w+)")) Assert.Contains(m.Groups[1].Value, own);
         foreach (Match m in Regex.Matches(sql, @"CREATE\s+TABLE\s+(\w+)")) Assert.Contains(m.Groups[1].Value, own);
         // the only UPDATE statement is the closure-hash refresh of the plan, whose value the plan's own trigger computes
-        var updates = Regex.Matches(sql, @"\bUPDATE\s+(t_[0-9a-f]{8})\s+SET\b");
+        var updates = Regex.Matches(sql, @"\bUPDATE\s+(?:public\.)?(t_[0-9a-f]{8})\s+SET\b");
         Assert.Equal(CompanySchema.CompensationPlan.Table, Assert.Single(updates).Groups[1].Value);
     }
 
     [Fact]
-    public void Exactly_three_triggers_are_added_to_existing_tables_and_all_are_insert_guards()
+    public void Exactly_four_triggers_are_added_to_existing_tables_and_all_are_insert_guards_or_the_deferred_position_check()
     {
         var sql = Sql();
         var own = Entities.Where(e => CompanySchema.Map.ContainsKey(e)).Select(e => CompanySchema.Map[e]).ToHashSet();
@@ -80,9 +80,11 @@ public class PlanExecutionSchemaDerivationTests
         Assert.Equal(new[]
         {
             (CompanySchema.EpochGuard.TrEntry, "BEFORE", "INSERT", CompanySchema.CostEntry.Table),
+            (CompanySchema.EpochGuard.TrEntryCommit, "AFTER", "INSERT", CompanySchema.CostEntry.Table),   // review M2: DEFERRABLE INITIALLY DEFERRED
             (CompanySchema.EpochGuard.TrOperation, "BEFORE", "INSERT", CompanySchema.CostOperation.Table),
             (CompanySchema.EpochGuard.TrPosting, "BEFORE", "INSERT", CompanySchema.StockPosting.Table),
-        }.OrderBy(x => x.Item4), onExisting);
+        }.OrderBy(x => x.Item4).ThenBy(x => x.Item1, StringComparer.Ordinal), onExisting.OrderBy(x => x.Table).ThenBy(x => x.Name, StringComparer.Ordinal));
+        Assert.Matches(@"CREATE CONSTRAINT TRIGGER " + CompanySchema.EpochGuard.TrEntryCommit + @" AFTER INSERT ON \w+ DEFERRABLE INITIALLY DEFERRED", sql);
     }
 
     [Fact]
@@ -97,5 +99,21 @@ public class PlanExecutionSchemaDerivationTests
         Assert.Contains($"NEW.{CompanySchema.CompensationPlan.ClosureHash} := {CompanySchema.EpochGuard.FnClosureHash}(NEW.{CompanySchema.CompensationPlan.Id});", sql);
         Assert.Contains($"NEW.{CompanySchema.CompensationPlan.CreatedXact} := pg_current_xact_id();", sql);
         Assert.Contains($"NEW.{CompanySchema.CompensationPlanExecution.CreatedXact} := pg_current_xact_id();", sql);
+    }
+
+    [Fact]
+    public void Every_table_named_inside_a_function_body_is_schema_qualified()
+    {
+        // review L2: no search_path clause is allowed, so a table inside a function is always public.<table>; the physical table names of the schema (own and earlier) are the ones that count
+        var sql = Sql();
+        var tables = CompanySchema.Map.Where(kv => !kv.Key.Contains('.')).Select(kv => kv.Value).ToHashSet();
+        var bodies = Regex.Matches(sql, @"\$\$(.*?)\$\$", RegexOptions.Singleline).Select(m => m.Groups[1].Value).ToList();
+        Assert.NotEmpty(bodies);
+        foreach (var body in bodies)
+            foreach (Match m in Regex.Matches(body, @"(?<![\w.'])(t_[0-9a-f]{8})\b"))
+                Assert.Fail("unqualified table " + m.Groups[1].Value + " in a function body");
+        Assert.Contains(bodies, b => b.Contains("public." + CompanySchema.CompensationPlan.Table));
+        Assert.DoesNotContain("search_path", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(tables);
     }
 }

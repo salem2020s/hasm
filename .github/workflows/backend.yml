@@ -145,7 +145,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1538 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1551 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -289,6 +289,6 @@ jobs:
                 "CompensationPlanTests": 4,
                 "CompensationPlanServiceTests": 12,
                 # Phase 3.8D step 4 (company migration 0033, provisional number): the X1-A database layer driven by SQL through the real runtime role (tests N1-N32 of the plan-execution design; no executor exists)
-                "PlanExecutionGuardTests": 9, "PlanExecutionPlanTests": 6, "PlanExecutionEpochTests": 17, "PlanExecutionCatalogTests": 4,
+                "PlanExecutionGuardTests": 10, "PlanExecutionPlanTests": 7, "PlanExecutionEpochTests": 28, "PlanExecutionCatalogTests": 4,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

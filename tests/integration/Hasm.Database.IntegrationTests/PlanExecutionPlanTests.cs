@@ -1,4 +1,6 @@
+using System.Data;
 using Hasm.Infrastructure.Access;
+using Npgsql;
 using Hasm.Infrastructure.CompanyDatabase;
 using CA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompensationPlanApproval;
 using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompensationPlanPosition;
@@ -103,6 +105,37 @@ public class PlanExecutionPlanTests : PlanExecutionTestBase
         var submitted = Ok(await Docs.SubmitAsync(Admin.Id, Company.Id, draft.Id, draft.Revision));
         Ok(await Docs.ApproveAsync((await Approver()).Id, Company.Id, draft.Id, submitted.Revision));
         RefusedWith("document_not_approved", await Rt(ApprovalInsert(p), Approve(p)));                                           // approved, but at a later revision than the plan was made for
+    }
+
+    [PostgresRoleFact]
+    public async Task L1_a_plan_is_never_written_or_approved_for_a_document_that_already_has_a_posting_also_when_the_posting_was_made_under_a_repeatable_read_snapshot_older_than_the_plan()
+    {
+        // review L1 (probe ODB5)
+        await PrepareRuntime();
+        await ReceiveDoc(Avg, 10m, 100m, "2026-03-10");
+        // a plan written for a document that is already posted is refused (at the insert, and again at the commit)
+        var posted = await Approved(Receipt(W1, "2026-03-12", L(Avg, Pcs, 1m)));
+        Ok(await Post(posted, Amounts(5m)));
+        var late = new Plan { Doc = posted, Item = Avg.Id, Warehouse = W1.Id };
+        RefusedWith("document_already_posted", await Rt(PlanInsert(late), Closure(late, Avg.Id, W1.Id)));
+        Assert.Equal(0L, await Rows(CP.Table));
+        // a REPEATABLE READ posting whose snapshot is older than the plan does not see the plan (X7 reads the snapshot): the posting commits (a posting is unique per document, so nothing is posted twice), but the plan
+        // for the now posted document can then neither be approved nor executed
+        var doc = await Approved(Receipt(W1, "2026-03-12", L(Avg, Pcs, 10m)));
+        var p = new Plan { Doc = doc, Item = Avg.Id, Warehouse = W1.Id };
+        await using (var conn = await AsRuntime())
+        {
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead);
+            await using (var snapshot = new NpgsqlCommand($"SELECT count(*) FROM {CP.Table}", conn, tx)) await snapshot.ExecuteScalarAsync();
+            Assert.Null(await Rt(PlanInsert(p), Closure(p, Avg.Id, W1.Id)));                                                      // another session, after the snapshot
+            var op = Guid.NewGuid();
+            foreach (var q in (string[])[Op(op, 1, D3), .. Move(op, Avg.Id, W1.Id, 1, 1, D3, 10m, 50m), PostingRow(p, op, D3, 50m)]) { await using var cmd = new NpgsqlCommand(q, conn, tx); await cmd.ExecuteNonQueryAsync(); }
+            await tx.CommitAsync();
+        }
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {CompanySchema.StockPosting.Table} WHERE {CompanySchema.StockPosting.DocumentId} = '{doc.Id}'"));
+        RefusedWith("document_already_posted", await Rt(ApprovalInsert(p), Approve(p)));
+        Assert.Equal((short)1, await Status(p));
+        Assert.Equal(0L, await Rows(CX.Table));
     }
 
     [PostgresRoleFact]

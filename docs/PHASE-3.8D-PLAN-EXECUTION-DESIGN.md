@@ -118,15 +118,17 @@ One new **company** migration and one **system** access migration. Both are forw
 
 ### 3.3 New entry-level guard (tightening) [A-Q1]
 
-A NEW BEFORE INSERT trigger on `t_bc727c1d`. It is a new function; no existing function is replaced. It reads the position row `FOR UPDATE`; the engine already holds that lock, so no new lock order arises (Agent G option (a)). It reads only table rows, **never a GUC or session variable**.
+A NEW BEFORE INSERT trigger on `t_bc727c1d`. It is a new function; no existing function is replaced. It reads the position row `FOR UPDATE`; the engine already holds that lock when it appends an entry. Lock order, stated exactly (X1-A review L6): ordinary posting takes the company advisory lock, then the fiscal period `FOR SHARE` (the period gate), then the positions `FOR UPDATE`; the guard takes the position (already held) and then the period `FOR SHARE`. This cannot deadlock: period share locks are compatible with each other, a period close takes no position lock, and posting and the executor serialize on the exclusive company advisory lock (Agent G option (a)). It reads only table rows, **never a GUC or session variable**.
 1. If `NEW.c_12665ffb` < the position's current `c_3c880b93`, **refuse unless** `NEW.c_eb34b7d8` has an `EpochMember` row whose execution has `created_xact = pg_current_xact_id()`. The execution's plan must also be Approved, with an approval whose approver is not the creator and whose fingerprints equal the plan's. This closes F1 for every ordinary path. G's assessment: the new guard could also ship as its own strengthening slice, independent of 3.8D (owner choice).
 2. If `NEW.c_4f9e777a` is set and the operation's kind is not 4, refuse unless the operation is an epoch member with role 1 (storno) **and the reversed entry belongs to the same position as `NEW`** (rev-3 review M1).
 2a. **Closure binding (rev-3 review M1):** for any entry of an epoch member, back-dated or not, the entry's (item, warehouse) must be a position in the closure of the member's plan (`CompensationPlanPosition`). Inside one executing transaction, a member operation can therefore never touch an unrelated position, whether through an executor bug or a forged member row.
 3. For any entry of an epoch member:
-   * the entry date must lie in an **Open** fiscal period (Soft Closed, Final Closed or missing refuses). The guard reads the period row **`FOR SHARE`** (rev-3 review L2), so a concurrent close cannot commit between this check and the commit. The rule does not depend on the executor's step-2 locks. Lock order stays positions, then periods, as in section 5. This gives epoch rows the database period guard that the open owner item STOCK-PERIOD-DB proposes for all stock effects;
+   * the entry date must lie in an **Open** fiscal period (Soft Closed, Final Closed or missing refuses). The guard reads the period row **`FOR SHARE`** (rev-3 review L2), so a concurrent close cannot commit between this check and the commit. The rule does not depend on the executor's step-2 locks. The guard's own order is the position, then the period (see the lock-order sentence above), and it stays deadlock-free there. This gives epoch rows the database period guard that the open owner item STOCK-PERIOD-DB proposes for all stock effects;
    * the position must hold no open obligation (TM-D10/TM-D13a);
    * the position must have no epoch member of ANOTHER plan (X5 as a database rule).
 4. **X6 as a database rule (rev-3 review M2):** a NEW BEFORE INSERT trigger on the operation table refuses a kind-4 reversal whose reversed operation **is an epoch member (any role: storno, the event's own operation, rebook) OR has stornoed entries** (an epoch lineage row). This covers reversal of the original documents, of the back-dated event's own document, and of a rebook operation by key. This is a new trigger; `f_9c827423` is unchanged.
+5. **X6 at entry level (X1-A review M1):** for an entry of a kind-4 operation with an entry-level reversal link, the reversed entry must belong to the operation that the reversal operation names (the engine always writes it so), and it may never belong to an epoch member. The epoch's own storno path is the branch of item 2 (outside a reversal operation), which a reversal never uses. Without this, a reversal of an unrelated operation could name an epoch entry.
+6. **The F1 anchor is tied to the entries (X1-A review M2):** (a) an entry takes the next sequence number of its position (`NEW.seq = last_seq + 1`, the position is locked); (b) a NEW deferred constraint trigger on the entry table checks at commit that the position has `last_seq >= NEW.seq` and `last_effective_date >= NEW.effective_date`. The engine and the executor (which keeps the date with `GREATEST`) satisfy both; a writer that appends an entry without moving its position, or moves it keeping an older date, is refused at commit, so the date compared in item 1 cannot be left behind.
 
 ### 3.4 Deferred checks (at commit) [A-Q1]
 
@@ -142,6 +144,10 @@ A deferred constraint trigger on `CompensationPlanExecution` (and on `EpochMembe
 
   Without it, the commit fails. Whether this is sufficient against a pre-chosen id is review question 2 in section 10;
 * no epoch member exists without an execution of this transaction, and every member operation has at least one entry.
+
+**X7 and a posted document (X1-A review L1).** A plan is not written, and an approval or an execution is not sound, for a document that already has a stock posting (`document_already_posted`; the plan's commit check reads it again at commit). Under REPEATABLE READ a posting made on a snapshot older than the plan cannot see the plan; the posting is unique per document, so nothing is posted twice, and the plan can then neither be approved nor executed.
+
+**Audit mapping of event type 1154 (X1-A review L3).** The business audit event of an execution is stored in `t_2db8cf1f` with `SubjectId` = the plan id and `TargetUserId` = the EXECUTION id (the only uuid reference column left; the column is not a user for this type). Event 1154 is the only company business event that uses `TargetUserId`; every place that resolves `TargetUserId` to a user (system streams, access-audit API) must exclude type 1154.
 
 ### 3.5 Executor contract (application) [A-Q1]
 
@@ -351,7 +357,7 @@ Scope: one forward-only, additive company migration, its logical dictionary, the
 | posting guard on the stock posting table | section 4 (X7) | **an addition to the list of section 3, marked for the reviewer:** the database also refuses a posting of a plan-bound document outside that plan's execution, so N13 has a database rule; it is additive and changes no existing object |
 | deferred checks on the execution and on the member | 3.4 | executed plan in this transaction, closure hash, members, pairing, lineage, the event's posting, the audit event (type, subject, target) |
 
-**Tests (36, on the isolated cluster; every statement that probes a rule runs as the REAL per-company runtime role, and an execution runs inside the real audited company transaction, so its audit event is genuine):**
+**Tests (36 originally; see the review-round list below; on the isolated cluster; every statement that probes a rule runs as the REAL per-company runtime role, and an execution runs inside the real audited company transaction, so its audit event is genuine):**
 
 | Class | Tests |
 |---|---|
@@ -369,5 +375,7 @@ Scope: one forward-only, additive company migration, its logical dictionary, the
 * The execution row is append-only, so it names the event's posting through a deferred foreign key and the journals are recorded in a child table.
 * The audit binding uses the audit table's subject column for the plan and its target reference column for the execution (0002 is not altered).
 * Between applying this migration and re-running `grant-company-runtime`, the runtime role has no SELECT on the new tables, so the new guards make ordinary posting fail closed until the grants are applied (the existing gate already refuses a company whose runtime grants are incomplete).
-* The functions do not pin `search_path` (no existing guard does); N25 pins that the runtime role cannot create any object, temporary ones included, that could shadow a guard's table or function.
+* The functions do not pin `search_path` (the migration guard refuses the word, and no existing guard does); instead every table named inside a function body is schema-qualified `public.` (X1-A review L2), and N25 pins that the runtime role cannot create any object, temporary ones included.
 * Compatibility with the pending migration-guard hardening (#188) was checked: the migration is accepted by that guard as it stands.
+
+**Database-safety review round (X1-A layer, independent review of PR 48 at `357d43a`).** Fixes, all additive, in the generator of migration 0033 (regenerated, never hand-edited): M1 (entry-level X6, 3.3 item 5), M2 (sequence and deferred position check, 3.3 item 6), L1 (posted document), L2 (schema-qualified tables), L3 and L6 (documentation above). New tests: N1 variants (unmoved position, date kept), N27 variants (rebook, event and storno entries on fresh reversed operations), one negative test per end-of-transaction message of 3.4 plus an N9 variant answered by the epoch check, L1, L5 (entry-level X5 for a raw writer) and N18 with the 12 cosmetic CHECK differences pinned (L4). The migration adds 21 functions, 9 tables and four triggers on existing tables (three insert guards and the deferred position check).
