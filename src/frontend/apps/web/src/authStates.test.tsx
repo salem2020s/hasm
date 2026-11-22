@@ -143,7 +143,9 @@ describe("a failed save never loses what the user typed", () => {
     });
   }
 
-  it("a save answered 401 ends the session with the expired notice (the server rejected the credential; nothing is claimed as saved)", async () => {
+  // D-236 changed what follows a 401 when something is unsaved: the user is asked to sign in again and the input is kept in memory (sessionLock.test.tsx covers the
+  // whole behaviour). Unchanged: the server rejected the credential and nothing is claimed as saved.
+  it("a save answered 401 asks the user to sign in again and keeps the input in memory (D-236); nothing is claimed as saved", async () => {
     const putProfile = vi.fn().mockRejectedValue(apiError(401, "unauthenticated"));
     renderApp(signedIn({ getProfile: getProfile(), putProfile }));
     await go("#/company/profile");
@@ -151,7 +153,16 @@ describe("a failed save never loses what the user typed", () => {
     await userEvent.clear(city);
     await userEvent.type(city, "Jeddah");
     await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
-    expect(await screen.findByText(catalog.ar["login.session_expired"]!)).toBeInTheDocument();
+    expect(await screen.findByTestId("reauth-dialog")).toHaveTextContent(catalog.ar["reauth.message"]!);
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("hidden");
+    expect(putProfile).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("saved")).toBeNull();
+  });
+
+  it("a 401 with nothing unsaved still ends the session with the expired notice", async () => {
+    renderApp(signedIn({ getProfile: vi.fn().mockRejectedValue(apiError(401, "unauthenticated")) }));
+    await go("#/company/profile");
+    expect(await screen.findByText(catalog.ar["login.session_expired"]!)).toBeInTheDocument();
+    expect(screen.queryByTestId("reauth-dialog")).toBeNull();
   });
 });

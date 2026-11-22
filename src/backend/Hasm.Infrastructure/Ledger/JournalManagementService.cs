@@ -37,6 +37,29 @@ public sealed class JournalManagementService(AccessService access, JournalServic
     internal static List<Guid> CostCenterRoots(EffectivePermissions eff, string code) =>
         [.. eff.Grants.Where(g => g.Scope == ScopeKind.CostCenter && g.ScopeId is not null && g.Permissions.Contains(code)).Select(g => g.ScopeId!.Value).Distinct()];
 
+    /// <summary>
+    /// The STAGE AUTHORITY of a caller for one entry: the roles held through assignments that cover the entry by the same three paths as a permission (company-wide; for the entry's branch and every line branch;
+    /// or cost-center-scoped with every line allocated inside the granted cost centers). A role held only for another branch gives no authority over a stage of this entry: neither to approve nor to reject.
+    /// </summary>
+    private Task<IReadOnlySet<Guid>> StageRolesAsync(EffectivePermissions eff, Guid companyId, Shape shape, CancellationToken ct) =>
+        StageRolesAsync(eff, shape.Branches, shape.LineCostCenters, async roots => (await journal.CostCenterClosureAsync(companyId, roots, ct)).ToHashSet());
+
+    /// <summary>The rule itself, without the database: <paramref name="closureOf"/> answers the granted cost centers with their descendants.</summary>
+    internal static async Task<IReadOnlySet<Guid>> StageRolesAsync(EffectivePermissions eff, IReadOnlyList<Guid> touchedBranches, IReadOnlyList<IReadOnlyList<Guid>> lineCostCenters, Func<IReadOnlyList<Guid>, Task<HashSet<Guid>>> closureOf)
+    {
+        var branches = touchedBranches.Distinct().ToList();
+        var roles = new HashSet<Guid>();
+        foreach (var held in eff.Grants.GroupBy(g => g.RoleId))
+        {
+            if (held.Any(g => g.Scope == ScopeKind.Company) || (branches.Count > 0 && branches.All(b => held.Any(g => g.Scope == ScopeKind.Branch && g.ScopeId == b)))) { roles.Add(held.Key); continue; }
+            var roots = held.Where(g => g.Scope == ScopeKind.CostCenter && g.ScopeId is not null).Select(g => g.ScopeId!.Value).Distinct().ToList();
+            if (roots.Count == 0 || lineCostCenters.Count == 0 || lineCostCenters.Any(l => l.Count == 0)) continue;
+            var closure = await closureOf(roots);
+            if (lineCostCenters.All(l => l.All(closure.Contains))) roles.Add(held.Key);
+        }
+        return roles;
+    }
+
     private static Shape ShapeOf(JournalInput input) => new(
         new[] { input.BranchId }.Concat((input.Lines ?? []).Select(l => l.BranchId)).Where(b => b is not null).Select(b => b!.Value).ToList(),
         (input.Lines ?? []).Select(l => (IReadOnlyList<Guid>)(l.Allocations ?? []).Where(a => a.CostCenterId is not null).Select(a => a.CostCenterId!.Value).Distinct().ToList()).ToList());
@@ -140,7 +163,7 @@ public sealed class JournalManagementService(AccessService access, JournalServic
     {
         var cur = await Authorized(userId, companyId, id, PermissionCatalog.Codes.JournalApprove, ct);
         if (!cur.IsOk) return cur;
-        var roles = (await access.GetEffectivePermissionsAsync(userId, companyId, ct)).Grants.Select(g => g.RoleId).ToHashSet();
+        var roles = await StageRolesAsync(await access.GetEffectivePermissionsAsync(userId, companyId, ct), companyId, ShapeOf(cur.Value!), ct);   // approve AND reject: the stage role must be held for what the entry touches
         return await journal.DecideAsync(userId, companyId, id, revision, input, ct, roles);
     }
 
@@ -174,7 +197,7 @@ public sealed class JournalManagementService(AccessService access, JournalServic
                 var eff = await access.GetEffectivePermissionsAsync(d.Approver, companyId, ct);
                 if (!valid.TryGetValue(d.Approver, out var ok))
                     valid[d.Approver] = ok = await CoversAsync(d.Approver, companyId, PermissionCatalog.Codes.JournalApprove, shape, ct);
-                if (ok && (plan.RoleId is not { } role || eff.Grants.Any(g => g.RoleId == role))) counted.Add(d.Approver);
+                if (ok && (plan.RoleId is not { } role || (await StageRolesAsync(eff, companyId, shape, ct)).Contains(role))) counted.Add(d.Approver);
             }
             if (counted.Count < plan.Required) return "approver_no_longer_authorized";
         }
