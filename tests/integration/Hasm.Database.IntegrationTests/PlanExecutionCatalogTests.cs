@@ -88,7 +88,7 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N18_a_dump_with_an_executed_epoch_restores_with_an_identical_catalog_and_identical_data_and_the_guards_work_in_the_restored_copy()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var work = Path.Combine(Path.GetTempPath(), "hasm-n18-" + Guid.NewGuid().ToString("N"));
@@ -147,7 +147,7 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N28_a_period_close_that_starts_during_an_execution_waits_for_it_and_no_later_epoch_entry_enters_the_closed_period()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var t = await SimpleEpoch(Avg2);
         Task<string?> close = null!;
@@ -171,7 +171,7 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N28_an_execution_that_starts_during_a_period_close_waits_for_it_and_is_refused_once_the_period_is_closed()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var before = (await Rows(CX.Table), await Rows(EM.Table), await Digest(EN.Table));
         await using var closer = new NpgsqlConnection(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName));
