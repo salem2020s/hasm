@@ -229,6 +229,8 @@ public static partial class CompanySchema
         public const string FnPlanChild = "f_a3ccf9dc";
         public const string FnEntry = "f_52c8a673";
         public const string TrEntry = "r_628f9022";
+        public const string FnEntryCommit = "f_53b76fbf";
+        public const string TrEntryCommit = "r_ada856d0";
         public const string FnOperation = "f_bad61ffa";
         public const string TrOperation = "r_745aa703";
         public const string FnPosting = "f_999b9ddf";
@@ -419,6 +421,8 @@ public static partial class CompanySchema
         ["EpochEntryLineage.TrGuardStatement"] = EpochEntryLineage.TrGuardStatement,
         ["EpochGuard.FnEntry"] = EpochGuard.FnEntry,
         ["EpochGuard.TrEntry"] = EpochGuard.TrEntry,
+        ["EpochGuard.FnEntryCommit"] = EpochGuard.FnEntryCommit,
+        ["EpochGuard.TrEntryCommit"] = EpochGuard.TrEntryCommit,
         ["EpochGuard.FnOperation"] = EpochGuard.FnOperation,
         ["EpochGuard.TrOperation"] = EpochGuard.TrOperation,
         ["EpochGuard.FnPosting"] = EpochGuard.FnPosting,

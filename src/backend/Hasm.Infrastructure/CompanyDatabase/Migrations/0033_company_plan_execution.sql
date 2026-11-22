@@ -21,6 +21,8 @@
 --     document approved at the planned revision, and is committed only together with the plan's status change;
 --   * one execution per plan and one audit event per execution; the executor is not the plan's creator; at commit the plan is executed in the same transaction, the epoch is complete (members, storno/rebook pairs,
 --     lineage, the event's posting) and the plan's business audit event exists with the plan-executed type, this plan as subject and this execution as target (3.4);
+--   * (review round) an entry takes the next sequence number of its position and the position is moved at least to it at commit (sequence and last date), so the F1 anchor follows the entries; a reversal entry takes back
+--     an entry of the operation its reversal operation names and never one of an epoch member; no plan, approval or execution exists for a document that already has a posting; every table named inside a function is public.-qualified;
 --   * every new record is append-only (never updated or removed), except the plan's status transition.
 -- plan status: 1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale. plan event kind: 1 created, 2 approved, 3 rejected, 4 cancelled, 5 executed, 6 staled. epoch member role: 1 storno, 2 event, 3 rebook.
 -- The business audit event type of an executed plan is 1154 (CostingAuditEvents.PlanExecuted).
@@ -216,7 +218,7 @@ REVOKE ALL ON TABLE t_1028a48d FROM PUBLIC;
 CREATE FUNCTION f_401f2ced(p_plan uuid) RETURNS char(64) LANGUAGE sql AS $$
     SELECT encode(sha256(convert_to(COALESCE(string_agg(lower(c.c_a6b7570c::text) || ':' || lower(c.c_d413a7c5::text), E'\n'
         ORDER BY c.c_a6b7570c, c.c_d413a7c5), ''), 'UTF8')), 'hex')::char(64)
-    FROM t_8cb0e5ef c WHERE c.c_5a28af19 = p_plan
+    FROM public.t_8cb0e5ef c WHERE c.c_5a28af19 = p_plan
 $$;
 
 -- X3: true when the user is independent of the plan: not its creator, and not the creator, an editor or the submitter of the event's stock document (every editor counts, which contains the last editor).
@@ -224,12 +226,12 @@ CREATE FUNCTION f_e061ccfa(p_plan uuid, p_user uuid) RETURNS boolean LANGUAGE pl
 DECLARE
     p record;
 BEGIN
-    SELECT c_d90f39d9 AS created_by, c_09237930 AS document INTO p FROM t_96484f97 WHERE c_621d79c0 = p_plan;
+    SELECT c_d90f39d9 AS created_by, c_09237930 AS document INTO p FROM public.t_96484f97 WHERE c_621d79c0 = p_plan;
     IF NOT FOUND OR p_user IS NULL THEN RETURN false; END IF;
     IF p_user = p.created_by THEN RETURN false; END IF;
-    IF EXISTS (SELECT 1 FROM t_a76c14d0 e WHERE e.c_ddc8b329 = p_plan AND e.c_a0df2a1e = 1 AND e.c_fa415e50 = p_user) THEN RETURN false; END IF;
-    IF EXISTS (SELECT 1 FROM t_e92d29e5 d WHERE d.c_9a59d13e = p.document AND (d.c_6b6eb86b = p_user OR d.c_afb8d9de = p_user)) THEN RETURN false; END IF;
-    IF EXISTS (SELECT 1 FROM t_b9231a6b e WHERE e.c_fd72fc35 = p.document AND e.c_2fe7652c IN (1, 2, 3) AND e.c_2a6bae0c = p_user) THEN RETURN false; END IF;
+    IF EXISTS (SELECT 1 FROM public.t_a76c14d0 e WHERE e.c_ddc8b329 = p_plan AND e.c_a0df2a1e = 1 AND e.c_fa415e50 = p_user) THEN RETURN false; END IF;
+    IF EXISTS (SELECT 1 FROM public.t_e92d29e5 d WHERE d.c_9a59d13e = p.document AND (d.c_6b6eb86b = p_user OR d.c_afb8d9de = p_user)) THEN RETURN false; END IF;
+    IF EXISTS (SELECT 1 FROM public.t_b9231a6b e WHERE e.c_fd72fc35 = p.document AND e.c_2fe7652c IN (1, 2, 3) AND e.c_2a6bae0c = p_user) THEN RETURN false; END IF;
     RETURN true;
 END;
 $$;
@@ -238,19 +240,21 @@ $$;
 -- approver is independent (X3), and the event's stock document is approved at the planned revision (X7).
 CREATE FUNCTION f_0be71dce(p_plan uuid, p_approval uuid) RETURNS text LANGUAGE plpgsql AS $$
 DECLARE
-    p t_96484f97%ROWTYPE;
-    a t_964512bc%ROWTYPE;
+    p public.t_96484f97%ROWTYPE;
+    a public.t_964512bc%ROWTYPE;
 BEGIN
-    SELECT * INTO p FROM t_96484f97 WHERE c_621d79c0 = p_plan;
+    SELECT * INTO p FROM public.t_96484f97 WHERE c_621d79c0 = p_plan;
     IF NOT FOUND THEN RETURN 'plan_not_found'; END IF;
-    SELECT * INTO a FROM t_964512bc WHERE c_43db9bce = p_approval AND c_028bc185 = p_plan;
+    SELECT * INTO a FROM public.t_964512bc WHERE c_43db9bce = p_approval AND c_028bc185 = p_plan;
     IF NOT FOUND THEN RETURN 'approval_not_found'; END IF;
     IF a.c_9fb6b16d <> p.c_dec3e2ca OR a.c_48183cc6 <> p.c_c472f350 OR a.c_4bd82fab <> p.c_dd1e8733 OR a.c_4c26b9b6 <> p.c_cdbe8eb1 OR a.c_dc702d45 <> p.c_55963e05 OR a.c_73066370 <> p.c_43e25975 OR a.c_c2116a32 <> p.c_0f570e78 OR a.c_a50ac941 <> p.c_7bfde04e THEN RETURN 'approval_fingerprint_mismatch'; END IF;
     IF f_401f2ced(p_plan) <> p.c_7bfde04e THEN RETURN 'closure_hash_mismatch'; END IF;
     IF NOT f_e061ccfa(p_plan, a.c_44893b8a) THEN RETURN 'approver_not_independent'; END IF;
-    IF NOT EXISTS (SELECT 1 FROM t_e92d29e5 d WHERE d.c_9a59d13e = p.c_09237930 AND d.c_3fc0f063 = 3 AND d.c_9ba641c8 = p.c_aaa05d6a) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.t_e92d29e5 d WHERE d.c_9a59d13e = p.c_09237930 AND d.c_3fc0f063 = 3 AND d.c_9ba641c8 = p.c_aaa05d6a) THEN
         RETURN 'document_not_approved';
     END IF;
+    -- review L1: a document that already has a stock posting is never executed by a plan (a posting is unique per document, so such a plan could never execute); this is read at approval and again at execution
+    IF EXISTS (SELECT 1 FROM public.t_4d4b251f sp WHERE sp.c_eb889fd0 = p.c_09237930) THEN RETURN 'document_already_posted'; END IF;
     RETURN NULL;
 END;
 $$;
@@ -259,9 +263,9 @@ $$;
 -- fingerprints equal the plan's. NULL otherwise. This is the same-transaction binding of every epoch row; it reads rows only.
 CREATE FUNCTION f_17688ad3(p_execution uuid) RETURNS uuid LANGUAGE sql AS $$
     SELECT p.c_621d79c0
-    FROM t_e965da92 x
-    JOIN t_96484f97 p ON p.c_621d79c0 = x.c_81f8cb75
-    JOIN t_964512bc a ON a.c_43db9bce = p.c_3318ed81 AND a.c_028bc185 = p.c_621d79c0
+    FROM public.t_e965da92 x
+    JOIN public.t_96484f97 p ON p.c_621d79c0 = x.c_81f8cb75
+    JOIN public.t_964512bc a ON a.c_43db9bce = p.c_3318ed81 AND a.c_028bc185 = p.c_621d79c0
     WHERE x.c_64aab6aa = p_execution AND x.c_1994ea3f = pg_current_xact_id() AND p.c_0df673f9 = 2
       AND a.c_44893b8a = p.c_95e58c86 AND a.c_44893b8a <> p.c_d90f39d9
       AND NOT (a.c_9fb6b16d <> p.c_dec3e2ca OR a.c_48183cc6 <> p.c_c472f350 OR a.c_4bd82fab <> p.c_dd1e8733 OR a.c_4c26b9b6 <> p.c_cdbe8eb1 OR a.c_dc702d45 <> p.c_55963e05 OR a.c_73066370 <> p.c_43e25975 OR a.c_c2116a32 <> p.c_0f570e78) AND a.c_a50ac941 = p.c_7bfde04e
@@ -284,6 +288,7 @@ BEGIN
         -- never client-supplied: the creating transaction and the closure hash (of the closure written so far: none yet)
         NEW.c_56265f1a := pg_current_xact_id();
         NEW.c_7bfde04e := f_401f2ced(NEW.c_621d79c0);
+        IF EXISTS (SELECT 1 FROM public.t_4d4b251f sp WHERE sp.c_eb889fd0 = NEW.c_09237930) THEN RAISE EXCEPTION 'document_already_posted: a plan is not written for a document that already has a stock posting'; END IF;
         IF NEW.c_0df673f9 <> 1 OR NEW.c_b82be849 <> 1 OR NEW.c_3318ed81 IS NOT NULL OR NEW.c_95e58c86 IS NOT NULL
            OR NEW.c_9bc8a099 IS NOT NULL OR NEW.c_3ef7b3ba IS NOT NULL THEN
             RAISE EXCEPTION 'a compensation plan starts as proposed, at revision 1';
@@ -318,7 +323,7 @@ BEGIN
     END IF;
     IF NEW.c_0df673f9 = 2 THEN
         IF NEW.c_3318ed81 IS NULL OR NEW.c_95e58c86 IS NULL OR NEW.c_9bc8a099 IS NULL THEN RAISE EXCEPTION 'an approved plan names its approval'; END IF;
-        IF NOT EXISTS (SELECT 1 FROM t_964512bc a WHERE a.c_43db9bce = NEW.c_3318ed81 AND a.c_028bc185 = OLD.c_621d79c0
+        IF NOT EXISTS (SELECT 1 FROM public.t_964512bc a WHERE a.c_43db9bce = NEW.c_3318ed81 AND a.c_028bc185 = OLD.c_621d79c0
                        AND a.c_1eabbc1d = OLD.c_b82be849 AND a.c_44893b8a = NEW.c_95e58c86) THEN
             RAISE EXCEPTION 'a plan is approved by the approval of its current revision';
         END IF;
@@ -330,7 +335,7 @@ BEGIN
         RAISE EXCEPTION 'the approval of a compensation plan is set once, by its approval';
     END IF;
     IF NEW.c_0df673f9 = 3 THEN
-        IF NOT EXISTS (SELECT 1 FROM t_e965da92 x WHERE x.c_81f8cb75 = OLD.c_621d79c0 AND x.c_1994ea3f = pg_current_xact_id()) THEN
+        IF NOT EXISTS (SELECT 1 FROM public.t_e965da92 x WHERE x.c_81f8cb75 = OLD.c_621d79c0 AND x.c_1994ea3f = pg_current_xact_id()) THEN
             RAISE EXCEPTION 'a plan is marked executed only in the transaction of its execution';
         END IF;
         IF f_401f2ced(OLD.c_621d79c0) <> OLD.c_7bfde04e THEN RAISE EXCEPTION 'the closure of the plan no longer matches its closure hash'; END IF;
@@ -349,12 +354,14 @@ CREATE FUNCTION f_960bccae() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     p record;
 BEGIN
-    SELECT c_4d700e9d AS item, c_beceb1db AS warehouse, c_7bfde04e AS closure_hash INTO p FROM t_96484f97 WHERE c_621d79c0 = NEW.c_621d79c0;
-    IF NOT EXISTS (SELECT 1 FROM t_8cb0e5ef c WHERE c.c_5a28af19 = NEW.c_621d79c0 AND c.c_a6b7570c = p.item
+    SELECT c_4d700e9d AS item, c_beceb1db AS warehouse, c_7bfde04e AS closure_hash INTO p FROM public.t_96484f97 WHERE c_621d79c0 = NEW.c_621d79c0;
+    IF NOT EXISTS (SELECT 1 FROM public.t_8cb0e5ef c WHERE c.c_5a28af19 = NEW.c_621d79c0 AND c.c_a6b7570c = p.item
                    AND c.c_d413a7c5 = p.warehouse) THEN
         RAISE EXCEPTION 'the closure of a compensation plan contains its root position and is written with the plan';
     END IF;
     IF f_401f2ced(NEW.c_621d79c0) <> p.closure_hash THEN RAISE EXCEPTION 'the closure of the plan does not match its closure hash'; END IF;
+    -- review L1: re-checked at commit, so a posting committed after the insert-time check (read committed) is seen; under REPEATABLE READ the approval and the execution re-read it again
+    IF EXISTS (SELECT 1 FROM public.t_4d4b251f sp WHERE sp.c_eb889fd0 = NEW.c_09237930) THEN RAISE EXCEPTION 'document_already_posted: a plan is not written for a document that already has a stock posting'; END IF;
     RETURN NULL;
 END;
 $$;
@@ -366,7 +373,7 @@ DECLARE
     v_plan uuid;
 BEGIN
     IF TG_TABLE_NAME = 't_8cb0e5ef' THEN v_plan := NEW.c_5a28af19; ELSE v_plan := NEW.c_23990f6a; END IF;
-    IF NOT EXISTS (SELECT 1 FROM t_96484f97 p WHERE p.c_621d79c0 = v_plan AND p.c_0df673f9 = 1 AND p.c_56265f1a = pg_current_xact_id()) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.t_96484f97 p WHERE p.c_621d79c0 = v_plan AND p.c_0df673f9 = 1 AND p.c_56265f1a = pg_current_xact_id()) THEN
         RAISE EXCEPTION 'the closure and the lines of a compensation plan are written with the plan, in its creating transaction';
     END IF;
     RETURN NEW;
@@ -377,7 +384,7 @@ CREATE TRIGGER r_a478e1c4 BEFORE INSERT ON t_973d21ee FOR EACH ROW EXECUTE FUNCT
 -- every closure row refreshes the plan's hash through the plan's own trigger (which computes it; the value written here is ignored)
 CREATE FUNCTION f_a27bc836() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    UPDATE t_96484f97 SET c_7bfde04e = c_7bfde04e WHERE c_621d79c0 = NEW.c_5a28af19;
+    UPDATE public.t_96484f97 SET c_7bfde04e = c_7bfde04e WHERE c_621d79c0 = NEW.c_5a28af19;
     RETURN NULL;
 END;
 $$;
@@ -396,7 +403,7 @@ DECLARE
     v_reason text;
 BEGIN
     -- the plan row is locked first: approvals, executions and status changes of one plan are serialized for every writer
-    SELECT c_0df673f9 AS status, c_b82be849 AS revision INTO p FROM t_96484f97 WHERE c_621d79c0 = NEW.c_028bc185 FOR UPDATE;
+    SELECT c_0df673f9 AS status, c_b82be849 AS revision INTO p FROM public.t_96484f97 WHERE c_621d79c0 = NEW.c_028bc185 FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'the plan of an approval does not exist'; END IF;
     IF p.status <> 1 OR p.revision <> NEW.c_1eabbc1d THEN RAISE EXCEPTION 'an approval is given to the current revision of a proposed plan'; END IF;
     v_reason := f_0be71dce(NEW.c_028bc185, NEW.c_43db9bce);
@@ -408,7 +415,7 @@ CREATE TRIGGER r_5b654d90 AFTER INSERT ON t_964512bc FOR EACH ROW EXECUTE FUNCTI
 -- at commit: the approval is the one the plan was approved with (an approval never exists without the status change of its plan)
 CREATE FUNCTION f_11d587c2() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM t_96484f97 p WHERE p.c_621d79c0 = NEW.c_028bc185 AND p.c_3318ed81 = NEW.c_43db9bce
+    IF NOT EXISTS (SELECT 1 FROM public.t_96484f97 p WHERE p.c_621d79c0 = NEW.c_028bc185 AND p.c_3318ed81 = NEW.c_43db9bce
                    AND p.c_95e58c86 = NEW.c_44893b8a) THEN
         RAISE EXCEPTION 'an approval is committed together with the approval of its plan';
     END IF;
@@ -428,17 +435,17 @@ BEGIN
     -- never client-supplied: the top-level transaction id (64 bits, no wraparound, the same inside a savepoint)
     NEW.c_1994ea3f := pg_current_xact_id();
     SELECT c_0df673f9 AS status, c_3318ed81 AS approval, c_d90f39d9 AS created_by INTO p
-      FROM t_96484f97 WHERE c_621d79c0 = NEW.c_81f8cb75 FOR UPDATE;
+      FROM public.t_96484f97 WHERE c_621d79c0 = NEW.c_81f8cb75 FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'the plan of an execution does not exist'; END IF;
     IF p.status <> 2 THEN RAISE EXCEPTION 'only an approved compensation plan is executed, once'; END IF;
     v_reason := f_0be71dce(NEW.c_81f8cb75, p.approval);
     IF v_reason IS NOT NULL THEN RAISE EXCEPTION 'the approval of a compensation plan is not sound: %', v_reason; END IF;
     IF NEW.c_adb5bbdf = p.created_by THEN RAISE EXCEPTION 'a compensation plan is never executed by its creator'; END IF;
     -- X5: no position of this plan's closure lies in the closure of another executed plan
-    IF EXISTS (SELECT 1 FROM t_8cb0e5ef c
-               JOIN t_8cb0e5ef o ON o.c_a6b7570c = c.c_a6b7570c AND o.c_d413a7c5 = c.c_d413a7c5
+    IF EXISTS (SELECT 1 FROM public.t_8cb0e5ef c
+               JOIN public.t_8cb0e5ef o ON o.c_a6b7570c = c.c_a6b7570c AND o.c_d413a7c5 = c.c_d413a7c5
                     AND o.c_5a28af19 <> c.c_5a28af19
-               JOIN t_e965da92 x ON x.c_81f8cb75 = o.c_5a28af19
+               JOIN public.t_e965da92 x ON x.c_81f8cb75 = o.c_5a28af19
                WHERE c.c_5a28af19 = NEW.c_81f8cb75) THEN
         RAISE EXCEPTION 'plan_on_epoch_position: a position of the closure was already rewritten by an executed plan';
     END IF;
@@ -468,25 +475,25 @@ DECLARE
 BEGIN
     v_plan := f_17688ad3(NEW.c_3c11cd4a);
     IF v_plan IS NULL THEN RAISE EXCEPTION 'an epoch member belongs to the execution, written in this transaction, of an approved compensation plan'; END IF;
-    SELECT c_7f2ea712 AS kind, c_03a68cea AS reverses INTO o FROM t_a648ca40 WHERE c_f47f15da = NEW.c_85ee124a;
+    SELECT c_7f2ea712 AS kind, c_03a68cea AS reverses INTO o FROM public.t_a648ca40 WHERE c_f47f15da = NEW.c_85ee124a;
     IF NOT FOUND THEN RAISE EXCEPTION 'the operation of an epoch member does not exist'; END IF;
     -- epoch operations are never reversal operations (review L1)
     IF o.kind = 4 OR o.reverses IS NOT NULL THEN RAISE EXCEPTION 'a reversal operation is never an epoch member'; END IF;
     -- the operation is being built now: it has no entry yet and no obligation or settlement refers to it (an empty operation of an earlier transaction exists only for those, 0020)
-    IF EXISTS (SELECT 1 FROM t_bc727c1d WHERE c_eb34b7d8 = NEW.c_85ee124a) THEN RAISE EXCEPTION 'an epoch member is an operation without entries yet'; END IF;
-    IF EXISTS (SELECT 1 FROM t_b56b119d WHERE c_1872eef0 = NEW.c_85ee124a)
-       OR EXISTS (SELECT 1 FROM t_d370b1d6 WHERE c_7208ba7b = NEW.c_85ee124a) THEN
+    IF EXISTS (SELECT 1 FROM public.t_bc727c1d WHERE c_eb34b7d8 = NEW.c_85ee124a) THEN RAISE EXCEPTION 'an epoch member is an operation without entries yet'; END IF;
+    IF EXISTS (SELECT 1 FROM public.t_b56b119d WHERE c_1872eef0 = NEW.c_85ee124a)
+       OR EXISTS (SELECT 1 FROM public.t_d370b1d6 WHERE c_7208ba7b = NEW.c_85ee124a) THEN
         RAISE EXCEPTION 'an operation of a negative-stock obligation or settlement is never an epoch member';
     END IF;
     IF NEW.c_87c64961 IN (1, 3) THEN
         -- X5: no epoch on an epoch
-        IF EXISTS (SELECT 1 FROM t_9083c68c m WHERE m.c_85ee124a = NEW.c_05f49ec6) THEN RAISE EXCEPTION 'plan_on_epoch_position: an epoch operation is never rewritten by another epoch'; END IF;
-        SELECT c_7f2ea712 INTO v_original_kind FROM t_a648ca40 WHERE c_f47f15da = NEW.c_05f49ec6;
+        IF EXISTS (SELECT 1 FROM public.t_9083c68c m WHERE m.c_85ee124a = NEW.c_05f49ec6) THEN RAISE EXCEPTION 'plan_on_epoch_position: an epoch operation is never rewritten by another epoch'; END IF;
+        SELECT c_7f2ea712 INTO v_original_kind FROM public.t_a648ca40 WHERE c_f47f15da = NEW.c_05f49ec6;
         IF v_original_kind IS DISTINCT FROM o.kind THEN RAISE EXCEPTION 'a storno or rebook operation keeps the kind of its original operation'; END IF;
         -- the entries of the original that the epoch takes back lie in the plan's closure: an original without any entry there is not rewritten by this plan
-        IF NOT EXISTS (SELECT 1 FROM t_bc727c1d e
-                       JOIN t_a2903683 ps ON ps.c_6b4abdd9 = e.c_98321e7f
-                       JOIN t_8cb0e5ef c ON c.c_5a28af19 = v_plan AND c.c_a6b7570c = ps.c_3380c61e
+        IF NOT EXISTS (SELECT 1 FROM public.t_bc727c1d e
+                       JOIN public.t_a2903683 ps ON ps.c_6b4abdd9 = e.c_98321e7f
+                       JOIN public.t_8cb0e5ef c ON c.c_5a28af19 = v_plan AND c.c_a6b7570c = ps.c_3380c61e
                             AND c.c_d413a7c5 = ps.c_f0a91938
                        WHERE e.c_eb34b7d8 = NEW.c_05f49ec6) THEN
             RAISE EXCEPTION 'the original operation of an epoch member has no entry in the closure of the plan';
@@ -508,15 +515,15 @@ DECLARE
 BEGIN
     IF f_17688ad3(NEW.c_60dbf0cd) IS NULL THEN RAISE EXCEPTION 'an epoch lineage row belongs to the execution, written in this transaction, of an approved compensation plan'; END IF;
     SELECT c_eb34b7d8 AS op, c_98321e7f AS pos, c_4105796c AS kind, c_e0cd1a14 AS dir, c_12665ffb AS d, c_dba27822 AS qty
-      INTO oe FROM t_bc727c1d WHERE c_ed61ae1a = NEW.c_eefb4728;
-    SELECT c_eb34b7d8 AS op, c_4f9e777a AS reverses INTO se FROM t_bc727c1d WHERE c_ed61ae1a = NEW.c_a4678c70;
+      INTO oe FROM public.t_bc727c1d WHERE c_ed61ae1a = NEW.c_eefb4728;
+    SELECT c_eb34b7d8 AS op, c_4f9e777a AS reverses INTO se FROM public.t_bc727c1d WHERE c_ed61ae1a = NEW.c_a4678c70;
     SELECT c_eb34b7d8 AS op, c_98321e7f AS pos, c_4105796c AS kind, c_e0cd1a14 AS dir, c_12665ffb AS d, c_dba27822 AS qty,
-           c_4f9e777a AS reverses INTO re FROM t_bc727c1d WHERE c_ed61ae1a = NEW.c_b9f16b78;
+           c_4f9e777a AS reverses INTO re FROM public.t_bc727c1d WHERE c_ed61ae1a = NEW.c_b9f16b78;
     IF oe IS NULL OR se IS NULL OR re IS NULL THEN RAISE EXCEPTION 'the entries of an epoch lineage row exist'; END IF;
     IF se.reverses IS DISTINCT FROM NEW.c_eefb4728 THEN RAISE EXCEPTION 'the storno entry of a lineage row takes back its original entry'; END IF;
-    IF NOT EXISTS (SELECT 1 FROM t_9083c68c m WHERE m.c_85ee124a = se.op AND m.c_3c11cd4a = NEW.c_60dbf0cd AND m.c_87c64961 = 1
+    IF NOT EXISTS (SELECT 1 FROM public.t_9083c68c m WHERE m.c_85ee124a = se.op AND m.c_3c11cd4a = NEW.c_60dbf0cd AND m.c_87c64961 = 1
                    AND m.c_05f49ec6 = oe.op)
-       OR NOT EXISTS (SELECT 1 FROM t_9083c68c m WHERE m.c_85ee124a = re.op AND m.c_3c11cd4a = NEW.c_60dbf0cd AND m.c_87c64961 = 3
+       OR NOT EXISTS (SELECT 1 FROM public.t_9083c68c m WHERE m.c_85ee124a = re.op AND m.c_3c11cd4a = NEW.c_60dbf0cd AND m.c_87c64961 = 3
                       AND m.c_05f49ec6 = oe.op) THEN
         RAISE EXCEPTION 'the storno and rebook entries of a lineage row belong to the storno and rebook members of the same execution and original operation';
     END IF;
@@ -542,12 +549,18 @@ DECLARE
     v_member boolean;
     v_plan uuid;
     v_kind smallint;
+    v_revop uuid;
+    v_revent uuid;
+    v_op boolean;
     v_period smallint;
 BEGIN
-    SELECT c_3380c61e AS item, c_f0a91938 AS warehouse, c_3c880b93 AS last_date INTO ps
-      FROM t_a2903683 WHERE c_6b4abdd9 = NEW.c_98321e7f FOR UPDATE;
+    SELECT c_3380c61e AS item, c_f0a91938 AS warehouse, c_3c880b93 AS last_date, c_ad2af2e5 AS last_seq INTO ps
+      FROM public.t_a2903683 WHERE c_6b4abdd9 = NEW.c_98321e7f FOR UPDATE;
     IF NOT FOUND THEN RETURN NEW; END IF;   -- no such position: the foreign key of the entry answers, as before
-    SELECT c_87c64961 AS role, c_3c11cd4a AS execution, c_05f49ec6 AS original INTO m FROM t_9083c68c WHERE c_85ee124a = NEW.c_eb34b7d8;
+    -- review M2 (a): an entry takes the next sequence number of its position (the engine's own invariant; the position is locked, so the number is stable). Together with the deferred check of the entry
+    -- (below) this ties the position's last date, which the F1 comparison relies on, to the entries themselves instead of to a value the writer alone maintains.
+    IF NEW.c_2affbce9 <> ps.last_seq + 1 THEN RAISE EXCEPTION 'seq_not_next: a cost entry takes the next sequence number of its position'; END IF;
+    SELECT c_87c64961 AS role, c_3c11cd4a AS execution, c_05f49ec6 AS original INTO m FROM public.t_9083c68c WHERE c_85ee124a = NEW.c_eb34b7d8;
     v_member := FOUND;
     IF v_member THEN
         -- every entry of an epoch member, back-dated or not, is written inside the execution of its approved plan, in this transaction
@@ -555,18 +568,18 @@ BEGIN
         IF v_plan IS NULL THEN RAISE EXCEPTION 'an entry of an epoch operation is written only inside the execution, in this transaction, of its approved compensation plan'; END IF;
         -- (2a) closure binding: the position of the entry (the position row decides, not the copied columns) is in the plan's approved closure
         IF NEW.c_9ee52677 <> ps.item OR NEW.c_0f65c03c <> ps.warehouse THEN RAISE EXCEPTION 'an entry of an epoch operation names the item and warehouse of its position'; END IF;
-        IF NOT EXISTS (SELECT 1 FROM t_8cb0e5ef c WHERE c.c_5a28af19 = v_plan AND c.c_a6b7570c = ps.item
+        IF NOT EXISTS (SELECT 1 FROM public.t_8cb0e5ef c WHERE c.c_5a28af19 = v_plan AND c.c_a6b7570c = ps.item
                        AND c.c_d413a7c5 = ps.warehouse) THEN
             RAISE EXCEPTION 'an entry of an epoch operation lies on a position of the approved closure of its plan';
         END IF;
         -- (3) X2: an Open fiscal period, read FOR SHARE so that a concurrent close cannot commit between this check and the commit (lock order: positions, then periods)
-        SELECT c_0a0b7f19 INTO v_period FROM t_ae996edc
+        SELECT c_0a0b7f19 INTO v_period FROM public.t_ae996edc
           WHERE c_8299fb3d <= NEW.c_12665ffb AND c_c0322bcf >= NEW.c_12665ffb FOR SHARE;
         IF NOT FOUND OR v_period <> 1 THEN RAISE EXCEPTION 'period_not_open: an entry of an epoch operation is dated in an Open fiscal period'; END IF;
         -- (3) no open negative-stock obligation on the position
         IF f_cf64ca57(ps.item, ps.warehouse) THEN RAISE EXCEPTION 'an epoch never touches a position with an open negative-stock obligation'; END IF;
         -- (3) X5: the position is not in the closure of another executed plan
-        IF EXISTS (SELECT 1 FROM t_8cb0e5ef c JOIN t_e965da92 x ON x.c_81f8cb75 = c.c_5a28af19
+        IF EXISTS (SELECT 1 FROM public.t_8cb0e5ef c JOIN public.t_e965da92 x ON x.c_81f8cb75 = c.c_5a28af19
                    WHERE c.c_a6b7570c = ps.item AND c.c_d413a7c5 = ps.warehouse AND c.c_5a28af19 <> v_plan) THEN
             RAISE EXCEPTION 'plan_on_epoch_position: the position was already rewritten by another executed plan';
         END IF;
@@ -577,11 +590,23 @@ BEGIN
     END IF;
     -- (2) an entry-level reversal link outside a reversal operation belongs to an epoch storno
     IF NEW.c_4f9e777a IS NOT NULL THEN
-        SELECT c_7f2ea712 INTO v_kind FROM t_a648ca40 WHERE c_f47f15da = NEW.c_eb34b7d8;
-        IF FOUND AND v_kind <> 4 THEN
+        SELECT c_7f2ea712, c_03a68cea INTO v_kind, v_revop FROM public.t_a648ca40 WHERE c_f47f15da = NEW.c_eb34b7d8;
+        v_op := FOUND;
+        IF v_op AND v_kind = 4 THEN
+            -- review M1 (X6 at entry level): a reversal entry takes back an entry of the operation that its reversal operation names (the engine always writes it so), and never an entry of an epoch member
+            -- (the epoch's own storno path is the branch below, outside a reversal operation)
+            SELECT c_eb34b7d8 INTO v_revent FROM public.t_bc727c1d WHERE c_ed61ae1a = NEW.c_4f9e777a;
+            IF FOUND THEN
+                IF v_revent IS DISTINCT FROM v_revop THEN RAISE EXCEPTION 'a reversal entry takes back an entry of the operation that its reversal operation names'; END IF;
+                IF EXISTS (SELECT 1 FROM public.t_9083c68c em WHERE em.c_85ee124a = v_revent) THEN
+                    RAISE EXCEPTION 'operation_rewritten_by_epoch: an entry of an epoch operation is never taken back by a reversal';
+                END IF;
+            END IF;
+        END IF;
+        IF v_op AND v_kind <> 4 THEN
             IF NOT v_member OR m.role <> 1 THEN RAISE EXCEPTION 'outside a reversal operation only an epoch storno takes back an entry'; END IF;
             SELECT c_eb34b7d8 AS op, c_98321e7f AS pos, c_4105796c AS kind, c_e0cd1a14 AS dir, c_12665ffb AS d, c_dba27822 AS qty,
-                   c_ece66ed5 AS amount INTO r FROM t_bc727c1d WHERE c_ed61ae1a = NEW.c_4f9e777a;
+                   c_ece66ed5 AS amount INTO r FROM public.t_bc727c1d WHERE c_ed61ae1a = NEW.c_4f9e777a;
             IF FOUND THEN
                 IF r.pos <> NEW.c_98321e7f THEN RAISE EXCEPTION 'a storno entry takes back an entry of its own position'; END IF;
                 IF r.op IS DISTINCT FROM m.original THEN RAISE EXCEPTION 'a storno entry takes back an entry of the original operation of its member'; END IF;
@@ -598,12 +623,25 @@ END;
 $$;
 CREATE TRIGGER r_628f9022 BEFORE INSERT ON t_bc727c1d FOR EACH ROW EXECUTE FUNCTION f_52c8a673();
 
+-- review M2 (b): at commit, the position of every entry written in the transaction has been moved at least to that entry (sequence number and last date). The engine moves the position with every entry and the executor
+-- keeps the date with GREATEST, so neither path changes; a writer that appends an entry without moving its position, or moves it without the entry's date, can no longer leave the F1 anchor behind.
+CREATE FUNCTION f_53b76fbf() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.t_a2903683 ps WHERE ps.c_6b4abdd9 = NEW.c_98321e7f AND ps.c_ad2af2e5 >= NEW.c_2affbce9
+                   AND ps.c_3c880b93 >= NEW.c_12665ffb) THEN
+        RAISE EXCEPTION 'position_not_moved: a cost entry is committed together with the move of its position to at least its sequence number and its date';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER r_ada856d0 AFTER INSERT ON t_bc727c1d DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION f_53b76fbf();
+
 -- ---------------------------------------------------------------------------------------------------------------- X6 (design 3.3(4)): no reversal operation of an epoch member or of an operation with stornoed entries
 CREATE FUNCTION f_bad61ffa() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF NEW.c_03a68cea IS NOT NULL THEN
-        IF EXISTS (SELECT 1 FROM t_9083c68c m WHERE m.c_85ee124a = NEW.c_03a68cea)
-           OR EXISTS (SELECT 1 FROM t_1028a48d l JOIN t_bc727c1d e ON e.c_ed61ae1a = l.c_eefb4728
+        IF EXISTS (SELECT 1 FROM public.t_9083c68c m WHERE m.c_85ee124a = NEW.c_03a68cea)
+           OR EXISTS (SELECT 1 FROM public.t_1028a48d l JOIN public.t_bc727c1d e ON e.c_ed61ae1a = l.c_eefb4728
                       WHERE e.c_eb34b7d8 = NEW.c_03a68cea) THEN
             RAISE EXCEPTION 'operation_rewritten_by_epoch: an operation rewritten by a replay epoch, or belonging to one, is never reversed';
         END IF;
@@ -618,8 +656,8 @@ CREATE FUNCTION f_999b9ddf() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     v_plan uuid;
 BEGIN
-    SELECT c_621d79c0 INTO v_plan FROM t_96484f97 WHERE c_09237930 = NEW.c_eb889fd0 AND c_0df673f9 IN (1, 2);
-    IF FOUND AND NOT EXISTS (SELECT 1 FROM t_e965da92 x WHERE x.c_81f8cb75 = v_plan AND x.c_1994ea3f = pg_current_xact_id()
+    SELECT c_621d79c0 INTO v_plan FROM public.t_96484f97 WHERE c_09237930 = NEW.c_eb889fd0 AND c_0df673f9 IN (1, 2);
+    IF FOUND AND NOT EXISTS (SELECT 1 FROM public.t_e965da92 x WHERE x.c_81f8cb75 = v_plan AND x.c_1994ea3f = pg_current_xact_id()
                              AND x.c_2f84a7ef = NEW.c_fc71418e) THEN
         RAISE EXCEPTION 'document_bound_to_plan: a stock document bound to a compensation plan is posted only by the execution of that plan';
     END IF;
@@ -636,39 +674,39 @@ DECLARE
     v_events bigint;
 BEGIN
     SELECT c_0df673f9 AS status, c_3ef7b3ba AS executed_xact, c_7bfde04e AS closure_hash, c_09237930 AS document INTO p
-      FROM t_96484f97 WHERE c_621d79c0 = NEW.c_81f8cb75;
+      FROM public.t_96484f97 WHERE c_621d79c0 = NEW.c_81f8cb75;
     -- the plan is executed, and was marked so in the transaction that wrote the execution (this one)
     IF p.status IS DISTINCT FROM 3 OR p.executed_xact IS DISTINCT FROM NEW.c_1994ea3f OR NEW.c_1994ea3f <> pg_current_xact_id() THEN
         RAISE EXCEPTION 'an execution is committed together with the executed status of its plan';
     END IF;
     IF f_401f2ced(NEW.c_81f8cb75) <> p.closure_hash THEN RAISE EXCEPTION 'the closure of the plan does not match its closure hash'; END IF;
-    SELECT count(*), count(*) FILTER (WHERE c_87c64961 = 2) INTO v_members, v_events FROM t_9083c68c WHERE c_3c11cd4a = NEW.c_64aab6aa;
+    SELECT count(*), count(*) FILTER (WHERE c_87c64961 = 2) INTO v_members, v_events FROM public.t_9083c68c WHERE c_3c11cd4a = NEW.c_64aab6aa;
     IF v_members = 0 OR v_events <> 1 THEN RAISE EXCEPTION 'an execution has members and exactly one event'; END IF;
     -- the event member is the cost operation of the execution's stock posting, and that posting is the posting of the plan's document
-    IF NOT EXISTS (SELECT 1 FROM t_9083c68c m JOIN t_4d4b251f sp ON sp.c_4ce1587f = m.c_85ee124a
+    IF NOT EXISTS (SELECT 1 FROM public.t_9083c68c m JOIN public.t_4d4b251f sp ON sp.c_4ce1587f = m.c_85ee124a
                    WHERE m.c_3c11cd4a = NEW.c_64aab6aa AND m.c_87c64961 = 2 AND sp.c_fc71418e = NEW.c_2f84a7ef
                      AND sp.c_eb889fd0 = p.document) THEN
         RAISE EXCEPTION 'the event of an execution is the posting of the document of its plan';
     END IF;
     -- every storno member has its rebook member for the same original operation, and the reverse (each is unique per original by the index)
-    IF EXISTS (SELECT 1 FROM t_9083c68c s WHERE s.c_3c11cd4a = NEW.c_64aab6aa AND s.c_87c64961 IN (1, 3)
-               AND NOT EXISTS (SELECT 1 FROM t_9083c68c t WHERE t.c_3c11cd4a = s.c_3c11cd4a AND t.c_87c64961 = 4 - s.c_87c64961
+    IF EXISTS (SELECT 1 FROM public.t_9083c68c s WHERE s.c_3c11cd4a = NEW.c_64aab6aa AND s.c_87c64961 IN (1, 3)
+               AND NOT EXISTS (SELECT 1 FROM public.t_9083c68c t WHERE t.c_3c11cd4a = s.c_3c11cd4a AND t.c_87c64961 = 4 - s.c_87c64961
                                AND t.c_05f49ec6 = s.c_05f49ec6)) THEN
         RAISE EXCEPTION 'every storno member has its rebook member for the same original operation';
     END IF;
-    IF EXISTS (SELECT 1 FROM t_9083c68c m WHERE m.c_3c11cd4a = NEW.c_64aab6aa
-               AND NOT EXISTS (SELECT 1 FROM t_bc727c1d e WHERE e.c_eb34b7d8 = m.c_85ee124a)) THEN
+    IF EXISTS (SELECT 1 FROM public.t_9083c68c m WHERE m.c_3c11cd4a = NEW.c_64aab6aa
+               AND NOT EXISTS (SELECT 1 FROM public.t_bc727c1d e WHERE e.c_eb34b7d8 = m.c_85ee124a)) THEN
         RAISE EXCEPTION 'every epoch member has at least one entry';
     END IF;
     -- every storno entry and every rebook entry has its lineage row
-    IF EXISTS (SELECT 1 FROM t_9083c68c m JOIN t_bc727c1d e ON e.c_eb34b7d8 = m.c_85ee124a
+    IF EXISTS (SELECT 1 FROM public.t_9083c68c m JOIN public.t_bc727c1d e ON e.c_eb34b7d8 = m.c_85ee124a
                WHERE m.c_3c11cd4a = NEW.c_64aab6aa
-                 AND ((m.c_87c64961 = 1 AND NOT EXISTS (SELECT 1 FROM t_1028a48d l WHERE l.c_a4678c70 = e.c_ed61ae1a AND l.c_60dbf0cd = m.c_3c11cd4a))
-                   OR (m.c_87c64961 = 3 AND NOT EXISTS (SELECT 1 FROM t_1028a48d l WHERE l.c_b9f16b78 = e.c_ed61ae1a AND l.c_60dbf0cd = m.c_3c11cd4a)))) THEN
+                 AND ((m.c_87c64961 = 1 AND NOT EXISTS (SELECT 1 FROM public.t_1028a48d l WHERE l.c_a4678c70 = e.c_ed61ae1a AND l.c_60dbf0cd = m.c_3c11cd4a))
+                   OR (m.c_87c64961 = 3 AND NOT EXISTS (SELECT 1 FROM public.t_1028a48d l WHERE l.c_b9f16b78 = e.c_ed61ae1a AND l.c_60dbf0cd = m.c_3c11cd4a)))) THEN
         RAISE EXCEPTION 'every storno and rebook entry has its lineage row';
     END IF;
     -- the business audit event of the execution: of the plan-executed type, with this plan as subject and this execution as target (0002 is not altered)
-    IF NOT EXISTS (SELECT 1 FROM t_2db8cf1f a WHERE a.c_ef116a9d = NEW.c_31e9c559 AND a.c_4c6c6496 = 1154
+    IF NOT EXISTS (SELECT 1 FROM public.t_2db8cf1f a WHERE a.c_ef116a9d = NEW.c_31e9c559 AND a.c_4c6c6496 = 1154
                    AND a.c_629e971c = NEW.c_81f8cb75 AND a.c_deb363a5 = NEW.c_64aab6aa) THEN
         RAISE EXCEPTION 'an execution is committed together with its business audit event';
     END IF;
@@ -680,10 +718,10 @@ CREATE CONSTRAINT TRIGGER r_b9337ccc AFTER INSERT ON t_e965da92 DEFERRABLE INITI
 -- orphan detection: no member without an execution of this transaction, and no member without entries
 CREATE FUNCTION f_c25934c5() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM t_e965da92 x WHERE x.c_64aab6aa = NEW.c_3c11cd4a AND x.c_1994ea3f = pg_current_xact_id()) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.t_e965da92 x WHERE x.c_64aab6aa = NEW.c_3c11cd4a AND x.c_1994ea3f = pg_current_xact_id()) THEN
         RAISE EXCEPTION 'an epoch member is committed together with its execution';
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM t_bc727c1d e WHERE e.c_eb34b7d8 = NEW.c_85ee124a) THEN RAISE EXCEPTION 'every epoch member has at least one entry'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.t_bc727c1d e WHERE e.c_eb34b7d8 = NEW.c_85ee124a) THEN RAISE EXCEPTION 'every epoch member has at least one entry'; END IF;
     RETURN NULL;
 END;
 $$;

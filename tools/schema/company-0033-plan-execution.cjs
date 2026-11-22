@@ -57,6 +57,8 @@ const TEMPLATE = `-- Migration ${MIGRATION}: plan storage, approval and atomic e
 --     document approved at the planned revision, and is committed only together with the plan's status change;
 --   * one execution per plan and one audit event per execution; the executor is not the plan's creator; at commit the plan is executed in the same transaction, the epoch is complete (members, storno/rebook pairs,
 --     lineage, the event's posting) and the plan's business audit event exists with the plan-executed type, this plan as subject and this execution as target (3.4);
+--   * (review round) an entry takes the next sequence number of its position and the position is moved at least to it at commit (sequence and last date), so the F1 anchor follows the entries; a reversal entry takes back
+--     an entry of the operation its reversal operation names and never one of an epoch member; no plan, approval or execution exists for a document that already has a posting; every table named inside a function is public.-qualified;
 --   * every new record is append-only (never updated or removed), except the plan's status transition.
 -- plan status: 1 proposed, 2 approved, 3 executed, 4 rejected, 5 cancelled, 6 stale. plan event kind: 1 created, 2 approved, 3 rejected, 4 cancelled, 5 executed, 6 staled. epoch member role: 1 storno, 2 event, 3 rebook.
 -- The business audit event type of an executed plan is 1154 (CostingAuditEvents.PlanExecuted).
@@ -275,6 +277,8 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM [[StockDocument.Table]] d WHERE d.[[StockDocument.Id]] = p.{{CompensationPlan.DocumentId}} AND d.[[StockDocument.Status]] = 3 AND d.[[StockDocument.Revision]] = p.{{CompensationPlan.DocumentRevision}}) THEN
         RETURN 'document_not_approved';
     END IF;
+    -- review L1: a document that already has a stock posting is never executed by a plan (a posting is unique per document, so such a plan could never execute); this is read at approval and again at execution
+    IF EXISTS (SELECT 1 FROM [[StockPosting.Table]] sp WHERE sp.[[StockPosting.DocumentId]] = p.{{CompensationPlan.DocumentId}}) THEN RETURN 'document_already_posted'; END IF;
     RETURN NULL;
 END;
 $$;
@@ -308,6 +312,7 @@ BEGIN
         -- never client-supplied: the creating transaction and the closure hash (of the closure written so far: none yet)
         NEW.{{CompensationPlan.CreatedXact}} := pg_current_xact_id();
         NEW.{{CompensationPlan.ClosureHash}} := {{EpochGuard.FnClosureHash}}(NEW.{{CompensationPlan.Id}});
+        IF EXISTS (SELECT 1 FROM [[StockPosting.Table]] sp WHERE sp.[[StockPosting.DocumentId]] = NEW.{{CompensationPlan.DocumentId}}) THEN RAISE EXCEPTION 'document_already_posted: a plan is not written for a document that already has a stock posting'; END IF;
         IF NEW.{{CompensationPlan.Status}} <> 1 OR NEW.{{CompensationPlan.Revision}} <> 1 OR NEW.{{CompensationPlan.ApprovalId}} IS NOT NULL OR NEW.{{CompensationPlan.ApprovedBy}} IS NOT NULL
            OR NEW.{{CompensationPlan.ApprovedAtUtc}} IS NOT NULL OR NEW.{{CompensationPlan.ExecutedXact}} IS NOT NULL THEN
             RAISE EXCEPTION 'a compensation plan starts as proposed, at revision 1';
@@ -379,6 +384,8 @@ BEGIN
         RAISE EXCEPTION 'the closure of a compensation plan contains its root position and is written with the plan';
     END IF;
     IF {{EpochGuard.FnClosureHash}}(NEW.{{CompensationPlan.Id}}) <> p.closure_hash THEN RAISE EXCEPTION 'the closure of the plan does not match its closure hash'; END IF;
+    -- review L1: re-checked at commit, so a posting committed after the insert-time check (read committed) is seen; under REPEATABLE READ the approval and the execution re-read it again
+    IF EXISTS (SELECT 1 FROM [[StockPosting.Table]] sp WHERE sp.[[StockPosting.DocumentId]] = NEW.{{CompensationPlan.DocumentId}}) THEN RAISE EXCEPTION 'document_already_posted: a plan is not written for a document that already has a stock posting'; END IF;
     RETURN NULL;
 END;
 $$;
@@ -566,11 +573,17 @@ DECLARE
     v_member boolean;
     v_plan uuid;
     v_kind smallint;
+    v_revop uuid;
+    v_revent uuid;
+    v_op boolean;
     v_period smallint;
 BEGIN
-    SELECT [[CostPosition.ItemId]] AS item, [[CostPosition.WarehouseId]] AS warehouse, [[CostPosition.LastEffectiveDate]] AS last_date INTO ps
+    SELECT [[CostPosition.ItemId]] AS item, [[CostPosition.WarehouseId]] AS warehouse, [[CostPosition.LastEffectiveDate]] AS last_date, [[CostPosition.LastSeq]] AS last_seq INTO ps
       FROM [[CostPosition.Table]] WHERE [[CostPosition.Id]] = NEW.[[CostEntry.PositionId]] FOR UPDATE;
     IF NOT FOUND THEN RETURN NEW; END IF;   -- no such position: the foreign key of the entry answers, as before
+    -- review M2 (a): an entry takes the next sequence number of its position (the engine's own invariant; the position is locked, so the number is stable). Together with the deferred check of the entry
+    -- (below) this ties the position's last date, which the F1 comparison relies on, to the entries themselves instead of to a value the writer alone maintains.
+    IF NEW.[[CostEntry.Seq]] <> ps.last_seq + 1 THEN RAISE EXCEPTION 'seq_not_next: a cost entry takes the next sequence number of its position'; END IF;
     SELECT {{EpochMember.Role}} AS role, {{EpochMember.ExecutionId}} AS execution, {{EpochMember.OriginalOperationId}} AS original INTO m FROM {{EpochMember}} WHERE {{EpochMember.OperationId}} = NEW.[[CostEntry.OperationId]];
     v_member := FOUND;
     IF v_member THEN
@@ -601,8 +614,20 @@ BEGIN
     END IF;
     -- (2) an entry-level reversal link outside a reversal operation belongs to an epoch storno
     IF NEW.[[CostEntry.ReversesEntryId]] IS NOT NULL THEN
-        SELECT [[CostOperation.Kind]] INTO v_kind FROM [[CostOperation.Table]] WHERE [[CostOperation.Id]] = NEW.[[CostEntry.OperationId]];
-        IF FOUND AND v_kind <> 4 THEN
+        SELECT [[CostOperation.Kind]], [[CostOperation.ReversesOperationId]] INTO v_kind, v_revop FROM [[CostOperation.Table]] WHERE [[CostOperation.Id]] = NEW.[[CostEntry.OperationId]];
+        v_op := FOUND;
+        IF v_op AND v_kind = 4 THEN
+            -- review M1 (X6 at entry level): a reversal entry takes back an entry of the operation that its reversal operation names (the engine always writes it so), and never an entry of an epoch member
+            -- (the epoch's own storno path is the branch below, outside a reversal operation)
+            SELECT [[CostEntry.OperationId]] INTO v_revent FROM [[CostEntry.Table]] WHERE [[CostEntry.Id]] = NEW.[[CostEntry.ReversesEntryId]];
+            IF FOUND THEN
+                IF v_revent IS DISTINCT FROM v_revop THEN RAISE EXCEPTION 'a reversal entry takes back an entry of the operation that its reversal operation names'; END IF;
+                IF EXISTS (SELECT 1 FROM {{EpochMember}} em WHERE em.{{EpochMember.OperationId}} = v_revent) THEN
+                    RAISE EXCEPTION 'operation_rewritten_by_epoch: an entry of an epoch operation is never taken back by a reversal';
+                END IF;
+            END IF;
+        END IF;
+        IF v_op AND v_kind <> 4 THEN
             IF NOT v_member OR m.role <> 1 THEN RAISE EXCEPTION 'outside a reversal operation only an epoch storno takes back an entry'; END IF;
             SELECT [[CostEntry.OperationId]] AS op, [[CostEntry.PositionId]] AS pos, [[CostEntry.Kind]] AS kind, [[CostEntry.Direction]] AS dir, [[CostEntry.EffectiveDate]] AS d, [[CostEntry.Quantity]] AS qty,
                    [[CostEntry.Amount]] AS amount INTO r FROM [[CostEntry.Table]] WHERE [[CostEntry.Id]] = NEW.[[CostEntry.ReversesEntryId]];
@@ -621,6 +646,19 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER {{EpochGuard.TrEntry}} BEFORE INSERT ON [[CostEntry.Table]] FOR EACH ROW EXECUTE FUNCTION {{EpochGuard.FnEntry}}();
+
+-- review M2 (b): at commit, the position of every entry written in the transaction has been moved at least to that entry (sequence number and last date). The engine moves the position with every entry and the executor
+-- keeps the date with GREATEST, so neither path changes; a writer that appends an entry without moving its position, or moves it without the entry's date, can no longer leave the F1 anchor behind.
+CREATE FUNCTION {{EpochGuard.FnEntryCommit}}() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM [[CostPosition.Table]] ps WHERE ps.[[CostPosition.Id]] = NEW.[[CostEntry.PositionId]] AND ps.[[CostPosition.LastSeq]] >= NEW.[[CostEntry.Seq]]
+                   AND ps.[[CostPosition.LastEffectiveDate]] >= NEW.[[CostEntry.EffectiveDate]]) THEN
+        RAISE EXCEPTION 'position_not_moved: a cost entry is committed together with the move of its position to at least its sequence number and its date';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE CONSTRAINT TRIGGER {{EpochGuard.TrEntryCommit}} AFTER INSERT ON [[CostEntry.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION {{EpochGuard.FnEntryCommit}}();
 
 -- ---------------------------------------------------------------------------------------------------------------- X6 (design 3.3(4)): no reversal operation of an epoch member or of an operation with stornoed entries
 CREATE FUNCTION {{EpochGuard.FnOperation}}() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -739,8 +777,11 @@ function existingNames() {
   return names;
 }
 
+// review L2: inside every function body each table of the schema is named public.<table>, so a same-named temporary table can never stand in for it (a search_path clause is not an option: the migration guard refuses it)
+const qualify = (t) => t.replace(/\$\$[\s\S]*?\$\$/g, (b) => b.replace(/(?<!')\{\{([A-Za-z0-9]+)\}\}/g, "public.{{$1}}").replace(/\[\[([A-Za-z0-9]+\.Table)\]\]/g, "public.[[$1]]"));
+
 function generate() {
-  const body = TEMPLATE.replace(/\[\[([A-Za-z0-9.]+)\]\]/g, (_, k) => ext(k));
+  const body = qualify(TEMPLATE).replace(/\[\[([A-Za-z0-9.]+)\]\]/g, (_, k) => ext(k));
   const tokens = [...new Set([...body.matchAll(/\{\{([A-Za-z0-9.]+)\}\}/g)].map((m) => m[1]))];
   const taken = existingNames();
   const byToken = new Map(), seen = new Map();
