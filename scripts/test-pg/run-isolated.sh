@@ -248,15 +248,20 @@ OWNER_FILE="${CAP}/slot${SLOT}.owner"
 recover_previous
 
 # The run's own directory. root:<server group> 0710: the server account may traverse to its 0700 data directory, nobody else may enter.
+# The results directory is checked BEFORE the run directory and the owner record exist, so a refusal leaves nothing behind. An EXISTING one is used as it is (its mode is the
+# caller's business: it may be a shared directory); only a missing one is created, owner-only.
+if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then
+  if [[ -e "${HASM_ISO_RESULTS}" || -L "${HASM_ISO_RESULTS}" ]]; then [[ -d "${HASM_ISO_RESULTS}" ]] || die "HASM_ISO_RESULTS is not a directory."; else mkdir -p -m 700 -- "${HASM_ISO_RESULTS}"; fi
+fi
 W="$(mktemp -d "${TMPBASE}/hasm-pgw-XXXXXX")"
 chmod 700 "${W}"; chgrp "${PG_GROUP}" "${W}"; chmod 710 "${W}"
+if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then
+  # The per-run sub-directory must not exist yet: mkdir without -p fails on anything that is already there (a directory, a file, a symbolic link somebody planted).
+  RES="${HASM_ISO_RESULTS%/}/$(basename "${W}")"
+  mkdir -m 700 -- "${RES}" || { rmdir -- "${W}"; die "Cannot create the results directory ${RES} (it must not exist yet)."; }     # W is still empty and unrecorded
+else RES="$(mktemp -d "${TMPBASE}/hasm-pgw-results-XXXXXX")"; chmod 700 "${RES}"; fi
 ( umask 077; printf '%s\n' "${W}" > "${OWNER_FILE}.tmp" ) && mv -f "${OWNER_FILE}.tmp" "${OWNER_FILE}"
 install -d -m 700 "${W}/tmp"
-if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then RES="${HASM_ISO_RESULTS%/}/$(basename "${W}")"
-  # An EXISTING results directory is used as it is (its mode is the caller's business: it may be a shared directory); only a missing one is created, owner-only.
-  if [[ -e "${HASM_ISO_RESULTS}" ]]; then [[ -d "${HASM_ISO_RESULTS}" ]] || die "HASM_ISO_RESULTS is not a directory."; else mkdir -p -m 700 -- "${HASM_ISO_RESULTS}"; fi
-  install -d -m 700 "${RES}"
-else RES="$(mktemp -d "${TMPBASE}/hasm-pgw-results-XXXXXX")"; chmod 700 "${RES}"; fi
 export HASM_TEST_ROOT="${W}/cluster"
 # shellcheck source=common.sh
 . "${HERE}/common.sh"           # the same settings and checks as every other script, for HASM_TEST_ROOT=W/cluster (lock W/cluster.lock)

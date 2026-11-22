@@ -20,7 +20,8 @@
 #  - one of the capacity tokens of run-isolated.sh (/tmp/hasm-iso-capacity/slot<N>.lock, HASM_ISO_WORKERS, default 2, maximum 3) is taken, so a one-shot cluster counts toward
 #    the machine-wide limit; when all are taken the script waits, exactly as run-isolated.sh does;
 #  - the checkout itself is locked (the same flock run-isolated.sh takes on a worktree), because both runners share its bin/obj.
-# Cleanup: every process started for the run (found by HASM_TEST_ROOT=W/cluster in its environment, never by name; the server is left to pg_ctl) is stopped, the results are
+# Cleanup: every process started for the run is stopped - the worker shell as this script's own background job (from the shell's job table), everything it started by
+# HASM_TEST_ROOT=W/cluster in the environment it was started with; never by name, and the server is left to pg_ctl. Then the results are
 # copied out, destroy-test-cluster.sh deletes the cluster, and W - only W, after a pattern and ownership check - is removed. A run killed with SIGKILL records its W in
 # /tmp/hasm-iso-capacity/oneshot.owner; the next one-shot run, or --recover, cleans it up the same way.
 # Results (pg-integration.trx, postgres.log) go to HASM_ONESHOT_RESULTS/<W name> or to a kept `mktemp -d` directory /tmp/hasm-pg1-results-XXXXXX.
@@ -76,9 +77,9 @@ open_lock() {   # $1 = descriptor number, $2 = file
 # True when something listens on TCP port 5433 in this network namespace. Read from /proc: no connection is made to anything. Status 1 = nothing listens; any other
 # status (unreadable /proc, awk failure) = unknown, and refuse_if_port_taken refuses on it: this check never passes on missing information.
 port_5433_listening() {
-  local f files=()
-  for f in /proc/self/net/tcp /proc/self/net/tcp6; do [[ -r "${f}" ]] && files+=("${f}"); done
-  [[ ${#files[@]} -gt 0 ]] || return 2
+  local files=(/proc/self/net/tcp)
+  [[ -r /proc/self/net/tcp ]] || return 2      # the IPv4 table is REQUIRED: the test clusters listen on 127.0.0.1, and the IPv6 table alone would not show such a listener
+  [[ -r /proc/self/net/tcp6 ]] && files+=(/proc/self/net/tcp6)      # absent where IPv6 is switched off
   awk 'FNR > 1 && $4 == "0A" { n = split($2, a, ":"); if (toupper(a[n]) == "1539") found = 1 } END { exit found ? 0 : 1 }' "${files[@]}"
 }
 refuse_if_port_taken() {
@@ -196,17 +197,28 @@ flock -n 5 || die "The shared cluster lock ${SHARED_LOCK} is held (holder: $(cat
 recover_previous
 refuse_if_port_taken
 
+# The results directory is checked BEFORE anything of the run exists. An EXISTING one is used as it is (its mode is the caller's business: it may be a shared directory);
+# only a missing one is created, owner-only.
+if [[ -n "${HASM_ONESHOT_RESULTS:-}" ]]; then
+  if [[ -e "${HASM_ONESHOT_RESULTS}" || -L "${HASM_ONESHOT_RESULTS}" ]]; then [[ -d "${HASM_ONESHOT_RESULTS}" ]] || die "HASM_ONESHOT_RESULTS is not a directory."; else mkdir -p -m 700 -- "${HASM_ONESHOT_RESULTS}"; fi
+fi
+
 # The run's own directory. As root: root:<server group> 0710, so the server account may traverse to its 0700 data directory and nobody else may enter. Otherwise 0700.
 W=""; INNER=""; CODE=2; CLEANED=no; CLEAN_OK=yes; RES=""
 cleanup() {
   trap '' INT TERM HUP        # FIRST: a signal that arrives from here on must not start a second, empty cleanup and exit with the cluster still up
   [[ "${CLEANED}" == no && -n "${W}" ]] || return 0; CLEANED=yes
   local ok=yes
-  # The worker shell itself is stopped by PID as well: between new-test-cluster.sh and the exec of run-pg-tests.sh it has no child and does not yet carry HASM_TEST_ROOT in
-  # the environment it was started with, so stop_run alone would not see it and the tests would start after all. INNER is our un-reaped child: its PID cannot be reused.
-  [[ -z "${INNER}" ]] || kill -TERM "${INNER}" 2>/dev/null || true
+  # The worker shell itself is stopped as well, as this script's own background job: between new-test-cluster.sh and the exec of run-pg-tests.sh it has no child and does
+  # not yet carry HASM_TEST_ROOT in the environment it was started with, so stop_run alone would not see it and the tests would start after all. Its PID is taken from the
+  # shell's job table HERE (jobs -pr: running jobs only), not from a variable set by the main flow: the table names the worker from the moment it is started, also before
+  # its PID has been stored anywhere, and no longer names it once it has been reaped, so a number that may belong to another process by now is never signalled.
+  local worker p
+  worker="$(jobs -pr)"
+  for p in ${worker}; do kill -TERM "${p}" 2>/dev/null || true; done
   stop_run "${W}/cluster" || ok=no
-  if [[ -n "${INNER}" ]]; then kill -KILL "${INNER}" 2>/dev/null || true; wait "${INNER}" 2>/dev/null || true; fi
+  for p in ${worker}; do kill -KILL "${p}" 2>/dev/null || true; done     # still our un-reaped children here: nothing has waited for them since the table was read
+  wait 2>/dev/null || true
   stop_run "${W}/cluster" || ok=no      # anything the worker still started before it was stopped
   if [[ -n "${RES}" ]]; then
     cp -f "${W}/cluster/trx/pg-integration.trx" "${RES}/" 2>/dev/null || true      # keep the evidence before the cluster is destroyed
@@ -230,10 +242,11 @@ W="$(mktemp -d "${TMPBASE}/hasm-pg1-XXXXXX")"     # the traps are already in pla
 if [[ -n "${PG_ACCOUNT}" ]]; then chmod 700 "${W}"; chgrp "$(id -gn "${PG_ACCOUNT}")" "${W}"; chmod 710 "${W}"; else chmod 700 "${W}"; fi
 ( umask 077; printf '%s\n' "${W}" > "${OWNER_FILE}.tmp" ) && mv -f "${OWNER_FILE}.tmp" "${OWNER_FILE}"
 install -d -m 700 "${W}/tmp"
-if [[ -n "${HASM_ONESHOT_RESULTS:-}" ]]; then RES="${HASM_ONESHOT_RESULTS%/}/$(basename "${W}")"
-  # An EXISTING results directory is used as it is (its mode is the caller's business: it may be a shared directory); only a missing one is created, owner-only.
-  if [[ -e "${HASM_ONESHOT_RESULTS}" ]]; then [[ -d "${HASM_ONESHOT_RESULTS}" ]] || die "HASM_ONESHOT_RESULTS is not a directory."; else mkdir -p -m 700 -- "${HASM_ONESHOT_RESULTS}"; fi
-  install -d -m 700 "${RES}"
+if [[ -n "${HASM_ONESHOT_RESULTS:-}" ]]; then
+  # The per-run sub-directory must not exist yet: mkdir without -p fails on anything that is already there (a directory, a file, a symbolic link somebody planted), so
+  # nothing existing is ever reused or has its mode changed.
+  RES="${HASM_ONESHOT_RESULTS%/}/$(basename "${W}")"
+  mkdir -m 700 -- "${RES}" || die "Cannot create the results directory ${RES} (it must not exist yet)."
 else RES="$(mktemp -d "${TMPBASE}/hasm-pg1-results-XXXXXX")"; chmod 700 "${RES}"; fi
 HASM_TEST_ROOT="${W}/cluster"   # NOT exported here: only the worker's processes carry it in their environment, which is how cleanup and recovery find them
 # shellcheck source=common.sh
