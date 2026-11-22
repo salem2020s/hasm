@@ -126,10 +126,12 @@ kill_ns() {
 pid_serves() {
   local pid="$1" dir="$2"
   [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" && "$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null)" != Z ]] || return 1
-  tr '\0' '\n' 2>/dev/null < "/proc/${pid}/cmdline" | grep -qxF -- "${dir}"
+  tr '\0' '\n' 2>/dev/null < "/proc/${pid}/cmdline" | grep -xF -- "${dir}" >/dev/null     # no -q: grep reads everything, so tr is never killed by SIGPIPE (pipefail would turn a match into a failure)
 }
 # True when <pid> was started with HASM_TEST_ROOT=<root> in its environment (the scripts and dotnet processes of the run that owns <root>).
-pid_env_root() { tr '\0' '\n' 2>/dev/null < "/proc/$1/environ" | grep -qxF -- "HASM_TEST_ROOT=$2"; }
+# No grep -q here: it exits at the first match, tr (which writes in 8 KiB chunks) then dies of SIGPIPE on the next chunk of a large environment, and under pipefail a MATCH became a
+# failure (about 2% of the calls idle, a third under load: the intermittent "the orphan was not stopped" of test-run-isolated-recovery.sh case 2).
+pid_env_root() { tr '\0' '\n' 2>/dev/null < "/proc/$1/environ" | grep -xF -- "HASM_TEST_ROOT=$2" >/dev/null; }
 # The unchanged destroy-test-cluster.sh asks pg_ctl about postmaster.pid and stops "the server" with -m immediate. If the recorded PID is not a live server of THIS data
 # directory (the server died and the PID may have been reused, e.g. by another worker's server running as the same account), the file is moved aside inside W so that
 # pg_ctl sees no server and signals nothing.

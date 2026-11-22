@@ -410,7 +410,7 @@ public class RoleTests : AccessTestBase
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.CompanyAdministratorId, []), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.SetRolePermissionsAsync(adminA.Id, a, PresetRoles.AccessAuditorId, [Codes.RolesCreate]), AccessStatus.Forbidden, "preset_role_immutable");
         Fails(await Access.DeactivateRoleAsync(adminA.Id, a, PresetRoles.AccessAuditorId), AccessStatus.Forbidden, "preset_role_immutable");
-        Assert.Equal(146, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);
+        Assert.Equal(148, Ok(await Access.ListRolesAsync(adminB.Id, b)).Single(r => r.Id == PresetRoles.CompanyAdministratorId).Permissions.Count);   // 146 + access.mfapolicy.view and access.mfapolicy.update (system migration 0034)
     }
 
     [PostgresFact]

@@ -15,14 +15,16 @@ using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 
 namespace Hasm.Infrastructure.Access;
 
-public enum AccessStatus { Ok, Forbidden, NotFound, Invalid, Conflict }
+public enum AccessStatus { Ok, Forbidden, NotFound, Invalid, Conflict, PreconditionRequired, PreconditionFailed }
 
-/// <summary>Outcome of an access operation. <see cref="Code"/> is a short machine-readable reason, never an exception message.</summary>
-public sealed record AccessResult<T>(AccessStatus Status, string? Code, T? Value)
+/// <summary>Outcome of an access operation. <see cref="Code"/> is a short machine-readable reason, never an exception message. <see cref="CurrentRevision"/> is set on a concurrency failure
+/// (<see cref="AccessStatus.PreconditionFailed"/>) so the client can reload, as <c>ConfigResult</c> does.</summary>
+public sealed record AccessResult<T>(AccessStatus Status, string? Code, T? Value, long? CurrentRevision = null)
 {
     public bool IsOk => Status == AccessStatus.Ok;
     public static AccessResult<T> Ok(T value) => new(AccessStatus.Ok, null, value);
     public static AccessResult<T> Fail(AccessStatus status, string code) => new(status, code, default);
+    public static AccessResult<T> Stale(long currentRevision) => new(AccessStatus.PreconditionFailed, "revision_conflict", default, currentRevision);
 }
 
 /// <summary>Numeric values are persisted in the audit table; never renumber.</summary>
@@ -214,7 +216,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
     }
 
-    private static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
+    internal static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             $"SELECT 1 FROM {M.Table} m JOIN {C.Table} c ON c.{C.Id} = m.{M.CompanyId} JOIN {U.Table} u ON u.{U.Id} = m.{M.UserId} " +

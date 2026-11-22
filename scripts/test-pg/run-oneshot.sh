@@ -217,7 +217,8 @@ cleanup() {
   worker="$(jobs -pr)"
   for p in ${worker}; do kill -TERM "${p}" 2>/dev/null || true; done
   stop_run "${W}/cluster" || ok=no
-  for p in ${worker}; do kill -KILL "${p}" 2>/dev/null || true; done     # still our un-reaped children here: nothing has waited for them since the table was read
+  worker="$(jobs -pr)"      # read AGAIN: bash reaps a finished background job in its SIGCHLD handler without any wait, so a PID read before stop_run may be free (or reused) by now
+  for p in ${worker}; do kill -KILL "${p}" 2>/dev/null || true; done     # only a job the table still lists as running
   wait 2>/dev/null || true
   stop_run "${W}/cluster" || ok=no      # anything the worker still started before it was stopped
   if [[ -n "${RES}" ]]; then
@@ -245,8 +246,9 @@ install -d -m 700 "${W}/tmp"
 if [[ -n "${HASM_ONESHOT_RESULTS:-}" ]]; then
   # The per-run sub-directory must not exist yet: mkdir without -p fails on anything that is already there (a directory, a file, a symbolic link somebody planted), so
   # nothing existing is ever reused or has its mode changed.
-  RES="${HASM_ONESHOT_RESULTS%/}/$(basename "${W}")"
-  mkdir -m 700 -- "${RES}" || die "Cannot create the results directory ${RES} (it must not exist yet)."
+  newres="${HASM_ONESHOT_RESULTS%/}/$(basename "${W}")"
+  mkdir -m 700 -- "${newres}" || die "Cannot create the results directory ${newres} (it must not exist yet)."     # RES stays empty when this refuses: the cleanup then copies nothing into, and never names, the refused path
+  RES="${newres}"
 else RES="$(mktemp -d "${TMPBASE}/hasm-pg1-results-XXXXXX")"; chmod 700 "${RES}"; fi
 HASM_TEST_ROOT="${W}/cluster"   # NOT exported here: only the worker's processes carry it in their environment, which is how cleanup and recovery find them
 # shellcheck source=common.sh

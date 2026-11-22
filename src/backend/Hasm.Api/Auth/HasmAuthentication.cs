@@ -26,6 +26,10 @@ public static class AuthDefaults
     public const string MfaVerifiedPolicy = "MfaVerified";
     /// <summary>Phase 4.1 S3a (D-160): the proof is within the freshness window (pass-through for users without MFA, D-161).</summary>
     public const string MfaFreshPolicy = "MfaFresh";
+    /// <summary>S3b-1b: an authenticated session with the second-factor proof where MFA applies, WITHOUT the selected company's policy: the routes a user must always reach to leave or change company or to enrol (company list and selection, change password, step-up).</summary>
+    public const string AuthenticatedPolicy = "AuthenticatedMfaVerified";
+    /// <summary>The fresh proof WITHOUT the selected company's policy: the fresh operations of identity administration, which is not company-scoped (review L2 of PR 181).</summary>
+    public const string AuthenticatedFreshPolicy = "AuthenticatedMfaFresh";
     public const string AdministratorClaim = "hasm:identity_admin";
     public const string SessionIdClaim = "hasm:session";
     public const string SessionItemKey = "hasm.session";
@@ -106,16 +110,21 @@ public static class AuthenticationSetup
         services.AddAuthentication(AuthDefaults.Scheme).AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(AuthDefaults.Scheme, null);
         services.AddSingleton<IAuthorizationHandler, MfaVerifiedHandler>();
         services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
+        services.AddSingleton<IAuthorizationHandler, MfaCompanyPolicyHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
         services.AddAuthorizationBuilder()
             // the default policy of every plain RequireAuthorization(): an authenticated session that carries the second-factor proof where MFA applies (S3b-1, D-166; pass-through for state None, D-161)
-            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()).Build())
+            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaCompanyPolicyRequirement()).Build())
             .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
-            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+            .AddPolicy(AuthDefaults.AuthenticatedPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()))
+            .AddPolicy(AuthDefaults.AuthenticatedFreshPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()))
+            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaCompanyPolicyRequirement()))
             .AddPolicy(AuthDefaults.MfaFreshPolicy, p =>
-                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()));
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement(), new MfaCompanyPolicyRequirement()));
         return services;
     }
 
