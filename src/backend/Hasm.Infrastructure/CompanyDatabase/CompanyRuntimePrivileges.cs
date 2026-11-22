@@ -151,6 +151,9 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
         (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),
         (CompanySchema.LegalHold.Table, ["SELECT", "INSERT", "UPDATE"]),   // placed, then released once
+        // Company migration 0033: one identity per approval policy, written only THROUGH the deferred triggers of the policy and stage tables (they run as the writer). Whatever is written, the guard trigger stores
+        // the fingerprint PostgreSQL computes; rows are never removed.
+        (CompanySchema.ApprovalPolicyIdentity.Table, ["SELECT", "INSERT", "UPDATE"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
