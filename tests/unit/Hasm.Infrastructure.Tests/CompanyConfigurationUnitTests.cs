@@ -217,7 +217,7 @@ public class ConfigurationSchemaContractTests
 {
     private static readonly string[] ApprovedTables =
     [
-        CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table,   // Phase R slice R1 (migration 0031): retention policy versions, their rules and legal holds for removed attachments (nothing is deleted)
+        CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table, CompanySchema.ApprovalPolicyIdentity.Table,   // Phase R slice R1 (migration 0031): retention policy versions, their rules and legal holds for removed attachments (nothing is deleted)
         CompanySchema.Identity.Table, CompanySchema.BusinessAudit.Table, CompanySchema.Profile.Table, CompanySchema.Settings.Table,
         CompanySchema.Currency.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.ConfigRevision.Table,
         CompanySchema.Branch.Table, CompanySchema.BranchRevision.Table,   // Phase 3.1B (migration 0004)
