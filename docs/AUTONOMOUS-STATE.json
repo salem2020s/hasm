@@ -476,8 +476,8 @@
     "Merges of protected verification-file changes (S, C, the Q5 workstream: authorized as work by D-234 and D-194; each merge owner-instructed)",
     "PR 188 owner questions: new paired DISABLE/ENABLE statements in future migrations; the fail-closed no-op run",
     "Strict reading until decided: A-2 (no deletion with no second backup destination, D-230); the branch scoping of approve in #191 is merged (8dbdbcd) and stands unless the owner decides otherwise",
-    "X4-PRESET-ROLE: may a system migration use the paired DISABLE/ENABLE of the preset immutability triggers (database-safety reviewer prefers it) or must the preset role be an ordinary per-company role; linked to PR 188 question 1 (per the lead, NOT VERIFIED)",
-    "MIGRATION-ACCOUNT-PRIVILEGES: is the migration account a superuser or not; PR 188 question 3 (per the lead, NOT VERIFIED)"
+    "X4-PRESET-ROLE: OPEN with the owner (raised by the #48 author in design section 12; linked to question 1 of #188): design revision 3 says the X4 system access migration contains no DISABLE TRIGGER, but adding a preset role has always used the paired DISABLE/ENABLE of the preset immutability triggers inside one system migration (D-066; 0007–0030). Option A: preset role with the paired pattern (an explicit owner confirmation that this pause is permitted under X1-A). Option B: no preset; the permission codes in the code catalog and the role created per company as an ordinary role by an administrative command (departs from D-066). Reviewer note (database-safety review of #48): prefers A — one transaction, ACCESS EXCLUSIVE until commit, trigger definitions unchanged, pair verified by #188's guard — subject to that owner confirmation, ideally after #188 merges.",
+    "MIGRATION-ACCOUNT-PRIVILEGES: may the account that runs migrations be a PostgreSQL superuser in production? The answer decides whether the catalog-write and session_replication_role rules are defence in depth or the only static barrier. (PR 188 question 3; per the lead, NOT VERIFIED)"
   ],
   "environment": {
     "repository": "public since 2026-11-16",
