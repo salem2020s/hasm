@@ -10,8 +10,8 @@ public sealed class EncryptionKeyRetirementTests
 {
     private static readonly Guid C1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static EncryptionKeyUsage U(params string[] ids) => new(ids, 0, 0);
-    private static CompanyKeyUsage Company(EncryptionKeyUsage? attachments = null, EncryptionKeyUsage? imports = null) =>
-        new(C1, true, null, attachments ?? EncryptionKeyUsage.Empty, imports ?? EncryptionKeyUsage.Empty);
+    private static CompanyKeyUsage Company(EncryptionKeyUsage? attachments = null, EncryptionKeyUsage? imports = null, EncryptionKeyUsage? cash = null) =>
+        new(C1, true, null, attachments ?? EncryptionKeyUsage.Empty, imports ?? EncryptionKeyUsage.Empty, cash ?? EncryptionKeyUsage.Empty);
     private static BackupRootKeyNeeds Root(params string[] ids) => new("/backups", true, null, ids);
     private static readonly DateTimeOffset At = new(2026, 11, 21, 9, 30, 0, TimeSpan.FromHours(3));
     private static KeyRetirementEntry Key(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
@@ -40,9 +40,28 @@ public sealed class EncryptionKeyRetirementTests
         Assert.Equal(["needed_by_cash_numbers"], Key(r, "k2").Reasons);
         Assert.Equal(["k1"], r.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
         var absent = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3"], "k3", [Company()], [Root()], backupScopeAttested: true, At);
-        Assert.Equal(["k1", "k2"], absent.Keys.Where(k => k.Retirable).Select(k => k.KeyId));                  // CashNumbers omitted: the earlier behaviour exactly
+        Assert.Equal(["k1", "k2"], absent.Keys.Where(k => k.Retirable).Select(k => k.KeyId));                  // an explicit EMPTY cash usage (a company with no bank number): the earlier behaviour exactly
         var unknown = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, new EncryptionKeyUsage(["k2"], 1, 0));
         Assert.Contains($"cash_number_key_unknown:{C1:N}:1", EncryptionKeyRetirement.Evaluate(["k2"], "k2", [unknown], [Root()], backupScopeAttested: true, At).Blockers);
+    }
+
+    [Fact]
+    public void The_cash_number_usage_is_required_there_is_no_silent_default_to_no_cash_usage()
+    {
+        // (review L5 of PR 206) a record cannot be built without it: no optional parameter ...
+        var ctor = Assert.Single(typeof(CompanyKeyUsage).GetConstructors());
+        Assert.Contains(ctor.GetParameters(), p => p.Name == "CashNumbers");
+        Assert.All(ctor.GetParameters(), p => Assert.False(p.HasDefaultValue, p.Name));
+        // ... and a value that nevertheless arrives as null (a deserialised or reflected record) is REFUSED: the report is incomplete and no key is retirable, never "nothing needs the key"
+        var missing = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, null!);
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k2"], "k2", [missing], [Root()], backupScopeAttested: true, At);
+        Assert.False(r.Complete);
+        Assert.Equal([$"cash_number_usage_missing:{C1:N}"], r.Blockers);
+        Assert.Empty(r.Keys.Where(k => k.Retirable));
+        Assert.Contains("report_incomplete", Key(r, "k1").Reasons);
+        // an UNREADABLE company needs no usage (it is already a blocker of its own)
+        var unreadable = new CompanyKeyUsage(C1, false, "company_not_ready", EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, null!);
+        Assert.Equal([$"company_unreadable:{C1:N}:company_not_ready"], EncryptionKeyRetirement.Evaluate(["k1"], "k1", [unreadable], [Root()], backupScopeAttested: true, At).Blockers);
     }
 
     [Fact]
@@ -57,7 +76,7 @@ public sealed class EncryptionKeyRetirementTests
 
     public static TheoryData<string, CompanyKeyUsage[], BackupRootKeyNeeds[], string?> Incomplete => new()
     {
-        { "company_unreadable", [new CompanyKeyUsage(C1, false, "company_not_ready", EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty)], [Root()], "k9" },
+        { "company_unreadable", [new CompanyKeyUsage(C1, false, "company_not_ready", EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty)], [Root()], "k9" },
         { "attachment_key_unknown", [Company(attachments: new EncryptionKeyUsage([], 1, 0))], [Root()], "k9" },
         { "import_original_key_unknown", [Company(imports: new EncryptionKeyUsage([], 1, 0))], [Root()], "k9" },
         { "no_backup_root", [Company()], [], "k9" },

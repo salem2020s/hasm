@@ -52,6 +52,8 @@ jobs:
         run: node tools/schema/company-0031-attachment-retention.cjs --check
       - name: Stock-period-guard schema files match the deterministic generator (STOCK-PERIOD-DB, D-220, company migration 0034)
         run: node tools/schema/company-0034-stock-period-guard.cjs --check
+      - name: TOTP owner-only schema files match the deterministic generator (D-235 second part, system migration 0035 provisional)
+        run: node tools/schema/system-totp-owner-only.cjs --check
       - name: Plan-execution schema files (company 0036, provisional number) match their generator
         run: node tools/schema/company-0036-plan-execution.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
@@ -149,7 +151,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1676 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1685 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -244,7 +246,7 @@ jobs:
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
                 # Owner decision D-235 (M2-TOTP): least-privilege system runtime account for the TOTP secret store, with a real restricted login role, the gate, the grant routine and the real API (no migration yet).
-                "SystemRuntimeLeastPrivilegeTests": 9,
+                "SystemRuntimeLeastPrivilegeTests": 12,
                 # Release 1 acceptance, cross-module accounting scenarios: company isolation over HTTP across every read family, the fiscal life cycle to year end, inventory valuation = inventory ledger.
                 "CrossModuleIsolationScenarioTests": 1, "CrossModuleFiscalLifecycleScenarioTests": 1, "CrossModuleInventoryValuationScenarioTests": 1,
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
@@ -286,7 +288,7 @@ jobs:
                 # Constraint-violation matrix, part 2, batch 4: commercial documents and imports on their own fixtures (no migration).
                 "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
                 # Phase 3.14 slice S1 cash and bank account master (company migration 0033, provisional number): binding, base currency, branch scope, sensitive bank number, runtime guards, HTTP API; constraint matrix batch 5 (cash accounts).
-                "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 8, "EndpointConstraintMatrixPart2CashTests": 1,
+                "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 9, "EndpointConstraintMatrixPart2CashTests": 1,
                 # Phase 3.8D-1 authorized, repeatable-read/read-only ordinary-history snapshots; unsupported histories fail closed.
                 "CostHistorySnapshotTests": 15, "NegativeCostHistorySnapshotTests": 2, "StockDocumentCostHistorySnapshotTests": 4,
                 "CostFlowSnapshotTests": 49, "StockDocumentCostFlowSnapshotTests": 6, "NegativeCostFlowSnapshotTests": 2,
