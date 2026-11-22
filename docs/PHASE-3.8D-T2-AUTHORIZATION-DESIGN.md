@@ -1,155 +1,568 @@
 # Phase 3.8D threat T2: authorization of replay operations (design proposal)
 
-Status: **DESIGN PROPOSAL, documentation only. Nothing here is implemented.** Author: Agent ODC (design author for this document; the independent adversarial review is Agent opusSEC's). Base: `main` `22c9d23` (PR 216 merged: the executor implementation plan). Until this design is independently reviewed and approved and the owner decisions of section 12 are taken, **replay executor production activation and the runtime INSERT grant on the four execution tables stay disabled** (owner direction of 2026-11-22).
+Status: **DESIGN PROPOSAL, revision 2, documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
 
-Sources: the owner's T2 direction of 2026-11-22 (quoted in section 1), `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` revision 3 (sections 3, 5, 7: T2), `docs/PHASE-3.8D-EXECUTOR-PLAN.md` (sections 4, 5, 7), company migration 0036, the migration guard of PR 188 (`docs/MIGRATION-GUARD.md` on that branch), and a feasibility probe recorded in section 4.2.
+Revision 1 (`a5010a5`) was reviewed by opusSEC in `review-records/PR-218-t2-design-review.md`: 1 Critical, 4 Medium, 3 Low. Section 0 maps every finding to its resolution.
+
+Until this design is independently approved and the owner decisions of section 14 are taken, **replay executor production activation and the runtime INSERT grant on the four execution tables stay disabled** (owner direction of 2026-11-22).
+
+Sources:
+* the owner's T2 direction of 2026-11-22 (section 1);
+* `docs/PHASE-3.8D-PLAN-EXECUTION-DESIGN.md` revision 3 and `docs/PHASE-3.8D-EXECUTOR-PLAN.md`;
+* company migration 0036;
+* system migrations 0031 (TOTP store) and 0035 (owner-only TOTP material, D-235) and `SystemRuntimePrivileges`;
+* the migration guard of PR 188;
+* the feasibility probe of section 4.2.
 
 ---
 
-## 1. The owner's requirement (verbatim) and what it rules out
+## 0. Revision 2: findings and resolutions
+
+| Finding | Resolution in this revision |
+|---|---|
+| **C1 (Critical).** The revision 1 in-process signer took its authority from system-database state that the runtime credentials can write: who the user is, permissions, a fresh second factor, two different people. A minted MFA-fresh session was accepted by the real API. Option (a) fails the same way. | Every signature's authority now comes from state the runtime credentials cannot create, in one of two ways. **(i)** An offline second person holds a private key on another machine (recommended, section 5). **(ii)** Owner-registered signers, whose pinned TOTP credential is verified for each signature (section 6). Both are specified in full, each with its own threat table (section 7). Every boundary is attacked with the SYSTEM runtime account as well as the company role (section 12). The general session-minting issue is referenced here, not solved (section 15). |
+| **M1.** Name resolution of invoker-rights code. | Section 4.5. Relations are schema-qualified. The no-TEMP/no-CREATE invariant is stated and tested, including on provisioned and restored databases. The message does not depend on session settings, and this is tested. |
+| **M2.** The message is underspecified. | Section 4.4. Byte-exact specification that can be rebuilt from this document alone, with known-answer vectors. |
+| **M3.** Revocation contradicts itself. | Section 4.6. Each signature gets an acceptance time assigned by the database, and each key a revoke-from time. History accepted before revoke-from stays valid and new signatures are refused. The window of a suspected compromise is an owner decision. |
+| **M4.** Read-side verification goes through a replaceable database function. | Section 9. Readers, the close probe and the restore check verify in .NET against keys pinned in the application. The threat tables are corrected. |
+| **L1.** Signature length and constants. | Sections 4.2 and 4.4. Exact length 384, e = 65537, a constant DigestInfo, built-in `sha256`, `mod` only. Known-answer and edge vectors are required. |
+| **L2.** Verified at insert only, against transaction time. | Section 4.3. Verified at insert AND re-verified at commit over the message rebuilt from the rows. The clock is `clock_timestamp()`, checked at both points. |
+| **L3.** The execution signature does not bind content. | The grant binds the payload, the seven fingerprints, the closure, the document revision and the lines digest (section 4.4). What 0036 does not bind (the posted amounts against the lines) is closed on the read side, and the remaining bearer window is justified (section 4.7). |
+| D1's false premise; missing decisions | Section 14 restates every decision: baseline, signer registry and authentication, key custody, validity, revocation, unsigned steps. |
+
+---
+
+## 1. The owner's requirement (verbatim)
 
 > "possession of the ordinary application runtime database credentials alone must not be sufficient to create or execute an unauthorized backdated replay."
 
-The design must (owner, verbatim bullets): "Preserves least-privilege database access." / "Prevents direct unauthorized replay writes by the ordinary runtime database role." / "Requires independently verifiable authorization for privileged replay operations." / "Preserves the external cryptographic audit evidence, segregation of duties and fiscal-period safeguards." / "Prevents unverified replay effects from being treated as valid financial history." / "Does not rely on an application-controlled flag or a SECURITY DEFINER function callable without an independent authorization check." / "Explicitly distinguishes stolen database credentials from complete application-process compromise." / "Includes adversarial PostgreSQL tests proving the relevant threat boundaries."
+The owner's bullets, verbatim:
+* "Preserves least-privilege database access."
+* "Prevents direct unauthorized replay writes by the ordinary runtime database role."
+* "Requires independently verifiable authorization for privileged replay operations."
+* "Preserves the external cryptographic audit evidence, segregation of duties and fiscal-period safeguards."
+* "Prevents unverified replay effects from being treated as valid financial history."
+* "Does not rely on an application-controlled flag or a SECURITY DEFINER function callable without an independent authorization check."
+* "Explicitly distinguishes stolen database credentials from complete application-process compromise."
+* "Includes adversarial PostgreSQL tests proving the relevant threat boundaries."
 
-Ruled out by the owner: accepting T2 with after-the-fact detection (audit chain, period-close block) as the only control; a SECURITY DEFINER writer that the runtime role can call without an independent authorization check.
+Detection alone is not accepted.
 
-## 2. T2 today, precisely
+A plan, a closure, lines and an approval change no financial history. A backdated replay, meaning its storno, event and rebook entries and the epoch rows, comes into existence only through an execution. Execution is therefore what must be impossible without an authorization the credentials cannot produce. Whether plan creation must also be signed is decision D6.
 
-* The per-company runtime role R holds **SELECT only** on the four execution tables (PR 48 review M1); nothing can execute.
-* Migration 0036 accepts an execution, and with it the epoch rows and back-dated entries, from any writer that can INSERT into those tables, provided the rows are consistent: an approved plan whose approval names an approver different from the creator (ids only, `f_17b9c93f`), an executor different from the creator, an audit event 1154 row in the same transaction, closure and period rules. The database compares **ids**; it cannot authenticate the application user behind them.
-* R holds INSERT on the plan, closure, line, event and approval tables (the storage and approval services write them) and on the business audit table. So, with the execution INSERT grant back, **R alone could write plan, approval, audit row and execution: T2.** The audit row's authentication code (HMAC with the audit key outside the database) would not verify, but PostgreSQL does not check it, and the owner does not accept detection alone.
+## 2. T2 precisely, and where authority may come from
 
-## 3. Options evaluated
+**What the runtime credentials are in this deployment.** The API process holds two sets, under the same operating-system account on the same host:
+* the SYSTEM runtime account, from its configuration (`Hasm__Database__Username/Password`);
+* every COMPANY runtime credential, from `Hasm__Database__CompanyCredentialDirectory` (owner-only files).
 
-### (a) A separate database principal (executor login role)
-A per-company role E with the execution INSERT grants that R never gets; R has no membership in E.
-* **Where its credential lives:** the executor runs inside the API process, so E's password must be readable by that process. Not in the runtime configuration, but in a separate owner-only credential file or encrypted under the API's key ring. Any theft vector that reads the API host's secrets yields both; an attacker who has only R's password (leaked connection string, a backup of the runtime credential store, a database-side leak) does not get E.
-* **Per-execution unlock:** none that is meaningful without a human secret: the process decrypts E's password whenever it executes. A human unlock (an operator typing a secret per execution) is an operational burden and still trusts the process that receives it.
-* **What an attacker with only R's credentials gets:** nothing on the execution tables, but E is a general capability: whoever holds E's password can execute ANY plan with ANY consistent ids (no per-plan binding, no approver binding).
-* **Cost:** a second login role per company (cluster role created by `grant-company-runtime`-style tooling with the role administrator), a second credential store, rotation, restore handling.
-* **Verdict:** meets the letter of the requirement for the narrow "stolen R password" case, gives no independently verifiable authorization of THIS plan by THIS approver, and adds a second credential with the same storage problem. Not chosen as the primary control (it may be added later as defence in depth, section 11).
+**Consequence:** "the ordinary application runtime database credentials" means both together. Every boundary below assumes the attacker holds the system runtime account AND the company runtime role R.
 
-### (b) Cryptographically verifiable authorization checked IN the database
-Each privileged replay write carries a signature that PostgreSQL verifies before accepting the row.
-* **Can PostgreSQL verify it with what is available?** `pgcrypto` offers digests, HMAC and PGP encryption/decryption, **no signature verification**; and the migration guard (PR 188) refuses `CREATE EXTENSION` in migrations anyway. Core PostgreSQL 16 has `sha256()`, `get_byte`, `decode` and arbitrary-precision `numeric`. That is enough for **RSA signature verification in plain PL/pgSQL** (modular exponentiation with the public exponent 65537 and an exact comparison with the PKCS#1 v1.5 encoding). Proven by the probe of section 4.2.
-* **HMAC variant (symmetric key):** the database would need the secret. If R can read it, R can forge; if only a verifier role can read it, the trigger must run with that role's rights, i.e. a SECURITY DEFINER function with a pinned `search_path`, which the migration guard refuses (`search_path` is refused in every form) and which puts a forging secret into every company database and every company backup. **Rejected.**
-* **Asymmetric variant (public key in the database, private key outside it):** the database holds only the PUBLIC key; nobody who can read the database can forge. The verifying function is **invoker-rights** (no SECURITY DEFINER, no `search_path`), so the owner's objection does not arise: there is no definer function at all, and the check IS the independent authorization check.
-* **Verdict: chosen** (section 4).
+**What those credentials can write (the C1 finding).**
+* System database:
+  * users;
+  * sessions: the token hash, which is a plain SHA-256; the MFA-verified time; the selected company;
+  * role assignments and permissions;
+  * company access;
+  * new TOTP secrets (INSERT);
+  * the TOTP state, confirmation time, last step and failure counter. UPDATE is allowed on these columns only. Under D-235 the runtime account never has UPDATE of the material or identity, and never DELETE or TRUNCATE.
+  * login throttles.
+* Company database: plans, closures, lines, plan events, approvals, the business audit table, and every ordinary posting table.
 
-### (c) Combinations and other architectures
-* **Out-of-process executor service** with its own credential: moves the execution code and a credential to another process; against stolen R credentials it is equivalent to (a); against a compromised API it helps only if that service independently authenticates the approver (it would need the MFA secrets or its own login). A large new component for Release 1; not chosen.
-* **Two-person, two-channel authorization** (the approver approves in the application, an operator runs an offline `Hasm.Admin` command holding the signing key): strongest against a compromised application, operationally heavy for every execution. Kept as a deployment option of the chosen design (the signer can be the offline tool; section 4.1, Tier 2b).
-* **Approver-held hardware keys (WebAuthn assertions over the authorization):** the only option that also prevents a fully compromised application from authorizing on its own (it still cannot stop an approver from signing what a compromised UI shows). Needs WebAuthn, which Release 1 does not have (PHASE-4.1: TOTP only). It is the **upgrade path (Tier 2a)** of the chosen design: the database check stays the same kind (signature verification against registered public keys), only the key holder changes.
+So the credentials alone can fabricate any decision the API makes from those tables: who the user is, what they may do, whether their second factor is fresh.
 
-## 4. Recommended design: signed replay authorizations verified by PostgreSQL
+**Therefore a signature counts as an authorization only if the decision to sign rests on something the runtime credentials can neither write nor use.** Two such sources exist without new cryptographic infrastructure:
+* **(i)** a private key held by a second person on another machine;
+* **(ii)** a TOTP secret pinned by the owner and verified for each signature. Its plaintext needs the key ring outside the database. The database holds only ciphertext, and the D-235 rules forbid the runtime account to change or delete it.
 
-### 4.1 Keys and signer
-* **Replay authorization signing key:** RSA-3072, generated by a new `Hasm.Admin replay-signing-keygen <key-id>` into `Hasm__Replay__SigningKeyDirectory` (owner-only files, never overwritten, exactly the pattern of `backup-signing-keygen`). It is **not** in the database, **not** in the runtime database configuration or the company credential store, and is backed up separately from database backups and from the audit and encryption keys.
-* **Public key registration:** a new `Hasm.Admin register-replay-signing-key <key-id>` writes the public key (modulus, byte length, key id, fingerprint) into the new table `ReplayAuthorizationKey` of every company database **as the owner account** (the administrative connection), audited in the system stream. R holds SELECT only; the table is append-only except a one-time revocation stamp.
-* **Pinning in the application:** the API configuration carries the fingerprints of the accepted keys. The signer refuses to sign with, and the verifying readers (section 7) refuse to accept, a key whose fingerprint is not pinned: a key row substituted by a database owner is not silently trusted by the application.
-* **Signer (Tier 1, Release 1):** an internal component of the API process that signs only after its own checks of the request (section 4.2). **Tier 2a:** approver-held WebAuthn keys (future). **Tier 2b:** an offline signer (`Hasm.Admin authorize-replay`, run by a second person on another machine holding the private key). The database side is identical in all tiers.
+Session state, roles, permissions and the session's MFA time are never inputs to an authorization decision. They only route the user interface.
 
-### 4.2 Feasibility probe (run on the isolated 5433 cluster, PostgreSQL 16.15, through the CPU gate; local only, not committed)
-An invoker-rights PL/pgSQL function `rsa_verify(n numeric, k integer, signature bytea, message bytea)` (convert the signature to `numeric`, refuse `s >= n`, compute `s^65537 mod n` by 16 squarings and one multiplication, build the expected encoding `00 01 FF..FF 00 || DigestInfo(SHA-256) || sha256(message)` and compare the two numbers exactly) against signatures made by .NET `RSA.SignData(..., SHA256, Pkcs1)` with a fresh 3072-bit key:
+**Option (a), a separate executor database principal, fails C1 for the same reason:** the API decides when to use it, and it gives no per-plan binding. It is not part of either resolution.
+
+## 3. Options considered
+
+Revision 1, section 3, has the full comparison.
+
+| Option | Decision |
+|---|---|
+| (a) Separate executor principal | Rejected: C1, and no per-plan binding. |
+| (b) Symmetric MAC verified in the database | Rejected. It needs a secret in the database and a definer function with a pinned `search_path`; the guard refuses that, and the secret would be in every backup. |
+| (b) Asymmetric signature verified in the database | **Kept** as the database side of both resolutions (section 4). |
+| (c) Where the signing authority lives | **(i)** offline second-person signer (section 5, recommended), or **(ii)** owner-registered in-app signers with per-signature TOTP (section 6). Approver-held WebAuthn keys remain a later upgrade of (ii), not in Release 1. |
+
+## 4. Database side (common to both resolutions)
+
+### 4.1 Keys
+
+* **Algorithm.** RSA with a modulus of exactly 3072 bits (k = 384 bytes) and public exponent exactly 65537, scheme RSASSA-PKCS1-v1_5 with SHA-256. Only public keys are in the database.
+* **Table `ReplaySignerKey`** (new, company database). Columns:
+  * key id: text matching `^[a-z0-9-]{1,40}$`;
+  * modulus: `numeric`, with a CHECK of `>= 2^3071` and `< 2^3072`;
+  * signer user id: uuid, the person the key belongs to. In (ii) the installation key has NULL here, and each message names its signer (section 6);
+  * registered at;
+  * revoke-from: timestamptz, NULL or set once.
+* **Who writes it.** Only the database owner account, through `Hasm.Admin`. The table is append-only except for the one-time revoke-from. R holds SELECT only.
+* **Pinned copy.** The API configuration pins the same keys: key id, modulus fingerprint, revoke-from. Read-side verification trusts this pinned list, not the table (section 9).
+
+### 4.2 Verification function (feasibility proven)
+
+`rsa_verify(n numeric, signature bytea, message bytea)` returns boolean. It is plain PL/pgSQL with invoker rights and no extension. It:
+1. refuses unless `length(signature) = 384` exactly;
+2. converts the signature to `numeric`, big-endian, and refuses `s >= n`;
+3. computes `s^65537 mod n` with 16 squarings and one multiplication, using `mod()` only and never `/`;
+4. compares the result, as a number, with the number of the full encoding `00 01 FF×(384-3-19-32) 00 || 3031300d060960864801650304020105000420 || sha256(message)`. The DigestInfo is constant; hex constants are built with `decode(..., 'hex')`.
+
+Comparing the whole encoding exactly, rather than parsing the decrypted block, avoids the PKCS#1 v1.5 parsing forgeries.
+
+The feasibility probe ran on the isolated 5433 cluster (PostgreSQL 16.15, through the CPU gate; local only):
 
 | Case | Result |
 |---|---|
-| valid signature | true |
-| message changed in one bit | false |
-| signature changed in one bit | false |
+| valid signature (.NET `RSA.SignData` with `Pkcs1`, fresh 3072-bit key) | true |
+| message changed | false |
+| signature changed | false |
 | signed by another key | false |
-| PSS signature by the right key | false (only PKCS#1 v1.5 is accepted) |
-| signature value >= modulus | false |
+| PSS padding | false |
+| signature value `>= n` | false |
 | signature one byte short | false |
-| `prosecdef` of the function | false (invoker rights) |
-| cost | **4.2 ms per verification** (50 VOLATILE calls on distinct messages: 212 ms) |
+| `prosecdef` | false |
+| cost | **4.2 ms per verification** (VOLATILE, distinct messages) |
 
-`pgcrypto` is available on the cluster but not installed in the databases and is not used. The exact comparison of the whole encoding (no parsing of the decrypted block) avoids the classic PKCS#1 v1.5 parsing forgeries; the key size is fixed at 3072 bits by the registration check.
+`pgcrypto` has no signature verification, and the guard refuses extensions.
 
-### 4.3 What is signed: three authorizations, built by PostgreSQL from the rows
-The message is **never taken from the client**: PostgreSQL builds the canonical text from the rows it already holds, and only the signature and the key id are supplied. The application builds the same text; a unit test pins byte equality (as for the closure hash). Domain-separated, one line, fields in this order:
+### 4.3 Enforcement
 
-* **Creation:** `hasm-replay-v1|creation|company=<company id from the company identity table>|plan=<id>|creator=<id>|document=<id>@<revision>|item=<id>|warehouse=<id>|payload=<sha256 of the payload>|fingerprints=<the seven, in order>|closure=<closure hash recomputed by the database>|lines=<sha256 of the ordered plan lines>`
-* **Approval:** `hasm-replay-v1|approval|company=…|plan=<id>|revision=<plan revision approved>|approval=<id>|approver=<id>|creator=<id>|document=<id>@<revision>|fingerprints=…|closure=…|lines=…`
-* **Execution:** `hasm-replay-v1|execution|company=…|plan=<id>|approval=<id>|approver=<id>|executor=<id>|execution=<id>|closure=…|not-after=<UTC timestamp, seconds>`
+One additive company migration; the lead allocates its number.
 
-The signer signs only after: the permission of the user on the plan's root warehouse (create, approve or execute); a fresh MFA step-up of that user (the existing `MfaFresh` policy; privileged under D-096); segregation of duties (creation: the creator; approval: approver independent of the plan and of the event document, as `f_17b9c93f`; execution: executor different from the creator); the re-plan with every fingerprint and the closure hash equal (approval and execution); `not-after` at most 10 minutes ahead (execution).
+**New tables.** All are append-only: UPDATE, DELETE and TRUNCATE are refused, as in 0036.
+* `ReplayExecutionGrant`: grant id, key id, plan id, executor user id, signer user id, not-before and not-after (Unix seconds, bigint), signature (`bytea`, length 384), and accepted at. Accepted at is set by the trigger to `clock_timestamp()` and is never supplied by the client.
+* `ReplayGrantUse`: execution id (unique) and grant id (unique). A grant is used at most once, and an execution has at most one grant.
+* `ReplayApprovalSignature` (resolution (ii) only): approval id (unique), key id, signer user id, signed at, signature, accepted at.
 
-### 4.4 Database enforcement (one new additive company migration, number to be allocated by the lead)
-New tables (append-only, refused UPDATE/DELETE/TRUNCATE as in 0036):
-* `ReplayAuthorizationKey` (key id, modulus, byte length 384, fingerprint, registered at, revoked at once).
-* `ReplayPlanAuthorization` (plan id unique, key id, signature), `ReplayApprovalAuthorization` (approval id unique, key id, signature), `ReplayExecutionAuthorization` (execution id unique, key id, signature, executor id, not-after).
+**At insert.** A `BEFORE INSERT` trigger with invoker rights requires:
+* the key exists, its modulus has 3072 bits, and `accepted_at < coalesce(revoke_from, 'infinity')`;
+* `rsa_verify` holds over the message of section 4.4, built from the rows;
+* `not_before <= clock_timestamp() <= not_after`, in epoch seconds;
+* signer independence: the signer is not the plan's creator, not the approval's approver (except in (ii)'s approval signature, where the signer must BE the approver), not the executor, and not the event document's creator, editor or submitter. This is the rule of `f_17b9c93f`, applied to the signer id;
+* for a key with a non-NULL signer user id, the message's signer equals it.
 
-New functions (plain PL/pgSQL, invoker rights): `rsa_verify` (4.2); `replay_message(kind, id)` building the canonical text from the rows; `replay_authorized(kind, id)` = the key exists, is not revoked and has 3072 bits, and `rsa_verify` holds for `replay_message`.
+**At commit.** New `DEFERRABLE INITIALLY DEFERRED` constraint triggers on the 0036 execution table and on `ReplayGrantUse` require:
+* every execution of the transaction has exactly one grant use;
+* its grant is **re-verified**: the signature is checked over the message rebuilt NOW from the rows. A closure or line row added after the grant was inserted therefore fails;
+* `clock_timestamp() <= not_after` still holds;
+* the grant's plan and executor equal the execution's plan and `executed_by`;
+* in (ii), the approval named by the plan has its verified approval signature, and the grant's signer differs from that signature's signer.
 
-New triggers (additive; no existing trigger, function or constraint is changed or replaced):
-* `BEFORE INSERT` on each authorization table: refuses the row unless `replay_authorized` holds for it; on the execution authorization also unless `now() <= not-after <= now() + 10 minutes` and the executor and execution match the execution row.
-* `DEFERRABLE INITIALLY DEFERRED` constraint triggers `AFTER INSERT` on the plan, approval and execution tables of 0036: at commit every plan, approval and execution row written in the transaction has its verified authorization row. A plan's transition to approved (`BEFORE UPDATE` new trigger on the plan table) additionally requires the verified approval authorization of the approval it names.
-* Nothing else changes: the epoch rows and back-dated entries remain accepted only inside a live execution of an approved plan (0036); since an execution cannot commit without its verified authorization, neither can they.
+Nothing in 0036 is changed or replaced; these are new triggers on new and existing tables.
 
-Grants (catalog `CompanyRuntimePrivileges`): R gets SELECT on `ReplayAuthorizationKey` and SELECT, INSERT on the three authorization tables; the INSERT grant on the four execution tables can return **only** with this migration, the first real caller and the owner decisions of section 12 (executor plan section 7 is replaced by this design).
+**Clock.** The database server's `clock_timestamp()`, synchronised by NTP. The signer sets not-before to its own time minus 5 minutes. `now()`, the transaction start, is never used for the window.
 
-## 5. Threat boundaries
+### 4.4 The signed messages, byte-exact
 
-| Attacker has | Create a plan | Approve | Execute / write epoch rows | What is detected | Out of scope |
-|---|---|---|---|---|---|
-| **The runtime database credentials only** (R's password or a session as R) | **prevented**: no valid creation signature | **prevented** | **prevented**: no valid execution signature; the deferred checks roll everything back | refused attempts are visible in the database log | availability: R can still write and lock ordinary data, and cancel or reject open plans (state transitions are not signed; section 12 D3) |
-| **R plus a stolen approver session** (cookie) without the approver's second factor | prevented (creator session would also be needed, plus step-up) | **prevented**: approval needs a fresh MFA step-up | prevented | the refused step-up | |
-| **R plus a stolen approver session AND that approver's TOTP** | needs a second, different user's session and step-up (the creator), because approval and creation are by different people | possible only as that approver, for a plan a different creator made | needs an executor different from the creator | the authenticated audit events name both people | collusion of two privileged users |
-| **The signing key file only** | no database access: nothing | | | | |
-| **Full compromise of the API process** (it holds the signing key, the audit key, the key ring and R) | **not prevented in Tier 1** | not prevented | not prevented | the signatures and audit events name the key and users; key revocation stops further use | prevention requires Tier 2a/2b (keys outside the API process) |
-| **Database owner or superuser** | can replace the public key, switch triggers off, write rows | | | readers refuse keys whose fingerprint is not pinned in the application (section 7); the migration runner refuses a switched-off trigger at its next run (PR 188) | out of scope (design T10; SRS: no DBA rights for users) |
+**Encoding.**
+* The UTF-8 bytes of ASCII text.
+* One field per line, separated by a single LF (0x0A), with no trailing LF.
+* No spaces. Keys are lowercase. Fields appear in exactly the order below.
 
-## 6. What is preserved
-* **Least privilege:** no new role and no definer function; R's INSERT on the execution tables is conditional on a signature R cannot produce; key registration needs the owner account.
-* **External audit HMAC chain:** unchanged; 1154 to 1159 are still required where they are today. The authorization rows add independent, publicly verifiable evidence (the audit detail can carry the signature digest).
-* **Segregation of duties:** unchanged in the database (`f_17b9c93f`, executor not the creator) and now also attested by the signed messages, which name creator, approver and executor.
-* **Fiscal periods:** unchanged (0036 entry guard: Open period, read `FOR SHARE`; the stock-period guard of 0034).
-* **The owner's Q1 safeguards (verbatim) and where this design keeps them:** "preserve all existing CHECKs, triggers and immutability; never relax or replace an existing safeguard" (only additions; N17 extended); "an entry-level guard refusing unauthorized back-dated movements" (0036 unchanged; authorized now also means signed); "the replay exception only for an operation bound, in the same DB transaction, to the single execution of an approved plan" (unchanged; the execution must also carry its signature); "every replayed operation and entry bound to the plan's approved item/warehouse closure" (unchanged; the closure hash is in every signed message); "segregation of duties and Open fiscal periods enforced" (above); "no unauthorized reversals of original, event, storno and rebook operations" (unchanged, 0036 X6); "transactional consistency and an auditable execution record" (deferred checks; signature plus audit event); "never a client-controlled session flag or a general back-dating bypass" (no flag; section 8); "historical accounting records and traceability preserved" (nothing edited; authorization rows are append-only).
+**Grant message** (resolutions (i) and (ii)):
 
-## 7. Keeping unverified replay effects out of valid financial history
-* **At write:** an execution, and therefore any epoch row, cannot commit without a verified signature (section 4.4).
-* **At read:** the snapshot readers and the close probe call `replay_authorized('execution', id)` for every execution they meet and refuse an epoch whose authorization does not verify, or whose key fingerprint is not pinned in the application. This covers rows that bypassed the triggers: a database owner's writes, and a **restore**, because `pg_restore` loads data before it creates triggers.
-* **After a restore** (trial restore and the restore drill, N18): a full verification pass over every authorization row is part of the restore check; a failure marks the restored copy unusable.
-* **Period close (slice P):** a period cannot be closed while it contains an epoch whose authorization does not verify.
+```
+hasm-replay-v2
+grant
+company=<company id>
+plan=<plan id>
+revision=<plan revision>
+approval=<approval id>
+approver=<approver user id>
+creator=<plan creator user id>
+document=<event document id>@<document revision>
+item=<root item id>
+warehouse=<root warehouse id>
+payload=<hex sha256 of the plan payload>
+fingerprints=<the seven fingerprints>
+closure=<closure hash>
+lines=<hex sha256 of the lines text>
+executor=<executor user id>
+grant=<grant id>
+signer=<signer user id>
+key=<key id>
+not-before=<integer>
+not-after=<integer>
+```
 
-## 8. No application flag; migration-guard compliance
-There is no setting, session variable or parameter that opens anything: the only way in is a signature over a message that PostgreSQL builds itself. The new migration uses `CREATE TABLE`, `CREATE FUNCTION` (PL/pgSQL, invoker rights), `CREATE TRIGGER`/`CREATE CONSTRAINT TRIGGER`, `REVOKE ... FROM PUBLIC`, `numeric`, `sha256`, `get_byte`, `decode`, `repeat`, `format`, `now()` and the allowed `pg_current_xact_id()`. It needs **no** `SECURITY DEFINER`, `search_path`, `set_config`, dynamic SQL, extension or other `pg_` name, and no backslash string literals (hex via `decode(..., 'hex')`). **No guard exception is needed.**
+**Approval message** (resolution (ii) only): the first 15 lines of the grant message (through `lines=`), with line 2 equal to `approve` instead of `grant`, followed by three lines: `signer=<signer user id>`, `key=<key id>` and `signed-at=<integer>`.
 
-## 9. Migration impact and provisioning
-* **One additive company migration** (tables, functions, triggers of section 4.4; number to be allocated by the lead; generated names; N17 extended for additions only). No change to 0036 or any earlier migration.
-* **No new cluster role.** Two new administrative commands (`replay-signing-keygen`, `register-replay-signing-key`), audited; registration also runs for a newly provisioned company (provisioning calls it when a key is configured) and after a restore (like `grant-company-runtime`). A company database without a registered key cannot authorize anything: it fails closed.
-* **Runtime catalog:** the grants of section 4.4.
+**Value rules.**
+* **uuid:** lowercase, hyphenated, 36 characters. This is PostgreSQL `uuid` output and never upper case.
+* **integer:** decimal, with no sign and no leading zeros.
+* **hash:** 64 lowercase hex characters. In SQL, `encode(sha256(x), 'hex')`, never `bytea::text`.
+* **time:** whole Unix seconds. Stored as bigint, so TimeZone and DateStyle never enter.
 
-## 10. Adversarial PostgreSQL tests (role-capable isolated cluster, the real per-company runtime role)
-Each with the production catalog; the "INSERT on the execution tables" cases run once with the grant this design allows:
-1. R inserts a plan (with closure and lines) without a creation authorization: refused at commit; with a forged signature: refused at insert.
-2. R inserts an approval and moves the plan to approved without an approval authorization, with a forged one, and with a genuine approval authorization **of another plan**: refused.
-3. R writes a complete, well-formed epoch (plan, approval, audit row 1154, execution, members, entries) with every authorization forged or missing: refused, nothing persists (the PR 48 epoch fixture as the attacker's script).
-4. A genuine execution authorization replayed: for another plan; another execution id; another company database (the same key registered in both); another closure (a plan whose closure hash differs); after `not-after`; with `not-after` more than 10 minutes ahead; for a second execution of an executed plan: all refused.
-5. A genuine signature with a revoked key; with an unregistered key; with a 2048-bit key; a key row inserted by R: refused (R holds SELECT only on the key table).
-6. Approver equal to the creator, to the event document's creator, editor or submitter, and executor equal to the creator, each with a signature made for exactly those ids: refused by the database (`f_17b9c93f`, executor rule), so a signer bug cannot bypass segregation of duties.
-7. The verifying functions are invoker-rights (`prosecdef` false), have no `proconfig`, and R cannot create a function or operator that shadows them (no CREATE on the schema; N25-style hijack attempts).
-8. Readers and the close probe refuse an epoch inserted with triggers switched off by the owner (the restore case) whose signature is missing or invalid, and one whose key fingerprint is not pinned.
-9. The canonical message: a unit test pins the application text against `replay_message` byte for byte for each kind, with edge cases (lowercase uuids, timestamp to seconds, empty lines digest).
-10. Mutation proofs: removing the signature check, the expiry check, the company field, the closure field, or the deferred existence check each fails a named test.
+**Field sources.**
+* `company`: the company identity table.
+* `revision`: the plan revision named by the approval.
+* `approval`, `approver`, `creator`, `document`, `item`, `warehouse`: the plan and approval rows of 0036.
+* `payload`: the hash of `convert_to(payload, 'UTF8')`; the server encoding is UTF-8.
+* `fingerprints`: the plan's seven `char(64)` fingerprint columns in their 0036 declaration order (plan, comparison, evidence, periods, position, policy, accounting), joined by `,` (0x2C).
+* `closure`: the plan's stored closure hash, after the database has recomputed it with `f_3cdca6ba` and compared.
 
-## 11. Effects on the merged executor plan
-* **New slice A (before E3):** the migration of section 4.4, the key tooling, the canonical message and signer, the adversarial tests of section 10. Inert: no key registered means nothing can be authorized; the runtime catalog keeps SELECT only on the execution tables.
-* **Change to merged services (own slice, with the existing-path treatment of the executor plan):** `CompensationPlanService` writes the creation authorization, `CompensationPlanApprovalService` the approval authorization; both behind the MFA step-up.
-* **E3:** the executor obtains the execution authorization (signer, after its re-plan) and writes it right after the execution row; the rollback matrix gains "signature refused" and "expired authorization".
-* **P:** the close probe's verification of section 7.
-* **E5 and the grant step (executor plan section 7) are replaced:** the INSERT grant on the four execution tables returns only with slice A merged, the first real caller, and the owner decisions below. (a) may be added later as defence in depth; it is not required by this design.
+**Lines text.**
+* One line per plan line, ordered by line number (integer), joined by LF, with no trailing LF.
+* Each line is `<line number>|<posting id, or - when NULL>|<entry date>|<period id>|<branch id>|<account id>|<debit>|<credit>`.
+* Entry date: `to_char(d, 'YYYY-MM-DD')`, which has no locale-dependent pattern.
+* Debit and credit: the `numeric(28,6)` values with exactly six decimals and no thousands separator. This is PostgreSQL `numeric` output for the column, for example `12.500000`. In .NET it is `ToString("F6", CultureInfo.InvariantCulture)`.
+* A plan with no lines: the hash of the empty string, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 
-## 12. Owner decisions needed before activation
-* **D1 (boundary):** "Do you accept enabling replay execution with Tier 1, where the database refuses every replay write that lacks a signature made with a key held outside the database (so stolen database credentials, alone or with a stolen session lacking the second factor, cannot create, approve or execute a replay), while a full compromise of the application process, which holds that key, could still sign one; or do you require Tier 2 before activation (each approval signed by the approver's own hardware-bound key, which needs WebAuthn, not in Release 1; or a second person signing each execution with an offline tool on another machine)?"
-* **D2 (key custody):** who generates the replay signing key, where it is stored (a directory separate from the database credentials, the audit key and the encryption keys), how it is backed up, its rotation interval, and who may revoke it.
-* **D3 (scope of signing):** whether plan creation is also signed (recommended: yes, so that R cannot bind an approved document to a forged plan, X7), and whether reject, cancel and stale transitions stay unsigned (recommended: yes, they only end a plan; the residual is availability).
-* **D4 (validity):** the maximum lifetime of an execution authorization (recommended: 10 minutes).
+**Known-answer vectors.** These are pinned in the unit tests for the SQL builder and the .NET builder alike.
 
-## 13. Trade-offs and residual risks
-* Tier 1 moves the forging capability from "anyone with the database password" to "anyone who controls the API process or its signing key file": a real narrowing, not elimination. Tier 2 closes it at the cost of WebAuthn or a second-person offline step.
-* 4 ms per verification at three points of a plan's life is negligible; the verification code (about 25 lines of PL/pgSQL) is security-critical and must be reviewed and mutation-tested as such.
-* Key loss blocks new authorizations but not reading (verification needs only the public key); key compromise is handled by revocation and a new key; already verified rows remain verifiable.
-* Restores must re-run verification (section 7); a company without a registered key fails closed.
+* **Ids.** Each id named by a digit or letter `d` has the form `dddddddd-dddd-4ddd-8ddd-dddddddddddd`, for example `44444444-4444-4444-8444-444444444444`.
+
+  | Field | Id |
+  |---|---|
+  | company | 1 |
+  | plan | 2 |
+  | approval | 3 |
+  | approver | 4 |
+  | creator | 5 |
+  | document | 6 |
+  | item | 7 |
+  | warehouse | 8 |
+  | executor | 9 |
+  | grant | a |
+  | signer | b |
+
+* **Other fields.**
+
+  | Field | Value |
+  |---|---|
+  | revision | 2 |
+  | document revision | 3 |
+  | fingerprints | `1`×64 through `7`×64 |
+  | closure | `c`×64 |
+  | key | `k1` |
+  | not-before | `1795651200` |
+  | not-after | `1795737600` |
+
+* **Payload.** `{"Contract":"stock-compensation-plan-payload-v1"}`, whose hash is `e5f0ae53bfb61148c98966f48120e58e83c035a397ad09ca30e879cd3417b18f`.
+* **Lines.**
+  ```
+  1|9f6c1d2e-0000-4000-8000-000000000001|2026-03-11|1a2b3c4d-0000-4000-8000-0000000000aa|2b3c4d5e-0000-4000-8000-0000000000bb|3c4d5e6f-0000-4000-8000-0000000000cc|12.500000|0.000000
+  2|-|2026-03-12|1a2b3c4d-0000-4000-8000-0000000000aa|2b3c4d5e-0000-4000-8000-0000000000bb|4d5e6f70-0000-4000-8000-0000000000dd|0.000000|12.500000
+  ```
+  The lines hash is `b5fd4e1d6a1b3265a0c351234a1ffc54b0fe850693aecdb67f1163c38facda49`.
+
+* **Results.**
+
+  | Message | Length | SHA-256 |
+  |---|---|---|
+  | Grant | 1260 bytes | `2bfb65d86a007c70bdb959a12c2ee6f26027c111665fea2d077ae12c1cc5b195` |
+  | Approval (signer `b`, key `k1`, `signed-at=1795651200`) | 1151 bytes | `1d7683564e8de382ff2b865d088f54251aacf0063112c89b9cdcac1bad9aa60c` |
+
+* **RSA vectors.** Slice A's tests also use a fixed 3072-bit test key with a valid signature over the grant vector, and Wycheproof-style invalid cases. Each case must give the same result in SQL and in .NET:
+  * wrong length, 383 and 385 bytes;
+  * the leading zero byte dropped;
+  * s = 0, s = 1, s = n − 1, s = n, s > n;
+  * altered padding;
+  * altered DigestInfo;
+  * a SHA-1 DigestInfo;
+  * a PSS signature;
+  * a 2048-bit key;
+  * exponent 3.
+
+### 4.5 Name resolution and session independence (M1)
+
+* **Schema qualification.** Every relation inside the new functions is written `public."t_…"`. Built-in functions are unqualified, because the guard refuses `pg_catalog.`.
+* **Invariant (tested):** R has no TEMPORARY privilege on its database and no CREATE on any schema. These are the existing `database_create_or_temp` and `schema_create` violations of `CompanyRuntimePrivileges`, which the API refuses before use. So no temporary relation or type, and no user-defined function or operator, can shadow what the verifier names.
+  * The test runs on a freshly provisioned company after `grant-company-runtime`, and on a restored database after its grant step.
+  * The verifying functions run only inside triggers on R's own writes; no other role's session ever calls them.
+* **Session settings.** The message uses only the formats of 4.4. TimeZone, DateStyle, IntervalStyle, `bytea_output`, `extra_float_digits` and `lc_numeric` therefore cannot change it. There are no floats and no `to_char` with D or G. Every ORDER BY is on uuid or integer columns, never on text.
+* **Test.** The message is built in sessions with each of those settings changed, and must be byte-identical every time.
+
+### 4.6 Revocation (M3)
+
+**Rule.** The owner sets a key's `revoke_from` once. A signature is valid exactly when two conditions hold:
+* the key verifies it;
+* its database-assigned `accepted_at` is before `revoke_from`, or `revoke_from` is NULL.
+
+**Consequences.**
+* History accepted before `revoke_from` stays verifiable, by the database and by the readers.
+* Every new signature by the key is refused from `revoke_from` on.
+
+**Suspected compromise.** The owner may set `revoke_from` to the suspected time, including a time in the past. Signatures accepted after it become invalid. The readers refuse their epochs (section 9) until the owner decides their remediation (decision D5).
+
+**Precedence for reading.** The pinned application list carries the same `revoke_from`, and the pinned list wins.
+
+`accepted_at` is assigned by the trigger, so a writer cannot backdate it. A database owner can, but the owner's writes are covered by section 9's assumptions, not by this rule.
+
+### 4.7 Content binding and the bearer window (L3)
+
+**What the grant binds.** It is valid for exactly one plan, one plan revision, one approval and approver, one creator and one event document revision. It also binds the closure, the payload, all seven fingerprints, the lines, one executor id, one use and one time window.
+
+**What 0036 binds of the replayed effects.**
+* The epoch rows are confined to the plan's closure and to the single execution of this approved plan, within this transaction.
+* Lineage is enforced: original, then storno, then rebook.
+* Periods must be Open.
+
+0036 does **not** require the posted amounts to equal the plan lines.
+
+**Remaining gap.** A party that holds a valid grant within its window and can write to the database could execute that plan with epoch amounts that differ from the signed lines but stay within the closure. Two measures close the gap:
+* **Read side.** The .NET verifier of section 9 recomputes the executed epoch's ledger effect per period, branch and account, and requires it to equal the signed lines. Otherwise the epoch is not treated as valid history, and its period cannot close.
+* **Exposure.** The grant reaches the database only inside the execution transaction. The executor uploads the grant file when executing, and the application inserts the grant, the execution and the grant use together. A grant is therefore never readable from the database before it is consumed, and it is single-use.
+
+A database-side equality check of posted amounts against lines is part of slice A if E3's posting shape allows it to be stated in SQL. That is to be confirmed when E3 is planned. Until then the residual is the read-side refusal described above.
+
+## 5. Resolution (i), RECOMMENDED: offline second-person execution grant
+
+**Who.** A named person whom the owner registers as a replay signer (decision D2). The signer is a different person from the plan's creator, the approver and the executor, and from the event document's creator, editor and submitter. The database enforces this (4.3).
+
+**Key.**
+* The signer generates their own RSA-3072 key pair on their own offline machine with a small offline tool, `Hasm.ReplaySigner keygen`, which uses no network. The private key never leaves that machine.
+* The public key file goes to the owner. The owner registers it in every company database with `Hasm.Admin register-replay-signer <public key file> <signer user id>`, as the owner account, and a system audit event is written. The owner adds the key to the API's pinned list.
+
+**Participants list.** The owner also gives each signer a list of the user ids and names of the people allowed to create, approve and execute replays. The list is pinned in the offline tool's own configuration, outside the database. The tool refuses to sign a plan whose creator, approver or executor id is not on the list. It shows names from this list, never from the export, because names in the database can be forged.
+
+**Flow per execution.**
+1. The plan is created and approved in the application, as today. The approval is recorded but grants nothing by itself.
+2. An operator runs `Hasm.Admin export-replay-plan <company> <plan> <executor>` with the owner account. It produces a file with every field of 4.4 except grant, signer, key and the times, plus display data: the closure positions with codes and names, and the lines with accounts, periods, branches and amounts.
+3. The file is carried to the signer's machine. The offline tool:
+   * rebuilds the lines digest and the message from the file's fields;
+   * shows the content in full;
+   * checks the participants list;
+   * on the signer's explicit confirmation, signs with not-before = now − 5 minutes and not-after = now + the validity of decision D4, and writes a grant file.
+4. The signer confirms the request with the approver through a channel outside the application (decision D2), for example in person or by phone. This step remains necessary while runtime credentials can mint sessions of real users (section 15): a thief could otherwise make a forged plan appear to come from real colleagues.
+5. The executor uploads the grant file in the application when executing. The grant, the execution and the grant use are written in one transaction, and the checks of 4.3 bind them at insert and at commit.
+
+**Why a forged export does not help.** The database verifies the signature against the message it rebuilds from its own rows. A file that misstates the rows yields a signature that does not verify. A plan forged INTO the database by the runtime credentials is shown to the signer as it actually is; signing it is a human decision about visible content, confirmed out of band.
+
+**Cost.** Each execution needs one offline step by a second person. Back-dated replays are rare corrections. A second machine and per-person keys are required.
+
+## 6. Resolution (ii): owner-registered in-app signers with per-signature TOTP
+
+**Registry: one new system migration** (the lead allocates its number).
+* **`ReplaySignerRegistration`:** user id, pinned TOTP secret id, registered at, revoked at (set once).
+  * Only the system database owner writes it, through `Hasm.Admin register-replay-signer-totp <login>`, with a system audit event.
+  * The system runtime account holds SELECT only. This is a new `SystemRuntimePrivileges` entry, refused at start of use like the D-235 TOTP gate.
+* **`ReplaySignerAttempt`:** signer, time, outcome. It is append-only: the runtime account holds INSERT and SELECT, and UPDATE, DELETE and TRUNCATE are refused by grants and by an owner-only trigger.
+* **Configuration.** The explicit non-least-privilege opt-in of `HasmDatabaseOptions` (D-235) is refused while replay signing is enabled.
+
+**Signing key.** One installation RSA key lives in `Hasm__Replay__SigningKeyDirectory`. The files are owner-only, like the backup signing key, and kept separate from the database credentials, the audit key and the key ring. Its public key is registered as in 4.1, with signer user id NULL. Each message names its registered signer.
+
+**Two signatures, by two different registered signers.**
+* The **approval signature** is by the approver, who must be a registered signer A, at approval time.
+* The **execution grant** is by registered signer B, with B ≠ A, B not the creator, and B not the executor.
+
+**Each signature requires the signer to type a fresh TOTP code for this operation.** The signer component:
+1. reads the registration, which the runtime account can read but only the owner can write;
+2. loads the pinned TOTP secret by its id. The material and identity are owner-only (D-235), the runtime account has no DELETE, and a newly inserted secret has a different id;
+3. requires the secret's state to be Active;
+4. decrypts the secret with the key ring held outside the database;
+5. verifies the code at the current step under the existing replay rule: the last accepted step strictly increases, and the runtime credentials can only raise it, never lower it;
+6. refuses after 5 failures in 15 minutes, counted from the append-only attempt log. The runtime-writable login throttle is not used;
+7. writes the attempt row, then signs.
+
+Session, roles, permissions and the session's MFA time are not inputs.
+
+**Re-enrolment voids the registration.** A re-enrolled signer has a new secret id. The registration still pins the old id and stops working until the owner registers the signer again.
+
+**Cost.**
+* a system migration;
+* an owner registration step per signer;
+* an installation key on the API host.
+
+It does not stop a fully compromised API process, which holds both the key ring and the signing key.
+
+## 7. Threat boundaries
+
+In both tables, "runtime credentials" means the system runtime account AND the company role R together (section 2).
+
+### 7.1 Resolution (i): offline second-person grant
+
+| Attacker holds | Plan / approval rows | Execute, or write epoch rows | Detected | Residual / out of scope |
+|---|---|---|---|---|
+| **Runtime credentials** | Can be written (unsigned); they grant nothing. | **Prevented.** No grant verifies without a signer's private key; the deferred checks roll back the whole epoch. | Refused writes in the database log. | Availability: forged proposed plans can bind documents (X7) until cancelled; cancel, reject and stale are unsigned (D6). |
+| Runtime credentials **+ sessions, users, roles and MFA times they mint** | As above. | **Prevented.** The signer is a person outside the application, using a participants list pinned outside the database. | As above. | A forged plan that appears to come from real colleagues is stopped by the signer's out-of-band confirmation (5, step 4). |
+| Runtime credentials **+ a legitimately issued grant file, intercepted within its window** | | Only that plan, that executor id and that content, once. | Different amounts are refused as history by the read-side check (4.7). | The one approved replay may be executed by the thief within the window, consuming the grant. |
+| **Full compromise of the API process** | Yes. | **Prevented** for any plan without a grant: there is no signer key on the API host. For a grant delivered to the compromised process: as in the row above. | As above. | |
+| A signer's offline machine and private key | | Without database access: nothing. With runtime credentials as well: equivalent to a malicious signer, one plan per grant, attributable. | Key revocation (4.6). | Collusion or coercion of a signer. |
+| **Database owner or superuser** | Can write any rows and switch triggers off. | Can write an execution without a valid grant. | **Readers, the close probe and the restore check refuse it** (.NET verification against pinned keys, section 9). | Preventing the write (design T10). |
+
+### 7.2 Resolution (ii): registered in-app signers with per-signature TOTP
+
+| Attacker holds | Approve with signature / execute | Detected | Residual / out of scope |
+|---|---|---|---|
+| **Runtime credentials** | **Prevented.** The registry is owner-written. The TOTP secret is pinned by id, and its plaintext needs the key ring outside the database. Guessing is bounded by the append-only attempt log: 5 per 15 minutes per signer. | The attempt log. | Availability: signers locked out by failed attempts, by a raised last step, or by a revoked TOTP state; unsigned creation, cancel, reject and stale (D6). |
+| Runtime credentials **+ minted sessions, users, roles and MFA times** | **Prevented.** None of these is an input. | | |
+| Runtime credentials **+ one registered signer's TOTP device or a phished code** | **Prevented.** A second, different registered signer is required. | The attempt log and the audit events. | Two registered signers colluding or compromised. |
+| **Full compromise of the API process** | **NOT prevented.** The process holds the key ring and the signing key. | The signatures and audit events name the signers. | Prevention needs resolution (i). |
+| Database owner or superuser | Can write unsigned rows. | Readers refuse them (section 9). | Preventing the write. |
+
+## 8. What is preserved
+
+* **Least privilege.** No new database role and no definer function. R's INSERT on the execution tables is conditional on a grant that R cannot produce. Keys and registrations are written by the owner.
+* **External audit HMAC chain.** Unchanged; business audit events 1154 to 1159 are still required as today. Grants and signatures add publicly verifiable evidence. The audit detail can carry the grant id, and the signature is unique because its length is exact.
+* **Segregation of duties.** Unchanged in the database (`f_17b9c93f`; the executor is not the creator) and extended to the signer (4.3). Resolution (ii) requires two different registered signers.
+* **Fiscal periods.** Unchanged: the 0036 entry guard with `FOR SHARE` on the period, and the stock-period guard of 0034.
+* **The owner's Q1 safeguards** (quoted verbatim, each followed by where this design keeps it):
+
+  | Q1 safeguard (verbatim) | Where it is kept |
+  |---|---|
+  | "preserve all existing CHECKs, triggers and immutability; never relax or replace an existing safeguard" | Additions only; N17 is extended. |
+  | "an entry-level guard refusing unauthorized back-dated movements" | 0036 is unchanged, and an execution now also needs its verified grant. |
+  | "the replay exception only for an operation bound, in the same DB transaction, to the single execution of an approved plan" | Unchanged, plus the single grant use. |
+  | "every replayed operation and entry bound to the plan's approved item/warehouse closure" | Unchanged, and the closure and lines are signed. |
+  | "segregation of duties and Open fiscal periods enforced" | See the bullets above. |
+  | "no unauthorized reversals of original, event, storno and rebook operations" | Unchanged (0036 X6). |
+  | "transactional consistency and an auditable execution record" | Deferred checks, the grant and the audit event. |
+  | "never a client-controlled session flag or a general back-dating bypass" | There is no flag (section 10). |
+  | "historical accounting records and traceability preserved" | Nothing is edited; every new table is append-only. |
+
+## 9. Keeping unverified replay effects out of valid financial history (M4)
+
+* **At write.** No execution commits without a grant that was verified at insert and re-verified at commit (4.3). Without an execution, no epoch row can commit.
+* **At read, independent of the database's functions.** The snapshot readers, the close probe (slice P) and the restore check do their own verification:
+  * they rebuild the message of 4.4 in .NET from the rows;
+  * they verify the RSA signature in .NET against the keys **pinned in the application configuration**, with their revoke-from;
+  * they compare the epoch's ledger effect with the signed lines (4.7).
+
+  An epoch is refused, and not treated as valid history, if any of these holds:
+  * its grant does not verify;
+  * its key is not pinned;
+  * its acceptance time is not before the pinned revoke-from;
+  * its ledger effect differs from the signed lines.
+
+  None of the following changes the outcome: a replaced database function, a replaced key row, rows written with triggers switched off, or a restore that loads data before it creates triggers.
+* **After a restore.** The restore check runs this verification over every grant. A failure marks the restored copy unusable.
+* **Period close.** A period that contains a refused epoch cannot be closed.
+
+## 10. No application flag; migration-guard compliance
+
+No setting, session variable or parameter opens anything.
+
+**What the migrations use.** The company migration, and for (ii) the system migration, use only:
+* `CREATE TABLE`;
+* PL/pgSQL `CREATE FUNCTION` with invoker rights;
+* `CREATE TRIGGER` and `CREATE CONSTRAINT TRIGGER`;
+* `REVOKE ... FROM PUBLIC`;
+* the built-ins `numeric`, `sha256`, `get_byte`, `length`, `mod`, `decode`, `encode`, `convert_to`, `to_char`, `string_agg`, `clock_timestamp` and `extract`, and the allowed `pg_current_xact_id()`.
+
+**What they avoid:** `SECURITY DEFINER`, `search_path`, `set_config`, dynamic SQL, extensions, other `pg_` names and backslash literals.
+
+**No guard exception is needed.**
+
+## 11. Migrations and provisioning
+
+**Resolution (i).**
+* One additive COMPANY migration: the tables `ReplaySignerKey`, `ReplayExecutionGrant` and `ReplayGrantUse`, the functions and the new triggers. No system migration and no cluster role.
+* Tools, run with the owner account and audited:
+  * the offline `Hasm.ReplaySigner` (`keygen`, `show`, `sign`);
+  * `Hasm.Admin register-replay-signer`, `revoke-replay-signer` and `export-replay-plan`.
+* Registration runs for every company database. Provisioning runs it for a new company when keys are configured, and it runs again after a restore. A company without a registered key cannot execute: it fails closed.
+
+**Resolution (ii).** The same company migration plus `ReplayApprovalSignature`, and one additive SYSTEM migration: `ReplaySignerRegistration`, `ReplaySignerAttempt` and the owner-only triggers. The `SystemRuntimePrivileges` entries are SELECT on the registry, and INSERT and SELECT on the attempt log.
+
+**Runtime grants (company).**
+* SELECT on `ReplaySignerKey`.
+* SELECT and INSERT on the grant tables.
+* The INSERT grant on the four execution tables returns only with these migrations, the first real caller and the owner decisions of section 14.
+
+## 12. Adversarial PostgreSQL tests
+
+The tests run on the role-capable isolated cluster. The attackers are the SYSTEM runtime account and the company runtime role R, separately and together.
+
+1. **The C1 replay, in both resolutions.**
+   * With the system runtime account: mint a session with a fresh MFA time for an enrolled user, create a user, and assign roles and company access.
+   * With R: write the plan, closure, lines, approval, audit row 1154, execution, members and entries.
+   * Expected: the execution never commits without a verified grant. In (ii), driving the honest API with the minted sessions produces no signature, because the TOTP of the pinned secret is required.
+2. **(ii): the registry and TOTP.** The system runtime account attempts each of the following:
+
+   | Attempt | Expected |
+   |---|---|
+   | INSERT or UPDATE on `ReplaySignerRegistration` | 42501 |
+   | INSERT a new TOTP secret for a registered signer | No signature: the registration still pins the old id. |
+   | UPDATE the state or last step of the pinned secret | Denial only; no signature results. |
+   | UPDATE the material or DELETE the pinned secret | Refused. |
+   | DELETE or UPDATE attempt rows | Refused. |
+   | Guess codes repeatedly | Stopped by the attempt limit. |
+   | Re-enrol the signer | The registration is void. |
+
+3. **Forged, missing and replayed grants.** Each of the following is refused:
+   * a grant for another plan, another executor, another company (with the same key registered in both), another revision, another closure, other lines, another payload, other fingerprints or another document revision;
+   * a second use of a grant;
+   * a grant before not-before;
+   * a grant after not-after, both at insert and at commit (a transaction kept open past not-after);
+   * a closure or line row added after the grant within the same transaction.
+4. **Keys.**
+   * An unregistered key, a 2048-bit key, and the wrong exponent are refused.
+   * A revoked key: a new signature is refused; a grant accepted before revoke-from still verifies; a grant accepted after a backdated revoke-from is refused by the readers.
+   * A key row written by R or by the system account: 42501.
+5. **Segregation of duties.** A grant is refused, even with a valid signature, if its signer is the plan's creator, the approver, the executor, or the event document's creator, editor or submitter. In (ii), the grant is refused if its signer equals the approval signer.
+6. **Name resolution and settings (M1).**
+   * R has no TEMPORARY and no CREATE on fresh, provisioned and restored databases.
+   * Attempts to create a temporary table, type or function, or a public function or operator shadowing a built-in, fail.
+   * The message is byte-identical in sessions with TimeZone, DateStyle, IntervalStyle, `bytea_output`, `extra_float_digits` and `lc_numeric` changed.
+7. **Signature primitives.** The known-answer and Wycheproof-style vectors of 4.4 give the same results in `rsa_verify` and in the .NET verifier.
+8. **Read side (M4).** Readers, the close probe and the restore check each refuse:
+   * an execution inserted by the owner with triggers switched off and an invalid or missing grant;
+   * an execution accepted after the database function was replaced by one that returns true;
+   * a key row replaced in the database;
+   * an epoch whose ledger effect differs from the signed lines.
+9. **Mutation proofs.** Removing any one of the following makes a named test fail:
+   * the length check;
+   * the expiry check at commit;
+   * the content re-verification at commit;
+   * the signer independence check;
+   * the single-use constraint;
+   * the read-side lines comparison.
+
+## 13. Effects on the merged executor plan (`docs/PHASE-3.8D-EXECUTOR-PLAN.md`)
+
+* **New slice A, before E3.** It contains:
+  * the migrations of section 11;
+  * `rsa_verify` and the message builders, in SQL and .NET;
+  * the read-side verifier;
+  * the tooling of the chosen resolution;
+  * the tests of section 12.
+
+  It stays inert while no key is registered. For (ii) it also contains the system migration and the signer component.
+* **E3.**
+  * The executor accepts the grant file, writes the grant, the execution and `ReplayGrantUse` in one transaction, and fails closed without a grant.
+  * The rollback matrix gains "grant refused" and "grant expired at commit".
+  * E3's planning confirms whether a database-side check of posted amounts against lines can be added (4.7).
+* **P.** The close probe and the readers use the .NET verifier (section 9).
+* **E5 and executor-plan section 7 are replaced by this design.** The runtime INSERT grant on the four execution tables returns only when all of these hold:
+  * slice A is merged;
+  * the first real caller exists;
+  * a revision of this design is approved;
+  * the owner has taken the decisions below.
+
+## 14. Owner decisions needed before activation
+
+* **D1 (activation baseline).** Proposed wording for the owner:
+
+  > "Shall replay execution require, for each execution, a grant signed by a second, owner-registered person with a private key kept on a separate offline machine? This is resolution (i), recommended: stolen runtime database credentials, sessions minted with them, and a fully compromised application server cannot execute a replay without such a grant. Or do you accept owner-registered in-application signers, two different people, who each confirm with a fresh code from their own registered authenticator? This is resolution (ii): stolen runtime database credentials and minted sessions cannot execute a replay, but a fully compromised application server can."
+* **D2 (signer registry and authentication).**
+  * Who may be registered as a replay signer, and by whom. Recommended: the owner account through `Hasm.Admin`, audited.
+  * The rule that a signer is never the creator, approver or executor of a plan they sign, nor the creator, editor or submitter of its document.
+  * For (i): the participants list held by each signer, and the out-of-band confirmation with the approver.
+  * For (ii): the pinned authenticator, and the rule that re-enrolment voids the registration.
+* **D3 (key custody).**
+  * For (i): per-signer keys, generated and kept on each signer's offline machine, backed up by that signer under a rule the owner sets.
+  * For (ii): the installation signing key in its own owner-only directory, separate from the database credentials, the audit key and the key ring.
+  * For both: the rotation interval, and who may revoke a key.
+* **D4 (grant validity).** The maximum window between signing and execution. Recommended: 24 hours for (i) and 10 minutes for (ii). A grant is always single-use.
+* **D5 (revocation after a suspected compromise).** When the owner backdates a key's revoke-from to the suspected time, replays accepted after it are refused as history. Decide what then happens to them. Recommended: they are treated as unauthorized and corrected by a new, properly granted plan under owner review.
+* **D6 (unsigned steps).** Accept that plan creation, approval in (i), cancel, reject and stale stay unsigned. None of them changes financial history; the residual is availability, because forged proposed plans can block documents until cancelled. The alternative is to also require a grant for plan creation.
+* **Not a decision of this design, but relevant to activation:** the separate register item on runtime-credential session minting (section 15).
+
+## 15. Residual risks and the separate issue
+
+* **Separate application-wide issue.** This was a side finding of C1. It is a register item handled by the lead and is not solved here. The system runtime credentials can create authenticated, MFA-satisfied sessions for any user: the token hash is a plain SHA-256, and the session's MFA time is writable.
+  * This design takes no authorization decision from sessions.
+  * For (i), the issue is why the signer's out-of-band confirmation is part of the procedure (5, step 4).
+  * The rest of the application depends on sessions.
+* **Residuals of (i).**
+  * A malicious or coerced signer: one plan per grant, attributable, revocable.
+  * An intercepted grant within its window: only that plan and that executor, once, with different amounts refused as history.
+* **Residuals of (ii).** It prevents the database-credential attacks, but not a fully compromised application process.
+* **Security-critical code.** The verification code, about 25 lines of PL/pgSQL and their .NET twin, together with the message builders, needs the vectors and mutation proofs of section 12.
+* **Key loss.** It blocks new grants but never reading, because verification needs only public keys. History accepted before a key's revoke-from remains verifiable.
