@@ -65,7 +65,12 @@ public class PlanExecutionGuardTests : PlanExecutionTestBase
         var keepsDate = Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m);
         keepsDate[1] = keepsDate[1].Replace($"GREATEST({PO.LastEffectiveDate}, DATE '2026-03-20')", PO.LastEffectiveDate);
         RefusedWith("position_not_moved", await Rt([Op(a, 1, late), .. keepsDate]));
-        RefusedWith("position_not_moved", await Rt([Op(a, 1, late), .. keepsDate, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m)]));
+        // the date-kept move followed by the 15 March entry: the previous-entry date now answers at the insert
+        RefusedWith(BackDated, await Rt([Op(a, 1, late), .. keepsDate, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m)]));
+        // (4) probe ODB9: 20 March entry with the position moved but its date kept at 12 March, then a 15 March entry (not before 12 March), then the position moved to 20 March: both commit-time checks would hold, so the
+        // entry guard also compares with the date of the position's previous entry
+        var moveToLate = $"UPDATE {PO.Table} SET {PO.LastEffectiveDate} = DATE '2026-03-20' WHERE {PO.ItemId} = '{Avg.Id}' AND {PO.WarehouseId} = '{W1.Id}'";
+        RefusedWith(BackDated, await Rt([Op(a, 1, late), .. keepsDate, Op(b, 1, earlier), .. Move(b, Avg.Id, W1.Id, 1, 1, earlier, 1m, 10m).Take(1), moveToLate]));
         Assert.Equal(before, (await Digest(EN.Table), await Digest(PO.Table), await Digest(OP.Table)));                       // nothing of any attempt was written
         // the engine's own way (next sequence, position moved with the date) still commits
         Assert.Null(await Rt([Op(a, 1, late), .. Move(a, Avg.Id, W1.Id, 1, 1, late, 1m, 10m)]));

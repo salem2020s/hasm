@@ -575,6 +575,7 @@ DECLARE
     v_kind smallint;
     v_revop uuid;
     v_revent uuid;
+    v_prev date;
     v_op boolean;
     v_period smallint;
 BEGIN
@@ -609,6 +610,12 @@ BEGIN
         END IF;
     END IF;
     -- (1) F1: a back-dated entry is accepted only for an epoch member (whose execution, plan and approval were verified above)
+    -- review M2 (residual): the position's date is also a value the writer maintains, so an ordinary entry is compared with the date of the position's PREVIOUS ENTRY as well (seq = last_seq, a one-row lookup on the
+    -- unique (position, sequence) index); a position moved without the entry's date can no longer hide a later date
+    IF NOT v_member THEN
+        SELECT [[CostEntry.EffectiveDate]] INTO v_prev FROM [[CostEntry.Table]] WHERE [[CostEntry.PositionId]] = NEW.[[CostEntry.PositionId]] AND [[CostEntry.Seq]] = ps.last_seq;
+        IF FOUND AND (ps.last_date IS NULL OR v_prev > ps.last_date) THEN ps.last_date := v_prev; END IF;
+    END IF;
     IF ps.last_date IS NOT NULL AND NEW.[[CostEntry.EffectiveDate]] < ps.last_date AND NOT v_member THEN
         RAISE EXCEPTION 'a back-dated cost entry is accepted only inside the execution of an approved compensation plan';
     END IF;
