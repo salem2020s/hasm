@@ -1,5 +1,6 @@
 import { useI18n } from "@hasm/ui";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useAuth } from "./auth";
 import { ConfirmDialog } from "./components";
 import { isTauri } from "./platform";
 import { setNavigationBlocker } from "./router";
@@ -24,18 +25,24 @@ const EDITING_ROUTES = "/company/details";
 export function UnsavedProvider({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const dirty = useRef<Record<string, string>>({}); // key -> label, only while dirty
-  const [pending, setPending] = useState<null | { run: () => void; labels: string[] }>(null);
+  const [pending, setPending] = useState<null | { run: () => void; labels: string[]; whileLocked?: boolean }>(null);
+
+  const auth = useAuth();
+  // D-236: while the shell is locked (the session ended with unsaved input) nothing may leave the current page or ask a question on top of the sign-in-again dialog.
+  const locked = useRef(false);
+  locked.current = auth.locked;
 
   const isDirty = () => Object.keys(dirty.current).length > 0;
   const setDirty = useCallback((key: string, d: boolean, label: string) => { if (d) dirty.current[key] = label; else delete dirty.current[key]; }, []);
   const guard = useCallback((action: () => void) => {
+    if (locked.current) return;                             // locked: the request is ignored (the address is put back by the router); the page and its input stay as they are
     if (!isDirty()) { action(); return; }
     // One dialog at a time: a second request while it is open (e.g. pressing X again) is ignored, so there are no stacked dialogs or loops.
     setPending((open) => open ?? { run: action, labels: Object.values(dirty.current) });
   }, []);
 
   useEffect(() => {
-    setNavigationBlocker({ isBlocked: (to) => isDirty() && !to.startsWith(EDITING_ROUTES), request: guard });
+    setNavigationBlocker({ isBlocked: (to) => locked.current || (isDirty() && !to.startsWith(EDITING_ROUTES)), request: guard });
     return () => setNavigationBlocker(null);
   }, [guard]);
 
@@ -59,6 +66,12 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
       const off = await win.onCloseRequested((event) => {
         if (!isDirty()) return;
         event.preventDefault();
+        if (locked.current) {
+          // D-236: the window is asked to close while the shell is locked. The close must stay possible, and it destroys the preserved input (memory only), so the
+          // same Stay / Discard question is asked on top of the sign-in-again dialog - WITHOUT the section names, which nobody who is not signed in may read.
+          setPending((open) => open ?? { run: () => { void win.destroy(); }, labels: [], whileLocked: true });
+          return;
+        }
         guard(() => { void win.destroy(); });
       });
       if (cancelled) off(); else unlisten = off;
@@ -66,14 +79,25 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; unlisten?.(); };
   }, [guard]);
 
+  // The session provider asks this registry whether anything is unsaved when the session ends, and empties it when the preserved input is dropped (D-236).
+  const { attachUnsaved } = auth;
+  useEffect(() => {
+    attachUnsaved({ isDirty, clear: () => { dirty.current = {}; setPending(null); } });
+    return () => attachUnsaved(null);
+  }, [attachUnsaved]);
+  // An open Stay / Discard question is withdrawn when the shell locks: the sign-in-again dialog is the only dialog then.
+  // ... and a question asked while locked (window close) is withdrawn when the lock ends.
+  useEffect(() => { setPending(null); }, [auth.locked]);
+
   const api = useMemo<UnsavedApi>(() => ({ setDirty, guard }), [setDirty, guard]);
   return (
     <UnsavedContext.Provider value={api}>
       {children}
-      {pending && (
+      {pending && (!auth.locked || pending.whileLocked) && (
         <ConfirmDialog
+          idPrefix={pending.whileLocked ? "reauth-" : ""}
           title={t("unsaved.title")}
-          message={t("unsaved.message", { sections: pending.labels.join(t("unsaved.joiner")) })}
+          message={pending.whileLocked ? t("reauth.close_message") : t("unsaved.message", { sections: pending.labels.join(t("unsaved.joiner")) })}
           cancelLabel={t("unsaved.stay")}
           confirmLabel={t("unsaved.discard")}
           onCancel={() => setPending(null)}
