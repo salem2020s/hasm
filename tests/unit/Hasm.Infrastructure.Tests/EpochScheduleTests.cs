@@ -112,6 +112,7 @@ public class EpochScheduleTests
         Assert.Equal((CostEntryKind.Receipt, 1, Day0.AddDays(1), 200m, 20m, 300m, (long?)null), (evt.Kind, evt.Direction, evt.Date, evt.Amount, evt.QuantityAfter, evt.ValueAfter, evt.OriginalEntryId));
         // the issue again, at the new average 15.00 = 60.00, on its ORIGINAL date: 16 / 240.00
         Assert.Equal((CostEntryKind.Issue, -1, 4m, Day0.AddDays(2), 60m, 16m, 240m, 2L), (rebook.Kind, rebook.Direction, rebook.Quantity, rebook.Date, rebook.Amount, rebook.QuantityAfter, rebook.ValueAfter, rebook.OriginalEntryId!.Value));
+        Assert.Equal([3L, 4L, 5L], plan.Operations.SelectMany(o => o.Entries).Select(e => e.Sequence));      // the position had 2 entries: storno 3, event 4, rebook 5
         var line = Assert.Single(plan.Lineage);
         Assert.Equal((2L, 0, 0, 2, 0), (line.OriginalEntryId, line.StornoOperation, line.StornoEntry, line.RebookOperation, line.RebookEntry));
         Assert.Equal((16m, 240m), (plan.ExpectedPositions.Single().Quantity, plan.ExpectedPositions.Single().Value));
@@ -330,6 +331,11 @@ public class EpochScheduleTests
         }
         foreach (var impact in f.Comparison.Positions) Assert.Equal((impact.ProposedQuantity, impact.ProposedValue), (qty[impact.WarehouseId], val[impact.WarehouseId]));
         foreach (var p in plan.ExpectedPositions) Assert.Equal((p.Quantity, p.Value), (qty[p.PositionId], val[p.PositionId]));
+        // the deterministic key of every entry: (position, sequence), contiguous per position from the baseline's last sequence in write order
+        var expectedSequence = f.Snapshot.Positions.ToDictionary(p => p.WarehouseId, p => p.LastSequence);
+        foreach (var e in plan.Operations.SelectMany(o => o.Entries))
+            Assert.Equal(++expectedSequence[e.WarehouseId], e.Sequence);
+        Assert.Equal(plan.Operations.SelectMany(o => o.Entries).Count(), plan.Operations.SelectMany(o => o.Entries).Select(e => (e.WarehouseId, e.Sequence)).Distinct().Count());
         // every entry of a non-storno phase meets the running figures it states
         // (checked entry by entry above through the same signed sums by the derivation; here once more, independently)
         var q2 = f.Snapshot.Positions.ToDictionary(p => p.WarehouseId, p => p.Quantity);

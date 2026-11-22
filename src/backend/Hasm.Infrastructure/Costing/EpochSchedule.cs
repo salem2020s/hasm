@@ -9,10 +9,11 @@ internal enum EpochRole : short { Storno = 1, Event = 2, Rebook = 3 }
 
 /// <summary>
 /// One entry an epoch writes. <see cref="OriginalEntryId"/> is the entry a storno takes back or a rebook rewrites (null for the event). The amount and the two running figures are what the REPLAY says
-/// the entry must carry (the storno mirrors its original: same kind, opposite direction, same quantity, amount and date).
+/// the entry must carry (the storno mirrors its original: same kind, opposite direction, same quantity, amount and date). <see cref="Sequence"/> is the sequence number the entry takes on its position
+/// (the position's last sequence plus the entries the plan writes before it on that position): with the warehouse (the position) it is the deterministic KEY of the entry, no generated id is involved.
 /// </summary>
 internal sealed record EpochEntryPlan(EpochRole Role, Guid WarehouseId, CostEntryKind Kind, int Direction, decimal Quantity, DateOnly Date, decimal Amount,
-    decimal QuantityAfter, decimal ValueAfter, long? OriginalEntryId);
+    decimal QuantityAfter, decimal ValueAfter, long? OriginalEntryId, long Sequence = 0);
 
 /// <summary>One epoch operation: a storno or a rebook of ONE original operation (natural kind of the original), or the event. <see cref="OriginalOperationId"/> is null for the event.</summary>
 internal sealed record EpochOperationPlan(EpochRole Role, Guid? OriginalOperationId, CostOperationKind Kind, DateOnly Date, ImmutableArray<EpochEntryPlan> Entries);
@@ -182,6 +183,8 @@ internal static class EpochSchedule
 
         // ---- the ledger proof: replay the plan on signed quantity and value per position
         var running = snapshot.Positions.ToDictionary(p => p.WarehouseId, p => (Quantity: p.Quantity, Value: p.Value));
+        var nextSequence = snapshot.Positions.ToDictionary(p => p.WarehouseId, p => snapshot.Entries.Where(e => e.WarehouseId == p.WarehouseId).Select(e => e.Sequence).DefaultIfEmpty(0L).Max());
+        foreach (var p in snapshot.Positions) if (p.LastSequence != nextSequence[p.WarehouseId]) throw Inconsistent();   // the baseline's last sequence is the last sequence of its entries
         for (var o = 0; o < operations.Count; o++)
         {
             var plan = operations[o];
@@ -194,8 +197,9 @@ internal static class EpochSchedule
                 value += entry.Direction * entry.Amount;
                 if (quantity < 0m || value < 0m) throw new CostingException("epoch_storno_negative");
                 running[entry.WarehouseId] = (quantity, value);
+                var sequence = ++nextSequence[entry.WarehouseId];
                 if (entry.Role != EpochRole.Storno && (entry.QuantityAfter, entry.ValueAfter) != (quantity, value)) throw new CostingException("epoch_schedule_inconsistent");
-                filled.Add(entry.Role == EpochRole.Storno ? entry with { QuantityAfter = quantity, ValueAfter = value } : entry);
+                filled.Add(entry.Role == EpochRole.Storno ? entry with { QuantityAfter = quantity, ValueAfter = value, Sequence = sequence } : entry with { Sequence = sequence });
             }
             operations[o] = plan with { Entries = filled.MoveToImmutable() };
         }
