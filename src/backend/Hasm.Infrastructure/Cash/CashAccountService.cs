@@ -278,14 +278,26 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
         return new CashRewrapOutcome(done, skipped, failed);
     }
 
-    /// <summary>The number of encrypted account numbers per master key id (key usage for the retirement report: a key must stay available while any number is protected by it). No secret and no number is read.</summary>
+    /// <summary>The number of encrypted account numbers per master key id (key usage for the retirement report: a key must stay available while any number is protected by it). No secret and no number is read; a company database of an older level (no table) has none.</summary>
     public static async Task<IReadOnlyDictionary<string, int>> KeyUsageAsync(NpgsqlConnection conn, CancellationToken ct = default)
     {
         var usage = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        await using (var exists = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL", conn))
+        {
+            exists.Parameters.AddWithValue("t", CA.Table);
+            if (await exists.ExecuteScalarAsync(ct) is not true) return usage;
+        }
         await using var cmd = new NpgsqlCommand($"SELECT {CA.NumberKeyId}, count(*) FROM {CA.Table} WHERE {CA.NumberKeyId} IS NOT NULL GROUP BY 1", conn);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) usage[r.GetString(0)] = (int)r.GetInt64(1);
         return usage;
+    }
+
+    /// <summary>The same as <see cref="EncryptionKeyUsage"/> for the key retirement report: the key ids in use and how many numbers are not under <paramref name="activeKeyId"/>. Nothing here is ever "unknown": the key id is a column of the row.</summary>
+    public static async Task<EncryptionKeyUsage> KeyUsageAsync(NpgsqlConnection conn, string? activeKeyId, CancellationToken ct = default)
+    {
+        var usage = await KeyUsageAsync(conn, ct);
+        return new EncryptionKeyUsage([.. usage.Keys], 0, usage.Where(u => u.Key != activeKeyId).Sum(u => u.Value));
     }
 
     // ------------------------------------------------------------------------------------------------------------- plumbing
