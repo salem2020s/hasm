@@ -1,4 +1,4 @@
-# Independent review record (merge-only confirmation)
+# Independent review record (merge-only confirmation; verdict approve)
 
 * **Pull request:** #200 (duplicate approval policies refused; owner decision D-209; company migration 0033)
 * **Head SHA reviewed (full 40 characters):** e0398c14a4bc7174b8e3a727a58204b0d61fdc03 (read by REST); the full review and approve are in `PR-200-approval-policy-duplicates.md`, bound to 7830a5db1ad90f11f91444053086d65d38629916. This record covers only the commits after it: d5d4854 (merge of main c633ade, PR 181), 8c47a24 (merge of main 644bc7f, PR 205), e0398c1 (merge of the review-record commit bf2352c)
@@ -15,6 +15,6 @@
 * **Findings:** none new. The open Low of the full review (the service accepts source `automatic` for commercial types) stays a recorded follow-up.
 * **Blocker or High findings open:** none
 * **NOT VERIFIED:** the local isolated PostgreSQL suite on e0398c1 (the PR's own content is unchanged since the full local run of 1330/1330 at 7830a5d; hosted postgres-integration is success on e0398c1); `verify-head.js` (GraphQL is blocked in this environment; the required checks were compared through REST). If main is merged again (for example PR 185), the SHA changes and the gates are repeated.
-* **Verdict:** approve (merge-only confirmation)
+* **Verdict:** approve
 
 Reviewer: Agent ODC (independent reviewer, separate agent; not the author); model family Claude Opus; prompt: "merge-only confirmation of PR 200 at e0398c1"; Head SHA reviewed e0398c14a4bc7174b8e3a727a58204b0d61fdc03; executed: remerge-diffs, PR diff comparison, migration and registry checks, ci-guard, Hasm.Infrastructure.Tests 1357/1357, hosted CI read by REST; verdict approve
