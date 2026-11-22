@@ -174,7 +174,7 @@ public class EndpointConstraintMatrixTests : JournalTestBase
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
         Assert.Equal(60, Probed.Count);
-        Assert.Equal(106, Pending.Count);
+        Assert.Equal(110, Pending.Count);
         await Task.CompletedTask;
     }
 

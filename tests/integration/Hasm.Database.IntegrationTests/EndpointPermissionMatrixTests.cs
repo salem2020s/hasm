@@ -146,6 +146,8 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         U("/api/v1/company/taxes/rules/{id:guid}"), P("/api/v1/company/taxes/policy"),
         // warehouses
         P("/api/v1/company/warehouses/"), U("/api/v1/company/warehouses/{id:guid}"), P("/api/v1/company/warehouses/{id:guid}/deactivate"), P("/api/v1/company/warehouses/{id:guid}/activate"),
+        // cash and bank accounts (Phase 3.14 S1): branch-scoped; the branch-scope and sensitivity rules are pinned by CashAccountAccessTests and CashAccountSensitiveTests
+        P("/api/v1/company/cash-accounts/"), U("/api/v1/company/cash-accounts/{id:guid}"), P("/api/v1/company/cash-accounts/{id:guid}/deactivate"), P("/api/v1/company/cash-accounts/{id:guid}/activate"),
     ];
 
     /// <summary>Mutating company routes deliberately NOT in the matrix, each with its reason: an in-flight pull request owns the route and its 403 tests.</summary>
