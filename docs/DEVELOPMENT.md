@@ -725,6 +725,23 @@ dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
 
   An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
 
+### Backup destinations (Phase 4.3 slice 8; S8a: configuration and status only)
+Configure each destination as an administrative-tool setting (D-183). HASM stores no network credentials: a network share must already be mounted, or reachable as a UNC path, under the service account's own identity.
+```
+Hasm__Backup__Destinations__0__Id=nas-1
+Hasm__Backup__Destinations__0__Path=/mnt/hasm-nas/backups
+Hasm__Backup__Destinations__0__Kind=network
+Hasm__Backup__Destinations__1__Id=usb-a
+Hasm__Backup__Destinations__1__Path=/srv/hasm-usb/backups
+Hasm__Backup__Destinations__1__Kind=local
+Hasm__Backup__Destinations__1__DailyKeep=14
+```
+* At most 8 entries, numbered 0, 1, 2 and so on without gaps. `Id` is lower-case letters, digits and hyphens (up to 32); `Path` is absolute; `Kind` is `local` or `network`. `DailyKeep`/`WeeklyKeep` may only raise the minimums (7 and 4); `MaxAgeHours` is the freshness limit for that destination's copies (default: `--max-age-hours`, 26).
+* Any invalid entry, a destination that is or passes through a symbolic link, one that is the backup root or another destination, or one inside or around the backup root, the attachment root or a key directory: `backup-status` refuses with exit 3 and names the rule. No destination is ever skipped.
+* `backup-keys` and `trial-restore-company` refuse a folder inside or around a destination (`destination_in_backup_root`): keep the recovery kit and restore staging away from the copies.
+* `backup-status <root>` prints every destination and exits with the OVERALL status: 1 when a destination has no verified copy, a stale, corrupt or conflicting copy, or a tombstone nothing explains; 8 when a destination lags behind the newest run, holds staging older than 24 hours, or is on the same volume as the root. A same-volume destination is not a second copy against disk loss (D-230), so it always warns. `backup-status <destination path>` checks that folder alone.
+* **S8a makes no copies.** Until the copy engine ships (S8b), every configured destination reports `replica_missing` (exit 1), so do not configure destinations in production before then.
+
 ## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
 
 `tools/loadtest/` is tooling only: no migration, no change to the PostgreSQL registry. It talks to the REAL HTTP API as ordinary users, so every server rule (validation, RBAC, numbering, audit, period and approval rules, optimistic concurrency) applies. Stage 2 (the 60-minute, 50-session runner) is separate and later.

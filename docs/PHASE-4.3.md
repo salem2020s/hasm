@@ -1538,6 +1538,58 @@ D-182 the model (primary root, byte-identical copies of complete signed encrypte
 
 **Owner decisions 2026-11-21 (consolidated package; recorded once in `docs/DECISIONS.md`, where the owner's wording stands; this block only points to it and does not rewrite the plan).** Slice 8: MD-Q1 and MD-Q2 = D-230, which CONFIRMS the merged plan (D-186: full success only with a verified copy at every configured destination; the same-volume warning stays and no deletion is possible while it stands, D-187). Two readings are kept on the strict side and are for the implementation review: every configured destination is a required one, and an installation whose backups have no independent destination is not a case in which deletion may be enabled (see `docs/INTEGRATION-STATUS.md`).
 
+### Implementation slices (lead-approved cut, 2026-11-22)
+Slice 8 is built in five independently reviewed pull requests. None activates deletion (D-137, D-227) or the cutover; none needs a migration (if one turns out to be needed, work stops and the lead allocates the number).
+* **S8a:** configuration, safety checks and the status function (built, below).
+* **S8b:** the copy engine, `backup-replicate` and replication at the end of `backup-run` (D-182, D-185; audit 2040, 2041, 2043).
+* **S8c:** `backup-replica-verify`, corrupt and re-verified copies in the status (audit 2042), restore from a copy (D-189).
+* **S8d:** retention per destination (D-187), with L-FG3 and the D-230 prerequisite inside the deletion executor.
+* **S8e:** the encryption-key retirement report requires every configured destination (after #182).
+
+Lead rulings of 2026-11-22 for the implementation:
+* With destinations configured, `backup-status` reads the system database read-only from the slice that first needs audit evidence (S8c: 2042; S8d: the 2015/2016 pairs). Unreachable database = exit 1 (`audit_unreadable`). Without destinations, or on a destination path: no database read. This changes the "no database" property of `backup-status` and is documented with it.
+* The new audit reads parse the detail tokens exactly (a `LIKE` match would take `nas-1` for `nas-10`). Slice 6's existing `LIKE` reads stay as they are: they carry no destination token, so the case cannot arise there (recorded).
+* The per-destination advisory lock uses the run-lock namespace with object `0x10000` plus a 16-bit stable hash of the destination id. A collision only serialises two destinations.
+* The retirement report (S8e) uses "at least one root that is not a destination" as the proxy for the primary root. No primary-root setting is added (not in D-183); this is a recorded limitation.
+
+### As built: S8a (configuration, safety checks, per-destination status)
+* **Configuration (D-183):** `BackupDestinations.FromConfiguration` reads `Hasm:Backup:Destinations` strictly. Any of the following refuses the WHOLE configuration with `destination_config_invalid` (exit 3); the cause names the entry and the rule, never a path:
+  * more than 8 entries;
+  * entries not numbered exactly 0 to n-1 (a gap in environment variables would otherwise drop an entry silently);
+  * an entry or field that is not a plain value, or an unknown field (a misspelt `DailyKeep` must not fall back to the minimum);
+  * a missing, malformed (`[a-z0-9-]{1,32}`) or repeated `Id`;
+  * a `Path` that is not absolute or carries surrounding white space;
+  * a `Kind` other than `local` or `network`;
+  * an optional field that is empty, not a plain decimal or out of range (`MaxAgeHours` 1 to 8760).
+
+  `DailyKeep` below 7 or `WeeklyKeep` below 4 is `retention_below_minimum` (exit 3, never clamped). No destination configured is today's behaviour.
+* **Safety checks (D-184), `BackupDestinations.Check`, read-only (nothing is created):**
+  * `symbolic_link_refused`: the destination or any folder on its path is a link, a dangling one included;
+  * `destination_duplicate`: it resolves to the primary root or to another destination;
+  * `destination_overlaps_source`: it lies inside or contains the primary, another destination, the attachment root, or the encryption, audit or signing key directory.
+* **Same volume:** the volume is the device of the mount that holds the path (`/proc/self/mountinfo`, longest mount point) on Linux, and the volume root on Windows. A destination that does not exist yet lies on its nearest existing parent's volume. A volume that cannot be determined counts as the primary's, because independence cannot be shown.
+* **The other direction of D-184:** `backup-keys` refuses an export folder inside or around a configured destination (`destination_in_backup_root`, D-087). So does `trial-restore-company` for its attachment target, checked before any key is loaded. The trial-restore staging folders are arguments, not configuration, so this is where D-184's "trial-restore staging folders" is enforced.
+* **The ONE status function (D-186), `ReplicaStatus.Contribution`:**
+  * exit 1: `replica_missing` (no verified copy; also an absent or unreadable folder), `replica_stale` (older than the destination's `MaxAgeHours` or the call's limit), `replica_conflict`, `replica_corrupt`, `replica_tombstone_unexplained`;
+  * exit 8: `replica_lagging`, `replica_incoming_stale` (staging older than 24 hours), `destination_same_volume`.
+
+  `BackupSeverity.Worst` combines by severity (1 > 8 > 0) and throws for 2, 3 and 4, which are never combined.
+* **Reading a destination (`ReplicaStatus.Inspect`), read-only and without a database:**
+  * every run folder is read through its signed status, exactly as at the primary;
+  * a copy is VERIFIED when it is replicable (finished, signature verified, encrypted, clean, verdict `ok` or `partial`) and, while the primary holds that run id, carries the primary's status hash;
+  * another hash is a conflict, and a run folder that does not verify is corrupt (a destination only ever holds published copies, D-185);
+  * the full re-hash of every file is `backup-replica-verify` (S8c);
+  * a tombstone or a `.deleting-*` folder at a destination counts as unexplained in S8a: no deletion at a destination exists yet, and the audit evidence that can explain one is read in S8d.
+* **`backup-status <root>`:** the destination configuration is read and checked first; a refusal is exit 3 and is returned alone. Then the primary's root status (slices 4 to 6, unchanged) is computed, then each destination's line and findings, then the OVERALL status (the worst of all), which is the exit code. With no destination configured it prints `Replicas: none` and the exit code is the root status, as before. On a destination folder it gives that folder's root status only. It stays read-only and without a database in S8a, and writes no audit event.
+* **Not in S8a:** no copy is made and no audit event is written (2040 to 2043 come with S8b and S8c). A configured destination therefore reads `replica_missing` (exit 1) until S8b ships: that is the intended fail-closed state.
+* **Tests:**
+  * unit `BackupDestinationsTests`: the parser, every invalid form, environment variables, the minimums, the overlap matrix in both directions with trailing separators, links (a dangling one included), the volume probe and the mountinfo parser, and the refusals of a key export or a trial-restore folder;
+  * unit `ReplicaStatusTests`: the severity order over every triple in several orders, refusals never combined, every finding with its severity, a destination's own `MaxAgeHours`, the overall status, the replicable predicate, and the inspection of a folder;
+  * PostgreSQL `BackupReplicationTests` (3), over real encrypted runs with byte-for-byte copies made by the test:
+    * missing, verified (another volume, 0), same volume (8, also an unknown volume), a status call on the destination folder, lagging, a corrupt copy, an unexplained tombstone, stale staging, through the service and the `Hasm.Admin` binary, with no audit event written;
+    * invalid, overlapping, duplicate and linked configurations (exit 3, nothing created);
+    * `backup-keys` and `trial-restore-company` into or around a destination refused, nothing written.
+
 ### Owner decisions this slice relies on (not re-asked)
 D-085 (encryption with an offline recovery key, signed manifests; copies are of encrypted signed runs only), D-086 (retention minimums at least 7 daily and 4 weekly, configurable upward only; never delete the last recoverable, held or chain-needed backup; deletion inactive until the safeguards are tested), D-087 (the key export goes to a separate destination), D-088 (unencrypted sets are DEV/TEST only), D-137 (deletion inactive until an owner-instructed activation PR).
 
