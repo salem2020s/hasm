@@ -166,6 +166,10 @@ public sealed partial class PermissionCatalog
         // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
         // plan) is NOT in the Company Administrator preset: it belongs to the Retention Approver preset (a sensitive grant, offline through the administrative tool; separation of duties).
         new("company.attachmentretention", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Hold, PermissionAction.Approve, PermissionAction.Execute]),
+        // Cash and bank accounts (Phase 3.14 slice S1, docs/PHASE-3.14.md, D-155/D-211): BRANCH-scoped (a cashbox belongs to a branch). Update and activate are privileged (they redirect where money is paid: D-096); the FULL bank account
+        // number needs the separate privileged resource (the attachments precedent) on the account's branch. Granting these codes to the preset roles is a system migration that waits for the owner's answer on the preset pattern.
+        new("company.cashaccounts", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        new("company.cashaccountssensitive", ScopeKind.Branch, [PermissionAction.View]),
     ]);
 
     public static class Codes
@@ -307,6 +311,11 @@ public sealed partial class PermissionCatalog
         public const string AttachmentsDelete = "company.attachments.delete";
         public const string AttachmentsSensitiveView = "company.attachmentssensitive.view";
         public const string AttachmentsSensitiveUpload = "company.attachmentssensitive.upload";
+        public const string CashAccountsView = "company.cashaccounts.view";
+        public const string CashAccountsCreate = "company.cashaccounts.create";
+        public const string CashAccountsUpdate = "company.cashaccounts.update";
+        public const string CashAccountsActivate = "company.cashaccounts.activate";
+        public const string CashAccountsSensitiveView = "company.cashaccountssensitive.view";
         public const string RetentionView = "company.attachmentretention.view";
         public const string RetentionConfigure = "company.attachmentretention.configure";
         public const string RetentionHold = "company.attachmentretention.hold";
@@ -345,11 +354,18 @@ public static class PresetRoles
 
     public const string CompanyAdministratorKey = "company-administrator";
 
+    /// <summary>
+    /// The cash and bank account permissions (Phase 3.14 slice S1) are in the catalog but NOT yet in the Company Administrator preset: granting them is a system migration (the versioned, paired-trigger pattern of migration 0028) that waits for the owner's
+    /// answer on that pattern. When it lands, this exclusion is removed in the same change so that the code definition and the migration seed agree again (the test that pins that equality fails until then).
+    /// </summary>
+    private static readonly string[] CashAccountCodes =
+        [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
+
     public static IReadOnlyDictionary<Guid, (string Key, IReadOnlySet<string> Permissions)> Definitions { get; } =
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, .. CashAccountCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,

@@ -41,7 +41,7 @@ public class CompensationPlanBindingTests
     public void A_stored_text_that_is_not_a_payload_of_this_contract_is_not_a_proposal(string text) => Assert.Null(CompensationPlanBinding.Proposal(text));
 }
 
-/// <summary>The refusals of the plan tables of migration 0034 and the codes they come back as (Phase 3.8D step 5).</summary>
+/// <summary>The refusals of the plan tables of migration 0036 and the codes they come back as (Phase 3.8D step 5).</summary>
 public class CompensationPlanRefusalMappingTests
 {
     private static Npgsql.PostgresException Raise(string message) => new(message, "ERROR", "ERROR", "P0001");

@@ -194,6 +194,64 @@ public class AttachmentTests : InventoryTestBase
         Assert.Equal("23514", await Fails($"UPDATE {AT.Table} SET {AT.KeyId} = 'k9', {AT.Revision} = {AT.Revision} + 1 WHERE {AT.Id} = '{b.Id}'"));            // a normal file has no key
     }
 
+    private Hasm.Infrastructure.Backup.EncryptionKeyRetirementService RetirementReport() => new(Options,
+        new AttachmentOptions { StorageDirectory = dir }, new Hasm.Infrastructure.Imports.ImportOptions { StorageDirectory = Path.Combine(dir, "imports") }, new EncryptionOptions { AllowInsecureFilePermissions = true });
+    private static KeyRetirementEntry KeyOf(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
+
+    [PostgresFact]
+    public async Task A_corrupt_sensitive_attachment_or_a_missing_storage_folder_makes_the_key_retirement_report_incomplete()
+    {
+        // review M1 of PR 182: the wiring of the envelope read (AttachmentService.KeyUsageAsync through the report service), not only the builder's rule
+        await Prepare();
+        Ok(await Up());                                                                                                        // a normal file is stored as is and is not scanned
+        var bad = Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes(" BAD")).ToArray(), sensitive: true, name: "bad.pdf"));
+        ring.Add("k2", RandomNumberGenerator.GetBytes(32)); ring.Activate("k2");
+        var service = RetirementReport();
+        var blocker = $"attachment_key_unknown:{Company.Id:N}:1";
+        var clean = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+        Assert.DoesNotContain(blocker, clean.Blockers);
+        Assert.Contains("needed_by_attachments", KeyOf(clean, "k1").Reasons);
+        await File.WriteAllBytesAsync(StoredPath(bad.Id), [1, 2, 3]);                                                          // not an envelope: its key cannot be determined
+        var r = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+        Assert.False(r.Complete);
+        Assert.Contains(blocker, r.Blockers);
+        Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        Assert.Contains("needed_by_attachments", KeyOf(r, "k1").Reasons);                                                      // the row still names k1
+
+        // the whole company folder gone (an unmounted or misconfigured storage) is NOT "no files", and the read-only scan does not create it (review L2)
+        var companyDir = Path.Combine(dir, Company.Id.ToString("N"));
+        Directory.Move(companyDir, companyDir + ".moved");
+        try
+        {
+            var gone = await service.ReportAsync(["k1", "k2"], "k2", [], null, backupScopeAttested: true);
+            Assert.Contains(blocker, gone.Blockers);
+            Assert.False(Directory.Exists(companyDir));
+            Assert.False(Directory.Exists(Path.Combine(dir, "imports")));
+        }
+        finally { Directory.Move(companyDir + ".moved", companyDir); }
+    }
+
+    [PostgresFact]
+    public async Task A_sensitive_attachment_whose_envelope_names_another_key_than_its_row_keeps_both_keys_non_retirable()
+    {
+        // review M1 of PR 182: a rewrap that crashed between the file replacement and the row update leaves the file under the new key and the row naming the old one; BOTH stay needed
+        await Prepare();
+        var a = Ok(await Up(Pdf.Concat(Encoding.ASCII.GetBytes(" A")).ToArray(), sensitive: true, name: "a.pdf"));
+        ring.Add("k2", RandomNumberGenerator.GetBytes(32)); ring.Activate("k2");
+        ring.Add("k3", RandomNumberGenerator.GetBytes(32)); ring.Activate("k3");
+        var service = RetirementReport();
+        var before = await service.ReportAsync(["k1", "k2", "k3"], "k3", [], null, backupScopeAttested: true);
+        Assert.Contains("needed_by_attachments", KeyOf(before, "k1").Reasons);
+        Assert.DoesNotContain("needed_by_attachments", KeyOf(before, "k2").Reasons);
+        await File.WriteAllBytesAsync(StoredPath(a.Id), new EnvelopeEncryptor(new InMemoryKekRing("k2")).Encrypt(Pdf, "any"));   // only the header is read: the key id is k2
+        Assert.Equal("k1", await Sql<string>($"SELECT {AT.KeyId} FROM {AT.Table} WHERE {AT.Id} = '{a.Id}'"));                  // the row still names k1
+        var r = await service.ReportAsync(["k1", "k2", "k3"], "k3", [], null, backupScopeAttested: true);
+        Assert.Contains("needed_by_attachments", KeyOf(r, "k1").Reasons);                                                      // the row's key
+        Assert.Contains("needed_by_attachments", KeyOf(r, "k2").Reasons);                                                      // the file's key
+        Assert.DoesNotContain(r.Blockers, b => b.StartsWith("attachment_key_unknown", StringComparison.Ordinal));
+        Assert.All(r.Keys, k => Assert.False(k.Retirable));
+    }
+
     [PostgresFact]
     public async Task A_removed_sensitive_file_keeps_its_key_in_use_so_the_old_key_is_never_reported_as_retirable()
     {

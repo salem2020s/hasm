@@ -157,15 +157,15 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
         var eventSql = s.Script.Of("event");
         var before = (await EpochRows(), await Digest(EN.Table));
         await Sql(PeriodStatus("2026-03-12", 2));                                                                               // March is Soft Closed
-        RefusedWith("period_not_open", await Run(s.Script));
+        RefusedByPeriod(SoftClosedMessage, await Run(s.Script));
         await Sql(PeriodStatus("2026-03-12", 1));                                                                               // reopened
         // a date for which no fiscal period exists (the calendar starts on 1 January 2026)
         var missing = new DateOnly(2025, 12, 31);
         s.Script.Set("event", [Op(s.Event, 1, missing), Member(s.Event, s.Plan.Execution, 2, null), .. Move(s.Event, Avg.Id, W1.Id, 1, 1, missing, 10m, 200m), PostingRow(s.Plan, s.Event, missing, 200m)]);
-        RefusedWith("period_not_open", await Run(s.Script));
+        RefusedByPeriod(NoPeriodMessage, await Run(s.Script));
         s.Script.Set("event", eventSql);
         await Sql(PeriodStatus("2026-03-12", 2)); await Sql(PeriodStatus("2026-03-12", 3, $", {FP.FinalClosedBy} = gen_random_uuid()"));   // March is Final Closed
-        RefusedWith("period_not_open", await Run(s.Script));
+        RefusedByPeriod(FinalClosedMessage, await Run(s.Script));
         Assert.Equal(before, (await EpochRows(), await Digest(EN.Table)));
         Assert.Equal((short)2, await Status(s.Plan));
         // (the same script commits while every date lies in an Open period: the first test of this class)

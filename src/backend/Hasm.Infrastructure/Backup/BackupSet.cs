@@ -20,7 +20,7 @@ public sealed record ManifestFile(string Name, long Size, string Sha256);
 /// <summary>
 /// The manifest of one company backup set (SRS 14.4, 16.2; Phase 3.12 coordination). It lists the database dump and every attachment file (active AND removed attachments: removed bytes are retained) with hashes,
 /// and the master key ids the sensitive files need (<see cref="KeyIdsRequired"/>): the key backup, kept SEPARATELY, must contain them. It never contains key material, original attachment file names (only the generated
-/// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set ONLY: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
+/// storage names) or any company name. <see cref="KeyIdsRequired"/> covers the attachment envelopes of the set AND the encrypted values inside the database (the cash and bank account numbers; their key ids are read from the company database), and NOT the following: encrypted import-file originals live outside the attachment folder and need their own key coverage (recorded limitation, see docs/PHASE-4.3.md). The manifest detects corruption and loss; it is NOT a signature (authenticity and encryption of the set belong to the scheduled/encrypted backup slice).
 /// </summary>
 /// <remarks><see cref="DatabaseLocale"/> is the encoding and locale of the source database captured at dump time (decision D-053); a manifest written before it existed reads with null (the restore then needs the live source).
 /// <see cref="CompanyMigrationVersion"/> is the highest company migration applied to the source at backup time (decision D-062); null in an older manifest (checked after the restore instead).</remarks>
@@ -76,7 +76,7 @@ public static class BackupSet
     /// Creates the set in <paramref name="destination"/> (must not exist or be empty and must not overlap the source). Stray files (temporary uploads) are skipped and counted. Symbolic links are refused.
     /// <paramref name="databaseLocale"/> is what <see cref="PgBackupTool.DumpAsync"/> captured and <paramref name="companyMigrationVersion"/> the company migration level; both are stored in the manifest.
     /// </summary>
-    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null, int? companyMigrationVersion = null)
+    public static BackupManifest Create(Guid companyId, string databaseDumpFile, string attachmentCompanyDirectory, string destination, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale = null, int? companyMigrationVersion = null, IReadOnlyCollection<string>? databaseKeyIds = null)
     {
         if (companyId == Guid.Empty) throw new BackupException("invalid_company");
         if (databaseLocale is { IsWellFormed: false }) throw new BackupException("invalid_database_locale");
@@ -91,7 +91,7 @@ public static class BackupSet
         if (new FileInfo(databaseDumpFile).LinkTarget is not null) throw new BackupException("symbolic_link_refused");
 
         var destExisted = Directory.Exists(dest);
-        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale, companyMigrationVersion); }
+        try { return CreateCore(companyId, databaseDumpFile, source, dest, createdUtc, databaseLocale, companyMigrationVersion, databaseKeyIds); }
         catch
         {
             // never leave a partial set that could be mistaken for a backup
@@ -101,7 +101,7 @@ public static class BackupSet
         }
     }
 
-    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale, int? companyMigrationVersion)
+    private static BackupManifest CreateCore(Guid companyId, string databaseDumpFile, string source, string dest, DateTimeOffset createdUtc, DatabaseLocale? databaseLocale, int? companyMigrationVersion, IReadOnlyCollection<string>? databaseKeyIds)
     {
         AuditFilePermissions.CreateOwnerOnlyDirectory(dest);
         var attachDir = Path.Combine(dest, AttachmentFolderName);
@@ -132,6 +132,7 @@ public static class BackupSet
             }
         }
 
+        if (databaseKeyIds is not null) foreach (var k in databaseKeyIds) keys.Add(k);   // keys of encrypted values inside the database (cash and bank account numbers)
         var manifest = new BackupManifest(CurrentVersion, companyId, createdUtc, database, files, [.. keys], stray, lookalikes, databaseLocale, companyMigrationVersion);
         var temp = Path.Combine(dest, ManifestFileName + ".tmp");
         File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));

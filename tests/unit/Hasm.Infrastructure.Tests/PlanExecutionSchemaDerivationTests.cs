@@ -7,13 +7,13 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// The opaque names of the plan-execution company migration (Phase 3.8D step 4, PROVISIONAL number 0034) are DERIVED, not invented: prefix + the first 8 hex digits of SHA-256("hasm.company.&lt;number&gt;.plan-execution.v1:" +
-/// logical token), exactly as <c>tools/schema/company-0034-plan-execution.cjs</c> generates them. The migration is ADDITIVE (owner decision X1-A): it replaces no function, pauses no trigger, alters no table, removes
+/// The opaque names of the plan-execution company migration (Phase 3.8D step 4, PROVISIONAL number 0036) are DERIVED, not invented: prefix + the first 8 hex digits of SHA-256("hasm.company.&lt;number&gt;.plan-execution.v1:" +
+/// logical token), exactly as <c>tools/schema/company-0036-plan-execution.cjs</c> generates them. The migration is ADDITIVE (owner decision X1-A): it replaces no function, pauses no trigger, alters no table, removes
 /// nothing, seeds nothing and reads no setting.
 /// </summary>
 public class PlanExecutionSchemaDerivationTests
 {
-    private const string Number = "0034";   // the number follows the merge order: a renumbering changes this constant, the generator constant and regenerates the files
+    private const string Number = "0036";   // the number follows the merge order: a renumbering changes this constant, the generator constant and regenerates the files
     private static readonly string[] Entities = ["CompensationPlan", "CompensationPlanPosition", "CompensationPlanLine", "CompensationPlanEvent", "CompensationPlanApproval", "CompensationPlanExecution",
         "CompensationPlanExecutionJournal", "EpochMember", "EpochEntryLineage", "EpochGuard"];
 

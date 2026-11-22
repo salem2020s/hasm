@@ -23,7 +23,7 @@ using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.8D step 4: the X1-A database layer (company migration 0034, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role, exactly as design section 8 describes the
+/// Phase 3.8D step 4: the X1-A database layer (company migration 0035, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role, exactly as design section 8 describes the
 /// N-tests. No executor exists: the tests write the plan, approval, execution and epoch rows themselves, which is also what a hostile holder of the runtime role's grants could try. The history is built by the real
 /// services (owner connection, as in every service suite); everything that probes the new rules runs as the runtime role, and an execution runs inside the real audited company transaction, so its business audit
 /// event is a genuine, key-authenticated event written in the same transaction. Role-capable disposable cluster only.
@@ -120,6 +120,17 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         }
         catch (Exception ex) { return Describe(ex); }
     }
+
+    /// <summary>The refusal of an epoch entry in a period that is not Open: either the plan guard's own ("period_not_open") or the message of the stock-period guard (STOCK-PERIOD-DB, company migration 0034), whichever of the
+    /// two triggers on the cost entry table fires first. Both messages are named; any other text fails.</summary>
+    protected static void RefusedByPeriod(string stockPeriodMessage, string? outcome)
+    {
+        Assert.NotNull(outcome);
+        Assert.StartsWith(Refusal, outcome);
+        Assert.True(outcome.Contains("period_not_open", StringComparison.Ordinal) || outcome.Contains(stockPeriodMessage, StringComparison.Ordinal), $"neither the plan guard nor the stock-period guard refused: {outcome}");
+    }
+
+    protected const string SoftClosedMessage = "the fiscal period is soft closed", FinalClosedMessage = "the fiscal period is final closed", NoPeriodMessage = "no fiscal period covers the posting date";
 
     protected static void RefusedWith(string expected, string? outcome) { Assert.NotNull(outcome); Assert.StartsWith(Refusal, outcome); Assert.Contains(expected, outcome); }
 

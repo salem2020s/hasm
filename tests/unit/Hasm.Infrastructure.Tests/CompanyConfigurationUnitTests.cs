@@ -217,7 +217,7 @@ public class ConfigurationSchemaContractTests
 {
     private static readonly string[] ApprovedTables =
     [
-        // Phase 3.8D step 4 (migration 0034, provisional): compensation plans, their closure, lines, history, approval and execution, and the epoch membership and lineage of the costing ledger (append-only; a plan exists only for an approved stock document, and nothing executes one yet)
+        // Phase 3.8D step 4 (migration 0036, provisional): compensation plans, their closure, lines, history, approval and execution, and the epoch membership and lineage of the costing ledger (append-only; a plan exists only for an approved stock document, and nothing executes one yet)
         CompanySchema.CompensationPlan.Table, CompanySchema.CompensationPlanPosition.Table, CompanySchema.CompensationPlanLine.Table, CompanySchema.CompensationPlanEvent.Table, CompanySchema.CompensationPlanApproval.Table,
         CompanySchema.CompensationPlanExecution.Table, CompanySchema.CompensationPlanExecutionJournal.Table, CompanySchema.EpochMember.Table, CompanySchema.EpochEntryLineage.Table,
         CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table,   // Phase R slice R1 (migration 0031): retention policy versions, their rules and legal holds for removed attachments (nothing is deleted)
@@ -244,6 +244,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.CostOperation.Table, CompanySchema.CostPosition.Table, CompanySchema.CostEntry.Table, CompanySchema.CostLayer.Table, CompanySchema.CostConsumption.Table,   // Phase 3.6 (migration 0014): the COSTING ENGINE's own ledger, layers and positions (written only by the engine inside a caller's transaction; no document, screen or job writes them yet)
         CompanySchema.InventorySettings.Table, CompanySchema.Unit.Table, CompanySchema.ItemGroup.Table, CompanySchema.Item.Table, CompanySchema.ItemUnit.Table, CompanySchema.ItemBarcode.Table,   // Phase 3.4 (migration 0012): inventory MASTER DATA only (no stock, quantity, cost or accounting table)
         CompanySchema.StatementMappingVersion.Table, CompanySchema.StatementMappingEntry.Table,   // Phase 3.3 S3 (migration 0011): the versioned classification of accounts into financial-statement sections (presentation metadata, no financial data)
+        CompanySchema.CashAccount.Table,   // Phase 3.14 S1 (migration 0033, provisional number): the cash and bank account master; configuration only, no balance, no ledger table
     ];
 
     /// <summary>

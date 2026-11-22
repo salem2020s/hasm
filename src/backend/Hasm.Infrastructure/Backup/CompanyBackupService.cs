@@ -141,8 +141,9 @@ public sealed class CompanyBackupService
         if (material is not null)
         {
             // slice 5: encrypted and signed, streamed: no plaintext dump and no staging folder exist at any time
+            var cashBefore = await ReadCashKeyIdsAsync(company.PhysicalDatabaseName, ct);   // read before AND after the dump (a rewrap may run in between): the union is what the set may need
             var v2 = await EncryptedSets.CreateCompanyAsync(companyId, runId, consume => tool.DumpCompanyToStreamAsync(company.PhysicalDatabaseName, consume, ct), Path.Combine(root, companyId.ToString("N")),
-                dest, clock.GetUtcNow(), level, material, ct);
+                dest, clock.GetUtcNow(), level, material, ct, async c => [.. cashBefore.Union(await ReadCashKeyIdsAsync(company.PhysicalDatabaseName, c), StringComparer.Ordinal)]);
             if (await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) != level)
             {
                 try { Directory.Delete(dest, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
@@ -157,11 +158,13 @@ public sealed class CompanyBackupService
         var staging = Path.Combine(stagingDir, BackupSet.DatabaseFileName);
         try
         {
+            var cashBefore = await ReadCashKeyIdsAsync(company.PhysicalDatabaseName, ct);
             var locale = await tool.DumpAsync(company.PhysicalDatabaseName, staging, ct);
             PgBackupTool.EnsureRestorable(locale);
             // R2-L2 belt and braces: the level is re-read after the dump; a change (impossible while the lock is held) refuses the set
             if (await ReadMigrationLevelAsync(company.PhysicalDatabaseName, ct) != level) throw new BackupException("migration_level_changed");
-            var manifest = BackupSet.Create(companyId, staging, Path.Combine(root, companyId.ToString("N")), dest, clock.GetUtcNow(), locale, level);
+            var cashKeys = cashBefore.Union(await ReadCashKeyIdsAsync(company.PhysicalDatabaseName, ct), StringComparer.Ordinal).ToList();
+            var manifest = BackupSet.Create(companyId, staging, Path.Combine(root, companyId.ToString("N")), dest, clock.GetUtcNow(), locale, level, cashKeys);
             // slice 5 (D-095): an unencrypted set is DEV/TEST only and marked as such
             BackupRunFiles.WriteOwnerOnlyAtomically(Path.Combine(dest, BackupRunFiles.UnencryptedMarker), "This set is NOT encrypted: DEV/TEST only (D-088, D-095).\n"u8.ToArray());
             if (!BackupSet.Verify(dest).IsClean)
@@ -210,6 +213,22 @@ public sealed class CompanyBackupService
             try { dir.Delete(true); removed++; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left for the next run */ }
         }
         return removed;
+    }
+
+    /// <summary>
+    /// The key ids that protect the encrypted cash and bank account numbers of the company database (Phase 3.14 S1, D-155): they belong to the key inventory of a backup exactly like the attachment key ids (D-138), so the recovery test and the
+    /// retention report never call an inventory complete while bank numbers need other keys. A company database without the table (an older level) has none.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> ReadCashKeyIdsAsync(string database, CancellationToken ct)
+    {
+        await using var conn = new NpgsqlConnection(options.BuildCompanyAdminConnectionString(database));
+        await conn.OpenAsync(ct);
+        if (!await TableExistsAsync(conn, CompanySchema.CashAccount.Table, ct)) return [];
+        var ids = new List<string>();
+        await using var cmd = new NpgsqlCommand($"SELECT DISTINCT {CompanySchema.CashAccount.NumberKeyId} FROM {CompanySchema.CashAccount.Table} WHERE {CompanySchema.CashAccount.NumberKeyId} IS NOT NULL ORDER BY 1", conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) ids.Add(r.GetString(0));
+        return ids;
     }
 
     private async Task<int?> ReadMigrationLevelAsync(string database, CancellationToken ct)

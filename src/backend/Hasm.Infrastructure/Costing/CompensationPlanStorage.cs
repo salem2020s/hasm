@@ -26,7 +26,7 @@ internal sealed record StoredCompensationPlan(Guid Id, Guid ItemId, Guid Warehou
     CompensationPlanFingerprints Fingerprints, ImmutableArray<(Guid Item, Guid Warehouse)> Closure, string Payload, Guid CreatedBy, Guid? ApprovalId, Guid? ApprovedBy);
 
 /// <summary>
-/// Reading of stored plans and the mapping of the database refusals of migration 0034 to result codes. A rule that PostgreSQL enforces is never replaced by the service: the service checks first so that the caller
+/// Reading of stored plans and the mapping of the database refusals of migration 0036 to result codes. A rule that PostgreSQL enforces is never replaced by the service: the service checks first so that the caller
 /// gets a precise code, and still maps what PostgreSQL refuses (a race, or a rule the service did not pre-check) to the same codes.
 /// </summary>
 internal static class CompensationPlanStore

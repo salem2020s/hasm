@@ -22,9 +22,9 @@ public class PrivilegedAccessTests
         // review L1 of PR #172: an explicit expected list, not a rule derived from the table under test. Changing the classification is a deliberate, reviewed change to THIS list.
         Assert.Equal(
             ["access.assignments", "access.audit", "access.members", "access.mfapolicy", "access.roles", "company.approvalpolicies", "company.attachmentretention", "company.attachmentssensitive",
-             "company.compensationplans", "company.costcenterpolicies", "company.journalsoftclosed", "company.ledgersettings", "company.settings"],
+             "company.cashaccountssensitive", "company.compensationplans", "company.costcenterpolicies", "company.journalsoftclosed", "company.ledgersettings", "company.settings"],
             PrivilegedAccess.PrivilegedResources.OrderBy(x => x, StringComparer.Ordinal).ToArray());
-        Assert.Equal(["company.imports.configure"], PrivilegedAccess.PrivilegedPermissions.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(["company.cashaccounts.activate", "company.cashaccounts.update", "company.imports.configure"], PrivilegedAccess.PrivilegedPermissions.OrderBy(x => x, StringComparer.Ordinal).ToArray());
         Assert.Equal(
             [PermissionAction.Approve, PermissionAction.FinalClose, PermissionAction.NegativeException, PermissionAction.Override, PermissionAction.Reopen],
             PrivilegedAccess.PrivilegedActions.OrderBy(a => a.ToString(), StringComparer.Ordinal).ToArray());

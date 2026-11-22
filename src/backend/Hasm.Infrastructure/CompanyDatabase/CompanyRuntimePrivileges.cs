@@ -154,7 +154,9 @@ public static class CompanyRuntimePrivileges
         // Company migration 0033: one identity per approval policy, written only THROUGH the deferred triggers of the policy and stage tables (they run as the writer). Whatever is written, the guard trigger stores
         // the fingerprint PostgreSQL computes; rows are never removed.
         (CompanySchema.ApprovalPolicyIdentity.Table, ["SELECT", "INSERT", "UPDATE"]),
-        // Phase 3.8D step 4 (company migration 0034, provisional): plan storage and execution, database layer. Every table is append-only (PostgreSQL refuses UPDATE, DELETE and TRUNCATE); the plan alone takes UPDATE, and its
+        // Phase 3.14 slice S1 (company migration 0033, provisional): cash and bank accounts are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates. The migration creates no other table.
+        (CompanySchema.CashAccount.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Phase 3.8D step 4 (company migration 0036, provisional): plan storage and execution, database layer. Every table is append-only (PostgreSQL refuses UPDATE, DELETE and TRUNCATE); the plan alone takes UPDATE, and its
         // trigger lets only the status transition through. The new guards on the cost entry, cost operation and stock posting tables read these tables as the invoker, so the ordinary posting path needs SELECT on them.
         (CompanySchema.CompensationPlan.Table, ["SELECT", "INSERT", "UPDATE"]),
         (CompanySchema.CompensationPlanPosition.Table, ["SELECT", "INSERT"]),
