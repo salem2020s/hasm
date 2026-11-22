@@ -42,7 +42,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task A_complete_epoch_written_by_a_writer_holding_the_executor_grant_commits_leaves_every_earlier_row_untouched_and_ends_at_the_replayed_figures()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var lastEntry = await Sql<long>($"SELECT max({EN.Id}) FROM {EN.Table}");
         var before = (await Digest(EN.Table), await Digest(OP.Table), await Digest(JE.Table), await Digest(JL.Table), await Digest(SP.Table));
@@ -73,7 +73,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N02_a_member_or_an_entry_bound_to_an_execution_of_an_earlier_transaction_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var rows = await EpochRows(); var entries = await Digest(EN.Table);
@@ -92,7 +92,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N08_a_plan_is_executed_exactly_once_a_second_execution_in_the_same_or_in_a_concurrent_transaction_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         // in the same transaction: the unique key on the plan
         Assert.StartsWith("23505", await Rt(ExecutionInsert(s.Plan, audit: Random), ExecutionInsert(s.Plan, audit: Random, id: Guid.NewGuid(), posting: Guid.NewGuid())));
@@ -112,7 +112,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N09_epoch_rows_written_inside_a_savepoint_are_accepted_and_a_rolled_back_savepoint_leaves_nothing_and_fails_the_commit()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var t = await SimpleEpoch(Avg2);
         // the execution row and the event are written inside savepoints (subtransactions, as the event's normal posting does): the xid8 binding is the TOP-LEVEL transaction, so they are accepted
@@ -138,7 +138,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N09_a_rolled_back_event_savepoint_with_a_posting_that_still_exists_is_answered_by_the_epoch_check_not_by_the_deferred_reference()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var t = await SimpleEpoch(Avg2);
         // the member event is rolled back, but the document's posting names an ORDINARY operation written outside the savepoint, so the execution's deferred reference to its posting is satisfied and the epoch check answers
         var ordinary = Guid.NewGuid();
@@ -152,7 +152,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N10_an_epoch_entry_in_a_soft_closed_final_closed_or_missing_period_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var eventSql = s.Script.Of("event");
         var before = (await EpochRows(), await Digest(EN.Table));
@@ -174,7 +174,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N11_an_epoch_on_a_position_with_an_open_negative_stock_obligation_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         await ReceiveDoc(Avg, 3m, 15m, "2026-03-10");
         var issue = Ok(await Post(await Exceptional(Avg, 10m, "2026-03-12")));                                                  // 3 covered at cost, 7 into an open obligation
         Assert.Equal(7m, (await Obligations(openOnly: true)).Single().OpenQuantity);
@@ -191,7 +191,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N13_a_document_bound_to_a_proposed_or_approved_plan_is_not_posted_by_the_normal_posting_path_and_is_released_when_the_plan_is_cancelled()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         await ReceiveDoc(Avg, 10m, 100m, "2026-03-10");
         var p = await ProposedPlan(Avg, "2026-03-12");                                                                          // dated on the last date: an unbound document of this date posts normally
         var postings = await Rows(SP.Table); var entries = await Digest(EN.Table);
@@ -214,7 +214,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N14_the_reversal_of_a_document_whose_cost_operation_was_rewritten_by_an_epoch_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var before = (await Digest(EN.Table), await Digest(OP.Table));
@@ -237,7 +237,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N15_a_second_plan_on_a_position_of_an_executed_epoch_is_not_executed_and_an_epoch_operation_is_never_rewritten_by_another_epoch()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var t = await SimpleEpoch(Avg2);
         Assert.Null(await Run(s.Script));
@@ -256,7 +256,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N19_an_execution_without_its_business_audit_event_in_the_same_transaction_is_refused_at_the_commit()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var before = (await EpochRows(), await Digest(EN.Table), await Rows(AU.Table));
         // the transaction does write an audit event, but the execution does not name it: every statement succeeds and the COMMIT is refused
@@ -273,7 +273,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N20_a_member_cannot_adopt_an_operation_that_has_entries_or_that_belongs_to_an_obligation_or_a_settlement()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var receipt = await ReceiveDoc(Avg, 10m, 100m, "2026-03-10");
         await Emptied(Avg2, 5m, 50m);
         var obligation = Ok(await Post(await Exceptional(Avg2, 3m, "2026-03-12")));                                             // nothing on hand: the whole issue is an obligation, its operation has no entry
@@ -290,7 +290,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N21_re_executing_an_executed_plan_writes_nothing()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var before = (await EpochRows(), await Digest(EN.Table), await Digest(OP.Table), await Digest(CP.Table), await Rows(AU.Table));
@@ -303,7 +303,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N26_every_epoch_entry_is_bound_to_the_approved_closure_and_a_storno_to_its_own_position_and_original_operation()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();                                                                                            // closure: AVG1 in W1 only
         var receiptEntry = await EntryOf(s.Receipt.CostOperationId);
         var elsewhere = await ReceiveDoc(Avg, 5m, 50m, "2026-03-12", W2);
@@ -341,7 +341,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N27_the_reversal_of_any_epoch_operation_storno_event_or_rebook_is_refused()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var before = (await Digest(EN.Table), await Digest(OP.Table));
@@ -364,7 +364,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     {
         // review M1 (probe ODB1): a kind-4 operation of an UNTOUCHED operation, whose entry names an entry of the epoch, used to commit. Each variant has its own fresh reversed operation, so the unique reversal
         // index cannot answer first.
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         Assert.Null(await Run(s.Script));
         var targets = new (string Name, long Entry)[] { ("rebook", await EntryOf(s.Rebook)), ("event", await EntryOf(s.Event)), ("storno", await EntryOf(s.Storno)) };
@@ -385,7 +385,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N29_a_two_way_equal_date_transfer_chain_is_stornoed_and_rebooked_in_its_original_sequence_and_ends_at_the_replayed_figures()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         // AVG1: 10 for 100.00 into W1 on 10 March; on 11 March 4 go W1 -> W2 (40.00) and 2 come back W2 -> W1 (20.00): both directions on the SAME date. W1 holds 8 / 80.00, W2 holds 2 / 20.00.
         await Receive(Avg, 10m, 100m, date: D1);
         var t1 = await Move(Avg, 4m, W1, W2, D2);
@@ -422,7 +422,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N30_a_reversal_operation_is_never_an_epoch_member()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var elsewhere = await ReceiveDoc(Avg, 5m, 50m, "2026-03-12", W2);
         var execution = ExecutionInsert(s.Plan, audit: Random);
@@ -438,7 +438,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N31_one_audit_event_vouches_for_one_execution_and_it_must_be_the_plan_executed_event_of_this_plan_and_this_execution()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         var t = await SimpleEpoch(Avg2);
         Assert.Null(await Run(s.Script));
@@ -468,7 +468,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
 
     private async Task<(Simple S, long Before, (long, long, long) Rows)> Incomplete()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         return (s, await Sql<long>($"SELECT count(*) FROM {EN.Table}"), await EpochRows());
     }
@@ -566,7 +566,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task L5_the_entry_level_check_refuses_an_epoch_entry_on_a_position_already_rewritten_by_another_executed_plan_for_a_raw_writer()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var a = await SimpleEpoch();
         var b = await ApprovedPlan(Avg, "2026-03-11");   // a second approved plan over the same position, with its own document
         await using var conn = await AsRuntime();

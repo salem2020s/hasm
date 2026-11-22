@@ -145,9 +145,9 @@ public class CompensationPlanStorageTests : CompensationPlanTestBase
     [PostgresRoleFact]
     public async Task A_position_of_an_executed_epoch_is_refused_with_plan_on_epoch_position()
     {
-        await PrepareRuntime();
+        await PrepareRuntime();                                                   // production grants (the default): the service under test never writes an execution table
         var epoch = await SimpleEpoch();
-        Assert.Null(await Run(epoch.Script));
+        Assert.Null(await RunAsOwner(epoch.Script));                              // the executed epoch is only the FIXTURE of this test, written as the owner
         var user = await PlanUser();
         var (_, input) = await Event("2026-03-11", 5m, 100m);
         var before = await Footprint();

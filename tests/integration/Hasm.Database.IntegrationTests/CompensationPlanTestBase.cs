@@ -38,7 +38,7 @@ public abstract class CompensationPlanTestBase : PlanExecutionTestBase
     /// <summary>History of AVG1 in W1 with both journals Posted (the planner refuses an unposted effect): receipt of 10 for 100.00 on 10 March, issue of 4 on 12 March.</summary>
     protected async Task Prepare()
     {
-        await PrepareRuntime(executorGrant: false);   // the step 5 services never write an execution table: production grants
+        await PrepareRuntime();   // the step 5 services never write an execution table: production grants
         await PostJournal(await ReceiveDoc(Avg, 10m, 100m, "2026-03-10"));
         await PostJournal(await IssueDoc(Avg, 4m, "2026-03-12"));
     }
