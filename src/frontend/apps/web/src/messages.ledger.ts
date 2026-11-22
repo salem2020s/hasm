@@ -132,7 +132,7 @@ export const ledgerAr: Record<string, string> = {
   "pol.required": "عدد المعتمدين",
   "pol.required_hint": "من 1 إلى 5 معتمدين مختلفين.",
   "pol.saved": "حُفظت السياسة.",
-  "pol.error.approval_policy_not_found": "السياسة غير موجودة.", "pol.error.approval_policy_duplicate": "توجد سياسة فعّالة مطابقة تماماً (النوع والمصدر والفرع والحد الأدنى والشروط والمراحل). عدّل السياسة القائمة أو غيّر أحد هذه العناصر.",
+  "pol.error.approval_policy_not_found": "السياسة غير موجودة.", "pol.error.approval_policy_duplicate": "توجد سياسة فعّالة مطابقة تماماً: نفس النوع والفرع والحد الأدنى والشروط والمراحل، ونفس المصدر في قيود اليومية. عدّل السياسة القائمة أو غيّر أحد هذه العناصر.",
   "pol.error.validation_failed": "راجع القيم المُدخلة.",
 
   "jrn.title": "قيود اليومية",
@@ -388,7 +388,7 @@ export const ledgerAr: Record<string, string> = {
   "jrn.plan_stage": "المرحلة {n}",
   "jrn.plan_done": "مكتملة",
   "jrn.plan_open": "مفتوحة الآن",
-  "jrn.plan_waiting": "بانتظار المرحلة السابقة",
+  "jrn.plan_waiting": "بانتظار المرحلة السابقة", "jrn.stage_role_missing": "المرحلة الحالية تتطلب دوراً لا تملكه لما يشمله هذا القيد.",
   "jrn.error.approver_role_required": "المرحلة المفتوحة مخصصة لحاملي دور محدد لا تملكه.",
   "jrn.error.approval_stage_complete": "اكتملت المرحلة المفتوحة بالفعل.",
   // Phase 3.2C S3: fiscal-year closing and opening balances
@@ -676,7 +676,7 @@ export const ledgerEn: Record<string, string> = {
   "pol.required": "Number of approvers",
   "pol.required_hint": "From 1 to 5 different approvers.",
   "pol.saved": "The policy was saved.",
-  "pol.error.approval_policy_not_found": "The policy was not found.", "pol.error.approval_policy_duplicate": "An identical active policy already exists (same type, source, branch, minimum amount, conditions and stages). Edit the existing policy or change one of these.",
+  "pol.error.approval_policy_not_found": "The policy was not found.", "pol.error.approval_policy_duplicate": "An identical active policy already exists: the same type, branch, minimum amount, conditions and stages, and for journal entries the same source. Edit the existing policy or change one of these.",
   "pol.error.validation_failed": "Check the entered values.",
 
   "jrn.title": "Journal entries",
@@ -932,7 +932,7 @@ export const ledgerEn: Record<string, string> = {
   "jrn.plan_stage": "Stage {n}",
   "jrn.plan_done": "complete",
   "jrn.plan_open": "open now",
-  "jrn.plan_waiting": "waiting for the previous stage",
+  "jrn.plan_waiting": "waiting for the previous stage", "jrn.stage_role_missing": "The current stage needs a role you do not hold for what this entry covers.",
   "jrn.error.approver_role_required": "The open stage is reserved for holders of a role you do not hold.",
   "jrn.error.approval_stage_complete": "The open stage is already complete.",
   // Phase 3.2C S3: fiscal-year closing and opening balances

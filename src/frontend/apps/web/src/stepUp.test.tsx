@@ -32,6 +32,7 @@ function setup(script: Script) {
     const path = new URL(url).pathname;
     const method = init.method ?? "GET";
     calls.push({ method, path, body: typeof init.body === "string" ? JSON.parse(init.body) : undefined, headers: init.headers as Record<string, string> });
+    if (path === "/api/v1/auth/login") return json({ user: { id: "u1", login: "amal", displayName: "Amal", isIdentityAdministrator: false } });   // signing in again after the session ended (D-236)
     if (path === "/api/v1/auth/status") return json({ authenticated: true, user: { id: "u1", login: "amal", displayName: "Amal", isIdentityAdministrator: false } });
     if (path === "/api/v1/companies") return json({ companies: [{ id: "c1", nameAr: "شركة الأمل", nameEn: "Amal Co" }] });
     if (path === "/api/v1/session/company") return json({ companyId: "c1" });
@@ -135,12 +136,38 @@ describe("MFA step-up dialog", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("another 401 (the session itself ended) still ends the session and opens no dialog", async () => {
+  // Since D-236 a session that ends while the form holds unsaved input asks the user to sign in again (sessionLock.test.tsx); what this test guards is unchanged:
+  // a 401 that is NOT `mfa_step_up_required` is a session end, never a step-up.
+  it("another 401 (the session itself ended) still ends the session and opens no step-up dialog", async () => {
     const s = setup({ create: [() => json({ error: "unauthenticated" }, 401)], stepUp: [] });
     await openAndFill();
-    expect(await screen.findByTestId("notice-expired")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByTestId("reauth-dialog")).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);                     // the sign-in-again dialog only
+    expect(screen.queryByText(A("mfa.step_up.title"))).toBeNull();
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("hidden");
     expect(s.stepUps()).toHaveLength(0);
+    expect(s.posts()).toHaveLength(1);                                         // not repeated
+  });
+
+  it("after the session ended and the same user signed in again (D-236), a privileged save asks for a fresh proof and then goes through with the restored input", async () => {
+    const s = setup({ create: [() => json({ error: "unauthenticated" }, 401), STALE, CREATED], stepUp: [() => json({ verifiedAtUtc: "2026-11-21T10:00:00Z" })] });
+    await openAndFill();                                                       // the save meets the ended session
+    const reauth = within(await screen.findByTestId("reauth-dialog"));
+    await userEvent.type(reauth.getByLabelText(new RegExp(A("login.user"))), "amal");
+    await userEvent.type(reauth.getByLabelText(new RegExp(A("login.password"))), "secret-password");
+    await userEvent.click(reauth.getByRole("button", { name: A("login.submit") }));
+    await waitFor(() => expect(screen.queryByTestId("reauth-dialog")).toBeNull());
+    expect(screen.getByLabelText("الاسم بالعربية")).toHaveValue("الخصوم");         // restored from memory
+    expect(s.posts()).toHaveLength(1);                                         // nothing was sent again by itself
+    await userEvent.click(screen.getByRole("button", { name: "حفظ الحساب" }));   // the user's own save: the new session has no fresh proof
+    const d = await dialog();
+    expect(within(d).getByText(A("mfa.step_up.title"))).toBeInTheDocument();
+    await userEvent.type(within(d).getByLabelText(new RegExp(A("mfa.code"))), "123456");
+    await userEvent.click(within(d).getByRole("button", { name: A("mfa.verify") }));
+    expect(await screen.findByTestId("saved")).toHaveTextContent(A("accounts.created"));
+    expect(s.stepUps()).toHaveLength(1);
+    expect(s.posts()).toHaveLength(3);                                         // refused (session), refused (stale proof), repeated once
+    expect(s.posts()[2]!.body).toEqual(s.posts()[0]!.body);                     // the same input the user typed before the session ended
   });
 
   it("a 401 from the step-up call itself (the session is gone) ends the session and closes the dialog", async () => {
@@ -149,8 +176,10 @@ describe("MFA step-up dialog", () => {
     const d = await dialog();
     await userEvent.type(within(d).getByLabelText(new RegExp(A("mfa.code"))), "123456");
     await userEvent.click(within(d).getByRole("button", { name: A("mfa.verify") }));
-    expect(await screen.findByTestId("notice-expired")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByTestId("reauth-dialog")).toBeInTheDocument();    // D-236: unsaved input, so sign in again; the session did end
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);                     // the step-up dialog is closed
+    expect(screen.queryByText(A("mfa.step_up.title"))).toBeNull();
+    expect(document.querySelector('input[autocomplete="one-time-code"]')).toBeNull();           // and its code is gone
   });
 
   it("a server that still asks after a good step-up is not looped: one repeat only, and the screen says the action was not done", async () => {

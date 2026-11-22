@@ -32,6 +32,9 @@ const TEMPLATE = `-- Migration ${MIGRATION}: a semantically identical ACTIVE app
 -- WHAT "IDENTICAL" MEANS. Two policies are semantically identical when they would be picked for exactly the same documents and demand exactly the same approvals: the same document type, source, branch (a policy for
 -- ALL branches, NULL, is its own value and differs from every single branch), minimum amount, journal type, rate-override, soft-closed and closing-kind conditions, and the same ORDERED list of stages (required approvals and
 -- role of each stage; a classic policy of N approvals is one stage of N without a role). The Arabic and English names, the identifier, the revision and the timestamps are not part of the identity.
+-- SOURCE. For the JOURNAL the picker compares the policy source with the source of the entry (3 = either, 1 = manual, 2 = automatic), so the three values are three different selections and the literal value is part of the identity.
+-- For every COMMERCIAL document type the picker (migration 0032) takes a policy when its source is IN (1, 3) and a commercial document has no source of its own: manual and any select exactly the same documents, so both
+-- are written as 'doc'; an automatic (2) commercial policy is never picked at all and is written as 'never'. The journal is exactly DocumentTypes.UsesApprovalPolicies; every other type in this table is commercial.
 -- The model has NO priority and NO effective period today; if either is ever added it MUST enter the fingerprint below (a new migration with a new fingerprint version).
 -- Policies that differ in any of the listed parts stay allowed, also when they overlap (for example one for all branches and one for a single branch): the picker of migrations 0009 and 0032 takes the strictest.
 -- The scope is this company database, so the company is not part of the fingerprint.
@@ -44,11 +47,13 @@ const TEMPLATE = `-- Migration ${MIGRATION}: a semantically identical ACTIVE app
 -- policy that is edited or reactivated must pass the same refusal as any other, and it can always be deactivated.
 
 CREATE FUNCTION {{ApprovalPolicyIdentity.FnFingerprint}}(p_policy uuid) RETURNS text LANGUAGE sql STABLE AS $$
-    -- canonical text, version v1: every part is named and typed; the document type is length-prefixed; the amount is numeric(20,4) and so always printed with four decimals; NULL is written as a token no value can produce
+    -- canonical text, version v2 (the source is canonicalized per document type, see SOURCE above): every part is named and typed; the document type is length-prefixed; the amount is numeric(20,4) and so always printed with four decimals; NULL is written as a token no value can produce
     SELECT encode(sha256(convert_to(
-           'v1'
+           'v2'
         || '|type=' || char_length(p.[[ApprovalPolicy.DocType]])::text || ':' || p.[[ApprovalPolicy.DocType]]
-        || '|source=' || p.[[ApprovalPolicy.Source]]::text
+        || '|source=' || CASE WHEN p.[[ApprovalPolicy.DocType]] = 'journal_entry' THEN p.[[ApprovalPolicy.Source]]::text
+                              WHEN p.[[ApprovalPolicy.Source]] IN (1, 3) THEN 'doc'
+                              ELSE 'never' END
         || '|branch=' || COALESCE('one:' || p.[[ApprovalPolicy.BranchId]]::text, 'all')
         || '|min=' || p.[[ApprovalPolicy.MinAmount]]::numeric(20,4)::text
         || '|jtype=' || COALESCE(p.[[ApprovalPolicyConditions.JournalType]]::text, '-')

@@ -41,7 +41,7 @@ public abstract record MfaEnrolOutcome
 
 public sealed record AuthenticatedSession(
     Guid SessionId, Guid UserId, string Login, string DisplayName, bool IsIdentityAdministrator,
-    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
+    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None, Guid? SelectedCompanyId = null);
 
 public enum CreateUserStatus { Created, InvalidLogin, WeakPassword, InvalidDisplayName, LoginTaken }
 public sealed record CreateUserResult(CreateUserStatus Status, UserRecord? User = null, IReadOnlyList<string>? PasswordProblems = null);
@@ -369,7 +369,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
             idle = Min(now + options.SessionIdle, s.AbsoluteExpiresAtUtc);
             await store.TouchSessionAsync(s.SessionId, idle, ct);
         }
-        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc, s.MfaVerifiedAtUtc, s.MfaState);
+        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc, s.MfaVerifiedAtUtc, s.MfaState, s.SelectedCompanyId);
     }
 
     public async Task LogoutAsync(Guid sessionId, CancellationToken ct = default)

@@ -54,7 +54,8 @@ public static class PartyEndpoints
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/propose", Propose).WithMetadata(new BodyLimit());
 
-        var a = app.MapGroup("/api/v1/admin/parties").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.MfaVerifiedPolicy);
+        // identity administration (the shared registry), not company-scoped: MfaVerified without the selected company's MFA policy (review L2 of PR 181)
+        var a = app.MapGroup("/api/v1/admin/parties").RequireAuthorization(AuthDefaults.AdministratorPolicy, AuthDefaults.AuthenticatedPolicy);
         a.MapGet("/proposals", ListProposals);
         a.MapGet("/proposals/{id:guid}", GetProposal);
         a.MapPost("/proposals/{id:guid}/approve", Approve).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);

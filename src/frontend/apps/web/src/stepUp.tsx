@@ -41,6 +41,13 @@ export function StepUpHost({ bridge }: { bridge: StepUpBridge }) {
   }, [bridge]);
 
   useEffect(() => { if (open) { const id = requestAnimationFrame(() => input.current?.focus()); return () => cancelAnimationFrame(id); } return undefined; }, [open]);
+  // D-236: the session ended while this dialog was open. It is withdrawn (the waiting request is reported as cancelled) and the typed code is forgotten.
+  useEffect(() => {
+    if (!auth.locked) return;
+    const p = pending.current; pending.current = null;
+    p?.settle(false);
+    setOpen(false); setCode(""); setError(null); setFieldError(undefined);
+  }, [auth.locked]);
 
   const finish = useCallback((ok: boolean) => {
     const p = pending.current;

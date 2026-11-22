@@ -259,13 +259,31 @@ describe("the new session after a voluntary enrolment", () => {
     expect(await screen.findByRole("heading", { name: A("companies.title") })).toBeInTheDocument();      // never a half signed-in screen
   });
 
+  it("the fallback shows company selection AT ONCE and never as a session end, also while the company list is still loading (no mounted shell behind a closed gate)", async () => {
+    let release: (v: unknown) => void = () => undefined;
+    const companies = { companies: [{ id: "c1", nameAr: "شركة الأمل", nameEn: "Amal Co" }] };
+    const listCompanies = vi.fn().mockResolvedValueOnce(companies).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; })).mockResolvedValue(companies);
+    const statusMock = vi.fn().mockResolvedValueOnce(status(NONE)).mockResolvedValueOnce(status(NONE)).mockResolvedValue(status(ENROLLED));
+    const client = setup({ status: statusMock, listCompanies, selectCompany: vi.fn().mockRejectedValue(new ApiError(503, "company_unavailable")) });
+    await openSecurity();
+    await beginWith();
+    await userEvent.type(await screen.findByLabelText(new RegExp(A("mfa.code"))), "123456{Enter}");
+    expect(await screen.findByRole("heading", { name: A("companies.title") })).toBeInTheDocument();   // before the list answered
+    expect(screen.queryByTestId("shell-root")).toBeNull();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    await act(async () => { release(companies); await Promise.resolve(); });
+    expect(screen.getByRole("heading", { name: A("companies.title") })).toBeInTheDocument();
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    expect(client.logout).not.toHaveBeenCalled();
+  });
+
   it("the fallback to company selection clears the previous company's id, permissions, branch permissions and role grants (as changing company does)", async () => {
     const seen: Array<{ id: string | null; can: boolean; any: boolean; branch: boolean; role: boolean }> = [];
     let adopt: (u: typeof USER) => Promise<void> = async () => {};
     function Probe() {
       const a = useAuth();
       adopt = a.adoptEnrolledSession;
-      seen.push({ id: a.companyId, can: a.can("company.profile.view"), any: a.canAny("company.profile.view"), branch: a.canOnBranch("company.profile.view", "b1"), role: a.hasRole("r") });
+      seen.push({ id: a.companyId, can: a.can("company.profile.view"), any: a.canAny("company.profile.view"), branch: a.canOnBranch("company.profile.view", "b1"), role: a.hasRoleOnBranch("r", "b1") });
       return <span data-testid="phase">{a.phase}</span>;
     }
     const client = fakeClient({
