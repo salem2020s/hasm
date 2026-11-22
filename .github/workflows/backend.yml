@@ -50,6 +50,8 @@ jobs:
         run: node tools/schema/company-0033-approval-policy-identity.cjs --check
       - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
         run: node tools/schema/company-0031-attachment-retention.cjs --check
+      - name: Stock-period-guard schema files match the deterministic generator (STOCK-PERIOD-DB, D-220, company migration 0034)
+        run: node tools/schema/company-0034-stock-period-guard.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
@@ -145,7 +147,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1296 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1322 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -222,6 +224,8 @@ jobs:
                 "StockAdjustmentTests": 12, "StockAdjustmentApiTests": 1,
                 # Phase 3.8B-3 negative-stock exception: obligations, settlements, reversals, close probe (company migration 0020, system migration 0022).
                 "NegativeStockTests": 15, "NegativeStockReviewTests": 4, "NegativeStockApiTests": 1,
+                # STOCK-PERIOD-DB (D-220, company migration 0034): the database guard against stock and cost postings into closed or missing periods. The role class needs the CREATEROLE test account (CI service only).
+                "StockPeriodGuardTests": 21, "StockPeriodGuardRuntimeRoleTests": 5,
                 # Phase 3.9A party registry: shared identity, central approval, outbox and reconciliation (company migration 0021, system migration 0023).
                 "PartyRegistryTests": 5, "PartyOutboxTests": 3, "PartyAccessTests": 1, "PartyDatabaseGuardTests": 1, "PartyApiTests": 1, "PartyReviewTests": 5,
                 # Phase 3.9C slice 2 party import adapter: creation through the party service, queued proposals, validation and conflicts, atomic rollback, stale plan.
