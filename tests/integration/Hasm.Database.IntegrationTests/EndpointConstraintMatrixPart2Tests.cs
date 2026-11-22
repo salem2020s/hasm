@@ -70,7 +70,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/parties/sync"] = "idempotent (same answer)",
             ["POST /api/v1/company/parties/reconcile"] = "read-only (same answer)",
             ["PUT /api/v1/company/statements/mapping"] = "stale-revision race",
-            ["POST /api/v1/company/approval-policies/"] = "append (no uniqueness rule)",
+            ["POST /api/v1/company/approval-policies/"] = "duplicate (409 approval_policy_duplicate)",
             ["PUT /api/v1/company/approval-policies/{id:guid}"] = "stale-revision race",
             ["POST /api/v1/company/approval-policies/{id:guid}/deactivate"] = "stale-revision race",
             ["POST /api/v1/company/approval-policies/{id:guid}/activate"] = "stale-revision race",
@@ -364,9 +364,9 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
 
         // statement mapping and approval policies
         await Race("statement mapping", R, HttpMethod.Put, "/api/v1/company/statements/mapping", new StatementMappingInput([new StatementMappingEntryInput(IdOf(leaf), "current_assets")], "matrix", null), "\"0\"");
-        // approval policies carry no uniqueness rule (several policies per document type are allowed), so each create appends one: no refusal is expected
-        var policy = await Race("approval policy", [], HttpMethod.Post, "/api/v1/company/approval-policies",
-            new ApprovalPolicyInput(DocumentTypes.JournalEntry, "manual", null, 100m, 1, "سياسة", "Policy"), mode: Mode.Append);
+        // a semantically identical ACTIVE policy is refused (company migration 0033, owner decision of 2026-11-21): of the identical parallel creates exactly one wins and every other gets the mapped 409
+        var policy = await Race("approval policy", ["409:approval_policy_duplicate"], HttpMethod.Post, "/api/v1/company/approval-policies",
+            new ApprovalPolicyInput(DocumentTypes.JournalEntry, "manual", null, 100m, 1, "سياسة", "Policy"));
         if (policy is not null)
         {
             var updated = await Race("approval policy update", R, HttpMethod.Put, $"/api/v1/company/approval-policies/{IdOf(policy)}",
