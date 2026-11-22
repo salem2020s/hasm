@@ -145,6 +145,9 @@ public sealed partial class PermissionCatalog
         // Phase 3.8B-3: negativeexception = approve the negative-stock exception of an issue document of the warehouse (never the creator; never the poster; system migration 0022)
         new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse, PermissionAction.NegativeException]),
         new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
+        // Compensation plans of a back-dated stock event (Phase 3.8D step 5): warehouse-scoped on the plan's root warehouse. Create = write a plan from the read-only planner output; Approve = approve or reject a plan
+        // (never the creator, last editor or submitter of the plan or of the event document: service AND PostgreSQL). The resource is privileged (D-096) and NO preset role holds either code (owner decision X4 is open).
+        new("company.compensationplans", ScopeKind.Warehouse, [PermissionAction.Create, PermissionAction.Approve]),
         // Stocktake (3.8B-1): warehouse-scoped like stock documents; the approver is never the submitter (service AND PostgreSQL). Counting and approving create no stock movement.
         new("company.stocktake", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
         // Party registry (3.9A, system migration 0023): company-wide. View the local parties and the shared identity they are linked to; create a local party (which proposes its shared identity);
@@ -271,6 +274,8 @@ public sealed partial class PermissionCatalog
         public const string StockDocsReverse = "company.stockdocs.reverse";
         public const string StockDocsNegativeException = "company.stockdocs.negativeexception";
         public const string StockBalanceView = "company.stockbalance.view";
+        public const string CompensationPlansCreate = "company.compensationplans.create";
+        public const string CompensationPlansApprove = "company.compensationplans.approve";
         public const string StocktakeView = "company.stocktake.view";
         public const string StocktakeCreate = "company.stocktake.create";
         public const string StocktakeUpdate = "company.stocktake.update";
@@ -344,7 +349,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,

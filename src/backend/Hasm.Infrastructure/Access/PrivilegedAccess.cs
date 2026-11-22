@@ -16,6 +16,8 @@ public static class PrivilegedAccess
         "company.attachmentssensitive", "company.journalsoftclosed",
         // Phase R slice R1: retention policy, legal holds and the approval and execution of attachment deletion are destructive controls (D-096: when in doubt, privileged)
         "company.attachmentretention",
+        // Phase 3.8D step 5: creating, approving and executing a compensation plan rewrites the cost history of a back-dated event (D-096: when in doubt, privileged)
+        "company.compensationplans",
         // review L2 of PR #172 (when in doubt, privileged): the ledger settings and the cost-center policies configure which controls apply to postings (the journal controls and the cost-center requirement), so changing them changes what the ledger lets through
         "company.ledgersettings", "company.costcenterpolicies",
     };

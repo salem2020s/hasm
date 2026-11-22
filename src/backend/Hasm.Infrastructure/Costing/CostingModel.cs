@@ -9,6 +9,12 @@ public static class CostingAuditEvents
     public const short Reversed = 1153;
     /// <summary>Phase 3.8D (company migration 0034, provisional): the business audit event of an executed compensation plan. PostgreSQL requires it at the commit of an execution, with the plan as subject and the execution as target. Nothing writes it yet: no execution path exists.</summary>
     public const short PlanExecuted = 1154;
+    /// <summary>Phase 3.8D step 5: the plan lifecycle events (subject = the plan, target user unused, detail = the plan's closure hash and fingerprints or the note). 1154 stays the execution.</summary>
+    public const short PlanProposed = 1155;
+    public const short PlanApproved = 1156;
+    public const short PlanRejected = 1157;
+    public const short PlanCancelled = 1158;
+    public const short PlanStaled = 1159;
 }
 
 /// <summary>The business document an operation belongs to (for traceability only; the engine never reads or changes it).</summary>

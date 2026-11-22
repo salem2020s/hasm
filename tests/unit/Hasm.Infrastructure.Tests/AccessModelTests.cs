@@ -38,7 +38,8 @@ public class AccessModelTests
         foreach (var (_, (_, permissions)) in PresetRoles.Definitions)
             Assert.All(permissions, code => Assert.True(PermissionCatalog.Default.TryGet(code, out _), code));
         // Segregation of duties: the APPROVAL of exceptional fiscal reopenings, of journal entries and of commercial documents is in the catalog but never in the Company Administrator preset; only Fiscal Approver / Journal Approver hold them.
-        string[] approval = [PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove];
+        string[] approval = [PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove,
+            PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove /* Phase 3.8D step 5: no preset holds the plan codes until owner decision X4 */];
         Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
         Assert.Equal(PresetRoles.FiscalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.FiscalReopenApprove)).Key);
         Assert.Equal(PresetRoles.JournalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.JournalApprove)).Key);

@@ -12,7 +12,7 @@ namespace Hasm.Infrastructure.Costing;
 
 /// <summary>Everything a later approval needs to bind, from ONE read-only snapshot. NOT an approval or execution token; nothing is written.</summary>
 internal sealed record CompensationPlanResult(CostFlowComparisonResult Comparison, ClassificationEvidence Evidence, CompensationPlan Plan,
-    ImmutableArray<CostFiscalPeriodEvidence> Periods, string PlanFingerprint);
+    ImmutableArray<CostFiscalPeriodEvidence> Periods, string PlanFingerprint, CostMethod Method, string CurrencyCode, int MoneyDecimals, ImmutableArray<Guid> PositionWarehouses);
 
 internal sealed partial class CostFlowSnapshotService
 {
@@ -102,7 +102,8 @@ internal sealed partial class CostFlowSnapshotService
             var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
                 { Contract = "stock-compensation-plan-result-v1", Company = company, Plan = plan.Fingerprint, Periods = used }, ClassificationEvidenceService.Canonical))).ToLowerInvariant();
             token.ThrowIfCancellationRequested();
-            return ConfigResult<CompensationPlanResult>.Ok(new(comparison, evidence, plan, used, fingerprint));
+            var head = snapshots.Value[0];
+            return ConfigResult<CompensationPlanResult>.Ok(new(comparison, evidence, plan, used, fingerprint, head.Method, head.CurrencyCode, head.MoneyDecimals, [.. head.Positions.Select(p => p.WarehouseId).Order()]));
         }, async (budget, token) =>
         {
             // Final live recheck of the ledger permissions on success AND on caught failures (stock roots are rechecked by RunBoundedReadAsync itself).
