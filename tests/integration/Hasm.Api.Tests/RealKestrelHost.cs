@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Identity;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +16,7 @@ namespace Hasm.Api.Tests;
 
 /// <summary>
 /// ONE real-Kestrel harness for the tests that need the framework's real request handling (the in-memory test server enforces neither the request-size limit nor the real order of the pipeline): the real application on a
-/// free loopback port (<c>UseKestrel(0)</c>) and a raw-socket POST, declared or chunked, that returns the status code of the answer. Optionally the session authentication is replaced by a handler that admits every
+/// loopback port chosen by the operating system (<c>UseKestrel(0)</c>, port 0, in both modes: any number of hosts can run in parallel) and a raw-socket POST, declared or chunked, that returns the status code of the answer. Optionally the session authentication is replaced by a handler that admits every
 /// request with a session that satisfies the default MFA policy (pass-through state), so a request reaches an endpoint behind authorization, where the endpoint's size limit is applied.
 /// </summary>
 internal sealed class RealKestrelHost : IDisposable
@@ -34,18 +35,30 @@ internal sealed class RealKestrelHost : IDisposable
         }
     }
 
-    private readonly WebApplicationFactory<Program> factory;
+    /// <summary>
+    /// The ROOT factory of both modes. The admitted mode is configured by overriding <see cref="ConfigureWebHost"/>, not through <c>WithWebHostBuilder</c>: that method returns a derived factory on which
+    /// <c>UseKestrel(0)</c> has no effect (the port stays with the factory it was derived from), so the server listened on Kestrel's default address, 127.0.0.1:5000, and a second admitted host, or anything else on
+    /// that port, failed with "address already in use" (FG review L3 of PR 184).
+    /// </summary>
+    private sealed class Factory(bool admitEveryone) : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            if (!admitEveryone) return;
+            builder.ConfigureTestServices(services =>
+                services.Configure<AuthenticationOptions>(o => o.Schemes.Single(s => s.Name == AuthDefaults.Scheme).HandlerType = typeof(AdmitEveryone)));
+        }
+    }
+
+    private readonly Factory factory;
 
     public string Host { get; }
     public int Port { get; }
 
     public RealKestrelHost(bool admitEveryone = false)
     {
-        factory = admitEveryone
-            ? new WebApplicationFactory<Program>().WithWebHostBuilder(b => b.ConfigureTestServices(services =>
-                services.Configure<AuthenticationOptions>(o => o.Schemes.Single(s => s.Name == AuthDefaults.Scheme).HandlerType = typeof(AdmitEveryone))))
-            : new WebApplicationFactory<Program>();
-        factory.UseKestrel(0);                                                                                  // a real Kestrel server on a free loopback port
+        factory = new Factory(admitEveryone);
+        factory.UseKestrel(0);                                                                                  // a real Kestrel server on an ephemeral loopback port chosen by the operating system, in BOTH modes
         factory.StartServer();
         using var probe = factory.CreateClient();
         Host = probe.BaseAddress!.Host;

@@ -24,11 +24,11 @@ public static class AttachmentRetentionEndpoints
         g.MapGet("/capabilities", Capabilities);
         g.MapGet("/policies", Policies);
         g.MapPost("/policies", Draft).WithMetadata(new BodyLimit());
-        g.MapPost("/policies/{id:guid}/approve", Approve).WithMetadata(new BodyLimit());
-        g.MapPost("/policies/{id:guid}/revoke", Revoke).WithMetadata(new BodyLimit());
+        g.MapPost("/policies/{id:guid}/approve", Approve).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/policies/{id:guid}/revoke", Revoke).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/holds", Holds);
         g.MapPost("/holds", Place).WithMetadata(new BodyLimit());
-        g.MapPost("/holds/{id:guid}/release", Release).WithMetadata(new BodyLimit());
+        g.MapPost("/holds/{id:guid}/release", Release).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/preview", Preview);
     }
 
