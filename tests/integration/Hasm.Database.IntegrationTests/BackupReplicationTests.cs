@@ -94,11 +94,21 @@ public class BackupReplicationTests : PostgresTestBase
         foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories)) File.Copy(f, Path.Combine(to, Path.GetRelativePath(from, f)));
     }
 
+    /// <summary>The fake volume of the destination: its own folder, or (while it does not exist yet) the nearest existing parent the real probe falls back to.</summary>
+    private bool OnDestinationVolume(string p)
+    {
+        if (p.StartsWith(Nas, StringComparison.Ordinal)) return true;
+        if (Directory.Exists(Nas)) return false;
+        var nearest = Path.GetDirectoryName(Nas);
+        while (nearest is not null && !Directory.Exists(nearest)) nearest = Path.GetDirectoryName(nearest);
+        return string.Equals(p, nearest, StringComparison.Ordinal);
+    }
+
     private IReadOnlyList<string> Findings(string? otherVolume = "dev:other")
     {
         var configured = new[] { new BackupDestination("nas", Nas, BackupDestinationKind.Network, null, null, null) };
         var check = Assert.Single(BackupDestinations.Check(configured, Root, [Storage, Keys, AuditKeys, SigningDir],
-            p => p.StartsWith(Nas, StringComparison.Ordinal) ? otherVolume : "dev:primary"));
+            p => OnDestinationVolume(p) ? otherVolume : "dev:primary"));
         var primaryRuns = RetentionInventory.Scan(Root, Trust).Runs;
         var newest = primaryRuns.Where(ReplicaStatus.IsReplicable).Max(r => r.RunId);
         var state = ReplicaStatus.Inspect(check, primaryRuns, Trust, DateTimeOffset.UtcNow);
