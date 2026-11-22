@@ -269,8 +269,8 @@ jobs:
                 "InventoryPeriodInvariantTests": 3,
                 # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
                 "BackupRetentionTests": 11,
-                # Phase 4.3 slice 8 (multiple backup destinations; no migration): S8a destination configuration, safety checks and the per-destination status.
-                "BackupReplicationTests": 3,
+                # Phase 4.3 slice 8 (multiple backup destinations; no migration): S8a destination configuration, safety checks and the per-destination status; S8b the copy engine, backup-replicate and replication at the end of backup-run (audit 2040, 2041, 2043).
+                "BackupReplicationTests": 3, "BackupReplicaCopyTests": 8,
                 # Release 1 acceptance evidence for owner item 11 (D-088): real encrypted backup, trial restore with the recovery key, tampering and downgrade refusals, key rotation, key-export round trip (no migration).
                 "BackupAcceptanceEvidenceTests": 5,
                 # Acceptance scenario 21.10 and the upgrade test category: opaque physical names and intact schema on a new database, an upgrade from company level 3 and a trial restore (no migration).
