@@ -23,7 +23,7 @@ using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.8D step 4: the X1-A database layer (company migration 0035, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role (production grants, plus a TEST-ONLY INSERT on the four execution tables: see PrepareRuntime), exactly as design section 8 describes the
+/// Phase 3.8D step 4: the X1-A database layer (company migration 0035, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role (production grants by default; the tests of the database rules that write executions opt in to a TEST-ONLY INSERT on the four execution tables: see PrepareRuntime), exactly as design section 8 describes the
 /// N-tests. No executor exists: the tests write the plan, approval, execution and epoch rows themselves, which is also what a hostile holder of the runtime role's grants could try. The history is built by the real
 /// services (owner connection, as in every service suite); everything that probes the new rules runs as the runtime role, and an execution runs inside the real audited company transaction, so its business audit
 /// event is a genuine, key-authenticated event written in the same transaction. Role-capable disposable cluster only.
@@ -65,11 +65,12 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
     protected static readonly string[] ExecutionTables = [CX.Table, CompanySchema.CompensationPlanExecutionJournal.Table, EM.Table, EL.Table];
 
     /// <summary>
-    /// Prepares the company and the REAL per-company runtime role (production grants). With <paramref name="executorGrant"/> (the default) the test ALSO gives that role INSERT on the four execution tables, as the owner of
-    /// the disposable test database: this is the right the future reviewed executor slice will carry in the grant catalog, and it lets the tests of the database rules (N1 to N32, which write plans, executions and epochs by
-    /// SQL) keep proving the guards against a writer that CAN insert. The tests that prove the production grants (PlanExecutionRuntimeRoleDisabledTests) and the services of step 5 pass false.
+    /// Prepares the company and the REAL per-company runtime role on the PRODUCTION grants (the default: the role holds SELECT only on the four execution tables, so every test that makes a claim about the runtime role
+    /// runs on exactly what production gives it; review L-b of PR 48). A test whose subject is the database rules that guard a writer that CAN insert (N1 to N32, which write plans, executions and epochs by SQL as that
+    /// role) opts in with <c>executorGrant: true</c>: the test then ALSO gives the role INSERT on the four execution tables, as the owner of the disposable test database. This is the right the future reviewed executor
+    /// slice will carry in the grant catalog; it is never part of a claim about what the runtime role may do today. Where a test only needs an executed epoch as its FIXTURE it writes it as the owner (<see cref="RunAsOwner"/>).
     /// </summary>
-    protected async Task PrepareRuntime(bool executorGrant = true)
+    protected async Task PrepareRuntime(bool executorGrant = false)
     {
         await PrepareNegative();
         var granted = await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
@@ -114,6 +115,32 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         try
         {
             await RuntimeTx.ExecuteAsync(Company.Id, async work =>
+            {
+                var audit = "gen_random_uuid()";
+                foreach (var (name, sql) in script.ToList())
+                {
+                    if (name == "audit")
+                    {
+                        var receipt = await work.AppendAuditAsync(new AuditEventData(script.AuditType, Executor, script.AuditTarget, script.AuditSubject, "compensation plan executed"));
+                        audit = $"(SELECT {AU.EventId} FROM {AU.Table} WHERE {AU.StreamKey} = '{receipt.StreamKey}' AND {AU.Seq} = {receipt.Seq})";
+                    }
+                    foreach (var s in sql) { await using var cmd = new NpgsqlCommand(s.Replace("@AUDIT@", audit), work.Connection, work.Transaction); await cmd.ExecuteNonQueryAsync(); }
+                    if (script.Hooks.TryGetValue(name, out var hook)) await hook();
+                }
+                return 0;
+            });
+            return null;
+        }
+        catch (Exception ex) { return Describe(ex); }
+    }
+
+    /// <summary>Runs a script as the OWNER of the disposable test database inside the real audited company transaction: a FIXTURE (for example an executed epoch that a step 5 test needs to exist), never a claim about the runtime role. Null when it committed.</summary>
+    protected async Task<string?> RunAsOwner(Script script)
+    {
+        var owner = new CompanyAuditedTransactions(Resolver, Audit, Clock);
+        try
+        {
+            await owner.ExecuteAsync(Company.Id, async work =>
             {
                 var audit = "gen_random_uuid()";
                 foreach (var (name, sql) in script.ToList())
