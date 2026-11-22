@@ -31,11 +31,11 @@ public static class StockAdjustmentEndpoints
 
     public static void MapStockAdjustmentEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/v1/company/stocktakes/{id:guid}/adjustment", Generate).RequireAuthorization();
+        app.MapPost("/api/v1/company/stocktakes/{id:guid}/adjustment", Generate).RequireAuthorization().WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         var g = app.MapGroup("/api/v1/company/stock-adjustments").RequireAuthorization();
         g.MapGet("/{id:guid}", Get);
         g.MapPost("/{id:guid}/posting", Post).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/reversal", Reverse).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/reversal", Reverse).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
     internal static object Body(StockAdjustmentView a) => new

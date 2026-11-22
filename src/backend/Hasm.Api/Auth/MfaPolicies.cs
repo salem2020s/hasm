@@ -31,6 +31,8 @@ public sealed class MfaCompanyPolicyHandler(ICompanyMfaPolicyEvaluator policies)
     {
         if (context.Resource is not HttpContext http || http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession s) return;
         if (s.MfaState != MfaState.None && s.MfaVerifiedAtUtc is not null) { context.Succeed(requirement); return; }  // carries the proof: satisfied whatever the policy says, so no query
+        // the decision below holds for THIS company only (possibly none): the endpoint must not serve another one (AccessEndpoints.ResolveActor compares; review H1 of PR 181)
+        http.Items[MfaEnforcement.EvaluatedCompanyItemKey] = new MfaEnforcement.EvaluatedCompany(s.SelectedCompanyId);
         if (s.SelectedCompanyId is not { } company) { context.Succeed(requirement); return; }                         // no company selected: no company policy applies
         if (!await policies.RequiresMfaAsync(s.UserId, company, http.RequestAborted)) { context.Succeed(requirement); return; }
         // required: the session must carry the proof (a user with an authenticator always does, S2; a user without one cannot)
@@ -60,6 +62,12 @@ public sealed class MfaAuthorizationResultHandler : IAuthorizationMiddlewareResu
             && companyFailure.FailedRequirements.Any(r => r is MfaCompanyPolicyRequirement)
             && companyFailure.FailedRequirements.All(r => r is MfaCompanyPolicyRequirement or MfaVerifiedRequirement or MfaFreshRequirement))
         {
+            // a user WITH an authenticator whose session carries no proof (a session issued before the user enrolled on another device) steps up; only a user without one must enrol (review L1 of PR 181)
+            if (context.Items[AuthDefaults.SessionItemKey] is AuthenticatedSession { MfaState: not MfaState.None })
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return context.Response.WriteAsJsonAsync(new { error = "mfa_step_up_required" });
+            }
             context.Response.StatusCode = StatusCodes.Status403Forbidden;                                              // the company requires MFA of this user and the user has no authenticator
             return context.Response.WriteAsJsonAsync(new { error = "mfa_enrolment_required" });
         }
@@ -82,8 +90,17 @@ public sealed class MfaAuthorizationResultHandler : IAuthorizationMiddlewareResu
 /// </summary>
 public static class MfaEnforcement
 {
-    /// <summary>Every route under these prefixes must carry the MfaVerified policy.</summary>
+    /// <summary>The company for which <see cref="MfaCompanyPolicyHandler"/> judged the company MFA policy on this request (null = no company was selected). Set only when the decision depended on the
+    /// company (a session that carries the proof satisfies every company's policy).</summary>
+    public const string EvaluatedCompanyItemKey = "hasm.mfa.evaluated-company";
+    public sealed record EvaluatedCompany(Guid? CompanyId);
+
+    /// <summary>Every route under these prefixes must carry the MfaVerified requirement.</summary>
     public static readonly string[] PrivilegedPrefixes = ["/api/v1/access", "/api/v1/admin/users", "/api/v1/admin/parties"];
+
+    /// <summary>The privileged prefixes of IDENTITY administration: not company-scoped, so their routes carry the MFA requirements WITHOUT the selected company's policy
+    /// (<see cref="AuthDefaults.AuthenticatedPolicy"/>, <see cref="AuthDefaults.AuthenticatedFreshPolicy"/>; review L2 of PR 181). Every other privileged prefix is company-scoped and carries the company policy too.</summary>
+    public static readonly string[] IdentityAdministrationPrefixes = ["/api/v1/admin/users", "/api/v1/admin/parties"];
 
     /// <summary>Every one of these operations (method, route pattern as mapped) must carry the MfaFresh policy.</summary>
     public static readonly (string Method, string Pattern)[] FreshOperations =

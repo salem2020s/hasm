@@ -24,12 +24,12 @@ public static class JournalEndpoints
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/submit", Submit);
-        g.MapPost("/{id:guid}/withdraw", Withdraw);
-        g.MapPost("/{id:guid}/cancel", Cancel);
-        g.MapPost("/{id:guid}/decision", Decide).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/post", Post);
-        g.MapPost("/{id:guid}/reverse", Reverse).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/submit", Submit).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/decision", Decide).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/post", Post).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/reverse", Reverse).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         var s = app.MapGroup("/api/v1/company/ledger-settings").RequireAuthorization();
         s.MapGet("", GetSettings);
         s.MapPut("", PutSettings).WithMetadata(new BodyLimit());

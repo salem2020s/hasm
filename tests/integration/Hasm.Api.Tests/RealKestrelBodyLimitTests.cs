@@ -1,7 +1,3 @@
-using System.Net.Sockets;
-using System.Text;
-using Microsoft.AspNetCore.Mvc.Testing;
-
 namespace Hasm.Api.Tests;
 
 /// <summary>
@@ -12,21 +8,9 @@ namespace Hasm.Api.Tests;
 public sealed class RealKestrelBodyLimitTests : IDisposable
 {
     private const int Limit = 8 * 1024;
-    private readonly WebApplicationFactory<Program> factory;
-    private readonly string host;
-    private readonly int port;
+    private readonly RealKestrelHost server = new();                                                           // the shared real-Kestrel harness (loopback, raw sockets)
 
-    public RealKestrelBodyLimitTests()
-    {
-        factory = new WebApplicationFactory<Program>();
-        factory.UseKestrel(0);                                                                                  // a real Kestrel server on a free loopback port
-        factory.StartServer();
-        using var probe = factory.CreateClient();
-        host = probe.BaseAddress!.Host;
-        port = probe.BaseAddress.Port;
-    }
-
-    public void Dispose() => factory.Dispose();
+    public void Dispose() => server.Dispose();
 
     /// <summary>A JSON login body of exactly <paramref name="bytes"/> bytes (the padding is a long login name).</summary>
     private static string Body(int bytes, string filler = "a")
@@ -35,35 +19,7 @@ public sealed class RealKestrelBodyLimitTests : IDisposable
         return prefix + new string(filler[0], bytes - prefix.Length - suffix.Length) + suffix;
     }
 
-    private async Task<int> Status(string body, bool chunked)
-    {
-        using var client = new TcpClient();
-        await client.ConnectAsync(host, port);
-        var stream = client.GetStream();
-        var payload = Encoding.UTF8.GetBytes(body);
-        var head = new StringBuilder("POST /api/v1/auth/login HTTP/1.1\r\n").Append($"Host: {host}:{port}\r\n").Append("Content-Type: application/json\r\n").Append("X-Hasm-Request: 1\r\nConnection: close\r\n");
-        head.Append(chunked ? "Transfer-Encoding: chunked\r\n\r\n" : $"Content-Length: {payload.Length}\r\n\r\n");
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(head.ToString()));
-        try
-        {
-            if (chunked)
-            {
-                for (var i = 0; i < payload.Length; i += 1024)
-                {
-                    var n = Math.Min(1024, payload.Length - i);
-                    await stream.WriteAsync(Encoding.ASCII.GetBytes(n.ToString("x") + "\r\n"));
-                    await stream.WriteAsync(payload.AsMemory(i, n));
-                    await stream.WriteAsync("\r\n"u8.ToArray());
-                }
-                await stream.WriteAsync("0\r\n\r\n"u8.ToArray());
-            }
-            else await stream.WriteAsync(payload);
-        }
-        catch (IOException) { /* the server may answer and close before the whole body is sent: its answer is still on the socket */ }
-        using var reader = new StreamReader(stream, Encoding.ASCII);
-        var statusLine = await reader.ReadLineAsync();
-        return int.Parse(statusLine!.Split(' ')[1]);
-    }
+    private Task<int> Status(string body, bool chunked) => server.PostStatus("/api/v1/auth/login", body, chunked);
 
     // Kestrel counts the chunk framing (size lines and CRLFs) of a chunked body toward the limit, so a chunked body is "at the limit" a little earlier than its payload (pre-existing behavior, recorded as a follow-up in
     // the review record of PR 175); the chunked cases therefore use a payload with room for the framing.

@@ -1,27 +1,50 @@
 {
-  "updatedAt": "2026-11-18",
-  "status": "merged-owner-approved-exact-temporary-dev-policy-advisory-unresolved",
+  "updatedAt": "2026-11-21",
+  "status": "retired-advisory-withdrawn-strict-zero-exceptions",
   "advisory": "GHSA-fc5q-39xc-vjpf",
   "severity": "High",
-  "baseMain": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
-  "branch": "feature/security-picomatch",
-  "affectedPRs": [
-    48,
-    49
+  "auditExceptionActive": false,
+  "installedVersion": "picomatch 4.0.7 (src/frontend/package-lock.json on main 9ffaa6c; unchanged)",
+  "whyAuditPasses": "the advisory GHSA-fc5q-39xc-vjpf was withdrawn by GitHub on 2026-11-18; the dependency was NOT upgraded or replaced",
+  "verifiedOnMain": "9ffaa6c7c265b3b2de2c8ddf398d2a6034ffa318",
+  "retirement": {
+    "decision": "D-047 (owner approval A, 2026-11-20; supersedes D-046)",
+    "appliedBy": "PR #61, merge commit 215da5691f8298a71044f4320f19e2c13e5ab783 (2026-11-20)",
+    "advisoryWithdrawn": "2026-11-18",
+    "policyRecord": "tools/verify/picomatch-exception.json status RETIRED-ADVISORY-WITHDRAWN",
+    "enforcement": "tools/verify/dependency-audit-policy.cjs: retirement bound to the owner-approved hash; zero exceptions; every High/Critical blocks",
+    "reviewRecord": "docs/review-records/PR-security-picomatch-apply.md"
+  },
+  "openOwnerDecisions": [
+    "S: bundler/Tauri inspection hardening (review residuals M1-M5), OPEN",
+    "C: mandatory Rust cargo audit job (M6), OPEN"
   ],
   "latestOfficialVersionChecked": "4.0.7",
   "advisoryUpdatedAt": "2026-11-17T15:56:44Z",
-  "officialPatchedVersion": null,
-  "changesToManifestsLockfilesOrGates": true,
   "rejected": [
     "ryotsu4.0.7-a:High-ReDoS-bypass",
     "older-toolchain:Critical-vulnerabilities",
     "flupke1.3.0:missing-required-API",
     "zeromatch1.0.0:incompatible-API-unvalidated"
   ],
-  "revisitOnlyOn": "new official patched release or new independently validated safe replacement",
-  "next": "Observe main post-merge CI and revalidate PR48/49. Exception automatically expires2026-11-24T00:00:00Z without renewal. Revisit remediation only on a legitimate new signal.",
-  "auditExceptionActive": true,
-  "changeDetails": "Hosted audit integration now applied after successful actual proof; manifests/lockfiles unchanged; other High/Critical, production/desktop/NuGet, self-hosted checks remain blocking",
-  "conditionalApproval": "D-046, owner2026-11-18; exact six dev records only; expires2026-11-24T00:00:00Z; no renewal"
+  "history": [
+    {
+      "note": "state of 2026-11-18 before the retirement, superseded by D-047 and PR #61",
+      "updatedAt": "2026-11-18",
+      "status": "merged-owner-approved-exact-temporary-dev-policy-advisory-unresolved",
+      "baseMain": "814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb",
+      "branch": "feature/security-picomatch",
+      "affectedPRs": [
+        48,
+        49
+      ],
+      "officialPatchedVersion": null,
+      "changesToManifestsLockfilesOrGates": true,
+      "revisitOnlyOn": "new official patched release or new independently validated safe replacement",
+      "next": "Observe main post-merge CI and revalidate PR48/49. Exception automatically expires2026-11-24T00:00:00Z without renewal. Revisit remediation only on a legitimate new signal.",
+      "auditExceptionActive": true,
+      "changeDetails": "Hosted audit integration now applied after successful actual proof; manifests/lockfiles unchanged; other High/Critical, production/desktop/NuGet, self-hosted checks remain blocking",
+      "conditionalApproval": "D-046, owner2026-11-18; exact six dev records only; expires2026-11-24T00:00:00Z; no renewal"
+    }
+  ]
 }
