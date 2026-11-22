@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Hasm.Api.Auth;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Security;
@@ -87,11 +88,13 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         if (tx is not null) { await using var rb = new NpgsqlCommand("ROLLBACK TO SAVEPOINT d", conn, tx); await rb.ExecuteNonQueryAsync(); }
     }
 
-    private async Task<SystemRuntimeFindings> Findings(string? role = null)
+    private async Task<SystemRuntimeFindings> Findings(string? role = null, string? readAll = null, string? writeAll = null)
     {
         await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await conn.OpenAsync();
-        return await SystemRuntimePrivileges.FindAsync(conn, role ?? runtimeRole);
+        return readAll is null && writeAll is null
+            ? await SystemRuntimePrivileges.FindAsync(conn, role ?? runtimeRole)
+            : await SystemRuntimePrivileges.FindAsync(conn, role ?? runtimeRole, readAll ?? SystemRuntimePrivileges.PredefinedReader, writeAll ?? SystemRuntimePrivileges.PredefinedWriter);
     }
 
     private MfaStore RuntimeMfa(SystemRuntimeGate? gate = null) => new(() => RuntimeConnection, Clock, Audit, new TotpSecretProtector(ring), gate ?? new SystemRuntimeGate(false, Clock) { CheckLifetime = TimeSpan.Zero });
@@ -133,6 +136,18 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         Assert.Equal(1, await mfa.RevokeAllAsync(user.Id, null, "test"));
 
         Assert.True(await Scalar<long>($"SELECT count(*) FROM {Ev.Table} WHERE {Ev.EventType} BETWEEN 1330 AND 1337") >= 3);   // the audit rows were written by the restricted role, in the same transactions
+
+        // the login challenges under the restricted role: issue, count an attempt, consume (the two UPDATE columns), and the housekeeping purge of an expired one (the DELETE of the catalog)
+        await using var challenges = new MfaChallengeStore(() => RuntimeConnection, Clock);
+        var issued = await challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
+        var info = await challenges.TryBeginAttemptAsync(issued.Token, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
+        Assert.NotNull(info);
+        Assert.True(await challenges.ConsumeAsync(info!.Id));
+        var stale = await challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
+        Assert.Equal(2L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MfaChallenge.Table}"));
+        Clock.Advance(TimeSpan.FromDays(3));                                                                     // both are long expired for the purge (a challenge's expiry is immutable, so time moves, not the row)
+        await new IdentityHousekeepingService(store, challenges, Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<IdentityHousekeepingService>.Instance).RunOnceAsync(default);
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MfaChallenge.Table}"));                        // the restricted role was allowed to DELETE them: wired, not dead code
         await using var conn = await As(RuntimeOptions);
         Assert.Equal(runtimeRole, await new NpgsqlCommand("SELECT current_user::text", conn).ExecuteScalarAsync());
         Assert.True(await SystemRuntimePrivileges.HasRequiredAccessAsync(conn, runtimeRole));
@@ -168,6 +183,8 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
             await Denied(conn, $"DROP TABLE {TO.Table}", tx);
             await Denied(conn, $"CREATE TABLE x_copy AS SELECT 1 AS a", tx);
             await Denied(conn, $"SELECT * FROM {SystemSchema.BackupLegalHold.Table}", tx);                       // a table the API never uses
+            await Denied(conn, $"UPDATE {SystemSchema.MfaChallenge.Table} SET {SystemSchema.MfaChallenge.TokenHash} = {SystemSchema.MfaChallenge.TokenHash}", tx);   // only the attempt counter and the consumption time may change
+            await Denied(conn, $"UPDATE {SystemSchema.CostCenterAssignment.Table} SET {SystemSchema.CostCenterAssignment.RoleId} = {SystemSchema.CostCenterAssignment.RoleId}", tx);   // only the two revocation columns
             await Denied(conn, $"DELETE FROM {U.Table}", tx);
             await Denied(conn, $"UPDATE {SystemSchema.Company.Table} SET {SystemSchema.Company.ProvisioningState} = {SystemSchema.Company.ProvisioningState}", tx);
         }
@@ -331,6 +348,74 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         Assert.Equal(companyAclBefore, await InCompany<string>(company.PhysicalDatabaseName, "SELECT COALESCE(string_agg(c.relname || COALESCE(c.relacl::text, '-'), ',' ORDER BY c.relname), '') FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace"));
         Assert.Equal(aclBefore, await AclOf(runtimeRole));
         Assert.Equal(ownerBefore, await OwnerState());
+    }
+
+    [PostgresRoleFact]
+    public async Task Review_findings_a_runtime_membership_database_wide_roles_grantable_privileges_and_schema_create_are_refused_and_the_command_converges()
+    {
+        await StartRestricted();
+        var user = await NewUser();
+        await using var mfa = RuntimeMfa();
+        var id = await mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);
+        Assert.True(await mfa.ActivatePendingAsync(user.Id, id, Step, null));
+        var catalog = await AclOf(runtimeRole);
+        var (reporting, reportingPassword) = await NewLoginRole();
+        await Exec($"GRANT USAGE ON SCHEMA public TO {Q(reporting)}");
+        var reportingOptions = OptionsFor(reporting, reportingPassword);
+
+        // M1: ANY membership of the runtime account is refused (it can SET ROLE to the role, or inherit from it: for a superuser role that is every table). The cluster of these tests cannot create a superuser or a
+        // BYPASSRLS role, so the rule is shown with an ordinary role: the decision is "any membership", not "a membership of a role that is a superuser", which is what makes it safe for the real case.
+        var (group, _) = await NewLoginRole();
+        await RoleAdmin($"GRANT {Q(group)} TO {Q(runtimeRole)}");
+        Assert.Contains("runtime_role_membership", (await Findings()).Violations);
+        var gated = await Assert.ThrowsAsync<SystemRuntimePrivilegeException>(() => mfa.FindActiveSecretAsync(user.Id, default));
+        Assert.Contains("runtime_role_membership", gated.Codes);
+        Assert.Equal("runtime_account_has_role_membership", (await Assert.ThrowsAsync<SystemRuntimeGrantException>(() => SystemRuntimeAdministration.GrantAsync(RuntimeOptions))).Code);
+        Assert.Equal(catalog, await AclOf(runtimeRole));                                                         // the refusal changed nothing
+        await RoleAdmin($"REVOKE {Q(group)} FROM {Q(runtimeRole)}");
+        Assert.Empty((await Findings()).Violations);
+
+        // M2: another role that reads (or writes) EVERY table through pg_read_all_data (pg_write_all_data) is refused, not just noted. The role administrator of these tests cannot grant a predefined role,
+        // so two stand-in roles take their place in the same decision (the production call names the predefined ones); a real predefined-role member is NOT tested at database level.
+        var (readAll, _) = await NewLoginRole(); var (writeAll, _) = await NewLoginRole();
+        Assert.Empty((await Findings(readAll: readAll, writeAll: writeAll)).Violations);
+        await RoleAdmin($"GRANT {Q(readAll)} TO {Q(reporting)}");
+        Assert.Equal(["totp_reader_all_data"], (await Findings(readAll: readAll, writeAll: writeAll)).Violations);
+        Assert.Empty((await Findings()).Violations);                                                             // with the predefined names the stand-in means nothing: the SQL names its roles by parameter only
+        await RoleAdmin($"GRANT {Q(writeAll)} TO {Q(reporting)}");
+        Assert.Equal(["totp_reader_all_data", "totp_writer_all_data"], (await Findings(readAll: readAll, writeAll: writeAll)).Violations);
+        await RoleAdmin($"REVOKE {Q(readAll)} FROM {Q(reporting)}"); await RoleAdmin($"REVOKE {Q(writeAll)} FROM {Q(reporting)}");
+        await RoleAdmin($"GRANT {Q(writeAll)} TO {Q(runtimeRole)}");
+        Assert.Contains("runtime_reads_all_data", (await Findings(readAll: readAll, writeAll: writeAll)).Violations);                 // the runtime account itself
+        await RoleAdmin($"REVOKE {Q(writeAll)} FROM {Q(runtimeRole)}");
+        Assert.Empty((await Findings(readAll: readAll, writeAll: writeAll)).Violations);
+
+        // L1: a privilege the runtime account holds WITH GRANT OPTION is an over-grant (table level and column level); the account can pass the store on, the command takes the passed-on grant away with it
+        await Exec($"GRANT SELECT ON TABLE {TO.Table} TO {Q(runtimeRole)} WITH GRANT OPTION");
+        Assert.Equal(["totp_runtime_overgrant"], (await Findings()).Violations);
+        await using (var rt = await As(RuntimeOptions)) await new NpgsqlCommand($"GRANT SELECT ON TABLE {TO.Table} TO {Q(reporting)}", rt).ExecuteNonQueryAsync();
+        await using (var conn = await As(reportingOptions)) Assert.Equal(1L, await new NpgsqlCommand($"SELECT count(*) FROM {TO.Table}", conn).ExecuteScalarAsync());   // the leak is real
+        Assert.Contains("totp_other_grantee", (await Findings()).Violations);
+        Assert.Empty((await SystemRuntimeAdministration.GrantAsync(RuntimeOptions)).Findings.Violations);        // converges (no "dependent privileges exist"), and the passed-on grant is gone
+        await using (var conn = await As(reportingOptions)) await Denied(conn, $"SELECT count(*) FROM {TO.Table}");
+        Assert.Equal(catalog, await AclOf(runtimeRole));
+        await Exec($"GRANT SELECT ({TO.Cipher}) ON TABLE {TO.Table} TO {Q(runtimeRole)} WITH GRANT OPTION");
+        Assert.Equal(["totp_runtime_overgrant"], (await Findings()).Violations);
+        Assert.Empty((await SystemRuntimeAdministration.GrantAsync(RuntimeOptions)).Findings.Violations);
+        Assert.Equal(catalog, await AclOf(runtimeRole));
+
+        // L2: CREATE on the schema, for the runtime account or for PUBLIC (a database from before PostgreSQL 15), is refused; the command removes both
+        await Exec($"GRANT CREATE ON SCHEMA public TO {Q(runtimeRole)}");
+        Assert.Equal(["runtime_schema_create"], (await Findings()).Violations);
+        await Exec("GRANT CREATE ON SCHEMA public TO PUBLIC");
+        Assert.Empty((await SystemRuntimeAdministration.GrantAsync(RuntimeOptions)).Findings.Violations);
+        Assert.Equal(0L, await Scalar<long>("SELECT count(*) FROM pg_namespace n, aclexplode(n.nspacl) x WHERE n.nspname = 'public' AND x.grantee = 0"));   // PUBLIC holds nothing on the schema
+        await using (var rt = await As(RuntimeOptions)) await Denied(rt, "CREATE FUNCTION zz_trojan() RETURNS int LANGUAGE sql AS 'SELECT 1'");
+        // role attributes: CREATEROLE is refused (the role administrator may set this one; CREATEDB and REPLICATION it cannot grant, they follow the same SQL)
+        await RoleAdmin($"ALTER ROLE {Q(runtimeRole)} CREATEROLE");
+        Assert.Equal(["runtime_role_attributes"], (await Findings()).Violations);
+        await RoleAdmin($"ALTER ROLE {Q(runtimeRole)} NOCREATEROLE");
+        Assert.Empty((await Findings()).Violations);
     }
 
     private WebApplicationFactory<Program> Api(HasmDatabaseOptions runtime, bool? optOut, LogCapture logs) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>

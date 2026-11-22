@@ -40,7 +40,7 @@ public static class SystemRuntimePrivileges
         new("Role", SystemSchema.Role.Table, Change),
         new("RolePermission", SystemSchema.RolePermission.Table, ["SELECT", "INSERT", "DELETE"]),
         new("RoleAssignment", SystemSchema.RoleAssignment.Table, Change),
-        new("CostCenterAssignment", SystemSchema.CostCenterAssignment.Table, Change),          // not documented before this slice: what AccessService does (assign, end); never DELETE
+        new("CostCenterAssignment", SystemSchema.CostCenterAssignment.Table, Append, [SystemSchema.CostCenterAssignment.RevokedAtUtc, SystemSchema.CostCenterAssignment.RevokedBy]),   // not documented before this slice: what AccessService does (assign, and end an assignment: only the two revocation columns change); never DELETE
         new("AccessAudit", SystemSchema.AccessAudit.Table, Append),
         new("AuditEvent", SystemSchema.AuditEvent.Table, Append),
         new("GlobalParty", SystemSchema.GlobalParty.Table, Change),
@@ -48,7 +48,7 @@ public static class SystemRuntimePrivileges
         new("PartyLink", SystemSchema.PartyLink.Table, Append),
         new("UserTotp", SystemSchema.UserTotp.Table, Append,
             [SystemSchema.UserTotp.State, SystemSchema.UserTotp.ConfirmedAtUtc, SystemSchema.UserTotp.LastStep, SystemSchema.UserTotp.FailedConfirmations]),
-        new("MfaChallenge", SystemSchema.MfaChallenge.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),   // not documented before this slice: what MfaChallengeStore does (short-lived login challenges, purged)
+        new("MfaChallenge", SystemSchema.MfaChallenge.Table, ["SELECT", "INSERT", "DELETE"], [SystemSchema.MfaChallenge.Attempts, SystemSchema.MfaChallenge.ConsumedAtUtc]),   // not documented before this slice: what MfaChallengeStore does (short-lived login challenges: count an attempt, consume, purge expired ones through the housekeeping)
         new("BackupLegalHold", SystemSchema.BackupLegalHold.Table, None),                      // administrative tool only (owner account)
         new("BackupRetentionPin", SystemSchema.BackupRetentionPin.Table, None),                // administrative tool only
         new("MigrationJournal", SystemSchema.MigrationJournalTable, None),                     // the API never reads the system journal
@@ -69,11 +69,12 @@ public static class SystemRuntimePrivileges
         var role = Q(roleName);
         var list = new List<string>
         {
+            "REVOKE ALL ON SCHEMA public FROM PUBLIC",                                          // as the company twin: PUBLIC holds neither USAGE nor CREATE on the schema (a role that needs USAGE is granted it explicitly)
             "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC",
-            $"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role}",
+            $"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role} CASCADE",                    // CASCADE: a grant the runtime account passed on WITH GRANT OPTION is removed with it, so the command converges
             "REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC",
-            $"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role}",
-            $"REVOKE ALL ON SCHEMA public FROM {role}",
+            $"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role} CASCADE",
+            $"REVOKE ALL ON SCHEMA public FROM {role} CASCADE",
             $"GRANT USAGE ON SCHEMA public TO {role}",
         };
         foreach (var t in Tables)
@@ -84,24 +85,37 @@ public static class SystemRuntimePrivileges
         return list;
     }
 
-    // Refused by the gate. The runtime account: no superuser or BYPASSRLS, no pg_read_all_data or pg_write_all_data. The secret store: not owned by the runtime account (or a role it belongs to),
+    // Refused by the gate. The runtime account: no superuser or BYPASSRLS, no pg_read_all_data or pg_write_all_data, no role membership at all, no CREATEDB, CREATEROLE or REPLICATION, no ownership of the database or of an object, no CREATE on the schema. The secret store: not owned by the runtime account (or a role it belongs to),
     // nothing beyond the catalog for it (table or column level), no other grantee at all (PUBLIC included; this is what "reporting roles" means: every role other than the owner and the runtime
-    // account), and no other role that can act as the owner or the runtime account through membership.
+    // account), no other role that can act as the owner or the runtime account through membership, and no other role that reads or writes every table through pg_read_all_data or pg_write_all_data.
     private const string ViolationSql = """
         WITH t AS (SELECT c.oid, c.relowner FROM pg_class c WHERE c.oid = to_regclass(@totp)),
              rt AS (SELECT oid FROM pg_roles WHERE rolname = @r::name)
         SELECT code FROM (
           SELECT 'runtime_account_unknown' AS code WHERE NOT EXISTS (SELECT 1 FROM rt)
           UNION ALL SELECT 'runtime_superuser' FROM pg_roles WHERE rolname = @r::name AND (rolsuper OR rolbypassrls)
-          UNION ALL SELECT 'runtime_reads_all_data' FROM rt WHERE pg_has_role(rt.oid, 'pg_read_all_data', 'MEMBER') OR pg_has_role(rt.oid, 'pg_write_all_data', 'MEMBER')
+          UNION ALL SELECT 'runtime_reads_all_data' FROM rt WHERE pg_has_role(rt.oid, @reader::name, 'MEMBER') OR pg_has_role(rt.oid, @writer::name, 'MEMBER')
+          UNION ALL SELECT 'runtime_role_membership' FROM rt WHERE EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = rt.oid)          -- as the company twin: ANY membership (it can SET ROLE to, or inherit from, a role it should not be)
+          UNION ALL SELECT 'runtime_role_attributes' FROM pg_roles WHERE rolname = @r::name AND (rolcreatedb OR rolcreaterole OR rolreplication)
+          UNION ALL SELECT 'runtime_owns_objects' FROM rt WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relowner = rt.oid)
+          UNION ALL SELECT 'runtime_owns_database' FROM rt WHERE EXISTS (SELECT 1 FROM pg_database d WHERE d.datname = current_database() AND d.datdba = rt.oid)
+          UNION ALL SELECT 'runtime_schema_create' FROM rt WHERE has_schema_privilege(rt.oid, 'public', 'CREATE')
           UNION ALL SELECT 'totp_owned_by_runtime' FROM t, rt WHERE pg_has_role(rt.oid, t.relowner, 'MEMBER')
           UNION ALL SELECT 'totp_runtime_overgrant' FROM t, rt WHERE EXISTS (SELECT 1 FROM unnest(@forbidden::text[]) p WHERE has_table_privilege(rt.oid, t.oid, p))
               OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> ALL (@update_columns::name[]) AND has_column_privilege(rt.oid, t.oid, a.attnum, 'UPDATE'))
               OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(rt.oid, t.oid, a.attnum, 'REFERENCES'))
+              OR EXISTS (SELECT 1 FROM unnest(@all::text[]) p WHERE has_table_privilege(rt.oid, t.oid, p || ' WITH GRANT OPTION'))                       -- a grantable privilege lets the runtime account pass the store on to another role
+              OR EXISTS (SELECT 1 FROM pg_attribute a, unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(rt.oid, t.oid, a.attnum, p || ' WITH GRANT OPTION'))
           UNION ALL SELECT 'totp_other_grantee' FROM t JOIN pg_class c ON c.oid = t.oid, aclexplode(c.relacl) x
               WHERE x.grantee <> t.relowner AND x.grantee IS DISTINCT FROM (SELECT oid FROM rt)
           UNION ALL SELECT 'totp_other_grantee' FROM t JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped, aclexplode(a.attacl) x
               WHERE x.grantee <> t.relowner AND x.grantee IS DISTINCT FROM (SELECT oid FROM rt)
+          UNION ALL SELECT 'totp_reader_all_data' FROM t, pg_roles m
+              WHERE NOT m.rolsuper AND m.rolname NOT LIKE 'pg\_%' AND m.oid <> t.relowner AND m.oid IS DISTINCT FROM (SELECT oid FROM rt)
+                AND m.rolname <> @reader::name AND (pg_has_role(m.oid, @reader::name, 'USAGE') OR pg_has_role(m.oid, @reader::name, 'SET'))
+          UNION ALL SELECT 'totp_writer_all_data' FROM t, pg_roles m
+              WHERE NOT m.rolsuper AND m.rolname NOT LIKE 'pg\_%' AND m.oid <> t.relowner AND m.oid IS DISTINCT FROM (SELECT oid FROM rt)
+                AND m.rolname <> @writer::name AND (pg_has_role(m.oid, @writer::name, 'USAGE') OR pg_has_role(m.oid, @writer::name, 'SET'))
           UNION ALL SELECT 'totp_reader_by_membership' FROM t, pg_roles m
               WHERE NOT m.rolsuper AND m.rolname NOT LIKE 'pg\_%' AND m.oid <> t.relowner AND m.oid IS DISTINCT FROM (SELECT oid FROM rt)
                 AND (pg_has_role(m.oid, t.relowner, 'USAGE') OR pg_has_role(m.oid, t.relowner, 'SET')
@@ -109,7 +123,7 @@ public static class SystemRuntimePrivileges
         ) v
         """;
 
-    // Reported, never refused: more than the catalog on another system table, attributes the runtime account does not need, and other roles that read every table through a predefined role.
+    // Reported, never refused: more than the catalog on another system table and access to a table the catalog does not know.
     private const string NoteSql = """
         WITH rt AS (SELECT oid FROM pg_roles WHERE rolname = @r::name)
         SELECT code FROM (
@@ -121,11 +135,6 @@ public static class SystemRuntimePrivileges
                                 AND has_column_privilege(rt.oid, a.attrelid, a.attnum, 'UPDATE')))
           UNION ALL SELECT 'uncatalogued_table_access' FROM rt, pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm')
                 AND c.relname::text <> ALL (@names::text[]) AND has_table_privilege(rt.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
-          UNION ALL SELECT 'runtime_role_attributes' FROM pg_roles WHERE rolname = @r::name AND (rolcreatedb OR rolcreaterole OR rolreplication)
-          UNION ALL SELECT 'runtime_owns_objects' FROM rt WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relowner = rt.oid)
-          UNION ALL SELECT 'runtime_schema_create' FROM rt WHERE has_schema_privilege(rt.oid, 'public', 'CREATE')
-          UNION ALL SELECT 'other_role_reads_all_data' WHERE EXISTS (SELECT 1 FROM pg_roles m WHERE NOT m.rolsuper AND m.rolname NOT LIKE 'pg\_%' AND m.oid IS DISTINCT FROM (SELECT oid FROM rt)
-                AND (pg_has_role(m.oid, 'pg_read_all_data', 'USAGE') OR pg_has_role(m.oid, 'pg_read_all_data', 'SET')))
         ) v
         """;
 
@@ -133,7 +142,15 @@ public static class SystemRuntimePrivileges
     /// Reports how <paramref name="roleName"/> and the TOTP secret store deviate from least privilege in the connected SYSTEM database (codes only, logical names, never a physical name).
     /// Run by the grant command with the owner account and by the API gate with the runtime account itself (the catalogs it reads are readable by every role).
     /// </summary>
-    public static async Task<SystemRuntimeFindings> FindAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+    public static Task<SystemRuntimeFindings> FindAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default) => FindAsync(conn, roleName, PredefinedReader, PredefinedWriter, ct);
+
+    internal const string PredefinedReader = "pg_read_all_data", PredefinedWriter = "pg_write_all_data";
+
+    /// <summary>
+    /// As <see cref="FindAsync(NpgsqlConnection, string, CancellationToken)"/> with the names of the two "reads/writes every table" roles given. Production always uses the predefined roles
+    /// <c>pg_read_all_data</c> and <c>pg_write_all_data</c>; a test whose role administrator cannot grant a predefined role passes stand-in roles to exercise the same decision at database level.
+    /// </summary>
+    public static async Task<SystemRuntimeFindings> FindAsync(NpgsqlConnection conn, string roleName, string readAllDataRole, string writeAllDataRole, CancellationToken ct = default)
     {
         var totp = Totp;
         var violations = new SortedSet<string>(StringComparer.Ordinal);
@@ -143,6 +160,9 @@ public static class SystemRuntimePrivileges
             cmd.Parameters.AddWithValue("totp", totp.Table);
             cmd.Parameters.AddWithValue("forbidden", AllTablePrivileges.Except(totp.Privileges).ToArray());
             cmd.Parameters.AddWithValue("update_columns", totp.UpdateColumns!);
+            cmd.Parameters.AddWithValue("all", AllTablePrivileges);
+            cmd.Parameters.AddWithValue("reader", readAllDataRole);
+            cmd.Parameters.AddWithValue("writer", writeAllDataRole);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) violations.Add(r.GetString(0));
         }
@@ -213,7 +233,8 @@ public static class SystemRuntimeAdministration
               WHEN to_regclass(@company_identity) IS NOT NULL OR to_regclass(@registry) IS NULL OR to_regclass(@journal) IS NULL THEN 'not_a_system_database'
               WHEN EXISTS (SELECT 1 FROM unnest(@tables::text[]) n WHERE to_regclass(n) IS NULL) THEN 'system_database_not_migrated'
               WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = @r::name) THEN 'runtime_account_unknown'
-              WHEN (SELECT rolsuper FROM pg_roles WHERE rolname = @r::name) THEN 'runtime_account_is_superuser'
+              WHEN (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = @r::name) THEN 'runtime_account_is_superuser'
+              WHEN EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = @r::name) THEN 'runtime_account_has_role_membership'
               WHEN EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND pg_has_role(@r::name, c.relowner, 'MEMBER')) THEN 'runtime_account_is_owner'
               WHEN EXISTS (SELECT 1 FROM unnest(@tables::text[]) n JOIN pg_class c ON c.oid = to_regclass(n) WHERE NOT pg_has_role(current_user, c.relowner, 'USAGE')) THEN 'not_the_owner_account'
             END

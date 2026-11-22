@@ -227,21 +227,23 @@ public sealed class SystemRuntimeGateService(Func<string> connectionStringFactor
 }
 
 /// <summary>Hourly removal of long-expired sessions and stale throttle rows. Failures never log more than the error type.</summary>
-public sealed class IdentityHousekeepingService(IdentityStore store, ILogger<IdentityHousekeepingService> logger) : BackgroundService
+public sealed class IdentityHousekeepingService(IdentityStore store, MfaChallengeStore challenges, TimeProvider clock, ILogger<IdentityHousekeepingService> logger) : BackgroundService
 {
+    /// <summary>One housekeeping pass: sessions and throttle rows, then expired second-factor login challenges (the DELETE of the runtime account on that table exists for this and nothing else). Each step fails on its own; only the error type is logged.</summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        try { await store.PurgeAsync(TimeSpan.FromDays(7), TimeSpan.FromDays(1), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning("Identity housekeeping failed ({ErrorType}).", ex.GetType().Name); }
+        try { await challenges.PurgeAsync(clock.GetUtcNow() - TimeSpan.FromDays(1), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning("MFA challenge housekeeping failed ({ErrorType}).", ex.GetType().Name); }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
         try
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-            {
-                try { await store.PurgeAsync(TimeSpan.FromDays(7), TimeSpan.FromDays(1), stoppingToken); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogWarning("Identity housekeeping failed ({ErrorType}).", ex.GetType().Name);
-                }
-            }
+            while (await timer.WaitForNextTickAsync(stoppingToken)) await RunOnceAsync(stoppingToken);
         }
         catch (OperationCanceledException) { /* shutting down */ }
     }

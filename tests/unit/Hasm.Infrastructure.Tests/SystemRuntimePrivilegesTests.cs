@@ -39,9 +39,9 @@ public class SystemRuntimePrivilegesTests
         Assert.Equal(
         [
             "Company=SELECT+UPDATE(3)", "User=SELECT,INSERT,UPDATE", "Session=SELECT,INSERT,UPDATE,DELETE", "LoginThrottle=SELECT,INSERT,UPDATE,DELETE", "UserCompanyAccess=SELECT,INSERT,UPDATE",
-            "Role=SELECT,INSERT,UPDATE", "RolePermission=SELECT,INSERT,DELETE", "RoleAssignment=SELECT,INSERT,UPDATE", "CostCenterAssignment=SELECT,INSERT,UPDATE", "AccessAudit=SELECT,INSERT",
+            "Role=SELECT,INSERT,UPDATE", "RolePermission=SELECT,INSERT,DELETE", "RoleAssignment=SELECT,INSERT,UPDATE", "CostCenterAssignment=SELECT,INSERT+UPDATE(2)", "AccessAudit=SELECT,INSERT",
             "AuditEvent=SELECT,INSERT", "GlobalParty=SELECT,INSERT,UPDATE", "PartyProposal=SELECT,INSERT,UPDATE", "PartyLink=SELECT,INSERT", "UserTotp=SELECT,INSERT+UPDATE(4)",
-            "MfaChallenge=SELECT,INSERT,UPDATE,DELETE", "BackupLegalHold=", "BackupRetentionPin=", "MigrationJournal=",
+            "MfaChallenge=SELECT,INSERT,DELETE+UPDATE(2)", "BackupLegalHold=", "BackupRetentionPin=", "MigrationJournal=",
         ], actual);
         Assert.All(SystemRuntimePrivileges.Tables, t => Assert.DoesNotContain(t.Privileges, p => p is "TRUNCATE" or "REFERENCES" or "TRIGGER"));
         Assert.All(SystemRuntimePrivileges.Tables.Where(t => t.UpdateColumns is not null), t => Assert.DoesNotContain("UPDATE", t.Privileges));   // a column grant never sits beside the table grant
@@ -53,17 +53,28 @@ public class SystemRuntimePrivilegesTests
     public void The_statements_strip_first_grant_the_catalog_and_never_name_another_role()
     {
         var sql = SystemRuntimePrivileges.SchemaStatements("rt\"x");
-        Assert.Equal("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC", sql[0]);
+        Assert.Equal("REVOKE ALL ON SCHEMA public FROM PUBLIC", sql[0]);                                          // as the company twin: PUBLIC holds nothing on the schema
+        Assert.Contains("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC", sql);
+        Assert.All(sql.Where(s => s.StartsWith("REVOKE") && s.Contains("\"rt\"\"x\"")), s => Assert.EndsWith(" CASCADE", s));       // a grant passed on WITH GRANT OPTION by the runtime account goes with its own
         var firstGrant = sql.Select((s, i) => (s, i)).First(x => x.s.StartsWith("GRANT")).i;
         Assert.All(sql.Take(firstGrant), s => Assert.StartsWith("REVOKE ", s));
         Assert.All(sql.Skip(firstGrant), s => Assert.StartsWith("GRANT ", s));
-        Assert.All(sql, s => Assert.True(s.EndsWith(" PUBLIC") || s.EndsWith(" \"rt\"\"x\""), s));             // only PUBLIC (revoked) and the quoted runtime account; the owner is never named
+        Assert.All(sql, s => Assert.True(s.EndsWith(" PUBLIC") || s.EndsWith(" \"rt\"\"x\"") || s.EndsWith(" \"rt\"\"x\" CASCADE"), s));             // only PUBLIC (revoked) and the quoted runtime account; the owner is never named
         Assert.All(sql.Where(s => s.StartsWith("GRANT")), s => Assert.DoesNotContain("PUBLIC", s));
         Assert.DoesNotContain(sql, s => s.Contains("GRANT ALL") || s.Contains("WITH GRANT OPTION") || s.Contains(" DATABASE ") || s.Contains("CREATE"));
         Assert.Contains($"GRANT SELECT, INSERT ON TABLE \"{SystemSchema.UserTotp.Table}\" TO \"rt\"\"x\"", sql);
         Assert.Single(sql, s => s.Contains(SystemSchema.UserTotp.Table) && s.StartsWith("GRANT UPDATE ("));
         Assert.DoesNotContain(sql, s => s.Contains(SystemSchema.UserTotp.Cipher) || s.Contains(SystemSchema.UserTotp.KekId));
         Assert.DoesNotContain(sql, s => s.StartsWith("GRANT") && (s.Contains(SystemSchema.BackupLegalHold.Table) || s.Contains(SystemSchema.MigrationJournalTable)));
+    }
+
+    [Fact]
+    public void The_two_tables_with_a_narrow_update_have_exactly_their_revocation_and_progress_columns()
+    {
+        Assert.Equal(new[] { SystemSchema.CostCenterAssignment.RevokedAtUtc, SystemSchema.CostCenterAssignment.RevokedBy }.Order(), Of("CostCenterAssignment").UpdateColumns!.Order());   // AccessService only ever ends an assignment
+        Assert.Equal(new[] { SystemSchema.MfaChallenge.Attempts, SystemSchema.MfaChallenge.ConsumedAtUtc }.Order(), Of("MfaChallenge").UpdateColumns!.Order());                           // count an attempt, consume
+        Assert.Contains("DELETE", Of("MfaChallenge").Privileges);                                                                                                                       // the housekeeping purge of expired challenges
+        Assert.DoesNotContain("DELETE", Of("CostCenterAssignment").Privileges);
     }
 
     [Theory]
