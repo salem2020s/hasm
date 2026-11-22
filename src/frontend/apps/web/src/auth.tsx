@@ -326,7 +326,14 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     if (!held || signedIn.id !== held.userId) return "drop";
     try {
       await api.selectCompany(held.companyId);
-      const me = await api.accessMe();
+      let me: AccessMe;
+      try { me = await api.accessMe(); }
+      catch (e) {
+        // The server says the session has no (or a different) company right now: that is a statement about a request race on the brand-new session, not a refusal to let this user in. Keep the lock and the input and say
+        // that signing in again will retry (review L1 of PR 196).
+        if (isCompanyContextChanged(e)) { setMfa(null); setNotice("resume_failed"); return "retry"; }
+        throw e;
+      }
       if (me.companyId !== held.companyId) return "drop";
       setUser(signedIn);
       applyAccess(me);
@@ -363,6 +370,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
       setRoleGrants([]);
       setBranchPermissions(new Map());
       setUser(null);
+      setCompanies([]);                                          // the previous user's company list never renders for whoever signs in next (review L2 of PR 196)
       setPhase("loading");
     });
     unsaved.current?.clear();
