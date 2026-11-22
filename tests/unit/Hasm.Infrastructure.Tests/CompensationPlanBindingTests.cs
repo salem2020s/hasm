@@ -64,3 +64,40 @@ public class CompensationPlanRefusalMappingTests
         Assert.Null(CompensationPlanStore.Refusal(new Npgsql.PostgresException("approver_not_independent", "ERROR", "ERROR", "XX000")));
     }
 }
+
+/// <summary>The staleness comparison of the approval: ALL seven fingerprints and the closure hash count; a change in exactly one of them makes the plan stale (review L3 of the step 5 slices 1 and 2).</summary>
+public class CompensationPlanStalenessComparisonTests
+{
+    private static string F(char c) => new(c, 64);
+    private static readonly CompensationPlanFingerprints Stored = new(F('1'), F('2'), F('3'), F('4'), F('5'), F('6'), F('7'));
+    private static StoredCompensationPlan Plan() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, 1, 1, F('c'), Stored, [], "{}", Guid.NewGuid(), null, null);
+
+    [Fact]
+    public void The_exact_fingerprints_and_closure_hash_match() => Assert.True(CompensationPlanBinding.Matches(Plan(), Stored with { }, F('c')));
+
+    [Theory]
+    [InlineData(nameof(CompensationPlanFingerprints.Plan))]
+    [InlineData(nameof(CompensationPlanFingerprints.Comparison))]
+    [InlineData(nameof(CompensationPlanFingerprints.Evidence))]
+    [InlineData(nameof(CompensationPlanFingerprints.Periods))]
+    [InlineData(nameof(CompensationPlanFingerprints.Position))]
+    [InlineData(nameof(CompensationPlanFingerprints.Policy))]
+    [InlineData(nameof(CompensationPlanFingerprints.Accounting))]
+    public void A_change_in_exactly_one_fingerprint_makes_the_plan_stale(string member)
+    {
+        var changed = member switch
+        {
+            nameof(CompensationPlanFingerprints.Plan) => Stored with { Plan = F('f') },
+            nameof(CompensationPlanFingerprints.Comparison) => Stored with { Comparison = F('f') },
+            nameof(CompensationPlanFingerprints.Evidence) => Stored with { Evidence = F('f') },
+            nameof(CompensationPlanFingerprints.Periods) => Stored with { Periods = F('f') },
+            nameof(CompensationPlanFingerprints.Position) => Stored with { Position = F('f') },
+            nameof(CompensationPlanFingerprints.Policy) => Stored with { Policy = F('f') },
+            _ => Stored with { Accounting = F('f') },
+        };
+        Assert.False(CompensationPlanBinding.Matches(Plan(), changed, F('c')));
+    }
+
+    [Fact]
+    public void A_change_in_the_closure_hash_alone_makes_the_plan_stale() => Assert.False(CompensationPlanBinding.Matches(Plan(), Stored with { }, F('d')));
+}

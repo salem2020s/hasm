@@ -121,7 +121,8 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
     {
         if (input?.Proposal is null || input.ItemId == Guid.Empty || input.WarehouseId == Guid.Empty || input.DocumentId == Guid.Empty || user == Guid.Empty || company == Guid.Empty || input.Proposal.Lines.IsDefaultOrEmpty)
             return Fail<StoredCompensationPlan>(ConfigStatus.Invalid, "invalid_plan_input");
-        // Permission first, on the plan's root warehouse; the document is read only for a caller who may create the plan and see the document there (no existence oracle).
+        // Permission first, on the plan's root warehouse. The document is then read only for a caller who may create the plan and see documents on that root warehouse, and its state (or the fact that it exists) is
+        // revealed only when the root warehouse is the document's source or target; for any other document the answer is the same document_not_found as for an id that does not exist (no status oracle across warehouses).
         if (!await access.IsAllowedAsync(user, company, PermissionCatalog.Codes.CompensationPlansCreate, ScopeTarget.Warehouse(input.WarehouseId), ct)
             || !await access.IsAllowedAsync(user, company, PermissionCatalog.Codes.StockDocsView, ScopeTarget.Warehouse(input.WarehouseId), ct))
             return Fail<StoredCompensationPlan>(ConfigStatus.Forbidden, "forbidden");
@@ -204,7 +205,7 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
     private async Task<ConfigResult<StoredCompensationPlan>?> PrecheckAsync(Guid company, CompensationPlanInput input, CancellationToken ct)
     {
         var doc = await CompensationPlanStore.ReadDocumentAsync(resolver, company, input.DocumentId, ct);
-        if (doc is null) return Fail<StoredCompensationPlan>(ConfigStatus.NotFound, "document_not_found");
+        if (doc is null || (doc.Source != input.WarehouseId && doc.Target != input.WarehouseId)) return Fail<StoredCompensationPlan>(ConfigStatus.NotFound, "document_not_found");
         if (doc.Status != 3) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "document_not_approved");
         if (doc.Posted) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "document_already_posted");
         var p = input.Proposal;

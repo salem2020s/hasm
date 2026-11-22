@@ -112,6 +112,25 @@ public class CompensationPlanStorageTests : CompensationPlanTestBase
     }
 
     [PostgresRoleFact]
+    public async Task The_state_of_a_document_is_revealed_only_when_the_root_warehouse_is_its_source_or_target()
+    {
+        // review L1 of the slices 1 and 2: a creator permitted on ANOTHER warehouse learns nothing about the status of a document of W1; every answer is document_not_found
+        await Prepare();
+        var onlyW2 = await PlanMember(PlannerPermissions, [PermissionCatalog.Codes.CompensationPlansCreate], ScopeKind.Warehouse, W2.Id);
+        var (approvedDoc, input) = await Event();
+        var draft = await Draft(Receipt(W1, "2026-03-11", L(Avg, Pcs, 10m)));
+        var posted = await Approved(Receipt(W1, "2026-03-12", L(Avg, Pcs, 1m)));
+        Ok(await Post(posted, Amounts(5m)));
+        CompensationPlanInput Elsewhere(Guid document) => input with { WarehouseId = W2.Id, DocumentId = document, Proposal = input.Proposal with { Lines = [new ProposedFlowLine(W2.Id, 10m, 200m)] } };
+        foreach (var document in new[] { approvedDoc.Id, draft.Id, posted.Id, Guid.NewGuid() })
+            Refused(await Service().CreateAsync(onlyW2.Id, Company.Id, Elsewhere(document)), ConfigStatus.NotFound, "document_not_found");
+        Assert.Equal(0L, await Rows(CP.Table));
+        // the creator of W1 still gets the real answers for W1's documents
+        var onlyW1 = await PlanMember(PlannerPermissions, [PermissionCatalog.Codes.CompensationPlansCreate], ScopeKind.Warehouse, W1.Id);
+        Refused(await Service().CreateAsync(onlyW1.Id, Company.Id, input with { DocumentId = draft.Id }), ConfigStatus.Conflict, "document_not_approved");
+    }
+
+    [PostgresRoleFact]
     public async Task A_planner_refusal_is_returned_unchanged_and_nothing_is_written()
     {
         await Prepare();

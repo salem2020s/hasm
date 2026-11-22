@@ -39,6 +39,10 @@ internal static class CompensationPlanBinding
             Versions = r.Evidence.Postings.Where(p => p.VersionId is not null).Select(p => p.VersionId!.Value).Distinct().Order().ToArray(),
         }));
 
+    /// <summary>True when what the planner computes now is exactly what the plan stored: all seven fingerprints AND the closure hash. A plan for which this is false is stale.</summary>
+    internal static bool Matches(StoredCompensationPlan plan, CompensationPlanFingerprints fresh, string freshClosureHash) =>
+        fresh == plan.Fingerprints && string.Equals(freshClosureHash, plan.ClosureHash, StringComparison.Ordinal);
+
     /// <summary>The closure of a plan: the planned item on every position of the planner's snapshot (the roots and every position reached through transfers), sorted.</summary>
     internal static ImmutableArray<(Guid Item, Guid Warehouse)> Closure(Guid item, CompensationPlanResult r) => [.. r.PositionWarehouses.Distinct().Order().Select(w => (item, w))];
 

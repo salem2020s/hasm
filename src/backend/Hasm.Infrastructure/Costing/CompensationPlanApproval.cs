@@ -66,7 +66,7 @@ internal sealed class CompensationPlanApprovalService(CompanyDatabaseResolver re
         if (!planned.IsOk) return Fail(planned.Status, planned.Code!);
         var fresh = CompensationPlanBinding.Fingerprint(company, plan.ItemId, planned.Value!);
         var closure = CompensationPlanBinding.Closure(plan.ItemId, planned.Value!);
-        if (fresh != plan.Fingerprints || CompensationPlanBinding.ClosureHash(closure) != plan.ClosureHash)
+        if (!CompensationPlanBinding.Matches(plan, fresh, CompensationPlanBinding.ClosureHash(closure)))
         {
             await MarkStaleAsync(user, company, plan, ct);
             return Fail(ConfigStatus.Conflict, "plan_stale");

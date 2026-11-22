@@ -119,6 +119,35 @@ public class CompensationPlanApprovalTests : CompensationPlanTestBase
     }
 
     [PostgresRoleFact]
+    public async Task A_person_who_is_not_independent_cannot_drive_the_stale_transition_of_a_plan_whose_history_changed()
+    {
+        // review L2 of the slices 1 and 2: the database also refuses a non-independent approver at the approval row, but only AFTER the planner ran; without the service pre-check such a person could mark a plan stale
+        await Prepare();
+        var creator = await PlanMember(PlannerPermissions, [PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]);   // may approve plans in general, never his own
+        var independent = await ApproverUser();
+        var (_, _, plan) = await Proposed(creator);
+        await PostJournal(await ReceiveDoc(Avg, 3m, 30m, "2026-03-12"));      // the history changed: the planner would now disagree with the plan
+        Refused(await Approval().ApproveAsync(creator.Id, Company.Id, plan.Id, plan.Revision), ConfigStatus.Conflict, "approver_not_independent");
+        Assert.Equal(((short)1, plan.Revision, 0L, 0L, 0L), (await PlanStatus(plan.Id), await PlanRevision(plan.Id), await EventCount(plan.Id, 6), await AuditCount(CostingAuditEvents.PlanStaled, plan.Id), await Rows(CA.Table)));
+        // an independent approver does reach the planner, and the very same plan is then stale: the refused call above is the only reason it was still proposed
+        Refused(await Approval().ApproveAsync(independent.Id, Company.Id, plan.Id, plan.Revision), ConfigStatus.Conflict, "plan_stale");
+        Assert.Equal(((short)6, 1L), (await PlanStatus(plan.Id), await EventCount(plan.Id, 6)));
+    }
+
+    [PostgresRoleFact]
+    public async Task A_cancelled_event_document_is_refused_before_the_planner_so_a_changed_history_does_not_mark_the_plan_stale()
+    {
+        await Prepare();
+        var creator = await PlanUser();
+        var approver = await ApproverUser();
+        var (doc, _, plan) = await Proposed(creator);
+        Ok(await Docs.CancelAsync(Admin.Id, Company.Id, doc.Id, doc.Revision, "withdrawn"));
+        await PostJournal(await ReceiveDoc(Avg, 3m, 30m, "2026-03-12"));
+        Refused(await Approval().ApproveAsync(approver.Id, Company.Id, plan.Id, plan.Revision), ConfigStatus.Conflict, "document_not_approved");
+        Assert.Equal(((short)1, plan.Revision, 0L, 0L), (await PlanStatus(plan.Id), await PlanRevision(plan.Id), await EventCount(plan.Id, 6), await AuditCount(CostingAuditEvents.PlanStaled, plan.Id)));
+    }
+
+    [PostgresRoleFact]
     public async Task A_planner_refusal_at_approval_is_returned_unchanged_and_does_not_mark_the_plan_stale()
     {
         await Prepare();
