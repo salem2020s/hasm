@@ -79,8 +79,13 @@ export interface AuthValue {
    * does not count. For hiding or disabling a control on a branch-scoped document; the server still decides.
    */
   canOnBranch(permission: string, branchId: string): boolean;
-  /** True when the user holds this ROLE in ANY grant, like the server (which reads the role ids from every grant and scopes only the approve PERMISSION to the document's branch). Read from the access answer; only for showing or hiding a button: a stage bound to a role is enforced by the server. */
-  hasRole(roleId: string): boolean;
+  /**
+   * True when the user holds this ROLE for ONE branch, like the server's stage authority: through a company-wide assignment or an assignment for exactly this branch. The role held for another branch, a warehouse or
+   * a cost center does not count. Only for showing or hiding a control on a role-bound approval stage; the server decides.
+   */
+  hasRoleOnBranch(roleId: string, branchId: string): boolean;
+  /** True when the user holds this ROLE through any COST-CENTER assignment. The server decides whether those cost centers cover a journal entry (it knows the tree and the allocations); the screen only uses this to avoid hiding a control the server may allow. */
+  hasRoleOnCostCenter(roleId: string): boolean;
   companyName: string | null;
   /** Page-level API failures: returns true (and ends the session in the UI) when the server answered 401. */
   handleError(error: unknown): boolean;
@@ -435,7 +440,8 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     can: (p) => permissions.has(p),
     canAny: (p) => anyPermissions.has(p),
     canOnBranch: (p, branchId) => permissions.has(p) || (branchPermissions.get(branchId)?.has(p) ?? false),
-    hasRole: (r) => roleGrants.some((g) => g.roleId === r),
+    hasRoleOnBranch: (r, branchId) => roleGrants.some((g) => g.roleId === r && (g.scope === "company" || (g.scope === "branch" && g.scopeId === branchId))),
+    hasRoleOnCostCenter: (r) => roleGrants.some((g) => g.roleId === r && g.scope === "costcenter"),
     companyName: displayCompanyName(companies.find((c) => c.id === companyId), locale),
   }), [phase, user, companies, companyId, notice, gated, locked, discardLocked, shellEpoch, attachUnsaved, login, mfa, submitMfaCode, beginEnrolment, confirmEnrolment, cancelMfa, adoptEnrolledSession, logout, chooseCompany, changeCompany, refreshCompanies, handleError, permissions, anyPermissions, branchPermissions, roleGrants, locale]);
 

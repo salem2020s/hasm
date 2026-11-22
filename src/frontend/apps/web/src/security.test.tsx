@@ -283,7 +283,7 @@ describe("the new session after a voluntary enrolment", () => {
     function Probe() {
       const a = useAuth();
       adopt = a.adoptEnrolledSession;
-      seen.push({ id: a.companyId, can: a.can("company.profile.view"), any: a.canAny("company.profile.view"), branch: a.canOnBranch("company.profile.view", "b1"), role: a.hasRole("r") });
+      seen.push({ id: a.companyId, can: a.can("company.profile.view"), any: a.canAny("company.profile.view"), branch: a.canOnBranch("company.profile.view", "b1"), role: a.hasRoleOnBranch("r", "b1") });
       return <span data-testid="phase">{a.phase}</span>;
     }
     const client = fakeClient({

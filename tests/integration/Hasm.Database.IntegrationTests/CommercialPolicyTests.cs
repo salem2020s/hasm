@@ -1,5 +1,6 @@
 using System.Net;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Commercial;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -310,6 +311,84 @@ public class CommercialPolicyTests : CommercialTestBase
         Assert.Single((await Plan(doc.Id)));
     }
 
+    /// <summary>A delegated approver (the approve permission company-wide) who additionally holds <paramref name="role"/> for one branch.</summary>
+    private async Task<Guid> ApproverWithRole(Guid role, Guid branch)
+    {
+        var user = await NewApproverUser();
+        var assigned = await Rbac.AssignRoleAsync(Admin.Id, Company.Id, user.Id, role, ScopeKind.Branch, branch);
+        Assert.True(assigned.IsOk, assigned.Code);
+        return user.Id;
+    }
+
+    /// <summary>Owner decision of 2026-11-21: rejecting a role-bound stage needs the stage role FOR THE DOCUMENT'S BRANCH and the independence rules; the server refuses, whatever the client shows.</summary>
+    [PostgresFact]
+    public async Task Rejecting_a_role_bound_stage_needs_the_stage_role_for_the_documents_branch_and_independence_and_is_audited_once()
+    {
+        var (branch, party, item, unit) = await Setup();
+        var otherBranch = await NewBranchId("BB");
+        var stageRole = (await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "stage-authority", [PermissionCatalog.Codes.CommercialView])).Value!.Id;
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, Policy([1], role: stageRole)));
+        var doc = await Submitted(branch, party, item, unit, "rej-key-000001");
+        var auditBefore = await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}");
+
+        // 1. the approve permission alone is not the stage authority
+        var withoutRole = await NewApprover();
+        Fails(await DocMgmt.RejectAsync(withoutRole, Company.Id, doc.Id, doc.Revision, "no"), ConfigStatus.Forbidden, "rejecter_role_required");
+        // 2. the stage role held for ANOTHER branch is not authority over this branch's document: neither to reject nor to approve
+        var elsewhere = await ApproverWithRole(stageRole, otherBranch);
+        Fails(await DocMgmt.RejectAsync(elsewhere, Company.Id, doc.Id, doc.Revision, "no"), ConfigStatus.Forbidden, "rejecter_role_required");
+        Fails(await DocMgmt.ApproveAsync(elsewhere, Company.Id, doc.Id, doc.Revision), ConfigStatus.Forbidden, "approver_role_required");
+        // 3. the role without the approve permission is refused before the document is even read (the administrator holds no approve permission)
+        var roleOnly = (await Member([PermissionCatalog.Codes.CommercialView], ScopeKind.Company, null)).User;
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, roleOnly.Id, stageRole, ScopeKind.Branch, branch)).IsOk);
+        Fails(await DocMgmt.RejectAsync(roleOnly.Id, Company.Id, doc.Id, doc.Revision, "no"), ConfigStatus.Forbidden, "forbidden");
+        // 4. independence is unchanged and comes first: the submitter is refused even with the role (service layer; the administrator created and submitted the document)
+        Fails(await Docs.RejectAsync(Admin.Id, Company.Id, doc.Id, doc.Revision, "mine", default, new HashSet<Guid> { stageRole }), ConfigStatus.Conflict, "approver_not_independent");
+        // the service fails closed when no roles are supplied at all
+        Fails(await Docs.RejectAsync(withoutRole, Company.Id, doc.Id, doc.Revision, "no"), ConfigStatus.Forbidden, "rejecter_role_required");
+
+        // nothing was written by any refusal: no status change, no revision, no event, no audit row
+        var still = (await Docs.GetAsync(Company.Id, doc.Id))!;
+        Assert.Equal((CommercialStatus.Submitted, doc.Revision), (still.Status, still.Revision));
+        Assert.Equal(0L, await Events(CommercialAuditEvents.Rejected));
+        Assert.Equal(auditBefore, await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
+
+        // 5. the stage role for the document's branch, with the approve permission and independence: the rejection succeeds and is audited once, by that user
+        var rightful = await ApproverWithRole(stageRole, branch);
+        var rejected = Ok(await DocMgmt.RejectAsync(rightful, Company.Id, doc.Id, doc.Revision, "price is wrong"));
+        Assert.Equal((CommercialStatus.Rejected, "price is wrong", CommercialEventKind.Rejected), (rejected.Status, rejected.Events[^1].Reason, rejected.Events[^1].Kind));
+        Assert.Equal(1L, await Events(CommercialAuditEvents.Rejected));
+        Assert.Equal(rightful, await Sql<Guid>($"SELECT {CompanySchema.BusinessAudit.ActorUserId} FROM {CompanySchema.BusinessAudit.Table} WHERE {CompanySchema.BusinessAudit.EventType} = {CommercialAuditEvents.Rejected}"));
+        Assert.Equal(auditBefore + 1, await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
+        var report = await new AuditVerifier(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName), AuditKeys, AuditCheckpoints).VerifyAsync(AuditStream.ForBusiness(Company.Id));
+        Assert.True(report.Verdict == AuditVerdict.Verified || report.Findings.All(f => f.Severity == FindingSeverity.Note));
+        Assert.Equal(await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"), report.Events);
+    }
+
+    /// <summary>The rule follows the OPEN stage: a stage without a role keeps the existing rule (approve permission and independence), and once the next, role-bound stage is open the rejection needs its role.</summary>
+    [PostgresFact]
+    public async Task A_stage_without_a_role_keeps_the_existing_rejection_rule_and_the_role_is_required_once_its_stage_is_the_open_one()
+    {
+        var (branch, party, item, unit) = await Setup();
+        var stageRole = (await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "second-stage", [PermissionCatalog.Codes.CommercialView])).Value!.Id;
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput("commercial_test", "any", null, 0m, null, "سياسة", "Two stages", Stages: [new(1, null), new(1, stageRole)])));
+        var first = await NewApprover(); var second = await NewApprover();
+
+        // stage 1 has no role: any independent approver may reject it, exactly as before
+        var a = await Submitted(branch, party, item, unit, "rej-key-000002");
+        Assert.Equal(CommercialStatus.Rejected, Ok(await DocMgmt.RejectAsync(first, Company.Id, a.Id, a.Revision, "not now")).Status);
+
+        // stage 1 approved: the open stage is the role-bound stage 2, so the same kind of approver can no longer reject, and the holder for this branch can
+        var b = await Submitted(branch, party, item, unit, "rej-key-000003");
+        Assert.Equal(CommercialStatus.Submitted, Ok(await DocMgmt.ApproveAsync(first, Company.Id, b.Id, b.Revision)).Status);
+        Fails(await DocMgmt.RejectAsync(second, Company.Id, b.Id, b.Revision, "no"), ConfigStatus.Forbidden, "rejecter_role_required");
+        Assert.Equal(CommercialStatus.Submitted, (await Docs.GetAsync(Company.Id, b.Id))!.Status);
+        var holder = await ApproverWithRole(stageRole, branch);
+        Assert.Equal(CommercialStatus.Rejected, Ok(await DocMgmt.RejectAsync(holder, Company.Id, b.Id, b.Revision, "stage two says no")).Status);
+
+        Assert.Equal(2L, await Events(CommercialAuditEvents.Rejected));
+    }
+
     [PostgresFact]
     public async Task The_approvals_route_shows_the_plan_and_the_decisions_over_HTTP_with_the_view_permission_only()
     {
@@ -330,5 +409,34 @@ public class CommercialPolicyTests : CommercialTestBase
         Assert.Equal(a1, Assert.Single(r.Json.GetProperty("decisions").EnumerateArray()).GetProperty("approver").GetGuid());
         var (nobody, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, path, cookie: await SignIn(nobody))).Status);
+
+        // Over HTTP a decision on a role-bound stage by an approver WITHOUT the stage role is the generic 403 {"error":"forbidden"}: the service's reason (rejecter_role_required / approver_role_required) is not
+        // disclosed to a caller who lacks the role, exactly like every other authorization refusal of the API. Nothing is recorded. (Owner decision D-208; review finding M1 of PR 191.)
+        var roleBranch = await NewBranchId("BR");
+        var stageRole = (await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "http-stage-authority", [PermissionCatalog.Codes.CommercialView])).Value!.Id;
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput("commercial_test", "any", roleBranch, 0m, null, "سياسة", "Role stage", Stages: [new(1, stageRole), new(1, null), new(1, null)])));
+        var bound = await Submitted(roleBranch, party, item, unit, "http-key-00002");
+        Assert.Equal(stageRole, (await Plan(bound.Id))[0].RoleId);
+        var withoutRole = await SignIn(await NewApproverUser());
+        var etag = $"\"{bound.Revision}\"";
+        var audit = await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}");
+        foreach (var (action, body) in new (string, object?)[] { ("reject", new { reason = "no" }), ("approve", null) })
+        {
+            var refused = await Send(HttpMethod.Post, $"/api/v1/company/commercial-documents/{bound.Id}/{action}", body, withoutRole, ifMatch: etag);
+            Assert.Equal(HttpStatusCode.Forbidden, refused.Status);
+            Assert.Equal("forbidden", refused.Json.GetProperty("error").GetString());
+            Assert.DoesNotContain("role", refused.Body, StringComparison.OrdinalIgnoreCase);
+        }
+        var after = (await Docs.GetAsync(Company.Id, bound.Id))!;
+        Assert.Equal((CommercialStatus.Submitted, bound.Revision), (after.Status, after.Revision));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {AD.Table} WHERE {AD.DocumentId} = '{bound.Id}'"));
+        Assert.Equal(0L, await Events(CommercialAuditEvents.Rejected));
+        Assert.Equal(audit, await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
+        // the holder of the role for the document's branch is served: the rejection goes through over the same route
+        var holder = await NewApproverUser();
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, holder.Id, stageRole, ScopeKind.Branch, roleBranch)).IsOk);
+        var rejected = await Send(HttpMethod.Post, $"/api/v1/company/commercial-documents/{bound.Id}/reject", new { reason = "no" }, await SignIn(holder), ifMatch: etag);
+        Assert.Equal(HttpStatusCode.OK, rejected.Status);
+        Assert.Equal(1L, await Events(CommercialAuditEvents.Rejected));
     }
 }
