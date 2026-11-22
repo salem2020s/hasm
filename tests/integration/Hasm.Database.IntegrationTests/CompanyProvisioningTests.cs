@@ -213,7 +213,7 @@ public class CompanyProvisioningTests : PostgresTestBase
 
         Assert.Equal(ProvisioningOutcome.Provisioned, retry.Outcome);
         Assert.False(retry.DatabaseCreated);
-        Assert.Equal([33], retry.AppliedMigrations); // migrations 1-32 already applied before the failure
+        Assert.Equal([34], retry.AppliedMigrations); // migrations 1-33 already applied before the failure
         var ready = (await registry.GetAsync(c.Id))!;
         Assert.Equal(ProvisioningState.Ready, ready.State);
         Assert.Equal(2, ready.ProvisioningAttempts);
