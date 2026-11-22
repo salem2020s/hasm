@@ -409,5 +409,34 @@ public class CommercialPolicyTests : CommercialTestBase
         Assert.Equal(a1, Assert.Single(r.Json.GetProperty("decisions").EnumerateArray()).GetProperty("approver").GetGuid());
         var (nobody, _) = await Member([PermissionCatalog.Codes.WarehousesView], ScopeKind.Company, null);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, path, cookie: await SignIn(nobody))).Status);
+
+        // Over HTTP a decision on a role-bound stage by an approver WITHOUT the stage role is the generic 403 {"error":"forbidden"}: the service's reason (rejecter_role_required / approver_role_required) is not
+        // disclosed to a caller who lacks the role, exactly like every other authorization refusal of the API. Nothing is recorded. (Owner decision D-208; review finding M1 of PR 191.)
+        var roleBranch = await NewBranchId("BR");
+        var stageRole = (await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "http-stage-authority", [PermissionCatalog.Codes.CommercialView])).Value!.Id;
+        Ok(await PolicyService.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput("commercial_test", "any", roleBranch, 0m, null, "سياسة", "Role stage", Stages: [new(1, stageRole), new(1, null), new(1, null)])));
+        var bound = await Submitted(roleBranch, party, item, unit, "http-key-00002");
+        Assert.Equal(stageRole, (await Plan(bound.Id))[0].RoleId);
+        var withoutRole = await SignIn(await NewApproverUser());
+        var etag = $"\"{bound.Revision}\"";
+        var audit = await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}");
+        foreach (var (action, body) in new (string, object?)[] { ("reject", new { reason = "no" }), ("approve", null) })
+        {
+            var refused = await Send(HttpMethod.Post, $"/api/v1/company/commercial-documents/{bound.Id}/{action}", body, withoutRole, ifMatch: etag);
+            Assert.Equal(HttpStatusCode.Forbidden, refused.Status);
+            Assert.Equal("forbidden", refused.Json.GetProperty("error").GetString());
+            Assert.DoesNotContain("role", refused.Body, StringComparison.OrdinalIgnoreCase);
+        }
+        var after = (await Docs.GetAsync(Company.Id, bound.Id))!;
+        Assert.Equal((CommercialStatus.Submitted, bound.Revision), (after.Status, after.Revision));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {AD.Table} WHERE {AD.DocumentId} = '{bound.Id}'"));
+        Assert.Equal(0L, await Events(CommercialAuditEvents.Rejected));
+        Assert.Equal(audit, await Sql<long>($"SELECT count(*) FROM {CompanySchema.BusinessAudit.Table}"));
+        // the holder of the role for the document's branch is served: the rejection goes through over the same route
+        var holder = await NewApproverUser();
+        Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, holder.Id, stageRole, ScopeKind.Branch, roleBranch)).IsOk);
+        var rejected = await Send(HttpMethod.Post, $"/api/v1/company/commercial-documents/{bound.Id}/reject", new { reason = "no" }, await SignIn(holder), ifMatch: etag);
+        Assert.Equal(HttpStatusCode.OK, rejected.Status);
+        Assert.Equal(1L, await Events(CommercialAuditEvents.Rejected));
     }
 }

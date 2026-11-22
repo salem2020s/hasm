@@ -388,13 +388,14 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
   });
 
-  it("keeps Reject for a stage without a role, and shows the server's refusal of a rejection in the dialog", async () => {
-    const reject = vi.fn().mockRejectedValue(apiError(403, "rejecter_role_required"));
+  it("keeps Reject for a stage without a role, and shows the server's generic 403 when a rejection is refused (the API never names the stage role)", async () => {
+    const reject = vi.fn().mockRejectedValue(apiError(403, "forbidden"));                                    // what the real server answers for rejecter_role_required and for every other authorization refusal
     await openSubmitted({ plan: [stage(1, 1, 0)], decisions: [] }, { rejectCommercialDocument: reject });
     await userEvent.click(screen.getByTestId("reject"));
     await userEvent.type(screen.getByLabelText(/^السبب/), "no");
     await userEvent.click(screen.getByRole("button", { name: "تأكيد" }));
-    expect(await screen.findByText("رفض المرحلة الحالية يتطلب دوراً لا تملكه لهذا الفرع.")).toBeInTheDocument();
+    expect(await screen.findByText("ليست لديك صلاحية لهذا الإجراء.")).toBeInTheDocument();
+    expect(screen.getByTestId("reject")).toBeInTheDocument();                                                // the document is unchanged: still submitted, the action still offered
   });
 
   describe("Approve and Reject follow the approve permission for the DOCUMENT'S branch, like the server (C4 of PR #137)", () => {
