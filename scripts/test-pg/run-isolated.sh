@@ -73,7 +73,7 @@ if [[ "${1:-}" == "--recover" ]]; then MODE=recover; shift; [[ $# -eq 0 ]] || di
 else [[ $# -ge 1 && "$1" != -* ]] || die "Usage: $0 <worktree> [--build] [extra dotnet test arguments] | $0 --recover"; fi
 [[ "$(id -u)" == "0" ]] || die "run-isolated.sh needs root (network namespaces and runuser)."
 for c in unshare flock runuser awk sha256sum mktemp; do command -v "$c" >/dev/null 2>&1 || die "$c is required."; done
-unshare --net -- true 2>/dev/null || die "unshare --net is not permitted here (it needs root with CAP_SYS_ADMIN and a kernel/container that allows new network namespaces). Isolated mode is unavailable on this machine: use the shared cluster (run-pg-tests.sh, one run at a time under its lock) instead."
+unshare --net -- true 2>/dev/null || die "unshare --net is not permitted here (it needs root with CAP_SYS_ADMIN and a kernel/container that allows new network namespaces). Isolated mode is unavailable on this machine: use scripts/test-pg/run-oneshot.sh (one self-cleaning run at a time), or a standing shared cluster with run-pg-tests.sh, instead."
 
 if [[ "${MODE}" == run ]]; then
 WT="$(cd "$1" 2>/dev/null && pwd -P)" || die "Worktree $1 not found."; shift
@@ -99,7 +99,9 @@ PG_ACCOUNT="${HASM_PG_RUN_AS:-postgres}"
 PG_GROUP="$(id -gn "${PG_ACCOUNT}" 2>/dev/null)" || die "The server account '${PG_ACCOUNT}' does not exist."
 
 OUTER_NS="$(own_net)"
-W_PATTERN="${TMPBASE}/hasm-pgw-??????"
+# True when <path> is exactly a run directory as mktemp creates it: directly under the temporary base, named hasm-pgw-<6 letters or digits>. A regular expression on the base
+# name and an equality on the parent, not a glob: in [[ == ]] a "?" also matches "/", so a glob would accept a path such as <base>/hasm-pgw-/../xy.
+is_run_dir() { [[ "$(dirname -- "$1")" == "${TMPBASE}" && "$(basename -- "$1")" =~ ^hasm-pgw-[A-Za-z0-9]{6}$ ]]; }
 SLOT=""; OWNER_FILE=""
 
 NS_HELD=no
@@ -124,10 +126,12 @@ kill_ns() {
 pid_serves() {
   local pid="$1" dir="$2"
   [[ "${pid}" =~ ^[0-9]+$ && -d "/proc/${pid}" && "$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null)" != Z ]] || return 1
-  tr '\0' '\n' 2>/dev/null < "/proc/${pid}/cmdline" | grep -qxF -- "${dir}"
+  tr '\0' '\n' 2>/dev/null < "/proc/${pid}/cmdline" | grep -xF -- "${dir}" >/dev/null     # no -q: grep reads everything, so tr is never killed by SIGPIPE (pipefail would turn a match into a failure)
 }
 # True when <pid> was started with HASM_TEST_ROOT=<root> in its environment (the scripts and dotnet processes of the run that owns <root>).
-pid_env_root() { tr '\0' '\n' 2>/dev/null < "/proc/$1/environ" | grep -qxF -- "HASM_TEST_ROOT=$2"; }
+# No grep -q here: it exits at the first match, tr (which writes in 8 KiB chunks) then dies of SIGPIPE on the next chunk of a large environment, and under pipefail a MATCH became a
+# failure (about 2% of the calls idle, a third under load: the intermittent "the orphan was not stopped" of test-run-isolated-recovery.sh case 2).
+pid_env_root() { tr '\0' '\n' 2>/dev/null < "/proc/$1/environ" | grep -xF -- "HASM_TEST_ROOT=$2" >/dev/null; }
 # The unchanged destroy-test-cluster.sh asks pg_ctl about postmaster.pid and stops "the server" with -m immediate. If the recorded PID is not a live server of THIS data
 # directory (the server died and the PID may have been reused, e.g. by another worker's server running as the same account), the file is moved aside inside W so that
 # pg_ctl sees no server and signals nothing.
@@ -151,8 +155,7 @@ destroy_cluster() {
 # Removes a worker directory, only one matching the mktemp pattern, owned by us, after its cluster is gone.
 remove_w() {
   local w="$1"
-  # shellcheck disable=SC2053
-  [[ "${w}" == ${W_PATTERN} && -d "${w}" && ! -L "${w}" && -O "${w}" && ! -e "${w}/cluster" ]] || { echo "WARNING: not removing ${w}." >&2; return 1; }
+  [[ "${w}" != */ ]] && is_run_dir "${w}" && [[ -d "${w}" && ! -L "${w}" && -O "${w}" && ! -e "${w}/cluster" ]] || { echo "WARNING: not removing ${w}." >&2; return 1; }
   rm -rf -- "${w}"
 }
 # A process that still belongs to the run that owned <old>: the live server of its data directory, or a process started with HASM_TEST_ROOT=<old>/cluster, in a namespace
@@ -192,8 +195,7 @@ recover_previous() {
   [[ -f "${OWNER_FILE}" && ! -L "${OWNER_FILE}" ]] || return 0
   old="$(head -1 "${OWNER_FILE}")"
   [[ -n "${old}" ]] || return 0
-  # shellcheck disable=SC2053
-  [[ "${old}" == ${W_PATTERN} ]] || { echo "WARNING: ignoring unexpected owner record ${old}." >&2; : > "${OWNER_FILE}"; return 0; }
+  [[ "${old}" != */ ]] && is_run_dir "${old}" || { echo "WARNING: ignoring unexpected owner record ${old}." >&2; : > "${OWNER_FILE}"; return 0; }
   [[ -e "${old}" ]] || { : > "${OWNER_FILE}"; return 0; }
   echo "Recovering ${old}, left behind by an earlier run on slot ${SLOT}..." >&2
   stop_old_run "${old}"
@@ -248,12 +250,20 @@ OWNER_FILE="${CAP}/slot${SLOT}.owner"
 recover_previous
 
 # The run's own directory. root:<server group> 0710: the server account may traverse to its 0700 data directory, nobody else may enter.
+# The results directory is checked BEFORE the run directory and the owner record exist, so a refusal leaves nothing behind. An EXISTING one is used as it is (its mode is the
+# caller's business: it may be a shared directory); only a missing one is created, owner-only.
+if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then
+  if [[ -e "${HASM_ISO_RESULTS}" || -L "${HASM_ISO_RESULTS}" ]]; then [[ -d "${HASM_ISO_RESULTS}" ]] || die "HASM_ISO_RESULTS is not a directory."; else mkdir -p -m 700 -- "${HASM_ISO_RESULTS}"; fi
+fi
 W="$(mktemp -d "${TMPBASE}/hasm-pgw-XXXXXX")"
 chmod 700 "${W}"; chgrp "${PG_GROUP}" "${W}"; chmod 710 "${W}"
+if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then
+  # The per-run sub-directory must not exist yet: mkdir without -p fails on anything that is already there (a directory, a file, a symbolic link somebody planted).
+  RES="${HASM_ISO_RESULTS%/}/$(basename "${W}")"
+  mkdir -m 700 -- "${RES}" || { rmdir -- "${W}"; die "Cannot create the results directory ${RES} (it must not exist yet)."; }     # W is still empty and unrecorded
+else RES="$(mktemp -d "${TMPBASE}/hasm-pgw-results-XXXXXX")"; chmod 700 "${RES}"; fi
 ( umask 077; printf '%s\n' "${W}" > "${OWNER_FILE}.tmp" ) && mv -f "${OWNER_FILE}.tmp" "${OWNER_FILE}"
 install -d -m 700 "${W}/tmp"
-if [[ -n "${HASM_ISO_RESULTS:-}" ]]; then RES="${HASM_ISO_RESULTS%/}/$(basename "${W}")"; install -d -m 700 "${HASM_ISO_RESULTS}"; install -d -m 700 "${RES}";
-else RES="$(mktemp -d "${TMPBASE}/hasm-pgw-results-XXXXXX")"; chmod 700 "${RES}"; fi
 export HASM_TEST_ROOT="${W}/cluster"
 # shellcheck source=common.sh
 . "${HERE}/common.sh"           # the same settings and checks as every other script, for HASM_TEST_ROOT=W/cluster (lock W/cluster.lock)

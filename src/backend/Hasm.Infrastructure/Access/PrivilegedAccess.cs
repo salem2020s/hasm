@@ -11,7 +11,7 @@ public static class PrivilegedAccess
     /// <summary>Resources whose every action is privileged: role, grant and member management, audit administration, company security settings, approval policies.</summary>
     public static IReadOnlySet<string> PrivilegedResources { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        "access.members", "access.roles", "access.assignments", "access.audit", "company.settings", "company.approvalpolicies",
+        "access.members", "access.roles", "access.assignments", "access.audit", "access.mfapolicy", "company.settings", "company.approvalpolicies",
         // review M3 of PR #133 (when in doubt, privileged): company.attachmentssensitive authorizes the encryption-key rewrap of attachments, and company.journalsoftclosed is override-like (posting into a soft-closed period)
         "company.attachmentssensitive", "company.journalsoftclosed",
         // Phase R slice R1: retention policy, legal holds and the approval and execution of attachment deletion are destructive controls (D-096: when in doubt, privileged)

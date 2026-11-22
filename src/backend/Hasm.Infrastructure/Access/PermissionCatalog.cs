@@ -82,6 +82,8 @@ public sealed partial class PermissionCatalog
         new("access.roles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Delete]),
         new("access.assignments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Delete]),
         new("access.audit", ScopeKind.Company, [PermissionAction.View]),
+        // The company MFA policy (Phase 4.1 S3b-1b, system migration 0034): view it, change it (an MFA-fresh, audited action). Only the Company Administrator preset holds it.
+        new("access.mfapolicy", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         // Company administration (Phase 3.1A-2, system migration 0006).
         new("company.profile", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         new("company.settings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
@@ -176,6 +178,8 @@ public sealed partial class PermissionCatalog
         public const string AssignmentsCreate = "access.assignments.create";
         public const string AssignmentsDelete = "access.assignments.delete";
         public const string AuditView = "access.audit.view";
+        public const string MfaPolicyView = "access.mfapolicy.view";
+        public const string MfaPolicyUpdate = "access.mfapolicy.update";
         public const string ProfileView = "company.profile.view";
         public const string ProfileUpdate = "company.profile.update";
         public const string SettingsView = "company.settings.view";

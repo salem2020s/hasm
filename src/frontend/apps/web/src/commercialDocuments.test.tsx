@@ -355,10 +355,10 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("سجّلت قرارك على هذه النسخة");
   });
 
-  it("hides Approve, with the reason, from a user who does not hold the role of the open stage, but keeps Reject (the server asks for no stage role to reject)", async () => {
+  it("hides Approve AND Reject, with the reason, from a user who does not hold the role of the open stage (the server refuses both)", async () => {
     await openSubmitted({ plan: [stage(1, 1, 0, "some-other-role")], decisions: [] });
     expect(screen.queryByTestId("approve")).toBeNull();
-    expect(screen.getByTestId("reject")).toBeEnabled();                                                      // Reject mirrors the server rule: submitted, independent, approve permission on the branch; no stage role, no decided rule
+    expect(screen.queryByTestId("reject")).toBeNull();                                                       // Reject mirrors the server rule: a role-bound stage is rejected only by a holder of its role for the document's branch
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
   });
 
@@ -369,14 +369,33 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("اكتملت كل مراحل الاعتماد");
   });
 
-  it("counts a stage role held through a grant for another branch, like the server (it reads role ids from every grant and scopes only the approve permission)", async () => {
+  it("does not count a stage role held through a grant for ANOTHER branch, like the server: neither Approve nor Reject is offered", async () => {
     const grants = [
       { roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS },                              // approve on the document's branch (company-wide)
       { roleId: "r", scope: "branch", scopeId: "other-branch", permissions: [] },                             // the stage role, held through ANOTHER branch's grant
     ];
     await openSubmitted({ plan: [stage(1, 1, 0, "r")], decisions: [] }, { accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
+    expect(screen.queryByTestId("approve")).toBeNull();
+    expect(screen.queryByTestId("reject")).toBeNull();
+    expect(screen.getByTestId("approve-not-eligible")).toHaveTextContent("المرحلة الحالية تتطلب دوراً لا تملكه");
+  });
+
+  it.each([["company", null], ["branch", "b1"]])("offers Approve and Reject to a holder of the stage role through a %s grant covering the document's branch", async (scope, scopeId) => {
+    const grants = [{ roleId: "viewer", scope: "company", scopeId: null, permissions: PERMS }, { roleId: "r", scope, scopeId, permissions: [] }];
+    await openSubmitted({ plan: [stage(1, 1, 0, "r")], decisions: [] }, { accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants }) });
     expect(screen.getByTestId("approve")).toBeEnabled();
+    expect(screen.getByTestId("reject")).toBeEnabled();
     expect(screen.queryByTestId("approve-not-eligible")).toBeNull();
+  });
+
+  it("keeps Reject for a stage without a role, and shows the server's generic 403 when a rejection is refused (the API never names the stage role)", async () => {
+    const reject = vi.fn().mockRejectedValue(apiError(403, "forbidden"));                                    // what the real server answers for rejecter_role_required and for every other authorization refusal
+    await openSubmitted({ plan: [stage(1, 1, 0)], decisions: [] }, { rejectCommercialDocument: reject });
+    await userEvent.click(screen.getByTestId("reject"));
+    await userEvent.type(screen.getByLabelText(/^السبب/), "no");
+    await userEvent.click(screen.getByRole("button", { name: "تأكيد" }));
+    expect(await screen.findByText("ليست لديك صلاحية لهذا الإجراء.")).toBeInTheDocument();
+    expect(screen.getByTestId("reject")).toBeInTheDocument();                                                // the document is unchanged: still submitted, the action still offered
   });
 
   describe("Approve and Reject follow the approve permission for the DOCUMENT'S branch, like the server (C4 of PR #137)", () => {

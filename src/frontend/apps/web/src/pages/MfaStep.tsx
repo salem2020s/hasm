@@ -1,8 +1,8 @@
 import { ApiError } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useState, type FormEvent } from "react";
+import { useContext, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
-import { Banner, Field } from "../components";
+import { AuthIdPrefix, Banner, Field } from "../components";
 import { EnrolmentSecretBlock } from "../mfaParts";
 
 /**
@@ -51,14 +51,15 @@ function useSubmit(action: (value: string) => Promise<void>, invalidKey: string)
 function CodeStep() {
   const { t } = useI18n();
   const auth = useAuth();
+  const ids = useContext(AuthIdPrefix);
   const f = useSubmit(auth.submitMfaCode, "mfa.code_invalid");
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title" className="auth-title">{t("mfa.title")}</h1>
+    <section aria-labelledby={`${ids}page-title`}>
+      <h1 id={`${ids}page-title`} className="auth-title">{t("mfa.title")}</h1>
       <p className="page-description auth-sub">{t("mfa.intro")}</p>
       {f.error && <Banner kind="error">{f.error}</Banner>}
       <form onSubmit={f.submit} noValidate>
-        <Field id="mfa-code" label={t("mfa.code")} error={f.fieldError} required>
+        <Field id={`${ids}mfa-code`} label={t("mfa.code")} error={f.fieldError} required>
           {(aria) => <input {...aria} name="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} autoFocus value={f.value} onChange={(e) => f.setValue(e.target.value)} dir="ltr" />}
         </Field>
         <button type="submit" className="primary block" disabled={f.busy}>{f.busy ? t("loading") : t("mfa.verify")}</button>
@@ -71,18 +72,19 @@ function CodeStep() {
 function EnrolmentSteps() {
   const { t } = useI18n();
   const auth = useAuth();
+  const ids = useContext(AuthIdPrefix);
   const secret = auth.mfa?.secret ?? null;
   const begin = useSubmit(auth.beginEnrolment, "mfa.enrol.invalid");
   const confirm = useSubmit(auth.confirmEnrolment, "mfa.code_invalid");
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title" className="auth-title">{t("mfa.enrol.title")}</h1>
+    <section aria-labelledby={`${ids}page-title`}>
+      <h1 id={`${ids}page-title`} className="auth-title">{t("mfa.enrol.title")}</h1>
       {!secret ? (
         <>
           <p className="page-description auth-sub">{t("mfa.enrol.intro")}</p>
           {begin.error && <Banner kind="error">{begin.error}</Banner>}
           <form onSubmit={begin.submit} noValidate>
-            <Field id="mfa-enrol-code" label={t("mfa.enrol.code")} error={begin.fieldError} required>
+            <Field id={`${ids}mfa-enrol-code`} label={t("mfa.enrol.code")} error={begin.fieldError} required>
               {(aria) => <input {...aria} name="enrolmentCode" autoComplete="off" autoCapitalize="characters" autoFocus value={begin.value} onChange={(e) => begin.setValue(e.target.value)} dir="ltr" />}
             </Field>
             <button type="submit" className="primary block" disabled={begin.busy}>{begin.busy ? t("loading") : t("mfa.enrol.start")}</button>
@@ -96,7 +98,7 @@ function EnrolmentSteps() {
           <p className="page-description">{t("mfa.enrol.confirm_intro")}</p>
           {confirm.error && <Banner kind="error">{confirm.error}</Banner>}
           <form onSubmit={confirm.submit} noValidate>
-            <Field id="mfa-confirm-code" label={t("mfa.code")} error={confirm.fieldError} required>
+            <Field id={`${ids}mfa-confirm-code`} label={t("mfa.code")} error={confirm.fieldError} required>
               {(aria) => <input {...aria} name="code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} autoFocus value={confirm.value} onChange={(e) => confirm.setValue(e.target.value)} dir="ltr" />}
             </Field>
             <button type="submit" className="primary block" disabled={confirm.busy}>{confirm.busy ? t("loading") : t("mfa.enrol.confirm")}</button>
@@ -110,9 +112,10 @@ function EnrolmentSteps() {
 function RecoveryNotice() {
   const { t } = useI18n();
   const auth = useAuth();
+  const ids = useContext(AuthIdPrefix);
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title" className="auth-title">{t("mfa.recovery.title")}</h1>
+    <section aria-labelledby={`${ids}page-title`}>
+      <h1 id={`${ids}page-title`} className="auth-title">{t("mfa.recovery.title")}</h1>
       <Banner kind="warning" testId="mfa-recovery">{t("mfa.recovery.body")}</Banner>
       <button type="button" className="link block" onClick={auth.cancelMfa}>{t("mfa.cancel")}</button>
     </section>

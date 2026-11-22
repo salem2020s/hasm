@@ -308,6 +308,8 @@ Because of this, a rollback to the copies never leaves a checkpoint ahead of its
 * **D-178** authorization and audit.
 
 ## Open questions for the owner (not decided here; the safe default applies until answered)
+
+**Owner decisions 2026-11-21 (consolidated package; recorded once in `docs/DECISIONS.md`, where the owner's wording stands; this block only points to it and does not rewrite the plan).** All four questions below are DECIDED. Q1 and Q3 = D-231 (the preserving defaults are confirmed). Q2 = D-232: a named MFA-verified administrator AND independent approval to apply a production update, so the interim single-administrator mode of D-178 does not suffice for production. Q4 = D-233: version entitlement is implemented separately in Phase 4.2, without disabling an owned version solely because maintenance expired; this phase still checks no entitlement.
 * **Q1. Key custody for update signing.** Should the publisher's update signing key be held under a custody that is separate from every other key: the installations' backup manifest signing keys, the licence signing key of 4.2 and the desktop code-signing certificate of 4.5? And who holds it (offline medium, hardware security module, two-person rule)?
   * **Preserving default:** a DEDICATED update signing key, used for nothing else, kept offline and never on a build or update server, with every signing event recorded by the publisher.
   * Technically, the backup signing keys cannot sign updates anyway (they are per installation, D-172). The question is the publisher-side custody and its separation from the licence and code-signing keys.
