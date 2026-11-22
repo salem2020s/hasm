@@ -134,7 +134,8 @@ public class ApprovalStageTests : JournalTestBase
         Ok(await Policies.DeactivateAsync(Admin.Id, Company.Id, soft.Id, soft.Revision));
         Assert.Equal([(1, 1)], await PlanOf(await Draft(Simple("2026-03-15"))));
         var tieA = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, Staged([1, 1], jtype: "adjusting", en: "Tie A")));
-        var tieB = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, Staged([1, 1], jtype: "adjusting", en: "Tie B")));
+        // (an IDENTICAL second policy is refused since company migration 0033, so the tie is between two policies that differ only in their branch scope: all branches and the entry's own branch)
+        var tieB = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(Doc, "any", Main, 0m, null, "سياسة", "Tie B", "adjusting", null, null, [new(1, null), new(1, null)])));
         var adj = Ok(await Journal.CreateDraftAsync(Maker, Company.Id, Simple("2026-04-05") with { AdjustsId = posted.Header.Id }, false));
         var expected = await Sql<Guid>($"SELECT {CompanySchema.ApprovalPolicy.Id} FROM {CompanySchema.ApprovalPolicy.Table} WHERE {CompanySchema.ApprovalPolicy.Id} IN ('{tieA.Id}', '{tieB.Id}') ORDER BY {CompanySchema.ApprovalPolicy.CreatedAtUtc}, {CompanySchema.ApprovalPolicy.Id} LIMIT 1");
         for (var i = 0; i < 3; i++)
