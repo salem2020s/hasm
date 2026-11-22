@@ -178,6 +178,79 @@ for (const mode of MODES) {
       expect(api.created.journal).toHaveLength(1);                                                            // nothing was lost or duplicated
     });
 
+    test("session expiry with UNSAVED input (D-236): the shell is hidden behind the sign-in-again dialog, the same user gets the input back in memory, and the save then succeeds", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      await go(page, "#/accounting/journal");
+      await page.getByRole("button", { name: E("jrn.new") }).click();
+      const accounts = page.getByLabel(E("jrn.account"));
+      await accounts.nth(0).selectOption("a1");
+      await accounts.nth(1).selectOption("a2");
+      await page.getByLabel(E("jrn.debit")).nth(0).fill("777.25");
+      await page.getByLabel(E("jrn.credit")).nth(1).fill("777.25");
+      api.expire();                                                                                           // the session ends while the entry is unsaved
+      await page.getByRole("button", { name: E("jrn.save_draft") }).click();                                  // the save meets the expired session (401)
+      const dialog = page.getByTestId("reauth-dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(E("reauth.message"));
+      await expect(page.getByTestId("shell-root")).toBeHidden();                                              // not rendered ...
+      await expect(page.getByTestId("shell-root")).toHaveAttribute("inert", "");                              // ... and inert
+      await expect(page.getByTestId("jrn-form")).toBeHidden();
+      await expect(dialog).not.toContainText("777.25");
+      await expect(dialog).not.toContainText("Amal");                                                         // no user, no company
+      expect(api.created.journal).toHaveLength(0);
+      // Nothing was written to web storage or to a cookie readable by scripts (the session cookie is HttpOnly), in either client.
+      const persisted = await page.evaluate(() => JSON.stringify([{ ...localStorage }, { ...sessionStorage }, document.cookie]));
+      expect(persisted).not.toContain("777.25");
+      // Printing shows the dialog only.
+      await page.emulateMedia({ media: "print" });
+      await expect(page.getByTestId("shell-root")).toBeHidden();
+      await page.emulateMedia({ media: "screen" });
+      // A wrong password keeps the dialog and the hidden input; then the same user signs in again.
+      const before = api.requests.length;
+      await signIn(page, "wrong-password");
+      await expect(dialog).toContainText(E("error.invalid_credentials"));
+      await expect(page.getByTestId("shell-root")).toBeHidden();
+      await signIn(page);
+      await expect(dialog).toBeHidden();
+      await expect(page.getByTestId("jrn-form")).toBeVisible();
+      await expect(page.getByLabel(E("jrn.debit")).nth(0)).toHaveValue("777.25");                             // restored from memory
+      await expect(page.getByLabel(E("jrn.credit")).nth(1)).toHaveValue("777.25");
+      // While the dialog was open the hidden shell sent nothing: the only requests are the two sign-ins, the company selection and the access answer.
+      await expect.poll(() => (api.inflight === 0 ? wire(api).slice(before) : ["(in flight)"])).toEqual(["POST /api/v1/auth/login", "POST /api/v1/auth/login", "POST /api/v1/session/company", "GET /api/v1/access/me"]);
+      expect(api.created.journal).toHaveLength(0);                                                            // nothing was re-submitted by itself
+      await page.getByRole("button", { name: E("jrn.save_draft") }).click();
+      await expect.poll(() => api.created.journal.length).toBe(1);                                            // the user's own save goes through on the new session
+      expect(new Set(api.requests.slice(before).map((r) => r.credentialsPath).filter((c) => c !== "none"))).toEqual(new Set([mode === "web" ? "cookie" : "bearer"]));
+    });
+
+    test("session expiry with unsaved input, then 'discard and sign out': the input is gone and the normal sign-in page is shown", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      await go(page, "#/accounting/journal");
+      await page.getByRole("button", { name: E("jrn.new") }).click();
+      const accounts = page.getByLabel(E("jrn.account"));
+      await accounts.nth(0).selectOption("a1");
+      await accounts.nth(1).selectOption("a2");
+      await page.getByLabel(E("jrn.debit")).nth(0).fill("888.5");
+      await page.getByLabel(E("jrn.credit")).nth(1).fill("888.5");
+      api.expire();
+      await page.getByRole("button", { name: E("jrn.save_draft") }).click();
+      await expect(page.getByTestId("reauth-dialog")).toBeVisible();
+      await page.getByTestId("reauth-discard").click();
+      await expect(page.getByTestId("notice-logged-out")).toBeVisible();
+      await expect(page.getByTestId("shell-root")).toHaveCount(0);
+      expect(await page.content()).not.toContain("888.5");
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      expect(await page.content()).not.toContain("888.5");
+      expect(api.created.journal).toHaveLength(0);
+    });
+
     test("logout: returns to sign-in with the notice, clears the web cookie, forgets the desktop token, and the next call carries no credential", async ({ page }) => {
       const api = await start(page, mode);
       await toEnglish(page);
