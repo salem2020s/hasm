@@ -21,6 +21,13 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     private static bool HoldsAnywhere(EffectivePermissions eff, string code) =>
         eff.Has(code, ScopeTarget.Company) || eff.Grants.Any(g => g.Scope == ScopeKind.Branch && g.Permissions.Contains(code));
 
+    /// <summary>
+    /// The STAGE AUTHORITY of a caller for one branch: the roles held through an assignment that covers that branch (company-wide, or for exactly this branch). A role held only for another branch, a warehouse or a
+    /// cost center gives no authority over a stage of this branch's documents. Read from the authorization store on the very call that decides.
+    /// </summary>
+    internal static IReadOnlySet<Guid> StageRolesOnBranch(EffectivePermissions eff, Guid branchId) =>
+        eff.Grants.Where(g => g.Scope == ScopeKind.Company || (g.Scope == ScopeKind.Branch && g.ScopeId == branchId)).Select(g => g.RoleId).ToHashSet();
+
     /// <summary>Loads the document and authorizes one permission on its branch. A missing or invisible document is the same refusal for a branch-scoped caller.</summary>
     private async Task<ConfigResult<CommercialDocumentView>> Authorized(Guid user, Guid company, Guid id, string code, CancellationToken ct)
     {
@@ -112,15 +119,21 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     {
         var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialApprove, ct);
         if (!a.IsOk) return a;
-        // a policy stage bound to a role takes decisions only from holders of that role: the roles are read from the authorization store on this very call (S5a)
-        var roles = (await access.GetEffectivePermissionsAsync(user, company, ct)).Grants.Select(g => g.RoleId).ToHashSet();
+        // a policy stage bound to a role takes decisions only from holders of that role FOR THE DOCUMENT'S BRANCH: the roles are read from the authorization store on this very call (S5a)
+        var roles = StageRolesOnBranch(await access.GetEffectivePermissionsAsync(user, company, ct), a.Value!.BranchId);
         return await documents.ApproveAsync(user, company, id, revision, ct, roles);
     }
 
+    /// <summary>
+    /// Rejection needs the same authority as approval (owner decision of 2026-11-21): the approve permission on the document's branch, independence, and, when the open stage of the plan is bound to a role, that role
+    /// held for the document's branch. The server decides; hiding a button is never the control.
+    /// </summary>
     public async Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)
     {
         var a = await Authorized(user, company, id, PermissionCatalog.Codes.CommercialApprove, ct);
-        return a.IsOk ? await documents.RejectAsync(user, company, id, revision, reason, ct) : a;
+        if (!a.IsOk) return a;
+        var roles = StageRolesOnBranch(await access.GetEffectivePermissionsAsync(user, company, ct), a.Value!.BranchId);
+        return await documents.RejectAsync(user, company, id, revision, reason, ct, roles);
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> CancelAsync(Guid user, Guid company, Guid id, long? revision, string? reason, CancellationToken ct = default)

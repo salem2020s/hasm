@@ -429,6 +429,27 @@ describe("journal screen", () => {
     await waitFor(() => expect(client.decideJournalEntry).toHaveBeenCalledWith("j1", false, "wrong account", 5));
   });
 
+  describe("a role-bound stage: Approve and Reject follow the stage role for what the entry touches, like the server (D-208)", () => {
+    const pending = () => entry("pending_approval", {}, { plan: [{ stage: 1, required: 1, approved: 0, roleId: "stage-role" }] });
+    const grants = (role: Record<string, unknown>) => ({ accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: [...base, "company.journal.view", "company.currencies.view", "company.costcenters.view"] }, role] }) });
+
+    it("hides both, with the reason, when the role is held only for another branch", async () => {
+      render(pending(), jcan(), grants({ roleId: "stage-role", scope: "branch", scopeId: "other-branch", permissions: [] }));
+      await open();
+      expect(await screen.findByTestId("jrn-stage-role-missing")).toHaveTextContent(A("jrn.stage_role_missing"));
+      expect(screen.queryByRole("button", { name: A("jrn.approve") })).toBeNull();
+      expect(screen.queryByRole("button", { name: A("jrn.reject") })).toBeNull();
+    });
+
+    it.each([["company", null], ["branch", "b1"], ["costcenter", "cc1"]])("offers both when the role is held through a %s assignment that can cover the entry", async (scope, scopeId) => {
+      render(pending(), jcan(), grants({ roleId: "stage-role", scope, scopeId, permissions: [] }));
+      await open();
+      expect(await screen.findByRole("button", { name: A("jrn.approve") })).toBeEnabled();
+      expect(screen.getByRole("button", { name: A("jrn.reject") })).toBeEnabled();
+      expect(screen.queryByTestId("jrn-stage-role-missing")).toBeNull();
+    });
+  });
+
   it("shows the separation-of-duties refusal from the server", async () => {
     render(entry("pending_approval"), jcan(), { decideJournalEntry: vi.fn().mockRejectedValue(apiError(403, "separation_of_duties")) });
     await open();
