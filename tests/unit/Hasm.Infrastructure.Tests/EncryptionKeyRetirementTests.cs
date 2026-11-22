@@ -165,6 +165,13 @@ public sealed class EncryptionKeyRetirementTests
         Assert.Equal(("backup_root_unrecognised_entry:archive", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, newer], [], ["archive"])));
         Assert.Equal(("backup_root_unrecognised_entry:20260304T020000Z-0a0b0c0d.bak", ""), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([], [], ["20260304T020000Z-0a0b0c0d.bak"])));
 
+        // review M-OBKP4 of PR 182: a present run that holds anything a run does not hold (the scan's Clean is false, e.g. another run copied into <run>/old/<run id>/) has unknown key needs;
+        // it is named, its own known keys are still listed, and an unrecognised root entry still comes first
+        var withNested = newer with { Clean = false };
+        Assert.Equal(("backup_run_unrecognised_content:20260313T020000Z-0a0b0c0d", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, withNested], [], [])));
+        Assert.Equal(("backup_run_unrecognised_content:20260313T020000Z-0a0b0c0d", "k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([withNested], [], [])));
+        Assert.Equal(("backup_root_unrecognised_entry:archive", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, withNested], [], ["archive"])));
+
         // and the rule turns each of them into "nothing retirable"; a key only the older run needs is kept
         var needed = EncryptionKeyRetirement.Evaluate(["k0", "k1"], "k1", [Company()], [new BackupRootKeyNeeds("/backups", true, null, ["k0", "k1"])], backupScopeAttested: true, At);
         Assert.True(needed.Complete);
@@ -231,6 +238,62 @@ public sealed class EncryptionKeyRetirementTests
             // several entries: ordinal order, all named
             Directory.CreateDirectory(Path.Combine(root, "b")); File.WriteAllText(Path.Combine(root, "a"), "x");
             Assert.Equal(["a", "b"], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Inside_the_retention_folder_only_slice_6_tombstones_are_recognised()
+    {
+        // review M-OBKP4 of PR 182: .retention was trusted whole, so a run kept in .retention/archive/<run id>/ was invisible to the report
+        const string Id = "20260301T020000Z-0a0b0c0d";
+        var root = Path.Combine(Path.GetTempPath(), "hasm-krt-" + Guid.NewGuid().ToString("N"));
+        var tombstone = Path.Combine(root, ".retention", "tombstones", Id);
+        Directory.CreateDirectory(tombstone);
+        Directory.CreateDirectory(Path.Combine(root, Id));
+        try
+        {
+            // a complete slice 6 tombstone, plus a crash leftover of the atomic writer: recognised; so is an incomplete one (a crash between its files) and an empty tombstones folder
+            foreach (var f in new[] { "run.status.json", "run.status.json.sig", "deleted.json", "completed.json", "deleted.json.tmp-0123456789abcdef0123456789abcdef" })
+                File.WriteAllText(Path.Combine(tombstone, f), "x");
+            var partial = Path.Combine(root, ".retention", "tombstones", "20260302T020000Z-0a0b0c0d");
+            Directory.CreateDirectory(partial);
+            File.WriteAllText(Path.Combine(partial, "run.status.json"), "x");
+            Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));
+
+            void Blocks(string expected, Action create, Action remove)
+            {
+                create();
+                try
+                {
+                    Assert.Equal([expected], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+                    Assert.Equal("backup_root_unrecognised_entry:" + string.Join("/", expected.Split('/').Select(Uri.EscapeDataString)),
+                        EncryptionKeyRetirementService.UnrecognisedEntryProblem(EncryptionKeyRetirementService.UnrecognisedEntries(root)));
+                }
+                finally { remove(); }
+                Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));
+            }
+            string R(params string[] parts) => Path.Combine([root, .. parts]);
+            Blocks(".retention/archive", () => Directory.CreateDirectory(R(".retention", "archive", Id, "companies")), () => Directory.Delete(R(".retention", "archive"), true));   // a run kept there
+            Blocks(".retention/notes.txt", () => File.WriteAllText(R(".retention", "notes.txt"), "x"), () => File.Delete(R(".retention", "notes.txt")));                         // a stray file
+            Blocks(".retention/.hidden", () => Directory.CreateDirectory(R(".retention", ".hidden")), () => Directory.Delete(R(".retention", ".hidden")));
+            Blocks(".retention/tombstones/archive", () => Directory.CreateDirectory(R(".retention", "tombstones", "archive")), () => Directory.Delete(R(".retention", "tombstones", "archive")));
+            Blocks(".retention/tombstones/x.json", () => File.WriteAllText(R(".retention", "tombstones", "x.json"), "x"), () => File.Delete(R(".retention", "tombstones", "x.json")));
+            Blocks($".retention/tombstones/{Id}/companies", () => Directory.CreateDirectory(R(".retention", "tombstones", Id, "companies")), () => Directory.Delete(R(".retention", "tombstones", Id, "companies")));   // a run inside a tombstone
+            Blocks($".retention/tombstones/{Id}/manifest.json.hbe", () => File.WriteAllText(R(".retention", "tombstones", Id, "manifest.json.hbe"), "x"), () => File.Delete(R(".retention", "tombstones", Id, "manifest.json.hbe")));
+            Blocks($".retention/tombstones/{Id}/deleted.json.tmp-XYZ", () => File.WriteAllText(R(".retention", "tombstones", Id, "deleted.json.tmp-XYZ"), "x"), () => File.Delete(R(".retention", "tombstones", Id, "deleted.json.tmp-XYZ")));
+            Blocks(".retention/a b", () => Directory.CreateDirectory(R(".retention", "a b")), () => Directory.Delete(R(".retention", "a b")));                                  // encoded per segment: .retention/a%20b
+            // tombstones itself must be a real folder
+            Blocks(".retention/tombstones", () => { Directory.Move(R(".retention", "tombstones"), root + "-moved"); File.WriteAllText(R(".retention", "tombstones"), "x"); },
+                () => { File.Delete(R(".retention", "tombstones")); Directory.Move(root + "-moved", R(".retention", "tombstones")); });
+            if (!OperatingSystem.IsWindows())
+            {
+                // links are never recognised: a tombstones link, a tombstone link, a file link inside a tombstone
+                Blocks($".retention/tombstones/20260303T020000Z-0a0b0c0d", () => Directory.CreateSymbolicLink(R(".retention", "tombstones", "20260303T020000Z-0a0b0c0d"), R(Id)),
+                    () => File.Delete(R(".retention", "tombstones", "20260303T020000Z-0a0b0c0d")));
+                Blocks($".retention/tombstones/{Id}/completed.json", () => { File.Delete(R(".retention", "tombstones", Id, "completed.json")); File.CreateSymbolicLink(R(".retention", "tombstones", Id, "completed.json"), R(".retention", "tombstones", Id, "deleted.json")); },
+                    () => { File.Delete(R(".retention", "tombstones", Id, "completed.json")); File.WriteAllText(R(".retention", "tombstones", Id, "completed.json"), "x"); });
+            }
         }
         finally { Directory.Delete(root, true); }
     }

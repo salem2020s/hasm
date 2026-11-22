@@ -721,7 +721,8 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bo
     foreach (var root in roots) Console.WriteLine($"  {root}");
     Console.WriteLine("NOT seen: any other backup destination or copy (another disk, an off-site or offline copy), standalone backup-company sets (they can hold attachment envelopes under a key), "
         + "uploads in flight and orphan files. Inside a root only run folders (named by a run id) are read: any other entry there (a run moved or copied under another name, a nested folder, "
-        + "a hidden entry, a file) is a blocker (backup_root_unrecognised_entry), never \"not needed\".");
+        + "a hidden entry, a file) is a blocker (backup_root_unrecognised_entry), never \"not needed\"; so is anything in .retention other than retention tombstones, and anything "
+        + "inside a run folder that a run does not hold, such as another run copied into it (backup_run_unrecognised_content).");
     Console.WriteLine(scopeAttested
         ? "The operator attested (--all-backup-copies-listed) that the roots above are every place a backup of this installation is kept. If that is not true, do not retire any key."
         : "No attestation (--all-backup-copies-listed) was given that the roots above are every place a backup is kept: the tool cannot know, so no key is reported retirable.");

@@ -19,7 +19,7 @@ namespace Hasm.Infrastructure.Backup;
 /// Scope: only the given roots are read. Other destinations, copies and standalone <c>backup-company</c> sets are invisible, so the caller must pass the operator's attestation
 /// (<paramref name="backupScopeAttested"/> of <see cref="ReportAsync"/>); without it the report is incomplete.
 /// </summary>
-public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database, AttachmentOptions attachments, ImportOptions imports, EncryptionOptions encryption, TimeProvider? clock = null)
+public sealed partial class EncryptionKeyRetirementService(HasmDatabaseOptions database, AttachmentOptions attachments, ImportOptions imports, EncryptionOptions encryption, TimeProvider? clock = null)
 {
     public async Task<KeyRetirementReport> ReportAsync(IReadOnlyCollection<string> presentKeyIds, string? activeKeyId, IReadOnlyList<string> backupRoots, SigningTrust? trust, bool backupScopeAttested,
         CancellationToken ct = default)
@@ -56,7 +56,9 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
     /// The encryption keys of EVERY run present in a root, and why the inventory is incomplete (or null). Not only the runs the retention plan would keep: a deletion-eligible run is still on disk and
     /// restorable (review M-FH1 of PR 182). Incomplete when the root holds an entry that is not a run folder, a <c>.deleting-*</c> folder or <c>.retention</c>
     /// (<c>backup_root_unrecognised_entry:&lt;names&gt;</c>: a run moved or copied inside the root under another name, e.g. <c>archive/&lt;run id&gt;</c> or <c>&lt;run id&gt;.bak</c>, or an archive file,
-    /// is not read as a run, so its key needs are unknown; review M-FH3 of PR 182), when no run proves the root (<c>backup_root_no_complete_verified_run</c>), when a deletion started and did not
+    /// is not read as a run, so its key needs are unknown; review M-FH3 of PR 182; also anything inside <c>.retention</c> that is not a slice 6 tombstone, review M-OBKP4), when a present run holds
+    /// anything a run does not hold (<c>backup_run_unrecognised_content:&lt;run ids&gt;</c>: the retention scan's <c>Clean</c> is false, e.g. another run copied into <c>&lt;run&gt;/old/&lt;run id&gt;/</c>,
+    /// whose key needs are not read; review M-OBKP4 of PR 182), when no run proves the root (<c>backup_root_no_complete_verified_run</c>), when a deletion started and did not
     /// finish (<c>backup_root_deletion_incomplete</c>: what is left of that run cannot be read as a run), or when any present run's key needs are unknown (<c>backup_run_key_needs_unknown</c>: an
     /// unfinished, unverifiable, version 1 or unencrypted DEV/TEST run). The known keys of EVERY present run are returned in every case (also a run whose verdict is <c>failed</c>: its company sets
     /// can still have been written), so they are reported as needed.
@@ -64,7 +66,9 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
     public static (string? Problem, IReadOnlyList<string> EncryptionKeysNeeded) InventoryOfPresentRuns(IReadOnlyList<RetentionRun> runs, IReadOnlyList<string> deletingFolders,
         IReadOnlyList<string> unrecognisedEntries)
     {
+        var unrecognisedContent = runs.Where(r => !r.Clean).Select(r => r.RunId).Order(StringComparer.Ordinal).ToList();
         var problem = unrecognisedEntries.Count > 0 ? UnrecognisedEntryProblem(unrecognisedEntries)
+            : unrecognisedContent.Count > 0 ? EncodedList("backup_run_unrecognised_content:", unrecognisedContent)
             : !runs.Any(IsCompleteVerifiedRun) ? "backup_root_no_complete_verified_run"
             : deletingFolders.Count > 0 ? "backup_root_deletion_incomplete"
             : runs.Any(r => !r.Complete || !r.Verified || r.Keys is null) ? "backup_run_key_needs_unknown"
@@ -79,11 +83,51 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
     /// <c>backup_root_unrecognised_entry:&lt;name&gt;,&lt;name&gt;...</c>, the names percent-encoded (RFC 3986 unreserved characters kept), so a name can neither break the code nor carry a control
     /// character into the output; at most <see cref="UnrecognisedEntriesListed"/> names, then <c>+N_more</c>.
     /// </summary>
-    public static string UnrecognisedEntryProblem(IReadOnlyList<string> names)
+    public static string UnrecognisedEntryProblem(IReadOnlyList<string> names) => EncodedList("backup_root_unrecognised_entry:", names);
+
+    /// <summary>
+    /// <paramref name="prefix"/> followed by the names, each percent-encoded per path segment (an entry inside <c>.retention</c> is named by its relative path, <c>.retention/archive</c>; a <c>/</c>
+    /// cannot occur in a name, so the segments stay unambiguous), comma-separated, at most <see cref="UnrecognisedEntriesListed"/> of them, then <c>+N_more</c>.
+    /// </summary>
+    private static string EncodedList(string prefix, IReadOnlyList<string> names)
     {
-        var listed = names.Take(UnrecognisedEntriesListed).Select(Uri.EscapeDataString).ToList();
+        var listed = names.Take(UnrecognisedEntriesListed).Select(n => string.Join("/", n.Split('/').Select(Uri.EscapeDataString))).ToList();
         if (names.Count > UnrecognisedEntriesListed) listed.Add($"+{names.Count - UnrecognisedEntriesListed}_more");
-        return "backup_root_unrecognised_entry:" + string.Join(",", listed);
+        return prefix + string.Join(",", listed);
+    }
+
+    /// <summary>The files slice 6 writes into a tombstone (<c>.retention/tombstones/&lt;run id&gt;/</c>): the deleted run's signed status and signature, the deletion and the completion markers.</summary>
+    private static readonly string[] TombstoneFiles =
+        [SignedDocuments.RunStatusFileName, SignedDocuments.RunStatusFileName + SignedDocuments.SignatureSuffix, RetentionInventory.DeletedMarker, RetentionInventory.CompletedMarker];
+
+    /// <summary>A temporary file left by a crash inside <c>BackupRunFiles.WriteOwnerOnlyAtomically</c> while it wrote one of the tombstone files (<c>&lt;name&gt;.tmp-&lt;32 hex&gt;</c>).</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(run\.status\.json(\.sig)?|deleted\.json|completed\.json)\.tmp-[0-9a-f]{32}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex TombstoneTemporaryFile();
+
+    private static readonly EnumerationOptions EveryEntry =
+        new() { AttributesToSkip = 0, IgnoreInaccessible = false, RecurseSubdirectories = false, ReturnSpecialDirectories = false, MatchType = MatchType.Simple };
+
+    /// <summary>
+    /// Review M-OBKP4 of PR 182: the entries inside <c>.retention</c> that are not exactly what slice 6 writes there, as paths relative to the root. Accepted are only a real directory
+    /// <c>.retention/tombstones</c>, in it only real directories named by a run id, and in each only real files (no link) named <c>run.status.json</c>, <c>run.status.json.sig</c>,
+    /// <c>deleted.json</c>, <c>completed.json</c> (any subset: a crash can interrupt the tombstone) or a crash leftover of one of them (<c>&lt;name&gt;.tmp-&lt;32 hex&gt;</c>). Anything else, e.g. a run
+    /// kept in <c>.retention/archive/&lt;run id&gt;/</c>, is a place a restorable run can hide.
+    /// </summary>
+    private static IEnumerable<string> UnrecognisedInRetention(DirectoryInfo retention)
+    {
+        foreach (var e in retention.EnumerateFileSystemInfos("*", EveryEntry))
+        {
+            var here = RetentionInventory.RetentionFolder + "/" + e.Name;
+            if (e is not DirectoryInfo tombstones || e.LinkTarget is not null || e.Name != RetentionInventory.TombstonesFolder) { yield return here; continue; }
+            foreach (var t in tombstones.EnumerateFileSystemInfos("*", EveryEntry))
+            {
+                var tomb = here + "/" + t.Name;
+                if (t is not DirectoryInfo tombstone || t.LinkTarget is not null || !BackupRunFiles.IsRunId(t.Name)) { yield return tomb; continue; }
+                foreach (var f in tombstone.EnumerateFileSystemInfos("*", EveryEntry))
+                    if (f is not FileInfo || f.LinkTarget is not null || !(TombstoneFiles.Contains(f.Name, StringComparer.Ordinal) || TombstoneTemporaryFile().IsMatch(f.Name)))
+                        yield return tomb + "/" + f.Name;
+            }
+        }
     }
 
     /// <summary>
@@ -92,13 +136,19 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
     /// <c>&lt;run id&gt;.deleting-&lt;16 hex&gt;</c>) or the retention folder (a real directory <c>.retention</c>). The retention scan (<see cref="RetentionInventory.Scan"/>) reads only run folders
     /// and ignores everything else; that is right for the retention preview and is not changed. For the report an ignored entry is a blind spot: a complete, signed run moved or copied inside the
     /// root under another name (<c>archive/&lt;run id&gt;</c>, <c>&lt;run id&gt;.bak</c>, <c>.old</c>, <c>run-&lt;run id&gt;</c>, an upper-case id, an archive file) is restorable and its key
-    /// needs are not read. A symbolic link is never recognised, whatever its name. Ordinal order. Reads names and metadata only.
+    /// needs are not read. A symbolic link is never recognised, whatever its name. <c>.retention</c> is walked as well (review M-OBKP4 of PR 182): anything in it that is not a slice 6 tombstone is
+    /// listed by its relative path (<c>.retention/archive</c>). Ordinal order. Reads names and metadata only.
     /// </summary>
     public static IReadOnlyList<string> UnrecognisedEntries(string root)
     {
         if (!Directory.Exists(root)) return [];
-        var all = new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false, RecurseSubdirectories = false, ReturnSpecialDirectories = false, MatchType = MatchType.Simple };
-        return [.. new DirectoryInfo(root).EnumerateFileSystemInfos("*", all).Where(e => !Recognised(e)).Select(e => e.Name).Order(StringComparer.Ordinal)];
+        var found = new List<string>();
+        foreach (var e in new DirectoryInfo(root).EnumerateFileSystemInfos("*", EveryEntry))
+        {
+            if (!Recognised(e)) found.Add(e.Name);
+            else if (e.Name == RetentionInventory.RetentionFolder) found.AddRange(UnrecognisedInRetention((DirectoryInfo)e));   // review M-OBKP4: .retention is walked, not trusted
+        }
+        return [.. found.Order(StringComparer.Ordinal)];
 
         static bool Recognised(FileSystemInfo e) =>
             e is DirectoryInfo && e.LinkTarget is null

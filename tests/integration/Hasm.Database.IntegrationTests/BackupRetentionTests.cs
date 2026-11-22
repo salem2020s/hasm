@@ -445,6 +445,43 @@ public class BackupRetentionTests : PostgresTestBase
         var again = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
         Assert.True(again.Complete, string.Join("; ", again.Blockers));
         Assert.Equal(["needed_by_present_backups"], again.Keys.Single(k => k.KeyId == "k0").Reasons);
+
+        // review M-OBKP4 of PR 182: the same blind spot one level down. (1) The run that needs k0 moved INSIDE the other run folder: that run holds something a run does not hold, so its key
+        // needs are unknown (the scan marks it not clean).
+        async Task BlockedWith(string blocker)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:{blocker}"], r.Blockers);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        }
+        Directory.CreateDirectory(Path.Combine(Root, other, "old"));
+        Directory.Move(source, Path.Combine(Root, other, "old", onlyK0));
+        await BlockedWith($"backup_run_unrecognised_content:{other}");
+        var nested = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed");
+        Assert.Equal(8, nested.Exit);
+        Assert.Contains($"[BLOCKER] backup_inventory_incomplete:backup_run_unrecognised_content:{other}", nested.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", nested.Out);
+        Directory.Move(Path.Combine(Root, other, "old", onlyK0), source);
+        Directory.Delete(Path.Combine(Root, other, "old"));
+        // (2) the run kept inside .retention (".retention/archive/<run id>"), and a stray file there: .retention holds only slice 6 tombstones
+        Directory.CreateDirectory(Path.Combine(Root, ".retention", "archive"));
+        Directory.Move(source, Path.Combine(Root, ".retention", "archive", onlyK0));
+        await BlockedWith("backup_root_unrecognised_entry:.retention/archive");
+        Directory.Move(Path.Combine(Root, ".retention", "archive", onlyK0), source);
+        Directory.Delete(Path.Combine(Root, ".retention", "archive"));
+        File.WriteAllText(Path.Combine(Root, ".retention", "notes.txt"), "x");
+        await BlockedWith("backup_root_unrecognised_entry:.retention/notes.txt");
+        File.Delete(Path.Combine(Root, ".retention", "notes.txt"));
+        // (3) a legitimate tombstone, written as slice 6 writes it (the deleted run's signed status and signature, the deletion and completion markers), is still accepted
+        var tombstone = Path.Combine(Root, ".retention", "tombstones", "20260301T020000Z-0a0b0c0d");
+        Directory.CreateDirectory(tombstone);
+        foreach (var name in new[] { SignedDocuments.RunStatusFileName, SignedDocuments.RunStatusFileName + SignedDocuments.SignatureSuffix })
+            File.Copy(Path.Combine(Root, other, name), Path.Combine(tombstone, name));
+        File.WriteAllText(Path.Combine(tombstone, RetentionInventory.DeletedMarker), "{}");
+        File.WriteAllText(Path.Combine(tombstone, RetentionInventory.CompletedMarker), "{}");
+        var withTombstone = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(withTombstone.Complete, string.Join("; ", withTombstone.Blockers));
+        Assert.Equal(["needed_by_present_backups"], withTombstone.Keys.Single(k => k.KeyId == "k0").Reasons);
     }
 
     [PostgresFact]
