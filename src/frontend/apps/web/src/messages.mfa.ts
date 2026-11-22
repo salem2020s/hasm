@@ -56,6 +56,8 @@ export const mfaAr: Record<string, string> = {
   "sec.enrol.done": "فُعّل التحقق بخطوتين. بدأت جلسة جديدة بعد التأكيد.",
   "error.mfa_step_up_required": "هذا الإجراء يتطلب تحققاً حديثاً بخطوتين ولم يُنفَّذ.",
   "error.mfa_not_enrolled": "لا يوجد تطبيق مصادقة مفعّل لحسابك، فلا يمكن إجراء التحقق الحديث.",
+  "error.mfa_enrolment_required": "تشترط هذه الشركة التحقق بخطوتين. فعّل تطبيق المصادقة من صفحة أمان الحساب ثم أعد المحاولة.",
+  "error.company_selection_changed": "تغيّرت الشركة المحددة أثناء تنفيذ الطلب. أعد تحميل الصفحة وحاول مرة أخرى.",
 };
 
 export const mfaEn: Record<string, string> = {
@@ -115,4 +117,6 @@ export const mfaEn: Record<string, string> = {
   "sec.enrol.done": "Two-step verification is on. A new session started after the confirmation.",
   "error.mfa_step_up_required": "This action needs a fresh two-step verification and was not done.",
   "error.mfa_not_enrolled": "Your account has no active authenticator, so a fresh verification cannot be done.",
+  "error.mfa_enrolment_required": "This company requires two-step verification. Set up an authenticator on the account security page, then try again.",
+  "error.company_selection_changed": "The selected company changed while the request was running. Reload the page and try again.",
 };
