@@ -8,6 +8,10 @@
 -- HOW THE OWNER IS RECOGNISED without naming it (the migration cannot know the owner's name, and a function that reads the catalog tables is not allowed): the information_schema view of table privileges lists, for a
 -- table, a row granted by a role to ITSELF only for the owner (the implicit privileges of an owner are held by the owner as its own grantor), and it shows a row only to the role concerned and to the roles that are members
 -- of it. So the check below finds such a row for the owner and for a member of the owner, and finds none for any other role: the answer for every role that is not the owner or a member is "no", which refuses.
+-- THE OWNER'S ROW IS GRANTABLE: PostgreSQL refuses a grant WITH GRANT OPTION back to the grantor itself, so a non-owner can only create a NON-grantable self-granted row (a role that holds TRIGGER
+-- WITH GRANT OPTION can run GRANT TRIGGER ... TO itself); requiring is_grantable = 'YES' is what keeps such a self-grant from passing as the owner (review of PR 210, M1).
+-- The membership test pg_has_role(current_user, grantee, 'USAGE') is redundant with the view's own visibility rule (a row is shown only to members of its grantor or grantee); it is kept as defence in
+-- depth, and it is the view's filter that decides. It sits inside a CASE so that it is never evaluated for a PUBLIC row (PUBLIC is not a role name).
 -- A superuser sees every row and passes (a superuser bypasses every privilege anyway).
 
 CREATE FUNCTION f_4d54e704() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -17,7 +21,7 @@ BEGIN
         IF NOT EXISTS (
             SELECT 1 FROM information_schema.table_privileges p
             WHERE p.table_schema = 'public' AND p.table_name = 't_47b9462a' AND p.privilege_type = 'TRIGGER'
-              AND p.grantor = p.grantee AND CASE WHEN p.grantor = p.grantee THEN pg_has_role(current_user, p.grantee::name, 'USAGE') ELSE false END
+              AND p.grantor = p.grantee AND p.is_grantable = 'YES' AND CASE WHEN p.grantor = p.grantee THEN pg_has_role(current_user, p.grantee::name, 'USAGE') ELSE false END
         ) THEN
             RAISE EXCEPTION 'TOTP secret material is changed only by the table owner (or a member of it), never by the runtime account';
         END IF;

@@ -42,6 +42,8 @@ public class TotpOwnerOnlySchemaDerivationTests
         Assert.DoesNotMatch(@"\bOR\s+REPLACE\b", sql);                                                          // the function of migration 0031 is NOT replaced
         Assert.DoesNotMatch(new Regex(@"\b(DROP|ALTER|GRANT|REVOKE|INSERT|UPDATE\s+t_|DELETE|DISABLE|ENABLE|EXECUTE\s+(?!FUNCTION)|SECURITY\s+DEFINER|search_path|set_config|current_setting)\b|\bTRUNCATE\b(?!')", RegexOptions.IgnoreCase), sql.Replace("BEFORE UPDATE ON", ""));
         Assert.Contains($"CREATE TRIGGER {SystemSchema.TotpGuard.TrOwnerOnly} BEFORE UPDATE ON {SystemSchema.UserTotp.Table} FOR EACH ROW EXECUTE FUNCTION {SystemSchema.TotpGuard.FnOwnerOnly}()", sql);
+        // the owner is recognised by a SELF-granted row that is GRANTABLE (a non-owner can only create a non-grantable self-grant: review of PR 210, M1)
+        Assert.Contains("p.grantor = p.grantee AND p.is_grantable = 'YES'", sql);
         // the four material columns, and only those, decide; the identity, state and progress columns are not looked at
         foreach (var column in new[] { SystemSchema.UserTotp.Cipher, SystemSchema.UserTotp.Nonce, SystemSchema.UserTotp.Tag, SystemSchema.UserTotp.KekId })
             Assert.Contains($"NEW.{column} IS DISTINCT FROM OLD.{column}", sql);

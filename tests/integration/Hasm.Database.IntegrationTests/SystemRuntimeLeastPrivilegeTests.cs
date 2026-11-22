@@ -526,6 +526,38 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
     }
 
     [PostgresRoleFact]
+    public async Task A_role_holding_TRIGGER_with_grant_option_cannot_pass_as_the_owner_by_granting_TRIGGER_to_itself()
+    {
+        await StartRestricted();
+        var user = await NewUser();
+        await using var mfa = RuntimeMfa();
+        var id = await mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);
+        Assert.True(await mfa.ActivatePendingAsync(user.Id, id, Step, null));
+        string Material() => $"SELECT encode({TO.Cipher} || {TO.Nonce} || {TO.Tag}, 'hex') || {TO.KekId} FROM {TO.Table} WHERE {TO.SecretId} = '{id}'";
+        var before = await Scalar<string>(Material());
+
+        // a broad grant by an operator: SELECT, UPDATE and TRIGGER WITH GRANT OPTION to an ordinary login role (review of PR 210, M1)
+        var (attacker, attackerPassword) = await NewLoginRole();
+        await Exec($"GRANT USAGE ON SCHEMA public TO {Q(attacker)}");
+        await Exec($"GRANT SELECT, UPDATE ON TABLE {TO.Table} TO {Q(attacker)}");
+        await Exec($"GRANT TRIGGER ON TABLE {TO.Table} TO {Q(attacker)} WITH GRANT OPTION");
+        await using var conn = await As(OptionsFor(attacker, attackerPassword));
+        await using (var self = new NpgsqlCommand($"GRANT TRIGGER ON TABLE {TO.Table} TO {Q(attacker)}", conn)) await self.ExecuteNonQueryAsync();   // a self-grant: accepted by PostgreSQL, creates a row granted by the role to itself (not grantable)
+        await using (var seen = new NpgsqlCommand($"SELECT count(*) FROM information_schema.table_privileges WHERE table_name = '{TO.Table}' AND grantor = grantee AND privilege_type = 'TRIGGER' AND is_grantable = 'NO'", conn))
+            Assert.Equal(1L, await seen.ExecuteScalarAsync());                                                   // the attack row exists, and the attacker sees it (the owner's row is grantable)
+        foreach (var (column, value) in new[] { (TO.Cipher, "decode(repeat('00', 20), 'hex')"), (TO.Nonce, "decode(repeat('00', 12), 'hex')"), (TO.Tag, "decode(repeat('00', 16), 'hex')"), (TO.KekId, "'k9'") })
+        {
+            await using var tx = await conn.BeginTransactionAsync();
+            await using (var flag = new NpgsqlCommand("SELECT set_config('hasm.totp_rewrap', 'on', true)", conn, tx)) await flag.ExecuteNonQueryAsync();   // the rewrap flag: open to any role
+            await using var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {column} = {value} WHERE {TO.SecretId} = '{id}'", conn, tx);
+            var refused = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.RaiseException, refused.SqlState);
+            Assert.Contains("only by the table owner", refused.MessageText);
+        }
+        Assert.Equal(before, await Scalar<string>(Material()));                                                  // the material is unchanged
+    }
+
+    [PostgresRoleFact]
     public async Task The_owner_only_migration_adds_one_function_and_one_trigger_and_changes_nothing_else_in_the_catalog()
     {
         await StartRestricted();
