@@ -50,8 +50,8 @@ jobs:
         run: node tools/schema/company-0033-approval-policy-identity.cjs --check
       - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
         run: node tools/schema/company-0031-attachment-retention.cjs --check
-      - name: Stock-period-guard schema files match the deterministic generator (STOCK-PERIOD-DB, D-220, company migration 0033)
-        run: node tools/schema/company-0033-stock-period-guard.cjs --check
+      - name: Stock-period-guard schema files match the deterministic generator (STOCK-PERIOD-DB, D-220, company migration 0034)
+        run: node tools/schema/company-0034-stock-period-guard.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx

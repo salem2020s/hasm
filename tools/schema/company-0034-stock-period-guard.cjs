@@ -5,14 +5,14 @@
 //   prefix + first 8 hex digits of SHA-256("hasm.company.<MIGRATION>.stock-period-guard.v1:" + token)
 // (same rules as tools/schema/company-0032-commercial-policies.cjs: a collision aborts the run; names are fixed once committed). References to names that already exist (migrations 0006, 0014, 0016, 0017,
 // 0019 and 0020) are written [[Entity.Name]] and resolved from the committed dictionaries, never re-derived.
-// Usage:  node tools/schema/company-0033-stock-period-guard.cjs --write | --check
+// Usage:  node tools/schema/company-0034-stock-period-guard.cjs --write | --check
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
-const MIGRATION = "0033";   // the company migration number: it is part of the name seed, so a renumbering is a regeneration
+const MIGRATION = "0034";   // the company migration number: it is part of the name seed, so a renumbering is a regeneration
 const outSql = path.join(infra, "CompanyDatabase", "Migrations", `${MIGRATION}_company_stock_period_guard.sql`);
 const outCs = path.join(infra, "CompanyDatabase", "CompanySchema.StockPeriodGuard.cs");
 
