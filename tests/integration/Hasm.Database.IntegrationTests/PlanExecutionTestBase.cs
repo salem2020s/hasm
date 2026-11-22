@@ -23,7 +23,7 @@ using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.8D step 4: the X1-A database layer (company migration 0035, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role, exactly as design section 8 describes the
+/// Phase 3.8D step 4: the X1-A database layer (company migration 0035, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role (production grants, plus a TEST-ONLY INSERT on the four execution tables: see PrepareRuntime), exactly as design section 8 describes the
 /// N-tests. No executor exists: the tests write the plan, approval, execution and epoch rows themselves, which is also what a hostile holder of the runtime role's grants could try. The history is built by the real
 /// services (owner connection, as in every service suite); everything that probes the new rules runs as the runtime role, and an execution runs inside the real audited company transaction, so its business audit
 /// event is a genuine, key-authenticated event written in the same transaction. Role-capable disposable cluster only.
@@ -59,11 +59,23 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         public string[] Of(string name) => Find(s => s.Name == name).Sql;
     }
 
-    protected async Task PrepareRuntime()
+    /// <summary>
+    /// The four tables of EXECUTION: the per-company runtime role holds SELECT only on them in this checkpoint (execution is disabled; review M1 of PR 48), so it cannot write an epoch.
+    /// </summary>
+    protected static readonly string[] ExecutionTables = [CX.Table, CompanySchema.CompensationPlanExecutionJournal.Table, EM.Table, EL.Table];
+
+    /// <summary>
+    /// Prepares the company and the REAL per-company runtime role (production grants). With <paramref name="executorGrant"/> (the default) the test ALSO gives that role INSERT on the four execution tables, as the owner of
+    /// the disposable test database: this is the right the future reviewed executor slice will carry in the grant catalog, and it lets the tests of the database rules (N1 to N32, which write plans, executions and epochs by
+    /// SQL) keep proving the guards against a writer that CAN insert. The tests that prove the production grants (PlanExecutionRuntimeRoleDisabledTests) and the services of step 5 pass false.
+    /// </summary>
+    protected async Task PrepareRuntime(bool executorGrant = true)
     {
         await PrepareNegative();
         var granted = await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
         Assert.True(granted.LoginVerified);
+        if (executorGrant)
+            await Sql($"GRANT INSERT ON {string.Join(", ", ExecutionTables)} TO \"{CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName)}\"");
         RuntimeTx = new CompanyAuditedTransactions(RealResolver(), Audit, Clock);
     }
 

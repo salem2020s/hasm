@@ -194,6 +194,18 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
     }
 
     [PostgresFact]
+    public async Task The_schema_gate_of_a_cold_connection_costs_a_constant_number_of_commands_whatever_the_number_of_tables()
+    {
+        // review L2 of PR 48: the privilege check of the schema gate used to send one command per guarded table (about a hundred charged to every bounded read on each cold check); it is one set-based query now
+        await PrepareNegative();
+        Assert.True(CompanyRuntimePrivileges.Tables.Count > 100, "the catalog is large, so a per-table command would show");
+        var cold = SinglePrincipalResolver(Company);          // a resolver that has verified nothing yet: its first open pays the whole gate
+        var commands = 0;
+        await using (await cold.OpenAsync(Company.Id, () => commands++, default)) { }
+        Assert.InRange(commands, 1, 15);
+    }
+
+    [PostgresFact]
     public async Task A_partially_visible_caller_sees_a_specific_refusal_only_after_every_member_is_authorized_and_duplicate_request_ids_change_nothing()
     {
         await PreparePosting();

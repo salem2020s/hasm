@@ -17,7 +17,7 @@ using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// The replay epoch at database level (design 3.2 to 3.4): a complete epoch written by SQL through the runtime role commits and leaves history untouched, and every way of writing an incomplete, misbound, repeated or
+/// The replay epoch at database level (design 3.2 to 3.4): a complete epoch written by SQL by a writer holding the (test-only) executor grant commits and leaves history untouched, and every way of writing an incomplete, misbound, repeated or
 /// unauthorized one is refused. Tests N2, N8, N9, N10, N11, N13, N14, N15, N19, N20, N21, N26, N27, N29, N30 and N31 of design section 8. Where the executor (step 5) adds something to a case, the test says so.
 /// </summary>
 public class PlanExecutionEpochTests : PlanExecutionTestBase
@@ -40,7 +40,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
     }
 
     [PostgresRoleFact]
-    public async Task A_complete_epoch_written_by_the_runtime_role_commits_leaves_every_earlier_row_untouched_and_ends_at_the_replayed_figures()
+    public async Task A_complete_epoch_written_by_a_writer_holding_the_executor_grant_commits_leaves_every_earlier_row_untouched_and_ends_at_the_replayed_figures()
     {
         await PrepareRuntime();
         var s = await SimpleEpoch();

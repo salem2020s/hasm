@@ -12,9 +12,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Owner conditions for the re-scoped PR 48 (checkpoint with execution DISABLED): the unfinished execution path cannot be activated or called. There is no executor type or entry point, no route and no registered service for
-/// planning or executing a compensation plan, and no preset role holds a plan permission. (That PostgreSQL refuses an execution row, an epoch member and a back-dated entry outside the executor path is proven by N2, N4, N8,
-/// N9 and N22 of PlanExecutionEpochTests and PlanExecutionGuardTests, which run against the real runtime role.)
+/// Owner condition for the re-scoped PR 48 (checkpoint with execution DISABLED): the unfinished execution path cannot be activated or called. This class proves the APPLICATION layer only: no route of the running API, no
+/// service of its container, no executor type or entry point in the backend assemblies, no code that appends the execution audit event (an IL scan, because constants are inlined), and no preset role (catalog and system
+/// database) holding a plan permission. The DATABASE layer is proven by PlanExecutionRuntimeRoleDisabledTests: with the production grants the per-company runtime role holds SELECT only on the four execution tables and
+/// a complete, well-formed epoch written by it is refused. N2, N4, N8, N9 and N22 (PlanExecutionEpochTests, PlanExecutionGuardTests) prove that a writer who COULD insert (the owner, or a role with the future executor
+/// grant) is still refused when the execution is malformed or lacks its approved plan, audit event, period or position rules.
 /// </summary>
 public class PlanExecutionDisabledTests : JournalTestBase
 {
@@ -80,9 +82,27 @@ public class PlanExecutionDisabledTests : JournalTestBase
         // no method of the services or of anything in a Costing/plan namespace is an execution entry point
         foreach (var type in new[] { typeof(CompensationPlanService), typeof(CompensationPlanApprovalService), typeof(CompensationPlanStore), typeof(CompensationPlanBinding) })
             Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly), m => Regex.IsMatch(m.Name, "Execute|Executor|Replay|Storno|Rebook"));
-        // and the audit type of an execution is declared but nothing in the code base appends it (it is only required by the database at commit)
-        var appenders = types.SelectMany(t => t.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)).Count(m => m.Name.Contains("PlanExecuted"));
-        Assert.Equal(0, appenders);
+        // and nothing in the code base appends the audit event of an execution (1154): constants are inlined, so the compiled code of every method is scanned for the constant; a positive control proves the scan sees
+        // the same kind of constant (1155, the plan-proposed event the storage service appends)
+        var everything = assemblies.SelectMany(a => a.GetTypes()).ToList();      // closures and async state machines hold the compiled code of lambdas and awaits
+        Assert.True(UsesConstant(everything, CostingAuditEvents.PlanProposed), "the scan must find a constant that IS used");
+        Assert.False(UsesConstant(everything, CostingAuditEvents.PlanExecuted), "nothing may append the plan-executed audit event");
+    }
+
+    private static bool UsesConstant(IEnumerable<Type> types, short value)
+    {
+        // ldc.i4 (0x20) followed by the 32-bit little-endian value: how the compiler loads an inlined constant that does not fit ldc.i4.s
+        byte[] pattern = [0x20, .. BitConverter.GetBytes((int)value)];
+        foreach (var type in types)
+            foreach (var method in type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Cast<MethodBase>()
+                         .Concat(type.GetConstructors(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)))
+            {
+                var il = method.GetMethodBody()?.GetILAsByteArray();
+                if (il is null) continue;
+                for (var i = 0; i + pattern.Length <= il.Length; i++)
+                    if (il.AsSpan(i, pattern.Length).SequenceEqual(pattern)) return true;
+            }
+        return false;
     }
 
     [PostgresFact]
