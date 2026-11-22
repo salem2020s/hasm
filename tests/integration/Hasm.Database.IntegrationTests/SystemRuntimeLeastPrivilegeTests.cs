@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Hasm.Api.Auth;
+using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Security;
@@ -416,6 +417,49 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         Assert.Equal(["runtime_role_attributes"], (await Findings()).Violations);
         await RoleAdmin($"ALTER ROLE {Q(runtimeRole)} NOCREATEROLE");
         Assert.Empty((await Findings()).Violations);
+    }
+
+    [PostgresRoleFact]
+    public async Task The_company_MFA_policy_service_sets_reads_and_evaluates_under_the_restricted_runtime_role()
+    {
+        await StartRestricted();
+        // fixtures through the owner connection (a company, its administrator and a plain member); the services under test run on the RUNTIME role only
+        var company = Guid.NewGuid();
+        await Exec($"INSERT INTO {SystemSchema.Company.Table} ({SystemSchema.Company.Id},{SystemSchema.Company.PhysicalDatabaseName},{SystemSchema.Company.ProvisioningState},{SystemSchema.Company.CreatedAtUtc},{SystemSchema.Company.StateChangedAtUtc}) VALUES (@i,@n,@s,now(),now())",
+            ("i", company), ("n", Hasm.Infrastructure.Naming.PhysicalIdentifier.GenerateDatabaseName()), ("s", (short)Hasm.Infrastructure.Companies.ProvisioningState.Ready));
+        var validator = new KnownScopeValidator();
+        await using var ownerAccess = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, validator);
+        var admin = await NewUser("poladmin");
+        Assert.Equal(AccessService.BootstrapStatus.Granted, await ownerAccess.BootstrapCompanyAdministratorAsync(admin.Login, company));
+        var plain = await NewUser("polplain");
+        Assert.True((await ownerAccess.GrantMembershipAsync(admin.Id, company, plain.Login)).IsOk);
+        await Exec($"UPDATE {U.Table} SET {SystemSchema.UserMfa.State} = 2 WHERE {U.Id} = @i", ("i", admin.Id));      // the administrator has an authenticator (the lock-out guard of the policy)
+
+        await using var access = new AccessService(RuntimeConnection, Clock, PermissionCatalog.Default, Audit, validator);
+        await using var identity = new IdentityStore(RuntimeConnection, Clock, Audit);
+        await using var policies = new MfaPolicyService(RuntimeConnection, Clock, Audit, access, identity);
+
+        var none = (await policies.GetAsync(admin.Id, company)).Value!;                                          // no row yet: Off at revision 0
+        Assert.Equal((CompanyMfaPolicyKind.Off, 0L), (none.Kind, none.Revision));
+        var all = (await policies.SetAsync(admin.Id, company, 0, CompanyMfaPolicyKind.RequiredForAll, null)).Value!;      // the first row: INSERT ... ON CONFLICT DO NOTHING
+        Assert.Equal((CompanyMfaPolicyKind.RequiredForAll, 1L), (all.Kind, all.Revision));
+        Assert.True(await policies.RequiresMfaAsync(plain.Id, company));                                           // the evaluation of the login path
+        var roles = (await policies.SetAsync(admin.Id, company, 1, CompanyMfaPolicyKind.RequiredForRoles, [PresetRoles.CompanyAdministratorId])).Value!;   // UPDATE of the four columns (after SELECT ... FOR UPDATE), DELETE and INSERT of the role list
+        Assert.Equal((CompanyMfaPolicyKind.RequiredForRoles, 2L, 1), (roles.Kind, roles.Revision, roles.RoleIds.Count));
+        Assert.True(await policies.RequiresMfaAsync(admin.Id, company));
+        Assert.False(await policies.RequiresMfaAsync(plain.Id, company));
+        var off = (await policies.SetAsync(admin.Id, company, 2, CompanyMfaPolicyKind.Off, null)).Value!;       // the role list is emptied again (DELETE)
+        Assert.Equal((CompanyMfaPolicyKind.Off, 3L, 0), (off.Kind, off.Revision, off.RoleIds.Count));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {SystemSchema.MfaPolicyRole.Table}"));
+        Assert.Equal(3L, await Scalar<long>($"SELECT count(*) FROM {U.Table} u JOIN {Ev.Table} e ON e.{Ev.EventType} = {MfaAuditEvents.PolicyChanged} WHERE u.{U.Id} = @i", ("i", admin.Id)));   // one audit event per change, written by the restricted role
+
+        // and nothing beyond that: the key, the history and the table itself are out of reach of the runtime role
+        await using var conn = await As(RuntimeOptions);
+        await Denied(conn, $"UPDATE {SystemSchema.MfaPolicy.Table} SET {SystemSchema.MfaPolicy.CompanyId} = gen_random_uuid()");
+        await Denied(conn, $"DELETE FROM {SystemSchema.MfaPolicy.Table}");
+        await Denied(conn, $"TRUNCATE {SystemSchema.MfaPolicy.Table}");
+        await Denied(conn, $"UPDATE {SystemSchema.MfaPolicyRole.Table} SET {SystemSchema.MfaPolicyRole.RoleId} = gen_random_uuid()");
+        Assert.Empty((await SystemRuntimePrivileges.FindAsync(conn, runtimeRole)).Violations);
     }
 
     private WebApplicationFactory<Program> Api(HasmDatabaseOptions runtime, bool? optOut, LogCapture logs) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>

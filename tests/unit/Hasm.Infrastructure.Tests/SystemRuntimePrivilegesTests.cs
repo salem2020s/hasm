@@ -41,7 +41,7 @@ public class SystemRuntimePrivilegesTests
             "Company=SELECT+UPDATE(3)", "User=SELECT,INSERT,UPDATE", "Session=SELECT,INSERT,UPDATE,DELETE", "LoginThrottle=SELECT,INSERT,UPDATE,DELETE", "UserCompanyAccess=SELECT,INSERT,UPDATE",
             "Role=SELECT,INSERT,UPDATE", "RolePermission=SELECT,INSERT,DELETE", "RoleAssignment=SELECT,INSERT,UPDATE", "CostCenterAssignment=SELECT,INSERT+UPDATE(2)", "AccessAudit=SELECT,INSERT",
             "AuditEvent=SELECT,INSERT", "GlobalParty=SELECT,INSERT,UPDATE", "PartyProposal=SELECT,INSERT,UPDATE", "PartyLink=SELECT,INSERT", "UserTotp=SELECT,INSERT+UPDATE(4)",
-            "MfaChallenge=SELECT,INSERT,DELETE+UPDATE(2)", "BackupLegalHold=", "BackupRetentionPin=", "MigrationJournal=",
+            "MfaChallenge=SELECT,INSERT,DELETE+UPDATE(2)", "MfaPolicy=SELECT,INSERT+UPDATE(4)", "MfaPolicyRole=SELECT,INSERT,DELETE", "BackupLegalHold=", "BackupRetentionPin=", "MigrationJournal=",
         ], actual);
         Assert.All(SystemRuntimePrivileges.Tables, t => Assert.DoesNotContain(t.Privileges, p => p is "TRUNCATE" or "REFERENCES" or "TRIGGER"));
         Assert.All(SystemRuntimePrivileges.Tables.Where(t => t.UpdateColumns is not null), t => Assert.DoesNotContain("UPDATE", t.Privileges));   // a column grant never sits beside the table grant

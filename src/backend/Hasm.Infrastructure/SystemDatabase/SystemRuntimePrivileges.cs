@@ -49,6 +49,10 @@ public static class SystemRuntimePrivileges
         new("UserTotp", SystemSchema.UserTotp.Table, Append,
             [SystemSchema.UserTotp.State, SystemSchema.UserTotp.ConfirmedAtUtc, SystemSchema.UserTotp.LastStep, SystemSchema.UserTotp.FailedConfirmations]),
         new("MfaChallenge", SystemSchema.MfaChallenge.Table, ["SELECT", "INSERT", "DELETE"], [SystemSchema.MfaChallenge.Attempts, SystemSchema.MfaChallenge.ConsumedAtUtc]),   // not documented before this slice: what MfaChallengeStore does (short-lived login challenges: count an attempt, consume, purge expired ones through the housekeeping)
+        // Phase 4.1 S3b-1b (system migration 0034): the company MFA policy. MfaPolicyService reads it (also SELECT ... FOR UPDATE, which needs UPDATE on at least one column), writes the first row with INSERT ... ON CONFLICT
+        // DO NOTHING and changes it with UPDATE of exactly the four columns below (the company id is the key and never changes); no DELETE. The role list of a RequiredForRoles policy is replaced as a whole (DELETE then INSERT).
+        new("MfaPolicy", SystemSchema.MfaPolicy.Table, Append, [SystemSchema.MfaPolicy.Policy, SystemSchema.MfaPolicy.Revision, SystemSchema.MfaPolicy.UpdatedAtUtc, SystemSchema.MfaPolicy.UpdatedBy]),
+        new("MfaPolicyRole", SystemSchema.MfaPolicyRole.Table, ["SELECT", "INSERT", "DELETE"]),
         new("BackupLegalHold", SystemSchema.BackupLegalHold.Table, None),                      // administrative tool only (owner account)
         new("BackupRetentionPin", SystemSchema.BackupRetentionPin.Table, None),                // administrative tool only
         new("MigrationJournal", SystemSchema.MigrationJournalTable, None),                     // the API never reads the system journal
