@@ -135,6 +135,47 @@ public class YearEndApprovalTests : YearEndHardeningBase
         var posted = Ok(await JMg.PostAsync(poster.Id, Company.Id, e.Header.Id, approvedAgain.Header.Revision));
         Assert.Equal(JournalStatus.Posted, posted.Header.Status);
         Assert.NotNull(posted.Header.Number);
+        // the same re-check for a ROLE-BOUND stage, on the opening entry of the next year
+        var carry = await Carry();
+        await The_stage_role_of_a_year_end_approval_must_still_cover_the_entry_at_posting(await Reload(carry.EntryId), poster.Id);
+    }
+
+    /// <summary>
+    /// The posting re-check also covers the STAGE ROLE and its scope (owner decision D-208): an approval of a role-bound stage counts at posting only while the approver still holds the stage role through an
+    /// assignment that covers the entry. The same role held for another branch does not count, although the approver keeps the approve permission.
+    /// </summary>
+    private async Task The_stage_role_of_a_year_end_approval_must_still_cover_the_entry_at_posting(JournalEntryView e, Guid posterId)
+    {
+        var (delegated, _) = await Member([PermissionCatalog.Codes.RolesView, PermissionCatalog.Codes.RolesCreate, PermissionCatalog.Codes.AssignmentsView, PermissionCatalog.Codes.AssignmentsCreate, PermissionCatalog.Codes.AssignmentsDelete,
+            PermissionCatalog.Codes.JournalView], ScopeKind.Company, null);
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantJournalApproverOfflineAsync(delegated.Login, Company.Id));
+        var created = await Rbac.CreateRoleAsync(delegated.Id, Company.Id, "year-end-stage", [PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove]);
+        Assert.True(created.IsOk, created.Code);
+        var stageRole = created.Value!.Id;
+        Ok(await Policies.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(Doc, "any", null, 0m, null, "سياسة", "Year-end role stage", ClosingKind: "opening", Stages: [new(1, stageRole)])));
+        var sub = Ok(await Journal.SubmitAsync(Admin.Id, Company.Id, e.Header.Id, e.Header.Revision));
+        Assert.Equal(stageRole, Assert.Single(sub.Plan!).RoleId);
+        var approver = await NewUser("yearendstagerole");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, approver.Login)).IsOk);
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantJournalApproverOfflineAsync(approver.Login, Company.Id));
+        var touched = new[] { e.Header.BranchId }.Concat(e.Lines.Select(l => l.BranchId)).Distinct().ToList();
+        var here = new List<Guid>();
+        foreach (var b in touched) { var a = await Rbac.AssignRoleAsync(delegated.Id, Company.Id, approver.Id, stageRole, ScopeKind.Branch, b); Assert.True(a.IsOk, a.Code); here.Add(a.Value!.Id); }
+        var approved = Ok(await JMg.DecideAsync(approver.Id, Company.Id, e.Header.Id, sub.Header.Revision, new ApprovalDecisionInput(true, null)));
+        Assert.Equal(JournalStatus.Approved, approved.Header.Status);
+        // the role moves to ANOTHER branch: the approver still holds the approve permission (the preset) and still holds the role somewhere, but no longer for this entry
+        var elsewhere = Guid.NewGuid();
+        await Sql($"INSERT INTO {CompanySchema.Branch.Table} ({CompanySchema.Branch.Id}, {CompanySchema.Branch.Code}, {CompanySchema.Branch.NameEn}, {CompanySchema.Branch.IsActive}, {CompanySchema.Branch.IsMain}, {CompanySchema.Branch.ActivationEpoch}, {CompanySchema.Branch.Revision}, {CompanySchema.Branch.CreatedAtUtc}, {CompanySchema.Branch.UpdatedAtUtc}) VALUES ('{elsewhere}', 'ELSE', 'Elsewhere', true, false, 1, 1, now(), now())");
+        Assert.DoesNotContain(elsewhere, touched);
+        Assert.True((await Rbac.AssignRoleAsync(delegated.Id, Company.Id, approver.Id, stageRole, ScopeKind.Branch, elsewhere)).IsOk);
+        foreach (var id in here) { var r = await Rbac.RevokeAssignmentAsync(delegated.Id, Company.Id, id); Assert.True(r.IsOk, r.Code); }
+        var denied = await JMg.PostAsync(posterId, Company.Id, e.Header.Id, approved.Header.Revision);
+        Assert.Equal((ConfigStatus.Conflict, "approver_no_longer_authorized"), (denied.Status, denied.Code));
+        Assert.Equal(JournalStatus.Approved, (await Reload(e.Header.Id)).Header.Status);
+        Assert.Null((await Reload(e.Header.Id)).Header.Number);
+        // with the role for the entry's branches again, the same approval counts and the entry posts
+        foreach (var b in touched) Assert.True((await Rbac.AssignRoleAsync(delegated.Id, Company.Id, approver.Id, stageRole, ScopeKind.Branch, b)).IsOk);
+        Assert.Equal(JournalStatus.Posted, Ok(await JMg.PostAsync(posterId, Company.Id, e.Header.Id, approved.Header.Revision)).Header.Status);
     }
 
     [PostgresFact]
