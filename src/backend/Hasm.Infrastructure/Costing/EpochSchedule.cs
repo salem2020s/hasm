@@ -23,7 +23,8 @@ internal sealed record EpochLineagePlan(long OriginalEntryId, int StornoOperatio
 
 /// <summary>
 /// The complete, ordered write plan of one replay epoch. <see cref="Operations"/> is in WRITE order: every storno operation (global descending entry order), the event, every rebook operation (replay order).
-/// <see cref="ExpectedPositions"/> is the final state (quantity, value, open layers) the replay proves; the executor must end at exactly it. <see cref="Fingerprint"/> is a hash of the whole plan.
+/// <see cref="ExpectedPositions"/> is the final state (quantity, value, open layers) the replay proves; the executor must end at exactly it. <see cref="Fingerprint"/> is a hash of the whole plan over a System.Text.Json
+/// serialisation, whose decimal text follows each value's scale: it is deterministic for identical inputs but NOT canonical, and it is NOT the T2 epoch digest (the byte-exact epoch text of the T2 design is a later slice).
 /// </summary>
 internal sealed record EpochScheduleResult(ImmutableArray<EpochOperationPlan> Operations, ImmutableArray<EpochLineagePlan> Lineage,
     ImmutableArray<ReplayFlowPosition> ExpectedPositions, string Fingerprint);
@@ -65,7 +66,7 @@ internal static class EpochSchedule
         foreach (var e in snapshot.Entries)
         {
             ct.ThrowIfCancellationRequested();
-            if (e is null || !entries.TryAdd(e.Id, e) || !closure.Contains(e.WarehouseId)) throw Inconsistent();
+            if (e is null || !entries.TryAdd(e.Id, e) || !closure.Contains(e.WarehouseId) || e.ItemId != snapshot.ItemId) throw Inconsistent();      // every entry belongs to the snapshot's item (the item of the E line)
             if (e.HasReversal) throw new CostingException("epoch_reversal_in_history");
             if (e.OperationKind is not (CostOperationKind.Receipt or CostOperationKind.Issue or CostOperationKind.Transfer)) throw new CostingException("impact_history_unsupported");
         }
@@ -169,6 +170,11 @@ internal static class EpochSchedule
         operations.Add(eventPlan);
         operations.AddRange(rebookPlans);
 
+        // the order the entries are WRITTEN in (operations grouped, entries in operation order) is ascending by (original date, original entry id), not only the trace order
+        var written = operations.Where(o => o.Role == EpochRole.Rebook).SelectMany(o => o.Entries).Select(e => entries[e.OriginalEntryId!.Value]).Select(e => (e.Date, e.Id)).ToList();
+        for (var n = 1; n < written.Count; n++)
+            if (written[n - 1].CompareTo(written[n]) > 0) throw new CostingException("epoch_order_inconsistent");
+
         // ---- lineage
         var stornoAt = new Dictionary<long, (int Operation, int Entry)>();
         var rebookAt = new Dictionary<long, (int Operation, int Entry)>();
@@ -203,13 +209,20 @@ internal static class EpochSchedule
             }
             operations[o] = plan with { Entries = filled.MoveToImmutable() };
         }
-        var finals = comparison.RevisedTrace.Positions.ToDictionary(p => p.PositionId);
+        // the end state covers EVERY closure position: each one is in the comparison and in the revised trace, and both equal the plan's end
+        var finals = new Dictionary<Guid, ReplayFlowPosition>();
+        foreach (var proven in comparison.RevisedTrace.Positions)
+            if (!finals.TryAdd(proven.PositionId, proven)) throw new CostingException("epoch_schedule_inconsistent");
+        var impacts = new Dictionary<Guid, CostFlowPositionImpact>();
         foreach (var impact in comparison.Positions)
+            if (!impacts.TryAdd(impact.WarehouseId, impact)) throw new CostingException("epoch_schedule_inconsistent");      // a position twice
+        foreach (var (warehouse, end) in running)
         {
-            if (!closure.Contains(impact.WarehouseId) || !running.TryGetValue(impact.WarehouseId, out var end) ||
-                (end.Quantity, end.Value) != (impact.ProposedQuantity, impact.ProposedValue) || !finals.TryGetValue(impact.WarehouseId, out var proven) || (proven.Quantity, proven.Value) != end)
+            if (!impacts.TryGetValue(warehouse, out var impact) || !finals.TryGetValue(warehouse, out var proven) ||
+                (end.Quantity, end.Value) != (impact.ProposedQuantity, impact.ProposedValue) || (proven.Quantity, proven.Value) != end)
                 throw new CostingException("epoch_schedule_inconsistent");
         }
+        if (impacts.Keys.Any(w => !closure.Contains(w))) throw new CostingException("epoch_schedule_inconsistent");
 
         var result = operations.ToImmutable();
         var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { Contract = "epoch-schedule-v1", History = comparison.HistoryFingerprint, Comparison = comparison.ComparisonFingerprint, Operations = result, Lineage = lineage }))).ToLowerInvariant();

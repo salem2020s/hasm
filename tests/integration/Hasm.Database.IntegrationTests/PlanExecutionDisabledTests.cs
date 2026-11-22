@@ -68,6 +68,65 @@ public class PlanExecutionDisabledTests : JournalTestBase
 
     private static readonly Regex PlanTypeName = new(@"Execut(or|ion)|CompensationPlan|Epoch|Replay(Executor|Writer)", RegexOptions.CultureInvariant);
 
+    // the ONLY types named like a plan, epoch or execution that may exist besides the services above: values and one static function (slice E1), allowed by identity
+    private static readonly Type[] PureEpochTypes = [typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole)];
+
+    /// <summary>
+    /// Pins the exact shape of the allowed types so the exception cannot hide an executor: EpochSchedule is a static class whose only own methods are Derive (exact signature) and the private Inconsistent; the
+    /// records and the enum declare nothing but compiler-generated members; nothing returns a Task or ValueTask; no field, property, constructor, method parameter or return type comes from Npgsql, System.Data,
+    /// System.Net, IServiceProvider or any backend type that is not a data record, enum or the static function itself (a service, store or resolver); and the execute/replay/storno/rebook method-name rule applies to them.
+    /// </summary>
+    private static void AssertPureEpochShape()
+    {
+        const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        bool Generated(MemberInfo m) => m.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null || m.Name.StartsWith('<');
+        var schedule = typeof(EpochSchedule);
+        Assert.True(schedule.IsAbstract && schedule.IsSealed, "EpochSchedule must be a static class");
+        var own = schedule.GetMethods(all).Where(m => !Generated(m)).ToList();
+        Assert.Equal(["Derive", "Inconsistent"], own.Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal));
+        var derive = own.Single(m => m.Name == "Derive");
+        Assert.True(derive.IsStatic && derive.IsAssembly, "Derive is internal static");
+        Assert.Equal([typeof(CostFlowSnapshot), typeof(CostFlowComparisonResult), typeof(CancellationToken)], derive.GetParameters().Select(p => p.ParameterType));
+        Assert.Equal(typeof(EpochScheduleResult), derive.ReturnType);
+        Assert.Empty(schedule.GetConstructors(all)); Assert.Empty(schedule.GetProperties(all)); Assert.Empty(schedule.GetEvents(all));
+        Assert.All(schedule.GetFields(all), f => Assert.True(f.IsLiteral, "EpochSchedule holds constants only: " + f.Name));
+        foreach (var type in PureEpochTypes)
+        {
+            Assert.False(type.IsPublic, type.FullName);
+            if (type != schedule)
+            {
+                Assert.Empty(type.GetMethods(all).Where(m => !Generated(m)));            // records and the enum: compiler-generated members only
+                Assert.Empty(type.GetEvents(all));
+            }
+            foreach (var method in type.GetMethods(all).Where(m => !Generated(m)))      // the name rule, on every method that is not compiler-generated
+                Assert.DoesNotMatch("Execute|Executor|Replay|Storno|Rebook", method.Name);
+            foreach (var method in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all)))
+            {
+                if (method is MethodInfo mi) { Assert.False(typeof(Task).IsAssignableFrom(mi.ReturnType) || mi.ReturnType.Name.StartsWith("ValueTask", StringComparison.Ordinal), type.Name + "." + method.Name + " returns a task"); AssertPureType(mi.ReturnType, type.Name + "." + method.Name); }
+                foreach (var p in method.GetParameters()) AssertPureType(p.ParameterType, type.Name + "." + method.Name + "(" + p.Name + ")");
+            }
+            foreach (var f in type.GetFields(all)) AssertPureType(f.FieldType, type.Name + "." + f.Name);
+            foreach (var p in type.GetProperties(all)) AssertPureType(p.PropertyType, type.Name + "." + p.Name);
+        }
+    }
+
+    private static void AssertPureType(Type type, string where)
+    {
+        if (type == typeof(void)) return;
+        if (type.HasElementType) { AssertPureType(type.GetElementType()!, where); return; }
+        if (type.IsGenericType) { foreach (var argument in type.GetGenericArguments()) AssertPureType(argument, where); }
+        var ns = type.Namespace ?? "";
+        Assert.False(type == typeof(IServiceProvider) || typeof(IServiceProvider).IsAssignableFrom(type), where + ": " + type);
+        Assert.False(ns.StartsWith("Npgsql", StringComparison.Ordinal) || ns.StartsWith("System.Data", StringComparison.Ordinal) || ns.StartsWith("System.Net", StringComparison.Ordinal) ||
+            ns.StartsWith("System.IO", StringComparison.Ordinal) || ns.StartsWith("Microsoft.", StringComparison.Ordinal) || ns.StartsWith("System.Threading.Tasks", StringComparison.Ordinal), where + ": " + type);
+        if (ns.StartsWith("Hasm.", StringComparison.Ordinal))
+        {
+            // a backend type may appear only as plain data (an enum or a record) or as the static function itself: a service, store, resolver or transaction never does
+            var data = type.IsEnum || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null || type == typeof(EpochSchedule) || type == typeof(CostingException);   // the refusal the derivation throws is a plain exception with a code
+            Assert.True(data, where + ": " + type + " is not plain data");
+        }
+    }
+
     [PostgresFact]
     public void No_executor_type_or_entry_point_exists_in_the_backend()
     {
@@ -76,11 +135,11 @@ public class PlanExecutionDisabledTests : JournalTestBase
         var types = assemblies.SelectMany(a => a.GetTypes()).Where(t => t.DeclaringType != typeof(CompanySchema) && !t.Name.StartsWith('<') && t.Namespace?.Contains(".Backup", StringComparison.Ordinal) != true).ToList();   // the backup retention sweep has its own executor, unrelated to plans
         // the services of this PR: the only plan types that may exist (storage, approval, their stored shape, bindings and inputs), none of which executes
         var allowed = new HashSet<string> { nameof(CompensationPlanService), nameof(CompensationPlanApprovalService), nameof(CompensationPlanStore), nameof(CompensationPlanBinding), nameof(CompensationPlanInput),
-            nameof(StoredCompensationPlan), nameof(CompensationPlanFingerprints), nameof(CompensationPlan), nameof(CompensationPlanResult), nameof(CompensationLine), nameof(CompensationCalculator), nameof(CompensationDateGuard),
-            // slice E1 (pure derivation of an epoch's write plan: no database, no clock, no caller; pinned by EpochScheduleReachabilityTests): values and one static function, nothing that executes
-            nameof(EpochSchedule), nameof(EpochScheduleResult), nameof(EpochOperationPlan), nameof(EpochEntryPlan), nameof(EpochLineagePlan), nameof(EpochRole) };
-        var offenders = types.Where(t => PlanTypeName.IsMatch(t.Name) && !allowed.Contains(t.Name) && !t.Name.StartsWith("DocumentState", StringComparison.Ordinal)).Select(t => t.FullName).ToList();
+            nameof(StoredCompensationPlan), nameof(CompensationPlanFingerprints), nameof(CompensationPlan), nameof(CompensationPlanResult), nameof(CompensationLine), nameof(CompensationCalculator), nameof(CompensationDateGuard) };
+        // slice E1: the pure derivation types are allowed BY TYPE IDENTITY (never by name: a same-named type elsewhere is an offender) and only in the exact shape AssertPureEpochShape pins
+        var offenders = types.Where(t => PlanTypeName.IsMatch(t.Name) && !allowed.Contains(t.Name) && !PureEpochTypes.Contains(t) && !t.Name.StartsWith("DocumentState", StringComparison.Ordinal)).Select(t => t.FullName).ToList();
         Assert.Empty(offenders);
+        AssertPureEpochShape();
         // no method of the services or of anything in a Costing/plan namespace is an execution entry point
         foreach (var type in new[] { typeof(CompensationPlanService), typeof(CompensationPlanApprovalService), typeof(CompensationPlanStore), typeof(CompensationPlanBinding) })
             Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly), m => Regex.IsMatch(m.Name, "Execute|Executor|Replay|Storno|Rebook"));
