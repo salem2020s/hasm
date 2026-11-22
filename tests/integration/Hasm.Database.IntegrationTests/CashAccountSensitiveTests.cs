@@ -3,6 +3,7 @@ using System.Text;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Cash;
 using Hasm.Infrastructure.CompanyDatabase;
+using Microsoft.Extensions.DependencyInjection;
 using Ca = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount;
 using Audit_ = Hasm.Infrastructure.CompanyDatabase.CompanySchema.BusinessAudit;
 
@@ -214,6 +215,34 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         var down = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, down.Status);
         Assert.Equal(("k1", "k3"), (await KeyOf(lost), await KeyOf(moved)));
+    }
+
+    [PostgresFact]
+    public async Task A_failed_audit_of_a_failed_rewrap_is_logged_with_codes_only_and_the_call_goes_on()
+    {
+        await Start();
+        var main = await MainBranch(); var cookie = await Manager();
+        var lost = IdOf(await Create(cookie, Bank("nb-lost", main, await Gl("1101"), Number)));
+        await Create(cookie, Cashbox("c1", main, await Gl("1102")));
+        Rotate("k2");
+        Assert.True(Keys.Remove("k1"));                                                                         // the number cannot be re-wrapped: the failure path runs
+        var service = factory!.Services.GetRequiredService<CashAccountService>();
+        service.BeforeFailureAuditForTests = _ => throw new InvalidOperationException("audit store secret detail 0380");   // the audit of the failure itself fails
+        try
+        {
+            var r = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
+            Assert.Equal(HttpStatusCode.OK, r.Status);                                                          // the call goes on and answers
+            Assert.Equal((0, 0, 1), (r.Json.GetProperty("rewrapped").GetInt32(), r.Json.GetProperty("skipped").GetInt32(), r.Json.GetProperty("failed").GetInt32()));
+            Assert.Equal(0L, await Events(CashAuditEvents.NumberRewrapFailed));                                 // best effort: no audit row was written
+            Assert.Equal("k1", await Sql<string>($"SELECT {Ca.NumberKeyId} FROM {Ca.Table} WHERE {Ca.Id} = '{lost}'"));   // the row is untouched
+            var line = Assert.Single(apiLogs.Entries, e => e.Contains("cash.rewrap.failure_audit_failed", StringComparison.Ordinal));
+            Assert.Contains($"account={lost:N}", line);
+            Assert.Contains("reason=encryption_key_unavailable", line);
+            Assert.Contains("error=InvalidOperationException", line);
+            var all = string.Join("\n", apiLogs.Entries);
+            Assert.DoesNotContain(Number, all); Assert.DoesNotContain("0380", all); Assert.DoesNotContain("secret detail", all);   // no number, no exception message
+        }
+        finally { service.BeforeFailureAuditForTests = null; }
     }
 
     [PostgresFact]

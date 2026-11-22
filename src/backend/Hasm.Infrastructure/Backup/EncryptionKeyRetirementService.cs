@@ -176,8 +176,8 @@ public sealed partial class EncryptionKeyRetirementService(HasmDatabaseOptions d
 
     private async Task<CompanyKeyUsage> CompanyUsageAsync(CompanyRecord company, string? activeKeyId, CancellationToken ct)
     {
-        CompanyKeyUsage Unreadable(string problem) => new(company.Id, false, problem, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty);
-        if (company.State == ProvisioningState.Pending) return new(company.Id, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty);   // no database was ever created: no data
+        CompanyKeyUsage Unreadable(string problem) => new(company.Id, false, problem, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty);
+        if (company.State == ProvisioningState.Pending) return new(company.Id, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty);   // no database was ever created: no data (no cash number either)
         if (company.State != ProvisioningState.Ready) return Unreadable("company_not_ready");
         try
         {
