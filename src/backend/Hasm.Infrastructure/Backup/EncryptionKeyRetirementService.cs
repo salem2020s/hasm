@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.Attachments;
+using Hasm.Infrastructure.Cash;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Imports;
@@ -184,7 +185,8 @@ public sealed partial class EncryptionKeyRetirementService(HasmDatabaseOptions d
             await conn.OpenAsync(ct);
             var attachmentUsage = await AttachmentService.KeyUsageAsync(conn, new AttachmentFileStore(attachments, encryption), company.Id, activeKeyId, ct);
             var importUsage = await ImportService.KeyUsageAsync(conn, new EncryptedFileStore(imports, encryption), company.Id, activeKeyId, ct);
-            return new(company.Id, true, null, attachmentUsage, importUsage);
+            var cashUsage = await CashAccountService.KeyUsageAsync(conn, activeKeyId, ct);   // the encrypted bank account numbers live inside the database: their keys are needed exactly like the attachment keys
+            return new(company.Id, true, null, attachmentUsage, importUsage, cashUsage);
         }
         catch (EncryptionUnavailableException ex) { return Unreadable(ex.Code); }   // e.g. attachment_storage_not_configured, import_storage_not_configured
         catch (Exception ex) when (ex is NpgsqlException or IOException or UnauthorizedAccessException or InvalidOperationException) { return Unreadable("company_unreadable"); }

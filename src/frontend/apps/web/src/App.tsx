@@ -13,6 +13,7 @@ import { StepUpHost, createStepUpBridge, type StepUpBridge } from "./stepUp";
 import { SecurityPage } from "./pages/Security";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
+import { CashAccountsPage } from "./pages/CashAccounts";
 import { ImportsPage } from "./pages/Imports";
 import { FinancialStatementsPage } from "./pages/FinancialStatements";
 import { StatementMappingPage } from "./pages/StatementMapping";
@@ -82,6 +83,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/currencies", permission: "company.currencies.view", element: <CurrenciesPage /> },
   { path: "/company/branches", anyScope: "company.branches.view", element: <BranchesPage /> },
   { path: "/company/warehouses", anyScope: "company.warehouses.view", element: <WarehousesPage /> },
+  { path: "/company/cash-accounts", anyScope: "company.cashaccounts.view", element: <CashAccountsPage /> },
   { path: "/company/fiscal-years", permission: "company.fiscalyears.view", element: <FiscalYearsPage /> },
   { path: "/company/accounts", permission: "company.accounts.view", element: <ChartOfAccountsPage /> },
   { path: "/company/numbering", permission: "company.numbering.view", element: <NumberingPage /> },
@@ -143,6 +145,7 @@ function Shell() {
       { id: "/company/currencies", label: t("nav.currencies"), permission: "company.currencies.view" },
       { id: "/company/branches", label: t("nav.branches"), permission: "company.branches.view", anyScope: true },
       { id: "/company/warehouses", label: t("nav.warehouse_mgmt"), permission: "company.warehouses.view", anyScope: true },
+      { id: "/company/cash-accounts", label: t("nav.cash_accounts"), permission: "company.cashaccounts.view", anyScope: true },
       { id: "/company/fiscal-years", label: t("nav.fiscal"), permission: "company.fiscalyears.view" },
       { id: "/company/accounts", label: t("nav.accounts"), permission: "company.accounts.view" },
       { id: "/company/numbering", label: t("nav.numbering"), permission: "company.numbering.view" },

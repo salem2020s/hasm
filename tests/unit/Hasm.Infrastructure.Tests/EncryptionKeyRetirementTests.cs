@@ -32,6 +32,20 @@ public sealed class EncryptionKeyRetirementTests
     }
 
     [Fact]
+    public void A_key_that_protects_a_stored_cash_number_is_needed_and_never_retirable_and_an_old_company_without_cash_numbers_changes_nothing()
+    {
+        var withCash = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, U("k2"));
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3"], "k3", [withCash], [Root()], backupScopeAttested: true, At);
+        Assert.True(r.Complete);
+        Assert.Equal(["needed_by_cash_numbers"], Key(r, "k2").Reasons);
+        Assert.Equal(["k1"], r.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+        var absent = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3"], "k3", [Company()], [Root()], backupScopeAttested: true, At);
+        Assert.Equal(["k1", "k2"], absent.Keys.Where(k => k.Retirable).Select(k => k.KeyId));                  // CashNumbers omitted: the earlier behaviour exactly
+        var unknown = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, new EncryptionKeyUsage(["k2"], 1, 0));
+        Assert.Contains($"cash_number_key_unknown:{C1:N}:1", EncryptionKeyRetirement.Evaluate(["k2"], "k2", [unknown], [Root()], backupScopeAttested: true, At).Blockers);
+    }
+
+    [Fact]
     public void A_needed_key_missing_from_the_key_directory_is_reported_and_never_retirable()
     {
         var r = EncryptionKeyRetirement.Evaluate(["k2"], "k2", [Company(imports: U("k0"))], [Root()], backupScopeAttested: true, At);
