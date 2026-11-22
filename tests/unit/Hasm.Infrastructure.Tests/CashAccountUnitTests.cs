@@ -10,12 +10,12 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// Phase 3.14 slice S1, no database needed: the validation and masking rules, the derivation and shape of the migration (company 0034, provisional: the number follows the merge order), and the guard that the cash module stays
+/// Phase 3.14 slice S1, no database needed: the validation and masking rules, the derivation and shape of the migration (company 0035, provisional: the number follows the merge order), and the guard that the cash module stays
 /// clear of the ledger and the numbering (D-214: financial posting for cash and bank is closed until the independent accounting and security reviews).
 /// </summary>
 public class CashAccountUnitTests
 {
-    private const string Number = "0034";   // a renumbering changes this constant, the generator constant and regenerates the files
+    private const string Number = "0035";   // a renumbering changes this constant, the generator constant and regenerates the files
 
     private static readonly Guid B = Guid.NewGuid(), A = Guid.NewGuid();
     private static CashAccountInput In(string? kind = "bank", string? code = "nb-1", string? ar = "البنك", string? en = null, string? bank = "National", string? branch = "Down", string? number = "SA03 8000 0000 6080 1016 7519") =>

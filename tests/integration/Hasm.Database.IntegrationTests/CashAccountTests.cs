@@ -210,7 +210,8 @@ public class CashAccountTests : CashAccountTestBase
         Assert.Equal(("bankName", "not_allowed_for_cashbox"), await Bad(new { kind = "cashbox", code = "a", nameEn = "x", branchId = main, accountId = g, bankName = "B" }));
         Assert.Equal(("accountNumber", "not_allowed_for_cashbox"), await Bad(new { kind = "cashbox", code = "a", nameEn = "x", branchId = main, accountId = g, accountNumber = "123456" }));
         Assert.Equal(("accountNumber", "invalid"), await Bad(Bank("b", main, g, number: "12")));
-        Assert.Equal(("accountNumber", "masked_value"), await Bad(Bank("b", main, g, number: "****7519")));        // a masked-looking value is never stored as a number
+        Assert.Equal(("accountNumber", "masked_value"), await Bad(Bank("b", main, g, number: "****7519")));
+        Assert.Equal(("accountNumber", "invalid"), await Bad(Bank("b", main, g, number: "1234567\u0131")));              // a non-ASCII letter whose upper-case is ASCII (the dotless i) is refused, not folded into the number (L4 of PR 206)        // a masked-looking value is never stored as a number
         var inactive = await Make("OFF"); Assert.True((await Domain.DeactivateAsync(Admin.Id, Company.Id, inactive.Id, 1)).IsOk);
         var closed = await Create(cookie, Cashbox("a", inactive.Id, g), HttpStatusCode.Conflict);
         Assert.Equal("branch_inactive", closed.Error);

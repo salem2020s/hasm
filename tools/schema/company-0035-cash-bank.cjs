@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Deterministic generator for company migration 0034 (Phase 3.14 slice S1: the cash and bank account master). The number is PROVISIONAL and follows the merge order: change MIGRATION below, rename the committed files and re-run --write (the number is part of the name seed, so a renumbering is a regeneration).
+// Deterministic generator for company migration 0035 (Phase 3.14 slice S1: the cash and bank account master). The number is PROVISIONAL and follows the merge order: change MIGRATION below, rename the committed files and re-run --write (the number is part of the name seed, so a renumbering is a regeneration).
 // SINGLE SOURCE: the SQL template below, written with LOGICAL tokens such as {{CashAccount.Code}}. Every opaque physical name (D-029) is derived as
 //   prefix + first 8 hex digits of SHA-256("hasm.company.<MIGRATION>.cash-bank.v1:" + token)
 // (same rules as tools/schema/company-0027-customer-groups.cjs: a collision aborts the run; names are fixed once committed). References to names that already exist are written [[Entity.Name]] and resolved from the committed generated dictionaries, never re-derived.
-// Usage:  node tools/schema/company-0034-cash-bank.cjs --write | --check
+// Usage:  node tools/schema/company-0035-cash-bank.cjs --write | --check
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
-const MIGRATION = "0034";   // the company migration number (provisional, by merge order: 0033 is PR 200)
+const MIGRATION = "0035";   // the company migration number (provisional, by merge order: 0033 is PR 200, 0034 is PR 204)
 const outSql = path.join(infra, "CompanyDatabase", "Migrations", `${MIGRATION}_company_cash_accounts.sql`);
 const outCs = path.join(infra, "CompanyDatabase", "CompanySchema.CashBank.cs");
 
