@@ -12,9 +12,10 @@ namespace Hasm.Infrastructure.Backup;
 /// connection; D-180) and the key needs of EVERY backup run present in every given backup root (the signed run status of slice 6, D-138). Read-only: it never retires, rewraps or deletes anything (retirement needs independent
 /// approval, D-080(6)) and creates no directory. Fail closed: a company that is not Ready (except a Pending one, which has no database and therefore no data), cannot be read, or whose storage
 /// is not configured, and a backup root whose inventory cannot be evaluated, make the report incomplete, and then no key is retirable. A backup root that does not exist, is not a directory, is a
-/// symbolic link, or holds no complete, verified run is such a root (review H1 of PR 182: a typo, an unmounted share or the wrong folder must never read as "no retained run needs any key").
+/// symbolic link, or holds no complete, verified run is such a root (review H1 of PR 182: a typo, an unmounted share or the wrong folder must never read as "no run present needs any key").
 /// Every run on disk counts, also one the retention plan would delete: it is still present and restorable, and automatic deletion is inactive (review M-FH1 of PR 182). The retention preview's own
-/// key inventory (D-138: the runs the plan keeps) is not used and not changed. A present run whose key needs are unknown, or an unfinished deletion, makes the root's inventory incomplete.
+/// key inventory (D-138: the runs the plan keeps) is not used and not changed. A present run whose key needs are unknown, an unfinished deletion, or any entry of the root that is not a run folder,
+/// a <c>.deleting-*</c> folder or <c>.retention</c> (review M-FH3 of PR 182), makes the root's inventory incomplete.
 /// Scope: only the given roots are read. Other destinations, copies and standalone <c>backup-company</c> sets are invisible, so the caller must pass the operator's attestation
 /// (<paramref name="backupScopeAttested"/> of <see cref="ReportAsync"/>); without it the report is incomplete.
 /// </summary>
@@ -34,9 +35,12 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
             try
             {
                 if (RootProblem(root) is { } rootProblem) { backups.Add(new BackupRootKeyNeeds(root, false, rootProblem, [])); continue; }
+                // every entry of the root is listed before AND after the scan (review M-FH3 of PR 182): an entry that is not a run folder can hold a run the scan does not read
+                var before = UnrecognisedEntries(root);
                 var (runs, deleting) = RetentionInventory.Scan(root, trust);
+                var unrecognised = before.Union(UnrecognisedEntries(root), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
                 // checked AFTER the scan as well: a root that vanished meanwhile yields no runs and is refused here
-                var (problem, keys) = InventoryOfPresentRuns(runs, deleting);
+                var (problem, keys) = InventoryOfPresentRuns(runs, deleting, unrecognised);
                 problem = RootProblem(root) ?? problem;
                 backups.Add(new BackupRootKeyNeeds(root, problem is null, problem, keys));
             }
@@ -50,17 +54,55 @@ public sealed class EncryptionKeyRetirementService(HasmDatabaseOptions database,
 
     /// <summary>
     /// The encryption keys of EVERY run present in a root, and why the inventory is incomplete (or null). Not only the runs the retention plan would keep: a deletion-eligible run is still on disk and
-    /// restorable (review M-FH1 of PR 182). Incomplete when no run proves the root (<c>backup_root_no_complete_verified_run</c>), when a deletion started and did not finish
-    /// (<c>backup_root_deletion_incomplete</c>: what is left of that run cannot be read as a run), or when any present run's key needs are unknown (<c>backup_run_key_needs_unknown</c>: an
-    /// unfinished, unverifiable, version 1 or unencrypted DEV/TEST run). The known keys are returned in every case, so they are reported as needed.
+    /// restorable (review M-FH1 of PR 182). Incomplete when the root holds an entry that is not a run folder, a <c>.deleting-*</c> folder or <c>.retention</c>
+    /// (<c>backup_root_unrecognised_entry:&lt;names&gt;</c>: a run moved or copied inside the root under another name, e.g. <c>archive/&lt;run id&gt;</c> or <c>&lt;run id&gt;.bak</c>, or an archive file,
+    /// is not read as a run, so its key needs are unknown; review M-FH3 of PR 182), when no run proves the root (<c>backup_root_no_complete_verified_run</c>), when a deletion started and did not
+    /// finish (<c>backup_root_deletion_incomplete</c>: what is left of that run cannot be read as a run), or when any present run's key needs are unknown (<c>backup_run_key_needs_unknown</c>: an
+    /// unfinished, unverifiable, version 1 or unencrypted DEV/TEST run). The known keys of EVERY present run are returned in every case (also a run whose verdict is <c>failed</c>: its company sets
+    /// can still have been written), so they are reported as needed.
     /// </summary>
-    public static (string? Problem, IReadOnlyList<string> EncryptionKeysNeeded) InventoryOfPresentRuns(IReadOnlyList<RetentionRun> runs, IReadOnlyList<string> deletingFolders)
+    public static (string? Problem, IReadOnlyList<string> EncryptionKeysNeeded) InventoryOfPresentRuns(IReadOnlyList<RetentionRun> runs, IReadOnlyList<string> deletingFolders,
+        IReadOnlyList<string> unrecognisedEntries)
     {
-        var problem = !runs.Any(IsCompleteVerifiedRun) ? "backup_root_no_complete_verified_run"
+        var problem = unrecognisedEntries.Count > 0 ? UnrecognisedEntryProblem(unrecognisedEntries)
+            : !runs.Any(IsCompleteVerifiedRun) ? "backup_root_no_complete_verified_run"
             : deletingFolders.Count > 0 ? "backup_root_deletion_incomplete"
             : runs.Any(r => !r.Complete || !r.Verified || r.Keys is null) ? "backup_run_key_needs_unknown"
             : null;
         return (problem, [.. runs.SelectMany(r => r.Keys?.EncryptionKeyIds ?? []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>The most entry names a <c>backup_root_unrecognised_entry</c> code lists; the rest are counted (<c>+N_more</c>).</summary>
+    public const int UnrecognisedEntriesListed = 20;
+
+    /// <summary>
+    /// <c>backup_root_unrecognised_entry:&lt;name&gt;,&lt;name&gt;...</c>, the names percent-encoded (RFC 3986 unreserved characters kept), so a name can neither break the code nor carry a control
+    /// character into the output; at most <see cref="UnrecognisedEntriesListed"/> names, then <c>+N_more</c>.
+    /// </summary>
+    public static string UnrecognisedEntryProblem(IReadOnlyList<string> names)
+    {
+        var listed = names.Take(UnrecognisedEntriesListed).Select(Uri.EscapeDataString).ToList();
+        if (names.Count > UnrecognisedEntriesListed) listed.Add($"+{names.Count - UnrecognisedEntriesListed}_more");
+        return "backup_root_unrecognised_entry:" + string.Join(",", listed);
+    }
+
+    /// <summary>
+    /// For this report only (review M-FH3 of PR 182): the names of every entry directly in <paramref name="root"/> (files, directories, links, hidden entries included) that is NOT one of the three
+    /// things a backup root holds: a run folder (a real directory named by a run id, <c>yyyyMMddTHHmmssZ-&lt;8 lower-case hex&gt;</c>), an unfinished deletion (a real directory
+    /// <c>&lt;run id&gt;.deleting-&lt;16 hex&gt;</c>) or the retention folder (a real directory <c>.retention</c>). The retention scan (<see cref="RetentionInventory.Scan"/>) reads only run folders
+    /// and ignores everything else; that is right for the retention preview and is not changed. For the report an ignored entry is a blind spot: a complete, signed run moved or copied inside the
+    /// root under another name (<c>archive/&lt;run id&gt;</c>, <c>&lt;run id&gt;.bak</c>, <c>.old</c>, <c>run-&lt;run id&gt;</c>, an upper-case id, an archive file) is restorable and its key
+    /// needs are not read. A symbolic link is never recognised, whatever its name. Ordinal order. Reads names and metadata only.
+    /// </summary>
+    public static IReadOnlyList<string> UnrecognisedEntries(string root)
+    {
+        if (!Directory.Exists(root)) return [];
+        var all = new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false, RecurseSubdirectories = false, ReturnSpecialDirectories = false, MatchType = MatchType.Simple };
+        return [.. new DirectoryInfo(root).EnumerateFileSystemInfos("*", all).Where(e => !Recognised(e)).Select(e => e.Name).Order(StringComparer.Ordinal)];
+
+        static bool Recognised(FileSystemInfo e) =>
+            e is DirectoryInfo && e.LinkTarget is null
+            && (BackupRunFiles.IsRunId(e.Name) || RetentionInventory.DeletingFolder().IsMatch(e.Name) || e.Name == RetentionInventory.RetentionFolder);
     }
 
     /// <summary>

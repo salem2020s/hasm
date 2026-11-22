@@ -39,9 +39,10 @@ using Npgsql;
 //   Hasm.Admin backup-hold-place (--run <run-id> | --company <id> [--from <date>] [--to <date>]) --reason <text>  (a backup legal hold; never released by this tool; audited 2018)
 //   Hasm.Admin backup-hold-list
 //   Hasm.Admin encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>]
-//              (D-181: which encryption master keys may be retired: none that is active, that a live attachment or import original needs, or that a retained run of ANY given backup root lists;
+//              (D-181: which encryption master keys may be retired: none that is active, that a live attachment or import original needs, or that a run present in ANY given backup root lists;
 //               read-only; retires nothing (D-080(6)); exit 0 complete, 8 incomplete (then no key is retirable), 3 configuration. Fail closed: a root that is missing, not a directory, a
-//               symbolic link or without a complete, verified run is a blocker. It reads ONLY the given roots: other destinations, copies and standalone backup-company sets are not seen, so
+//               symbolic link or without a complete, verified run is a blocker, and so is any entry of a root that is not a run folder, a .deleting-* folder or .retention (a run moved or
+//               copied under another name is not read; write --json outside the roots). It reads ONLY the given roots: other destinations, copies and standalone backup-company sets are not seen, so
 //               without --all-backup-copies-listed (the operator's attestation that the given roots are every place a backup is kept) the report is incomplete)
 //   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
@@ -719,7 +720,8 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bo
     Console.WriteLine($"Scope: the live sensitive attachments and import originals of every registered company, and EVERY run present (also one that retention would delete) in ONLY these {roots.Count} backup root(s):");
     foreach (var root in roots) Console.WriteLine($"  {root}");
     Console.WriteLine("NOT seen: any other backup destination or copy (another disk, an off-site or offline copy), standalone backup-company sets (they can hold attachment envelopes under a key), "
-        + "uploads in flight and orphan files.");
+        + "uploads in flight and orphan files. Inside a root only run folders (named by a run id) are read: any other entry there (a run moved or copied under another name, a nested folder, "
+        + "a hidden entry, a file) is a blocker (backup_root_unrecognised_entry), never \"not needed\".");
     Console.WriteLine(scopeAttested
         ? "The operator attested (--all-backup-copies-listed) that the roots above are every place a backup of this installation is kept. If that is not true, do not retire any key."
         : "No attestation (--all-backup-copies-listed) was given that the roots above are every place a backup is kept: the tool cannot know, so no key is reported retirable.");

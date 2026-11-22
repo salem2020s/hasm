@@ -376,6 +376,78 @@ public class BackupRetentionTests : PostgresTestBase
     }
 
     [PostgresFact]
+    public async Task The_key_retirement_report_blocks_on_any_entry_of_a_root_that_is_not_a_run_folder_so_a_moved_or_copied_run_is_never_invisible()
+    {
+        // review M-FH3 of PR 182: the retention scan reads only folders named by a run id. A complete, signed run moved or copied inside the root under another name was invisible, so the only
+        // key it needs read as RETIRABLE. Every other entry of a root is now a blocker (backup_root_unrecognised_entry); the retention preview is unchanged.
+        await Init();
+        var company = await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");
+        var clock = new Clock();
+        var companyStorage = Path.Combine(Storage, company.Id.ToString("N"));
+        var stored = Path.Combine(companyStorage, Guid.NewGuid().ToString("N") + ".att");
+        Directory.CreateDirectory(companyStorage);
+        File.WriteAllBytes(stored, new EnvelopeEncryptor(new InMemoryKekRing("k0")).Encrypt("x"u8, "any"));                 // only the first run holds an envelope under k0
+        var onlyK0 = await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        File.Delete(stored);
+        var other = await RunAt(clock, new DateTimeOffset(2026, 3, 3, 2, 0, 0, TimeSpan.Zero));                              // a complete, verified run that does not need k0
+        var service = RetirementReport(clock);
+
+        // a clean root still reports: complete, k0 kept by the run that needs it
+        var clean = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(clean.Complete, string.Join("; ", clean.Blockers));
+        Assert.Equal(["needed_by_present_backups"], clean.Keys.Single(k => k.KeyId == "k0").Reasons);
+
+        async Task Blocked(string entry)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:backup_root_unrecognised_entry:{entry}"], r.Blockers);
+            Assert.False(r.Complete);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        }
+        var source = Path.Combine(Root, onlyK0);
+        async Task Moved(string relative, string entry)
+        {
+            var target = Path.Combine(Root, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            Directory.Move(source, target);
+            try { await Blocked(entry); }
+            finally { Directory.Move(target, source); if (entry != relative && Directory.Exists(Path.Combine(Root, entry))) Directory.Delete(Path.Combine(Root, entry)); }
+        }
+        await Moved(Path.Combine("archive", onlyK0), "archive");                                                       // a nested run
+        await Moved(onlyK0 + ".bak", onlyK0 + ".bak");                                                                 // a renamed run
+        await Moved(".old", ".old");                                                                                   // a hidden folder
+        await Moved("run-" + onlyK0, "run-" + onlyK0);
+        await Moved(onlyK0[..17] + "ABCDEF01", onlyK0[..17] + "ABCDEF01");                                                 // an upper-case id is not a run id
+        // a COPY next to the original (the original keeps k0 listed, the copy is still named) and a file
+        CopyTree(source, Path.Combine(Root, "copy-of-run"));
+        await Blocked("copy-of-run");
+        Directory.Delete(Path.Combine(Root, "copy-of-run"), true);
+        var file = Path.Combine(Root, "keys.json"); File.WriteAllText(file, "{}");
+        await Blocked("keys.json");
+
+        // the tool end to end, with the attestation: incomplete (exit 8), the entry named, nothing retirable, the scope text names the rule
+        Directory.Move(source, Path.Combine(Root, onlyK0 + ".bak"));
+        var tool = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed");
+        Assert.Equal(8, tool.Exit);
+        Assert.Contains($"[BLOCKER] backup_inventory_incomplete:backup_root_unrecognised_entry:{onlyK0}.bak,keys.json", tool.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", tool.Out);
+        Assert.Contains("Inside a root only run folders (named by a run id) are read", tool.Out);
+        Assert.Contains("(backup_root_unrecognised_entry)", tool.Out);
+        // the retention preview is unchanged: it still reads only the run folders and ignores the other entries
+        var (plan, inputs) = await new RetentionService(Options, Retention, clock).PlanAsync(Root, Trust);
+        Assert.Equal([other], inputs.Runs.Select(r => r.RunId));
+        Assert.True(plan.KeyInventoryComplete);
+        Directory.Move(Path.Combine(Root, onlyK0 + ".bak"), source);
+        File.Delete(file);
+
+        // clean again: complete
+        var again = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(again.Complete, string.Join("; ", again.Blockers));
+        Assert.Equal(["needed_by_present_backups"], again.Keys.Single(k => k.KeyId == "k0").Reasons);
+    }
+
+    [PostgresFact]
     public async Task Backup_legal_holds_are_audited_append_only_never_released_by_the_tool_and_honoured()
     {
         await Init();

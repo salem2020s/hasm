@@ -52,8 +52,9 @@ public sealed record CompanyKeyUsage(Guid CompanyId, bool Readable, string? Prob
 /// <summary>
 /// The encryption keys that the runs PRESENT in one backup root need: every run on disk, also one the retention plan would delete (it is still there and restorable; review M-FH1 of PR 182).
 /// This is deliberately wider than the retention preview's key inventory (D-138), which lists the keys of the runs the plan keeps. <see cref="InventoryComplete"/> false makes every non-active
-/// key non-retirable. It is false, with a <see cref="Problem"/> code, when the root is missing, not a directory or a symbolic link, when it holds no complete, verified run (an empty or wrong
-/// folder proves nothing), when a deletion is unfinished (a <c>.deleting-*</c> folder), or when the key needs of any present run are unknown.
+/// key non-retirable. It is false, with a <see cref="Problem"/> code, when the root is missing, not a directory or a symbolic link, when it holds an entry that is not a run folder, a
+/// <c>.deleting-*</c> folder or <c>.retention</c> (<c>backup_root_unrecognised_entry:&lt;names&gt;</c>: e.g. a run moved or copied under another name, which is not read; review M-FH3 of PR 182),
+/// when it holds no complete, verified run (an empty or wrong folder proves nothing), when a deletion is unfinished (a <c>.deleting-*</c> folder), or when the key needs of any present run are unknown.
 /// </summary>
 public sealed record BackupRootKeyNeeds(string Root, bool InventoryComplete, string? Problem, IReadOnlyList<string> EncryptionKeysNeeded);
 
@@ -72,8 +73,8 @@ public sealed record KeyRetirementReport(IReadOnlyList<KeyRetirementEntry> Keys,
 /// <summary>
 /// The retirement rule for encryption master keys (D-181; D-138 extended to live attachments and import originals; register item K). A key is retirable ONLY when:
 /// it is not the active key; no live attachment (active, removed or purged row, D-114) and no live import original (not yet purged) needs it; no backup run PRESENT in a given root lists it;
-/// and nothing is unknown anywhere: every registered company was read, every file's key determined, at least one backup root was evaluated, every root exists, is a real directory, holds at least
-/// one complete, verified run and has a complete key inventory, AND the operator attested that the given roots are every place a backup of this installation is kept
+/// and nothing is unknown anywhere: every registered company was read, every file's key determined, at least one backup root was evaluated, every root exists, is a real directory, holds nothing but run folders, unfinished deletions
+/// and <c>.retention</c>, holds at least one complete, verified run and has a complete key inventory, AND the operator attested that the given roots are every place a backup of this installation is kept
 /// (<paramref name="backupScopeAttested"/>; the report cannot discover other destinations, copies or standalone sets, so without the attestation it cannot know and nothing is retirable).
 /// A report only: retiring a key needs independent approval (D-080(6)) and is not built here.
 /// </summary>
