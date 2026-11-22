@@ -153,9 +153,9 @@ public class EncryptedBackupTests : PostgresTestBase
         Assert.Equal("ok", report.Verdict);
         Assert.True(report.Encrypted);
 
-        // D-091: only ciphertext, signatures and the signed readable status; no dump, manifest, report or marker in plaintext
+        // D-091: only ciphertext, signatures, the signed readable status and the signed ciphertext inventory (names, sizes and SHA-256 of the ciphertext, D-185 as amended); no dump, manifest, report or marker in plaintext
         var files = Directory.EnumerateFiles(runDir, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(runDir, f).Replace('\\', '/')).ToList();
-        Assert.All(files, f => Assert.True(f.EndsWith(".hbe") || f.EndsWith(".sig") || f == SignedDocuments.RunStatusFileName, f));
+        Assert.All(files, f => Assert.True(f.EndsWith(".hbe") || f.EndsWith(".sig") || f == SignedDocuments.RunStatusFileName || f == CiphertextDigests.FileName, f));
         Assert.Contains("system/database.dump.hbe", files);
         Assert.Contains($"companies/{c.Id:N}/database.dump.hbe", files);
         Assert.Single(files, f => f.StartsWith($"companies/{c.Id:N}/attachments/"));

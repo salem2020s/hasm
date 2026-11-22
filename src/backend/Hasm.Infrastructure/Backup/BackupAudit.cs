@@ -27,7 +27,7 @@ public static partial class BackupAudit
     /// <summary>Appends one event to the system stream in its own transaction and commits it (anchoring the head). Throws when the audit trail is unavailable (the caller fails closed).</summary>
     public static async Task WriteAsync(string systemConnectionString, AuditTrail trail, short eventType, string detail, Guid? subjectId = null, CancellationToken ct = default)
     {
-        if (eventType is < 2010 or > 2019) throw new ArgumentOutOfRangeException(nameof(eventType), "Backup audit events use the block 2010-2019.");
+        if (eventType is not ((>= 2010 and <= 2019) or (>= 2040 and <= 2049))) throw new ArgumentOutOfRangeException(nameof(eventType), "Backup audit events use the blocks 2010-2019 and 2040-2049.");
         await using var conn = new NpgsqlConnection(systemConnectionString);
         await conn.OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
