@@ -174,7 +174,7 @@ public class BackupReplicaCopyTests : PostgresTestBase
         Assert.True(replicate.Exit == 8, replicate.All);                                      // only the same-volume warning remains
         Assert.DoesNotContain("[FAILURE]", replicate.Out);
         var verified = (await Events(BackupAuditEvents.ReplicaVerified)).Select(d => Token(d, "run")).ToList();
-        Assert.Equal([first, second, third], verified);                                       // oldest first; the first run was not copied again
+        Assert.Equal([first, .. new[] { second, third }.Order(StringComparer.Ordinal)], verified);      // oldest first by run id (runs of one second order by their random suffix); the first run was not copied again
         Assert.All(new[] { first, second, third }, id => Assert.Equal(Tree(Path.Combine(Root, id)), Tree(Path.Combine(Nas, id))));
         // nothing left to copy: a second pass writes no new event
         var again = await AdminTool.RunWith(Options, env, "backup-replicate", Root);
@@ -184,7 +184,7 @@ public class BackupReplicaCopyTests : PostgresTestBase
         Directory.CreateDirectory(Usb);
         var usb = Destination("usb", Usb, "local");
         await Service().ReplicateAsync(Root, [usb], new ReplicationRequest(NewestFirst: true));
-        Assert.Equal([third, second, first], (await Events(BackupAuditEvents.ReplicaVerified)).Skip(3).Select(d => Token(d, "run")).ToList());
+        Assert.Equal(new[] { first, second, third }.Order(StringComparer.Ordinal).Reverse().ToList(), (await Events(BackupAuditEvents.ReplicaVerified)).Skip(3).Select(d => Token(d, "run")).ToList());
     }
 
     [PostgresFact]
