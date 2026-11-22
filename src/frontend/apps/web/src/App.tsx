@@ -1,4 +1,4 @@
-import { createApiClient, type ApiClient } from "@hasm/api-client";
+import { createApiClient, type ApiClient, type SessionGate } from "@hasm/api-client";
 import { AccountingIcon, AppShell, CascadingMenu, CompanyIcon, HomeIcon, LanguageSwitcher, PurchasesIcon, ReportsIcon, SalesIcon, SettingsIcon, WarehouseIcon, useI18n, type MenuItem } from "@hasm/ui";
 import "@hasm/ui/src/tokens.css";
 import { lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
@@ -8,10 +8,12 @@ import { AuthProvider, createSessionBridge, useAuth, type SessionBridge } from "
 import { Banner, Loading } from "./components";
 import { apiBaseUrl } from "./config";
 import { isTauri } from "./platform";
+import { ReauthDialog } from "./reauth";
 import { StepUpHost, createStepUpBridge, type StepUpBridge } from "./stepUp";
 import { SecurityPage } from "./pages/Security";
 import { BranchesPage } from "./pages/Branches";
 import { WarehousesPage } from "./pages/Warehouses";
+import { CashAccountsPage } from "./pages/CashAccounts";
 import { ImportsPage } from "./pages/Imports";
 import { FinancialStatementsPage } from "./pages/FinancialStatements";
 import { StatementMappingPage } from "./pages/StatementMapping";
@@ -30,6 +32,8 @@ import { PartyApprovalsPage } from "./pages/PartyApprovals";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
+import { EnrolmentRequiredPage } from "./pages/EnrolmentRequired";
+import { MfaPolicyPage } from "./pages/MfaPolicy";
 import { CostCentersPage } from "./pages/CostCenters";
 import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
 import { PricingPage } from "./pages/Pricing";
@@ -79,6 +83,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/currencies", permission: "company.currencies.view", element: <CurrenciesPage /> },
   { path: "/company/branches", anyScope: "company.branches.view", element: <BranchesPage /> },
   { path: "/company/warehouses", anyScope: "company.warehouses.view", element: <WarehousesPage /> },
+  { path: "/company/cash-accounts", anyScope: "company.cashaccounts.view", element: <CashAccountsPage /> },
   { path: "/company/fiscal-years", permission: "company.fiscalyears.view", element: <FiscalYearsPage /> },
   { path: "/company/accounts", permission: "company.accounts.view", element: <ChartOfAccountsPage /> },
   { path: "/company/numbering", permission: "company.numbering.view", element: <NumberingPage /> },
@@ -92,6 +97,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/attachment-retention", permission: "company.attachmentretention.view", element: <AttachmentRetentionPage /> },
   { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
+  { path: "/company/mfa-policy", permission: "access.mfapolicy.view", element: <MfaPolicyPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
   { path: "/accounting/report-center", anyScope: "company.ledgerreports.view", element: <ReportCenterPage /> },
@@ -139,6 +145,7 @@ function Shell() {
       { id: "/company/currencies", label: t("nav.currencies"), permission: "company.currencies.view" },
       { id: "/company/branches", label: t("nav.branches"), permission: "company.branches.view", anyScope: true },
       { id: "/company/warehouses", label: t("nav.warehouse_mgmt"), permission: "company.warehouses.view", anyScope: true },
+      { id: "/company/cash-accounts", label: t("nav.cash_accounts"), permission: "company.cashaccounts.view", anyScope: true },
       { id: "/company/fiscal-years", label: t("nav.fiscal"), permission: "company.fiscalyears.view" },
       { id: "/company/accounts", label: t("nav.accounts"), permission: "company.accounts.view" },
       { id: "/company/numbering", label: t("nav.numbering"), permission: "company.numbering.view" },
@@ -152,6 +159,7 @@ function Shell() {
       { id: "/company/attachment-retention", label: t("nav.attachment_retention"), permission: "company.attachmentretention.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
+      { id: "/company/mfa-policy", label: t("nav.mfa_policy"), permission: "access.mfapolicy.view" },
       { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
@@ -288,20 +296,36 @@ function Gate() {
   }
   if (auth.phase === "anonymous" || auth.phase === "mfa") return <AuthLayout><LoginPage /></AuthLayout>;
   if (auth.phase === "needCompany") return <AuthLayout><CompanySelectPage /></AuthLayout>;
-  return <Shell />;
+  if (auth.phase === "needEnrolment") return <AuthLayout><EnrolmentRequiredPage /></AuthLayout>;
+  // D-236: when the session ends with unsaved input the shell stays MOUNTED (its state is the preserved input, in memory only) but is taken away from whoever sits at
+  // the screen: `hidden` (not rendered, not printed), `inert` (no focus, no pointer, no keyboard, no clipboard or drag events) and `aria-hidden` (not in the
+  // accessibility tree). The sign-in-again dialog is then the only content. `shellEpoch` makes a later shell a NEW instance, never this one.
+  return (
+    <>
+      <div className="shell-root" data-testid="shell-root" hidden={auth.locked} inert={auth.locked} aria-hidden={auth.locked || undefined}><Shell key={auth.shellEpoch} /></div>
+      {auth.locked && <ReauthDialog frame={(children) => <AuthLayout>{children}</AuthLayout>} />}
+    </>
+  );
 }
 
-export function App({ client, bridge, stepUpBridge }: { client?: ApiClient; bridge?: SessionBridge; stepUpBridge?: StepUpBridge }) {
+/** The skip link targets the shell's content, so it does not exist while the shell is locked away (D-236). */
+function SkipLink() {
   const { t } = useI18n();
+  const auth = useAuth();
+  if (auth.locked) return null;
+  return <a className="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById("content")?.focus(); }}>{t("skip_to_content")}</a>;
+}
+
+export function App({ client, bridge, stepUpBridge, gate }: { client?: ApiClient; bridge?: SessionBridge; stepUpBridge?: StepUpBridge; /** Tests only: observe the session gate. */ gate?: SessionGate }) {
   const own = useMemo(() => {
     const step = stepUpBridge ?? createStepUpBridge();
     if (client) return { api: client, bridge, step };
     const b = createSessionBridge();
-    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, stepUp: step.request }), bridge: b, step };
+    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, onEnrolmentRequired: b.fireEnrolment, requestScope: b.scope, stepUp: step.request }), bridge: b, step };
   }, [client, bridge, stepUpBridge]);
   return (
-    <AuthProvider api={own.api} bridge={own.bridge}>
-      <a className="skip-link" href="#content" onClick={(e) => { e.preventDefault(); document.getElementById("content")?.focus(); }}>{t("skip_to_content")}</a>
+    <AuthProvider api={own.api} bridge={own.bridge} gate={gate}>
+      <SkipLink />
       <UnsavedProvider><Gate /></UnsavedProvider>
       <StepUpHost bridge={own.step} />
     </AuthProvider>

@@ -11,17 +11,21 @@ public static class PrivilegedAccess
     /// <summary>Resources whose every action is privileged: role, grant and member management, audit administration, company security settings, approval policies.</summary>
     public static IReadOnlySet<string> PrivilegedResources { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        "access.members", "access.roles", "access.assignments", "access.audit", "company.settings", "company.approvalpolicies",
+        "access.members", "access.roles", "access.assignments", "access.audit", "access.mfapolicy", "company.settings", "company.approvalpolicies",
         // review M3 of PR #133 (when in doubt, privileged): company.attachmentssensitive authorizes the encryption-key rewrap of attachments, and company.journalsoftclosed is override-like (posting into a soft-closed period)
         "company.attachmentssensitive", "company.journalsoftclosed",
         // Phase R slice R1: retention policy, legal holds and the approval and execution of attachment deletion are destructive controls (D-096: when in doubt, privileged)
         "company.attachmentretention",
+        // Phase 3.14 S1: the full bank account number (a payment-redirection and fraud vector) is sensitive data: the resource is privileged (D-155, the attachments-sensitive precedent)
+        "company.cashaccountssensitive",
+        // Phase 3.8D step 5: creating, approving and executing a compensation plan rewrites the cost history of a back-dated event (D-096: when in doubt, privileged)
+        "company.compensationplans",
         // review L2 of PR #172 (when in doubt, privileged): the ledger settings and the cost-center policies configure which controls apply to postings (the journal controls and the cost-center requirement), so changing them changes what the ledger lets through
         "company.ledgersettings", "company.costcenterpolicies",
     };
 
     /// <summary>Individual permissions that are privileged although their resource is ordinary (review M3): <c>company.imports.configure</c> authorizes the import maintenance, including the encryption-key rewrap of imported files.</summary>
-    public static IReadOnlySet<string> PrivilegedPermissions { get; } = new HashSet<string>(StringComparer.Ordinal) { "company.imports.configure" };
+    public static IReadOnlySet<string> PrivilegedPermissions { get; } = new HashSet<string>(StringComparer.Ordinal) { "company.imports.configure", "company.cashaccounts.update", "company.cashaccounts.activate" };
 
     /// <summary>Resources classified as ordinary at resource level (their privileged ACTIONS, see <see cref="PrivilegedActions"/>, still count). Listing a resource here is a deliberate review decision.</summary>
     public static IReadOnlySet<string> OrdinaryResources { get; } = new HashSet<string>(StringComparer.Ordinal)
@@ -32,6 +36,7 @@ public static class PrivilegedAccess
         "company.imports", "company.financialstatements", "company.statementmapping", "company.units", "company.itemgroups", "company.items", "company.barcodes",
         "company.inventorysettings", "company.inventoryaccounting", "company.stockdocs", "company.stockbalance", "company.stocktake", "company.parties", "company.tax",
         "company.partyroles", "company.salesreps", "company.pricing", "company.commercialdocs", "company.attachments",
+        "company.cashaccounts",
     };
 
     /// <summary>Actions that are privileged on every resource: approving (an approver is a sensitive grant), overriding a control, reopening and final-closing a period, approving the negative-stock exception.</summary>

@@ -31,7 +31,7 @@ public static partial class RetentionInventory
     public const string DeletedMarker = "deleted.json";
     /// <summary>Written into a tombstone after audit 2016, so a deletion whose 2016 was lost by a crash is detected and completed (review L2 of #134).</summary>
     public const string CompletedMarker = "completed.json";
-    [GeneratedRegex(@"^(run\.status\.json(\.sig)?|manifest\.json\.hbe(\.sig)?|canary\.hbe|recovery-test\.json|system/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?)|companies/[0-9a-f]{32}/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?|attachments/[0-9a-f]{32}\.att\.hbe))$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(run\.status\.json(\.sig)?|manifest\.json\.hbe(\.sig)?|canary\.hbe|ciphertext\.digests\.json(\.sig)?|recovery-test\.json|system/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?)|companies/[0-9a-f]{32}/(database\.dump\.hbe|manifest\.json\.hbe(\.sig)?|attachments/[0-9a-f]{32}\.att\.hbe))$", RegexOptions.CultureInvariant)]
     private static partial Regex AllowedFile();
     [GeneratedRegex(@"^(system|companies|companies/[0-9a-f]{32}|companies/[0-9a-f]{32}/attachments)$", RegexOptions.CultureInvariant)]
     private static partial Regex AllowedDirectory();

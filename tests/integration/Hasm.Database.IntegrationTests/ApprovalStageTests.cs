@@ -134,7 +134,8 @@ public class ApprovalStageTests : JournalTestBase
         Ok(await Policies.DeactivateAsync(Admin.Id, Company.Id, soft.Id, soft.Revision));
         Assert.Equal([(1, 1)], await PlanOf(await Draft(Simple("2026-03-15"))));
         var tieA = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, Staged([1, 1], jtype: "adjusting", en: "Tie A")));
-        var tieB = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, Staged([1, 1], jtype: "adjusting", en: "Tie B")));
+        // (an IDENTICAL second policy is refused since company migration 0033, so the tie is between two policies that differ only in their branch scope: all branches and the entry's own branch)
+        var tieB = Ok(await Policies.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(Doc, "any", Main, 0m, null, "سياسة", "Tie B", "adjusting", null, null, [new(1, null), new(1, null)])));
         var adj = Ok(await Journal.CreateDraftAsync(Maker, Company.Id, Simple("2026-04-05") with { AdjustsId = posted.Header.Id }, false));
         var expected = await Sql<Guid>($"SELECT {CompanySchema.ApprovalPolicy.Id} FROM {CompanySchema.ApprovalPolicy.Table} WHERE {CompanySchema.ApprovalPolicy.Id} IN ('{tieA.Id}', '{tieB.Id}') ORDER BY {CompanySchema.ApprovalPolicy.CreatedAtUtc}, {CompanySchema.ApprovalPolicy.Id} LIMIT 1");
         for (var i = 0; i < 3; i++)
@@ -233,6 +234,49 @@ public class ApprovalStageTests : JournalTestBase
         // Stage 1 is complete, so the open stage is the unbound stage 2: any other distinct approver may decide it.
         var done = Ok(await Journal.DecideAsync(Checker2, Company.Id, d.Header.Id, d.Header.Revision, new ApprovalDecisionInput(true, null)));
         Assert.Equal(JournalStatus.Approved, done.Header.Status);
+    }
+
+    /// <summary>
+    /// Owner decision of 2026-11-21: the stage role is an authority over WHAT THE ENTRY TOUCHES. A holder of the approval permission whose stage role is assigned only for another branch can neither approve nor reject
+    /// the stage; the same role for the entry's branch can. (Approve and reject are one decision route in the journal.)
+    /// </summary>
+    [PostgresFact]
+    public async Task A_stage_role_held_only_for_another_branch_neither_approves_nor_rejects_the_stage_and_the_same_role_for_the_entrys_branch_does()
+    {
+        await PrepareJournal();
+        // A delegate who holds journal approval (offline) and may manage roles and assignments creates an approving role: the only way a role with the approve permission comes to exist inside the company.
+        var (delegated, _) = await Holder(PermissionCatalog.Codes.RolesView, PermissionCatalog.Codes.RolesCreate, PermissionCatalog.Codes.AssignmentsView, PermissionCatalog.Codes.AssignmentsCreate, PermissionCatalog.Codes.JournalView);
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantJournalApproverOfflineAsync(delegated.Login, Company.Id));
+        var created = await Rbac.CreateRoleAsync(delegated.Id, Company.Id, "branch-stage-approvers", [PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalApprove]);
+        Assert.True(created.IsOk, created.Code);
+        var stageRole = created.Value!.Id;
+        Ok(await PMg.CreateAsync(Admin.Id, Company.Id, new ApprovalPolicyInput(Doc, "any", null, 0m, null, "سياسة", "Branch stage", Stages: [new(1, stageRole)])));
+        var otherBranch = B2;                                                                                              // the second active branch of the fixture; the entry below lives in Main
+
+        // The approver holds the approve PERMISSION for the entry (the preset, company-wide) and the stage ROLE for another branch only.
+        var approver = await NewUser("stagebranch");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, approver.Login)).IsOk);
+        Assert.Equal(AccessService.FiscalApproverStatus.Granted, await Rbac.GrantJournalApproverOfflineAsync(approver.Login, Company.Id));
+        var elsewhere = await Rbac.AssignRoleAsync(delegated.Id, Company.Id, approver.Id, stageRole, ScopeKind.Branch, otherBranch);
+        Assert.True(elsewhere.IsOk, elsewhere.Code);
+
+        var (maker, _) = await Holder(PermissionCatalog.Codes.JournalView, PermissionCatalog.Codes.JournalCreate, PermissionCatalog.Codes.JournalSubmit);
+        var d = Ok(await JMg.CreateAsync(maker.Id, Company.Id, Simple()));
+        var s = Ok(await JMg.SubmitAsync(maker.Id, Company.Id, d.Header.Id, d.Header.Revision));
+        foreach (var approve in new[] { true, false })
+        {
+            var refused = await JMg.DecideAsync(approver.Id, Company.Id, s.Header.Id, s.Header.Revision, new ApprovalDecisionInput(approve, approve ? null : "no"));
+            Assert.Equal((ConfigStatus.Forbidden, "approver_role_required"), (refused.Status, refused.Code));
+        }
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {Ad.Table}"));
+        Assert.Equal(JournalStatus.PendingApproval, (await Journal.GetAsync(Company.Id, s.Header.Id))!.Header.Status);
+
+        // The same role for the entry's own branch is the stage authority: the rejection is recorded and the entry returns to draft.
+        var here = await Rbac.AssignRoleAsync(delegated.Id, Company.Id, approver.Id, stageRole, ScopeKind.Branch, Main);
+        Assert.True(here.IsOk, here.Code);
+        var rejected = Ok(await JMg.DecideAsync(approver.Id, Company.Id, s.Header.Id, s.Header.Revision, new ApprovalDecisionInput(false, "wrong account")));
+        Assert.Equal(JournalStatus.Draft, rejected.Header.Status);
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Ad.Table} WHERE {Ad.Approver} = '{approver.Id}' AND {Ad.Decision} = 2"));
     }
 
     [PostgresFact]

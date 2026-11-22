@@ -7,6 +7,7 @@ using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
+using Hasm.Infrastructure.SystemDatabase;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Extensions.Options;
@@ -26,6 +27,10 @@ public static class AuthDefaults
     public const string MfaVerifiedPolicy = "MfaVerified";
     /// <summary>Phase 4.1 S3a (D-160): the proof is within the freshness window (pass-through for users without MFA, D-161).</summary>
     public const string MfaFreshPolicy = "MfaFresh";
+    /// <summary>S3b-1b: an authenticated session with the second-factor proof where MFA applies, WITHOUT the selected company's policy: the routes a user must always reach to leave or change company or to enrol (company list and selection, change password, step-up).</summary>
+    public const string AuthenticatedPolicy = "AuthenticatedMfaVerified";
+    /// <summary>The fresh proof WITHOUT the selected company's policy: the fresh operations of identity administration, which is not company-scoped (review L2 of PR 181).</summary>
+    public const string AuthenticatedFreshPolicy = "AuthenticatedMfaFresh";
     public const string AdministratorClaim = "hasm:identity_admin";
     public const string SessionIdClaim = "hasm:session";
     public const string SessionItemKey = "hasm.session";
@@ -95,7 +100,16 @@ public static class AuthenticationSetup
             sp.GetRequiredService<AuditTrail>()));
         // Phase 4.1: the second factor. The secrets are protected by the existing key ring (KekRing, fail closed when it is not configured); every component uses the same runtime connection as the identity store.
         string SystemConnection() { var options = HasmDatabaseOptions.FromConfiguration(configuration); options.EnsureValid(requireAdmin: false); return options.BuildSystemConnectionString(admin: false); }
-        services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing())));
+        // owner decision D-235: the runtime account must be least-privilege for the TOTP secret store. The gate refuses otherwise (the API does not start; the MFA store never opens a
+        // connection), unless the explicit opt-out for disposable single-account test environments is set, which is logged as critical and never silent.
+        services.AddSingleton(sp =>
+        {
+            bool allow;
+            try { allow = HasmDatabaseOptions.FromConfiguration(configuration).AllowOverprivilegedSystemRuntime; } catch (DatabaseConfigurationException) { allow = false; }
+            return new SystemRuntimeGate(allow, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<SystemRuntimeGate>>());
+        });
+        services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing()), sp.GetRequiredService<SystemRuntimeGate>()));
+        services.AddHostedService(sp => new SystemRuntimeGateService(SystemConnection, sp.GetRequiredService<SystemRuntimeGate>(), sp.GetRequiredService<ILogger<SystemRuntimeGateService>>()));
         services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IMfaAttemptLimiter>(sp => new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new MfaVerifier(sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>(), sp.GetRequiredService<TimeProvider>()));
@@ -106,16 +120,21 @@ public static class AuthenticationSetup
         services.AddAuthentication(AuthDefaults.Scheme).AddScheme<AuthenticationSchemeOptions, SessionAuthenticationHandler>(AuthDefaults.Scheme, null);
         services.AddSingleton<IAuthorizationHandler, MfaVerifiedHandler>();
         services.AddSingleton<IAuthorizationHandler, MfaFreshHandler>();
+        services.AddSingleton<IAuthorizationHandler, MfaCompanyPolicyHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, MfaAuthorizationResultHandler>();
         services.AddAuthorizationBuilder()
             // the default policy of every plain RequireAuthorization(): an authenticated session that carries the second-factor proof where MFA applies (S3b-1, D-166; pass-through for state None, D-161)
-            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()).Build())
+            .SetDefaultPolicy(new AuthorizationPolicyBuilder().AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaCompanyPolicyRequirement()).Build())
             .AddPolicy(AuthDefaults.AdministratorPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().RequireClaim(AuthDefaults.AdministratorClaim, "true"))
-            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+            .AddPolicy(AuthDefaults.AuthenticatedPolicy, p =>
                 p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement()))
+            .AddPolicy(AuthDefaults.AuthenticatedFreshPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()))
+            .AddPolicy(AuthDefaults.MfaVerifiedPolicy, p =>
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaCompanyPolicyRequirement()))
             .AddPolicy(AuthDefaults.MfaFreshPolicy, p =>
-                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement()));
+                p.AddAuthenticationSchemes(AuthDefaults.Scheme).RequireAuthenticatedUser().AddRequirements(new MfaVerifiedRequirement(), new MfaFreshRequirement(), new MfaCompanyPolicyRequirement()));
         return services;
     }
 
@@ -180,7 +199,7 @@ public static class AuthenticationSetup
             AuditUnavailableException a => Audit(context, a),
             EncryptionUnavailableException e => Encryption(context, e),
             CompanyDatabaseException c => Company(context, c),
-            DatabaseConfigurationException or AuthConfigurationException or NpgsqlException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
+            DatabaseConfigurationException or AuthConfigurationException or NpgsqlException or SystemRuntimePrivilegeException => (StatusCodes.Status503ServiceUnavailable, "service_unavailable"),
             _ => (StatusCodes.Status500InternalServerError, "internal_error"),
         };
         context.Response.StatusCode = status;
@@ -189,22 +208,51 @@ public static class AuthenticationSetup
     }));
 }
 
-/// <summary>Hourly removal of long-expired sessions and stale throttle rows. Failures never log more than the error type.</summary>
-public sealed class IdentityHousekeepingService(IdentityStore store, ILogger<IdentityHousekeepingService> logger) : BackgroundService
+/// <summary>
+/// Start-up half of the least-privilege gate (owner decision D-235): when the system database is reachable and the runtime account or the TOTP secret store violates least privilege, the API
+/// does NOT start. When the database is not configured or not reachable the API starts as before (anonymous endpoints work without a database); the MFA store then applies the same gate on its
+/// first connection, so the secret store is never used unchecked.
+/// </summary>
+public sealed class SystemRuntimeGateService(Func<string> connectionStringFactory, SystemRuntimeGate gate, ILogger<SystemRuntimeGateService> logger) : IHostedService
 {
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(TimeSpan.FromSeconds(10));
+            await using var conn = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(connectionStringFactory()) { Pooling = false, Timeout = 5 }.ConnectionString);
+            await conn.OpenAsync(limit.Token);
+            await gate.EnsureAsync(conn, limit.Token);
+        }
+        catch (SystemRuntimePrivilegeException) { throw; }                                   // refuse to start; the gate has logged the codes
+        catch (Exception ex) when (ex is DatabaseConfigurationException or NpgsqlException or OperationCanceledException or TimeoutException or System.Net.Sockets.SocketException)
+        {
+            logger.LogWarning("The least-privilege check of the system database runtime account could not run at start-up ({ErrorType}); the MFA store applies it on first use.", ex.GetType().Name);
+        }
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>Hourly removal of long-expired sessions and stale throttle rows. Failures never log more than the error type.</summary>
+public sealed class IdentityHousekeepingService(IdentityStore store, MfaChallengeStore challenges, TimeProvider clock, ILogger<IdentityHousekeepingService> logger) : BackgroundService
+{
+    /// <summary>One housekeeping pass: sessions and throttle rows, then expired second-factor login challenges (the DELETE of the runtime account on that table exists for this and nothing else). Each step fails on its own; only the error type is logged.</summary>
+    public async Task RunOnceAsync(CancellationToken ct)
+    {
+        try { await store.PurgeAsync(TimeSpan.FromDays(7), TimeSpan.FromDays(1), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning("Identity housekeeping failed ({ErrorType}).", ex.GetType().Name); }
+        try { await challenges.PurgeAsync(clock.GetUtcNow() - TimeSpan.FromDays(1), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning("MFA challenge housekeeping failed ({ErrorType}).", ex.GetType().Name); }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
         try
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken))
-            {
-                try { await store.PurgeAsync(TimeSpan.FromDays(7), TimeSpan.FromDays(1), stoppingToken); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogWarning("Identity housekeeping failed ({ErrorType}).", ex.GetType().Name);
-                }
-            }
+            while (await timer.WaitForNextTickAsync(stoppingToken)) await RunOnceAsync(stoppingToken);
         }
         catch (OperationCanceledException) { /* shutting down */ }
     }

@@ -26,7 +26,7 @@ namespace Hasm.Infrastructure.Inventory;
 /// Every mutation runs in <see cref="CompanyAuditedTransactions"/> (change, history row and authenticated audit event commit or roll back together) after the same advisory lock that serialises warehouse structure
 /// changes, so a warehouse can never be deactivated underneath a document being written. Transitions are fenced by the revision (a repeated or concurrent request fails and does nothing twice).
 /// </summary>
-public sealed class StockDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ILogger? logger = null)
+public sealed partial class StockDocumentService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, TimeProvider clock, ILogger? logger = null)
 {
     internal sealed class Abort(ConfigStatus status, string code, IReadOnlyList<FieldError>? fields = null, long? currentRevision = null) : Exception(code)
     {
@@ -149,15 +149,19 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
     internal sealed record WarehouseRow(Guid Id, Guid BranchId, bool IsActive, string Code);
     internal sealed record ItemRow(Guid Id, string Code, int Type, Guid BaseUnitId, bool Tracked, bool IsActive);
 
-    internal static async Task<(Guid BranchId, string BranchCode)> ResolveWarehouses(CompanyAuditedWork work, StockDocumentValidation.Header h, CancellationToken ct)
+    internal static Task<(Guid BranchId, string BranchCode)> ResolveWarehouses(CompanyAuditedWork work, StockDocumentValidation.Header h, CancellationToken ct)
+        => ResolveWarehousesCore(work.Connection, work.Transaction, h, false, null, null, ct);
+
+    private static async Task<(Guid BranchId, string BranchCode)> ResolveWarehousesCore(NpgsqlConnection conn, NpgsqlTransaction tx,
+        StockDocumentValidation.Header h, bool readOnly, Action? reserveCommand, Action? reserveRow, CancellationToken ct)
     {
         var rows = new Dictionary<Guid, WarehouseRow>();
         var ids = new[] { h.Source, h.Target }.Where(x => x is not null).Select(x => x!.Value).Distinct().ToArray();
-        await using (var q = new NpgsqlCommand($"SELECT {W.Id}, {W.BranchId}, {W.IsActive}, {W.Code} FROM {W.Table} WHERE {W.Id} = ANY(@ids) FOR SHARE", work.Connection, work.Transaction))
+        await using (var q = ValidationCommand($"SELECT {W.Id}, {W.BranchId}, {W.IsActive}, {W.Code} FROM {W.Table} WHERE {W.Id} = ANY(@ids){(readOnly ? "" : " FOR SHARE")}", conn, tx, reserveCommand))
         {
             q.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = ids });
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) rows[r.GetGuid(0)] = new WarehouseRow(r.GetGuid(0), r.GetGuid(1), r.GetBoolean(2), r.GetString(3));
+            while (await r.ReadAsync(ct)) { reserveRow?.Invoke(); rows[r.GetGuid(0)] = new WarehouseRow(r.GetGuid(0), r.GetGuid(1), r.GetBoolean(2), r.GetString(3)); }
         }
         void Check(Guid? id, string field)
         {
@@ -169,38 +173,49 @@ public sealed class StockDocumentService(CompanyDatabaseResolver resolver, Compa
         Check(h.Target, "targetWarehouseId");
         var branch = rows[(h.Source ?? h.Target)!.Value].BranchId;
         if (h.Source is not null && h.Target is not null && rows[h.Source.Value].BranchId != rows[h.Target.Value].BranchId) throw Invalid("targetWarehouseId", "transfer_cross_branch_not_supported");
-        await using var bq = new NpgsqlCommand($"SELECT {B.Code}, {B.IsActive} FROM {B.Table} WHERE {B.Id} = @b FOR SHARE", work.Connection, work.Transaction);
+        await using var bq = ValidationCommand($"SELECT {B.Code}, {B.IsActive} FROM {B.Table} WHERE {B.Id} = @b{(readOnly ? "" : " FOR SHARE")}", conn, tx, reserveCommand);
         bq.Parameters.AddWithValue("b", branch);
         await using var br = await bq.ExecuteReaderAsync(ct);
-        await br.ReadAsync(ct);
+        await br.ReadAsync(ct); reserveRow?.Invoke();
         if (!br.GetBoolean(1)) throw new Abort(ConfigStatus.Conflict, "branch_inactive");
         return (branch, br.GetString(0));
     }
 
     internal sealed record Resolved(Guid ItemId, Guid UnitId, decimal Quantity, decimal Factor, decimal Base, string? Notes);
 
-    internal static async Task<List<Resolved>> ResolveLines(CompanyAuditedWork work, IReadOnlyList<StockDocumentValidation.Line> lines, CancellationToken ct)
+    internal static Task<List<Resolved>> ResolveLines(CompanyAuditedWork work, IReadOnlyList<StockDocumentValidation.Line> lines, CancellationToken ct)
+        => ResolveLinesCore(work.Connection, work.Transaction, lines, false, null, null, ct);
+
+    private static async Task<List<Resolved>> ResolveLinesCore(NpgsqlConnection conn, NpgsqlTransaction tx,
+        IReadOnlyList<StockDocumentValidation.Line> lines, bool readOnly, Action? reserveCommand, Action? reserveRow, CancellationToken ct)
     {
         var itemIds = lines.Select(l => l.ItemId).Distinct().ToArray();
         var items = new Dictionary<Guid, ItemRow>();
-        await using (var q = new NpgsqlCommand($"SELECT {I.Id}, {I.Code}, {I.ItemType}, {I.BaseUnitId}, ({I.IsLot} OR {I.IsSerial} OR {I.HasExpiry}), {I.IsActive} FROM {I.Table} WHERE {I.Id} = ANY(@ids) FOR SHARE", work.Connection, work.Transaction))
+        await using (var q = ValidationCommand($"SELECT {I.Id}, {I.Code}, {I.ItemType}, {I.BaseUnitId}, ({I.IsLot} OR {I.IsSerial} OR {I.HasExpiry}), {I.IsActive} FROM {I.Table} WHERE {I.Id} = ANY(@ids){(readOnly ? "" : " FOR SHARE")}", conn, tx, reserveCommand))
         {
             q.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = itemIds });
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) items[r.GetGuid(0)] = new ItemRow(r.GetGuid(0), r.GetString(1), r.GetInt16(2), r.GetGuid(3), r.GetBoolean(4), r.GetBoolean(5));
+            while (await r.ReadAsync(ct)) { reserveRow?.Invoke(); items[r.GetGuid(0)] = new ItemRow(r.GetGuid(0), r.GetString(1), r.GetInt16(2), r.GetGuid(3), r.GetBoolean(4), r.GetBoolean(5)); }
         }
         var units = new Dictionary<Guid, (bool Active, int Decimals)>();
-        await using (var q = new NpgsqlCommand($"SELECT {U.Id}, {U.IsActive}, {U.Decimals} FROM {U.Table}", work.Connection, work.Transaction))
+        await using (var q = ValidationCommand($"SELECT {U.Id}, {U.IsActive}, {U.Decimals} FROM {U.Table}{(readOnly ? $" WHERE {U.Id}=ANY(@units)" : "")}", conn, tx, reserveCommand))
         {
+            if (readOnly) q.Parameters.AddWithValue("units", lines.Select(l => l.UnitId).Concat(items.Values.Select(i => i.BaseUnitId)).Distinct().ToArray());
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) units[r.GetGuid(0)] = (r.GetBoolean(1), r.GetInt16(2));
+            while (await r.ReadAsync(ct)) { reserveRow?.Invoke(); units[r.GetGuid(0)] = (r.GetBoolean(1), r.GetInt16(2)); }
         }
         var factors = new Dictionary<(Guid, Guid), decimal>();
-        await using (var q = new NpgsqlCommand($"SELECT {IU.ItemId}, {IU.UnitId}, {IU.Factor} FROM {IU.Table} WHERE {IU.ItemId} = ANY(@ids)", work.Connection, work.Transaction))
+        await using (var q = ValidationCommand($"SELECT {IU.ItemId}, {IU.UnitId}, {IU.Factor} FROM {IU.Table} WHERE {IU.ItemId} = ANY(@ids){(readOnly ? $" AND EXISTS(SELECT 1 FROM unnest(@pairItems,@pairUnits) p(item_id,unit_id) WHERE p.item_id={IU.ItemId} AND p.unit_id={IU.UnitId})" : "")}", conn, tx, reserveCommand))
         {
             q.Parameters.Add(new NpgsqlParameter("ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid) { Value = itemIds });
+            if (readOnly)
+            {
+                var pairs = lines.Select(l => (l.ItemId, l.UnitId)).Distinct().ToArray();
+                q.Parameters.AddWithValue("pairItems", pairs.Select(p => p.ItemId).ToArray());
+                q.Parameters.AddWithValue("pairUnits", pairs.Select(p => p.UnitId).ToArray());
+            }
             await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) factors[(r.GetGuid(0), r.GetGuid(1))] = r.GetDecimal(2);
+            while (await r.ReadAsync(ct)) { reserveRow?.Invoke(); factors[(r.GetGuid(0), r.GetGuid(1))] = r.GetDecimal(2); }
         }
         var result = new List<Resolved>();
         for (var i = 0; i < lines.Count; i++)

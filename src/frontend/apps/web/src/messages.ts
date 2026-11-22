@@ -19,6 +19,7 @@ import { attachmentsAr, attachmentsEn } from "./messages.attachments";
 import { impTplAr, impTplEn } from "./messages.imptpl";
 import { partyAr, partyEn } from "./messages.party";
 import { mfaAr, mfaEn } from "./messages.mfa";
+import { cashAr, cashEn } from "./messages.cash";
 
 export const catalog: Catalog = {
   ar: { ...baseAr, ...mfaAr },
@@ -62,3 +63,5 @@ Object.assign(catalog.ar, impTplAr);
 Object.assign(catalog.en, impTplEn);
 Object.assign(catalog.ar, partyAr);
 Object.assign(catalog.en, partyEn);
+Object.assign(catalog.ar, cashAr);
+Object.assign(catalog.en, cashEn);

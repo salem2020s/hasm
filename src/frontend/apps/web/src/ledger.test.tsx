@@ -262,6 +262,21 @@ describe("approval policies screen", () => {
     expect(client.createApprovalPolicy).not.toHaveBeenCalled();
   });
 
+  it.each(["ar", "en"] as const)("shows the translated message when the server refuses an identical active policy with 409 approval_policy_duplicate (%s)", async (lang) => {
+    localStorage.setItem("hasm.locale", lang);
+    const C = (k: string) => catalog[lang][k]!;
+    const client = render();
+    (client.createApprovalPolicy as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(apiError(409, "approval_policy_duplicate"));
+    await go("#/company/approval-policies");
+    await userEvent.click(await screen.findByRole("button", { name: C("pol.new") }));
+    await userEvent.type(screen.getByLabelText(new RegExp(`^${esc(C("cc.name_en"))}\\s*\\*?$`)), "Same");
+    await userEvent.click(screen.getByRole("button", { name: C("common.save") }));
+    expect(await screen.findByText(C("pol.error.approval_policy_duplicate"))).toBeInTheDocument();
+    expect(C("pol.error.approval_policy_duplicate")).not.toBe(catalog[lang === "ar" ? "en" : "ar"]["pol.error.approval_policy_duplicate"]);
+    expect(client.createApprovalPolicy).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(new RegExp(`^${esc(C("cc.name_en"))}\\s*\\*?$`))).toHaveValue("Same");   // what was typed is kept
+  });
+
   it("edits and deactivates with the policy revision", async () => {
     const client = render();
     await go("#/company/approval-policies");
@@ -427,6 +442,27 @@ describe("journal screen", () => {
     await userEvent.type(within(dialog).getByLabelText(lbl("jrn.reject_reason")), "wrong account");
     await userEvent.click(within(dialog).getByRole("button", { name: A("jrn.reject") }));
     await waitFor(() => expect(client.decideJournalEntry).toHaveBeenCalledWith("j1", false, "wrong account", 5));
+  });
+
+  describe("a role-bound stage: Approve and Reject follow the stage role for what the entry touches, like the server (D-208)", () => {
+    const pending = () => entry("pending_approval", {}, { plan: [{ stage: 1, required: 1, approved: 0, roleId: "stage-role" }] });
+    const grants = (role: Record<string, unknown>) => ({ accessMe: vi.fn().mockResolvedValue({ companyId: "c1", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: [...base, "company.journal.view", "company.currencies.view", "company.costcenters.view"] }, role] }) });
+
+    it("hides both, with the reason, when the role is held only for another branch", async () => {
+      render(pending(), jcan(), grants({ roleId: "stage-role", scope: "branch", scopeId: "other-branch", permissions: [] }));
+      await open();
+      expect(await screen.findByTestId("jrn-stage-role-missing")).toHaveTextContent(A("jrn.stage_role_missing"));
+      expect(screen.queryByRole("button", { name: A("jrn.approve") })).toBeNull();
+      expect(screen.queryByRole("button", { name: A("jrn.reject") })).toBeNull();
+    });
+
+    it.each([["company", null], ["branch", "b1"], ["costcenter", "cc1"]])("offers both when the role is held through a %s assignment that can cover the entry", async (scope, scopeId) => {
+      render(pending(), jcan(), grants({ roleId: "stage-role", scope, scopeId, permissions: [] }));
+      await open();
+      expect(await screen.findByRole("button", { name: A("jrn.approve") })).toBeEnabled();
+      expect(screen.getByRole("button", { name: A("jrn.reject") })).toBeEnabled();
+      expect(screen.queryByTestId("jrn-stage-role-missing")).toBeNull();
+    });
   });
 
   it("shows the separation-of-duties refusal from the server", async () => {

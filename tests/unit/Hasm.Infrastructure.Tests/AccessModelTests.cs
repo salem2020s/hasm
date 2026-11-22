@@ -38,8 +38,11 @@ public class AccessModelTests
         foreach (var (_, (_, permissions)) in PresetRoles.Definitions)
             Assert.All(permissions, code => Assert.True(PermissionCatalog.Default.TryGet(code, out _), code));
         // Segregation of duties: the APPROVAL of exceptional fiscal reopenings, of journal entries and of commercial documents is in the catalog but never in the Company Administrator preset; only Fiscal Approver / Journal Approver hold them.
-        string[] approval = [PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove];
-        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
+        string[] approval = [PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove,
+            PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove /* Phase 3.8D step 5: no preset holds the plan codes until owner decision X4 */];
+        // The cash and bank account codes (Phase 3.14 S1) are in the catalog but not yet in the preset: the grant is a system migration that waits for the owner's answer on the preset pattern; remove this exclusion with that migration.
+        string[] pendingPresetGrant = [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
+        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Except(pendingPresetGrant).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
         Assert.Equal(PresetRoles.FiscalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.FiscalReopenApprove)).Key);
         Assert.Equal(PresetRoles.JournalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.JournalApprove)).Key);
     }
@@ -48,7 +51,7 @@ public class AccessModelTests
     public void Migration_seed_equals_the_code_defined_preset_roles()
     {
         // The preset roles are seeded by migration 0004 and extended by the versioned migrations 0006 (company administration), 0007 (branches) 0008 (warehouses) and 0009 (fiscal calendar), 0010 (chart) and 0011 (general ledger foundation).
-        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6 or 7 or 8 or 9 or 10 or 11 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30).Select(s => s.Sql));
+        var sql = string.Join('\n', MigrationScript.LoadEmbedded().Where(s => s.Version is 4 or 6 or 7 or 8 or 9 or 10 or 11 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 34).Select(s => s.Sql));
         var seeded = Regex.Matches(sql, @"^\s*\('(?<id>5c1b0f6e-[0-9a-f-]+)', '(?<perm>[a-z.]+)'\)", RegexOptions.Multiline)
             .GroupBy(m => Guid.Parse(m.Groups["id"].Value))
             .ToDictionary(g => g.Key, g => g.Select(m => m.Groups["perm"].Value).Order().ToArray());

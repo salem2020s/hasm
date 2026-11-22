@@ -181,7 +181,7 @@ public sealed class InventoryCostingService(CompanyDatabaseResolver resolver, Co
         return CostingMath.ToUnits(q, CostingMath.QuantityScale);
     }
 
-    private static BigInteger Amount(decimal a, int moneyDecimals)
+    internal static BigInteger Amount(decimal a, int moneyDecimals)
     {
         if (a < 0m || a >= 1_000_000_000_000_000_000m) throw new CostingException("invalid_amount");
         if (!CostingMath.FitsDecimals(a, moneyDecimals)) throw new CostingException("amount_precision_exceeded", $"{a}");

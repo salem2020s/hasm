@@ -51,6 +51,16 @@ public sealed record ImportSettingsInput(int? RetentionDays, int? PendingExpiryD
 public sealed record ImportMaintenanceResult(int Expired, int Purged, int Rewrapped);
 
 /// <summary>
+/// The outcome of an import-file key rewrap (D-180; like the attachments' <c>RewrapOutcome</c>): <see cref="Failed"/> counts originals that could not be rewrapped (missing file, unavailable or invalid
+/// old key, malformed envelope, refused change); <see cref="Usage"/> is the key usage of every not-yet-purged original read AFTER the run. The old keys may be retired (as far as import originals are
+/// concerned) only when nothing failed, nothing is left under another key and no key is unknown.
+/// </summary>
+public sealed record ImportRewrapOutcome(int Rewrapped, int Skipped, int Failed, Hasm.Infrastructure.Security.EncryptionKeyUsage Usage)
+{
+    public bool OldKeysMayBeRetired => Failed == 0 && Usage.UnderOtherKeys == 0 && Usage.Unknown == 0;
+}
+
+/// <summary>
 /// An import adapter: ALL business knowledge about one kind of data lives behind this interface, never in the generic framework. The descriptor identifies it and its permissions; the fields drive mapping
 /// and normalization; <see cref="AnalyzeAsync"/> validates, detects conflicts against existing records and says exactly what application would do; later slices add application.
 /// </summary>
