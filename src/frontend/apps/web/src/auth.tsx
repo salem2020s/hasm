@@ -11,13 +11,17 @@ import { flushSync } from "react-dom";
 export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "ready";
 /** The unfinished second-factor step of a login (Phase 4.1). Held in memory only; the challenge is single use, bound to this client and expires in five minutes. */
 export interface MfaFlow { kind: LoginStep["kind"]; challenge: string | null; secret: EnrolmentSecret | null }
-export type Notice = "session_expired" | "logged_out" | null;
+/** "resume_failed" (D-236): the sign-in succeeded but the company could not be re-entered for a reason that is NOT a refusal (no answer, a server error); still locked, the input is kept, the user signs in again. */
+export type Notice = "session_expired" | "logged_out" | "resume_failed" | null;
 
 /**
  * What the unsaved-changes registry (unsaved.tsx) lets the session provider do: ask whether anything is unsaved when the session ends, and forget everything when the
  * preserved input is dropped. The registry holds section names only; the input itself is nothing but the React state of the mounted screens.
  */
 export interface UnsavedProbe { isDirty(): boolean; clear(): void }
+
+/** The answers that mean the company can no longer be entered by this user (forbidden, gone, or no longer selectable). */
+const CANNOT_ENTER: ReadonlySet<number> = new Set([403, 404, 409]);
 
 /** Cross-tab session events (same browser, same origin). The channel carries the bare event name and nothing else; nothing is stored. */
 const SESSION_CHANNEL = "hasm-session";
@@ -166,8 +170,10 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   }, [gate, endSession]);
 
   const handleError = useCallback((error: unknown) => {
+    // A call refused by the closed gate was never sent: it says nothing about the session. It is reported as handled and changes NOTHING, whatever the state.
+    if (error instanceof ApiError && error.code === "session_locked") return true;
     if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
-      expire();                                                  // `session_locked` (a call refused by the closed gate) lands here too and is a no-op while locked
+      expire();
       return true;
     }
     return false;
@@ -247,16 +253,16 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
    *  - The same user id: the remembered company is selected on the new session and the access answer is read; only when the server confirms that very company are the
    *    permissions replaced, the lock released and - last - the gate opened. A screen whose permission is gone is then replaced by the normal "no access" rendering,
    *    which unmounts it together with its input.
-   *  - Anything else (another user, a company that can no longer be entered): returns false and the caller drops the shell BEFORE it continues.
-   * A 401 in the middle (the brand-new session is already gone) is rethrown: the dialog stays, still locked.
+   *  - Another user, or a company the server REFUSES (or answers differently): "drop", and the caller drops the shell BEFORE it continues.
+   * Any failure that is not such a refusal (network, 5xx, a 401 because the brand-new session is already gone): "retry", the dialog stays, still locked.
    */
-  const resumeLocked = useCallback(async (signedIn: SessionUser): Promise<boolean> => {
+  const resumeLocked = useCallback(async (signedIn: SessionUser): Promise<"resumed" | "retry" | "drop"> => {
     const held = lock.current;
-    if (!held || signedIn.id !== held.userId) return false;
+    if (!held || signedIn.id !== held.userId) return "drop";
     try {
       await api.selectCompany(held.companyId);
       const me = await api.accessMe();
-      if (me.companyId !== held.companyId) return false;
+      if (me.companyId !== held.companyId) return "drop";
       setUser(signedIn);
       applyAccess(me);
       setMfa(null);
@@ -264,10 +270,15 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
       lock.current = null;
       setLocked(false);
       gate.open();
-      return true;
+      return "resumed";
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) throw e;
-      return false;
+      // Only a DEFINITE refusal by the server means "this user can no longer enter that company". Anything else (no answer, a 5xx, a throttle, a 401 because the
+      // new session is already gone) says nothing about that: the lock and the input are KEPT, the second step (its challenge is spent) is left, and the dialog's
+      // password form says that signing in again will retry.
+      if (e instanceof ApiError && CANNOT_ENTER.has(e.status)) return "drop";
+      setMfa(null);
+      setNotice("resume_failed");
+      return "retry";
     }
   }, [api, applyAccess, gate]);
 
@@ -293,18 +304,28 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   }, [gate]);
 
   const finishLogin = useCallback(async (signedIn: SessionUser) => {
+    let dropped = false;
     if (lock.current) {
-      if (await resumeLocked(signedIn)) { announce("signed-in"); return; }
+      const outcome = await resumeLocked(signedIn);
+      if (outcome !== "drop") { announce("signed-in"); return; }
       dropShell();
+      dropped = true;
     }
     announce("signed-in");
     setMfa(null);
     setUser(signedIn);
     setNotice(null);
-    const list = (await api.listCompanies()).companies;
-    setCompanies(list);
-    if (!(await autoEnterSole(list))) setPhase("needCompany");
-  }, [api, autoEnterSole, resumeLocked, dropShell, announce]);
+    try {
+      const list = (await api.listCompanies()).companies;
+      setCompanies(list);
+      if (!(await autoEnterSole(list))) setPhase("needCompany");
+    } catch (e) {
+      if (!dropped) throw e;                                     // an ordinary sign-in: the form is still there and shows the error, as before
+      // The shell was just dropped (phase "loading") and the sign-in form is gone with the dialog: never stay there. A 401 ends the session; anything else shows
+      // the "service unreachable" page with its retry.
+      if (e instanceof ApiError && e.status === 401) endSession("session_expired"); else setPhase("unreachable");
+    }
+  }, [api, autoEnterSole, resumeLocked, dropShell, announce, endSession]);
 
   const login = useCallback(async (loginName: string, password: string) => {
     const result = await api.login(loginName, password); // throws ApiError: the form shows the mapped message
@@ -345,9 +366,10 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
       if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
     gate.close();
+    setShellEpoch((n) => n + 1);
     setCompanyId(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
-    await loadCompanies();
-    setPhase("needCompany");
+    setPhase("needCompany");                                     // at once (the invariant above); the list refreshes behind it
+    try { await loadCompanies(); } catch (e) { handleError(e); }
   }, [api, companyId, enterCompany, gate, handleError, loadCompanies]);
 
   const logout = useCallback(async () => {
@@ -390,6 +412,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     await enterCompany();
   }, [api, enterCompany]);
 
+  // Invariant: outside the lock of D-236 a MOUNTED shell never sits behind a CLOSED gate. Whoever closes the gate leaves the phase "ready" in the same step.
   const changeCompany = useCallback(async () => {
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }
     gate.close();                                                // no company: nothing for a screen to ask; the next enterCompany opens it again
@@ -399,8 +422,8 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
-    try { await loadCompanies(); } catch (e) { if (handleError(e)) return; }
-    setPhase("needCompany");
+    setPhase("needCompany");                                     // at once: the selection shows the list it already has while the fresh one loads
+    try { await loadCompanies(); } catch (e) { handleError(e); }
   }, [api, gate, handleError, loadCompanies]);
 
   const refreshCompanies = useCallback(async () => {

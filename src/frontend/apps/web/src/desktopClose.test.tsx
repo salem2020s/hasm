@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderApp, signedIn } from "./test-utils";
+import { apiError, renderApp, signedIn } from "./test-utils";
 
 // The official Tauri 2 window API, replaced by a fake that records the close-requested handler and the destroy() call.
 const fake = vi.hoisted(() => ({ handler: null as null | ((e: { preventDefault: () => void }) => void), destroy: vi.fn(), unlisten: vi.fn(), onCloseRequested: vi.fn() }));
@@ -100,6 +100,58 @@ describe("Windows desktop: native window-close request", () => {
     await waitFor(() => expect(fake.handler).not.toBeNull());
     unmount();
     await waitFor(() => expect(fake.unlisten).toHaveBeenCalled());
+  });
+
+  // D-236: the session ended with unsaved input, the shell is locked behind the sign-in-again dialog, and the user closes the window.
+  describe("while the shell is locked (session ended with unsaved input)", () => {
+    const lock = async () => {
+      const c = signedIn({ getProfile: vi.fn().mockResolvedValue({ profile: stored, revision: 1, updatedAtUtc: null, projection: "synced" }), putProfile: vi.fn().mockRejectedValue(apiError(401, "unauthenticated")) });
+      renderApp(c);
+      await go("#/company/details");
+      await edit();
+      await waitFor(() => expect(fake.handler).not.toBeNull());
+      await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+      await screen.findByTestId("reauth-dialog");
+      return c;
+    };
+    const question = () => screen.getAllByRole("dialog").find((d) => d !== screen.getByTestId("reauth-dialog"))!;
+
+    it("the close request is NOT silently ignored: it is prevented and the Stay / Discard question appears above the dialog, without naming any section or value", async () => {
+      await lock();
+      expect(pressX()).toBe(true);
+      await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
+      const q = question();
+      expect(q).toHaveTextContent("توجد إدخالات غير محفوظة. إغلاق النافذة سيتجاهلها نهائياً.");
+      expect(q.textContent).not.toContain("بيانات الشركة");                            // no section name for whoever is not signed in
+      expect(q.textContent).not.toContain("Jeddah");
+      expect(q).toHaveAccessibleName("تغييرات غير محفوظة");                             // its own title, not something of the hidden shell
+      expect(fake.destroy).not.toHaveBeenCalled();
+    });
+
+    it("Stay keeps the window, the lock and the hidden input", async () => {
+      await lock();
+      pressX();
+      await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
+      await userEvent.click(within(question()).getByRole("button", { name: "البقاء في الصفحة" }));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(screen.getByTestId("reauth-dialog")).toBeInTheDocument();
+      expect([...document.querySelectorAll("input")].some((i) => i.value === "Jeddah")).toBe(true);
+      expect(fake.destroy).not.toHaveBeenCalled();
+    });
+
+    it("Discard closes the window (the input is memory only and ends with it)", async () => {
+      await lock();
+      pressX();
+      await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
+      await userEvent.click(within(question()).getByRole("button", { name: "تجاهل التغييرات" }));
+      expect(fake.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("a second close request while the question is open does not stack another one", async () => {
+      await lock();
+      pressX(); pressX();
+      await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
+    });
   });
 });
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { createSessionBridge } from "./auth";
+import { AuthProvider, createSessionBridge, useAuth } from "./auth";
 import { catalog } from "./messages";
 import { createStepUpBridge } from "./stepUp";
 import { apiError, signedIn, USER } from "./test-utils";
@@ -372,6 +372,191 @@ describe("session expiry with unsaved input (D-236)", () => {
     expect(await screen.findByTestId("notice-expired")).toBeInTheDocument();
     expect(screen.queryByTestId("reauth-dialog")).toBeNull();
     expect(screen.queryByTestId("shell-root")).toBeNull();
+  });
+
+  // ---- review of PR 196 (FH): M-1 to M-4, L-2
+  it("names the dialog after its OWN title, not after the hidden screen, and shares no element id with the hidden shell (Arabic, English, second step)", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    const duplicateIds = () => { const ids = [...document.querySelectorAll("[id]")].map((e) => e.id); return ids.filter((id, i) => ids.indexOf(id) !== i); };
+    expect(screen.getByTestId("reauth-dialog")).toHaveAccessibleName("تسجيل الدخول");
+    expect(screen.getByRole("dialog", { name: "تسجيل الدخول" })).toBe(screen.getByTestId("reauth-dialog"));
+    expect(shell().querySelector("#page-title")).not.toBeNull();                        // the hidden page still has its own title id ...
+    expect(screen.getByTestId("reauth-dialog").querySelector("#page-title")).toBeNull(); // ... and the dialog does not use it
+    expect(duplicateIds()).toEqual([]);
+    for (const label of [/اسم المستخدم/, /كلمة المرور/]) expect(screen.getByTestId("reauth-dialog").contains(screen.getByLabelText(label))).toBe(true);
+
+    await userEvent.click(within(screen.getByTestId("reauth-dialog")).getByRole("button", { name: /English/i }));
+    expect(screen.getByTestId("reauth-dialog")).toHaveAccessibleName("Sign in");
+    expect(duplicateIds()).toEqual([]);
+
+    (client.login as ReturnType<typeof vi.fn>).mockResolvedValue({ step: { kind: "mfa_required", challenge: "ch-1" } });
+    const dialog = within(screen.getByTestId("reauth-dialog"));
+    await userEvent.type(dialog.getByLabelText(/User name|Username|Login/i), "amal");
+    await userEvent.type(dialog.getByLabelText(/Password/i), "secret-password");
+    await userEvent.click(dialog.getByRole("button", { name: /Sign in/i }));
+    await dialog.findByLabelText(/Verification code/);
+    expect(screen.getByTestId("reauth-dialog")).toHaveAccessibleName("Two-step verification");
+    expect(duplicateIds()).toEqual([]);
+  });
+
+  it("decides by the user ID the server returns, never by the name: the same login name under another id is dropped", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.login as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { ...USER, id: "u1-other" } });   // same login and display name, another account
+    await signInAgain();
+    await waitFor(() => expect(screen.getByLabelText("المدينة")).toHaveValue("Riyadh"));
+    expect(screen.queryByTestId("reauth-dialog")).toBeNull();
+    expect(cityInDocument()).toBeNull();
+    expect(document.body.textContent).not.toContain(SECRET);
+  });
+
+  it("decides by the user ID the server returns, never by the name: the same id under a changed login and display name is restored", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.login as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { ...USER, login: "amal.renamed", displayName: "Amal R." } });
+    await signInAgain();
+    await waitFor(() => expect(screen.queryByTestId("reauth-dialog")).toBeNull());
+    expect(screen.getByLabelText("المدينة")).toHaveValue(SECRET);
+    expect(screen.getByText("Amal R.")).toBeInTheDocument();
+  });
+
+  for (const [what, failure] of [["a network error", new Error("network down")], ["a server error (503)", apiError(503, "unavailable")], ["a throttle (429)", apiError(429, "too_many_requests")]] as const) {
+    it(`keeps the lock and the input when re-entering the company fails with ${what}, says so, and restores on the next sign-in`, async () => {
+      const { client, gate } = await startDirty();
+      await expireBySaving();
+      const select = client.selectCompany as ReturnType<typeof vi.fn>;
+      select.mockRejectedValueOnce(failure);
+      await signInAgain();
+      expect(await screen.findByTestId("notice-resume-failed")).toBeInTheDocument();
+      expect(screen.getByTestId("reauth-dialog")).toBeInTheDocument();
+      expect(shell()).toHaveAttribute("hidden");
+      expect(cityInDocument()).not.toBeNull();                                          // the same user's input is NOT destroyed by a transient failure
+      expect(gate.isOpen()).toBe(false);
+      expect(within(screen.getByTestId("reauth-dialog")).getByLabelText(/كلمة المرور/)).toHaveValue("");
+      await signInAgain();                                                              // the retry
+      await waitFor(() => expect(screen.queryByTestId("reauth-dialog")).toBeNull());
+      expect(screen.getByLabelText("المدينة")).toHaveValue(SECRET);
+      expect(screen.queryByTestId("notice-resume-failed")).toBeNull();
+    });
+  }
+
+  it("keeps the lock when the access answer fails with a server error after the company was selected", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.accessMe as ReturnType<typeof vi.fn>).mockRejectedValueOnce(apiError(500, "server_error"));
+    await signInAgain();
+    expect(await screen.findByTestId("notice-resume-failed")).toBeInTheDocument();
+    expect(cityInDocument()).not.toBeNull();
+  });
+
+  it("leaves the second step when the company cannot be reached after a correct code (the challenge is spent) and still keeps the input", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.login as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ step: { kind: "mfa_required", challenge: "ch-1" } });
+    (client as unknown as { verifyMfa: unknown }).verifyMfa = vi.fn().mockResolvedValue({ user: USER });
+    (client.selectCompany as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("network down"));
+    await signInAgain();
+    const dialog = within(screen.getByTestId("reauth-dialog"));
+    await userEvent.type(await dialog.findByLabelText(/رمز التحقق/), "123456");
+    await userEvent.click(dialog.getByRole("button", { name: "تحقق" }));
+    expect(await screen.findByTestId("notice-resume-failed")).toBeInTheDocument();
+    expect(dialog.getByLabelText(/كلمة المرور/)).toBeInTheDocument();                   // back on the password form, not stuck on a spent code step
+    expect(document.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
+    expect(cityInDocument()).not.toBeNull();
+  });
+
+  it("never strands the application on the loading screen: a different user whose company list cannot be read gets the unreachable page with its retry", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.login as ReturnType<typeof vi.fn>).mockResolvedValue({ user: OTHER });
+    (client.listCompanies as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+    await signInAgain();
+    expect(await screen.findByTestId("unreachable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "إعادة المحاولة" })).toBeInTheDocument();
+    expect(screen.queryByTestId("reauth-dialog")).toBeNull();
+    expect(cityInDocument()).toBeNull();                                                // dropped all the same: it was another user
+  });
+
+  it("never strands the application on the loading screen: the same user refused the company, then no company list", async () => {
+    const { client } = await startDirty();
+    await expireBySaving();
+    (client.selectCompany as ReturnType<typeof vi.fn>).mockRejectedValue(apiError(403, "forbidden"));
+    (client.listCompanies as ReturnType<typeof vi.fn>).mockRejectedValue(apiError(503, "unavailable"));
+    await signInAgain();
+    expect(await screen.findByTestId("unreachable")).toBeInTheDocument();
+    expect(cityInDocument()).toBeNull();
+  });
+
+  it("a call refused by the closed gate is never taken for a session end: Change company with a slow company list keeps the user signed in (and the tab can still lock later)", async () => {
+    let release: (v: { companies: { id: string; nameAr: string; nameEn: string }[] }) => void = () => undefined;
+    const companies = { companies: [{ id: "c1", nameAr: "شركة الأمل", nameEn: "Amal Co" }, { id: "c2", nameAr: "مؤسسة النور", nameEn: "Noor Est" }] };
+    const listCompanies = vi.fn().mockResolvedValueOnce(companies).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; })).mockResolvedValue(companies);
+    const client = signedIn({
+      listCompanies,
+      getProfile: vi.fn().mockResolvedValue({ profile: stored, revision: 3, updatedAtUtc: null, projection: "synced" }),
+      putProfile: vi.fn().mockRejectedValue(apiError(401, "unauthenticated")),
+    });
+    const { gate } = recordingGate();
+    render(<I18nProvider catalog={catalog}><App client={client} gate={gate} /></I18nProvider>);
+    await screen.findByTestId("company-name");
+    go("#/account/security");                                                           // this screen reads the session status whenever the session value changes
+    await screen.findByRole("heading", { name: "الأمان", level: 1 });
+    await userEvent.click(screen.getByRole("button", { name: "تغيير الشركة" }));
+    expect(await screen.findByRole("heading", { name: "اختيار الشركة" })).toBeInTheDocument();   // at once, while the fresh list is still loading
+    expect(screen.queryByTestId("shell-root")).toBeNull();                              // no mounted shell behind the closed gate
+    expect(gate.isOpen()).toBe(false);
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    await act(async () => { release(companies); await Promise.resolve(); });
+    expect(screen.queryByTestId("notice-expired")).toBeNull();
+    expect(client.logout).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /شركة الأمل/ }));
+    await screen.findByTestId("company-name");
+    expect(screen.getByText(USER.displayName)).toBeInTheDocument();                     // still the signed-in user
+    expect(gate.isOpen()).toBe(true);
+    // ... and the lock for unsaved input still arms in this tab.
+    go("#/company/profile");
+    const city = await screen.findByLabelText("المدينة");
+    await userEvent.clear(city);
+    await userEvent.type(city, SECRET);
+    await userEvent.click(screen.getByRole("button", { name: "حفظ" }));
+    expect(await screen.findByTestId("reauth-dialog")).toBeInTheDocument();
+  });
+
+  it("handleError swallows the gate's own refusal in every state and changes nothing", async () => {
+    let handle: (e: unknown) => boolean = () => false;
+    function Probe() { const a = useAuth(); handle = a.handleError; return <span data-testid="probe-phase">{a.phase}:{String(a.locked)}:{a.user?.id ?? "-"}</span>; }
+    const gate = createSessionGate();
+    render(<I18nProvider catalog={catalog}><AuthProvider api={signedIn()} gate={gate}><Probe /></AuthProvider></I18nProvider>);
+    await waitFor(() => expect(screen.getByTestId("probe-phase")).toHaveTextContent("ready:false:u1"));
+    let handled = false;
+    act(() => { handled = handle(new ApiError(401, "session_locked")); });
+    expect(handled).toBe(true);
+    expect(screen.getByTestId("probe-phase")).toHaveTextContent("ready:false:u1");      // not signed out, not locked
+    expect(gate.isOpen()).toBe(true);
+    act(() => { handled = handle(new ApiError(401, "unauthenticated")); });             // a real 401 still ends the session
+    expect(handled).toBe(true);
+    await waitFor(() => expect(screen.getByTestId("probe-phase")).toHaveTextContent("anonymous:false:-"));
+    expect(gate.isOpen()).toBe(false);
+  });
+
+  it("starts with a CLOSED gate and opens it only for a confirmed session with a company (an application built on a gate that starts open fails here)", async () => {
+    const gate = createSessionGate();
+    let answer: (v: unknown) => void = () => undefined;
+    const client = signedIn({ status: vi.fn().mockImplementation(() => new Promise((resolve) => { answer = resolve; })) });
+    render(<I18nProvider catalog={catalog}><App client={client} gate={gate} /></I18nProvider>);
+    expect(gate.isOpen()).toBe(false);                                                  // nothing confirmed yet
+    await act(async () => { answer({ authenticated: false }); await Promise.resolve(); });
+    await screen.findByRole("heading", { name: "تسجيل الدخول" });
+    expect(gate.isOpen()).toBe(false);                                                  // the sign-in page: still closed
+    await userEvent.type(screen.getByLabelText(/اسم المستخدم/), "amal");
+    await userEvent.type(screen.getByLabelText(/كلمة المرور/), "secret-password");
+    await userEvent.click(screen.getByRole("button", { name: "دخول" }));
+    await screen.findByTestId("company-name");
+    expect(gate.isOpen()).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "تسجيل الخروج" }));
+    await screen.findByTestId("notice-logged-out");
+    expect(gate.isOpen()).toBe(false);
   });
 
   it("treats a call refused by the closed gate as nothing new: no second dialog, no sign-out", async () => {

@@ -1,7 +1,7 @@
 import { useI18n } from "@hasm/ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "./auth";
-import { Banner } from "./components";
+import { AuthIdPrefix, Banner } from "./components";
 import { LoginPage } from "./pages/Login";
 
 /**
@@ -12,6 +12,8 @@ import { LoginPage } from "./pages/Login";
  * (password, then the second factor, an enrolment or the recovery notice, exactly as at any sign-in) plus one way out, "Discard and sign out".
  * The password and code fields belong to the sign-in form, are never part of anything preserved, and disappear with this dialog on every outcome.
  */
+export const REAUTH_IDS = "reauth-";
+
 export function ReauthDialog({ frame }: { frame: (children: ReactNode) => ReactNode }) {
   const { t } = useI18n();
   const auth = useAuth();
@@ -25,11 +27,12 @@ export function ReauthDialog({ frame }: { frame: (children: ReactNode) => ReactN
   }, []);
 
   return (
-    <div ref={root} className="reauth" role="dialog" aria-modal="true" aria-labelledby="page-title" aria-describedby="reauth-message" data-testid="reauth-dialog">
+    <div ref={root} className="reauth" role="dialog" aria-modal="true" aria-labelledby={`${REAUTH_IDS}page-title`} aria-describedby="reauth-message" data-testid="reauth-dialog">
       {frame(
         <>
           <Banner kind="warning" testId="reauth-message"><span id="reauth-message">{t("reauth.message")}</span></Banner>
-          <LoginPage />
+          {/* Ids of its own: the hidden shell page has a `page-title` and fields too, and a shared id would name this dialog after the HIDDEN screen. */}
+          <AuthIdPrefix.Provider value={REAUTH_IDS}><LoginPage /></AuthIdPrefix.Provider>
           <div className="reauth-discard">
             <button type="button" className="ghost" data-testid="reauth-discard" disabled={busy} onClick={() => { setBusy(true); void auth.discardLocked(); }}>{t("reauth.discard")}</button>
           </div>

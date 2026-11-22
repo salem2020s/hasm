@@ -1,14 +1,21 @@
 import { ApiError } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useState, type FormEvent } from "react";
+import { useContext, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
-import { Banner, Field } from "../components";
+import { AuthIdPrefix, Banner, Field } from "../components";
 import { MfaStep } from "./MfaStep";
 
+/** The sign-in forms: the password form, or the step that follows a correct password. Two components, so that each keeps its own hooks whichever is shown. */
 export function LoginPage() {
+  const auth = useAuth();
+  // Locked (D-236): the phase stays "ready" so that the shell stays mounted; the step is read from `mfa`.
+  return (auth.phase === "mfa" || auth.locked) && auth.mfa ? <MfaStep /> : <PasswordForm />;
+}
+
+function PasswordForm() {
   const { t } = useI18n();
   const auth = useAuth();
-  if ((auth.phase === "mfa" || auth.locked) && auth.mfa) return <MfaStep />;   // locked (D-236): the phase stays "ready" so that the shell stays mounted; the step is read from `mfa`
+  const ids = useContext(AuthIdPrefix);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -38,17 +45,18 @@ export function LoginPage() {
   }
 
   return (
-    <section aria-labelledby="page-title">
-      <h1 id="page-title" className="auth-title">{t("login.title")}</h1>
+    <section aria-labelledby={`${ids}page-title`}>
+      <h1 id={`${ids}page-title`} className="auth-title">{t("login.title")}</h1>
       <p className="page-description auth-sub">{t("tagline")}</p>
       {auth.notice === "session_expired" && <Banner kind="warning" testId="notice-expired">{t("login.session_expired")}</Banner>}
+      {auth.notice === "resume_failed" && <Banner kind="error" testId="notice-resume-failed">{t("reauth.resume_failed")}</Banner>}
       {auth.notice === "logged_out" && <Banner kind="success" testId="notice-logged-out">{t("login.logged_out")}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       <form onSubmit={submit} noValidate>
-        <Field id="login" label={t("login.user")} error={fieldError.login} required>
+        <Field id={`${ids}login`} label={t("login.user")} error={fieldError.login} required>
           {(aria) => <input {...aria} name="login" autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} dir="ltr" />}
         </Field>
-        <Field id="password" label={t("login.password")} error={fieldError.password} required>
+        <Field id={`${ids}password`} label={t("login.password")} error={fieldError.password} required>
           {(aria) => <input {...aria} name="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} dir="ltr" />}
         </Field>
         <button type="submit" className="primary block" disabled={busy}>{busy ? t("loading") : t("login.submit")}</button>

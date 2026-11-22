@@ -25,7 +25,7 @@ const EDITING_ROUTES = "/company/details";
 export function UnsavedProvider({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const dirty = useRef<Record<string, string>>({}); // key -> label, only while dirty
-  const [pending, setPending] = useState<null | { run: () => void; labels: string[] }>(null);
+  const [pending, setPending] = useState<null | { run: () => void; labels: string[]; whileLocked?: boolean }>(null);
 
   const auth = useAuth();
   // D-236: while the shell is locked (the session ended with unsaved input) nothing may leave the current page or ask a question on top of the sign-in-again dialog.
@@ -66,6 +66,12 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
       const off = await win.onCloseRequested((event) => {
         if (!isDirty()) return;
         event.preventDefault();
+        if (locked.current) {
+          // D-236: the window is asked to close while the shell is locked. The close must stay possible, and it destroys the preserved input (memory only), so the
+          // same Stay / Discard question is asked on top of the sign-in-again dialog - WITHOUT the section names, which nobody who is not signed in may read.
+          setPending((open) => open ?? { run: () => { void win.destroy(); }, labels: [], whileLocked: true });
+          return;
+        }
         guard(() => { void win.destroy(); });
       });
       if (cancelled) off(); else unlisten = off;
@@ -80,16 +86,18 @@ export function UnsavedProvider({ children }: { children: ReactNode }) {
     return () => attachUnsaved(null);
   }, [attachUnsaved]);
   // An open Stay / Discard question is withdrawn when the shell locks: the sign-in-again dialog is the only dialog then.
-  useEffect(() => { if (auth.locked) setPending(null); }, [auth.locked]);
+  // ... and a question asked while locked (window close) is withdrawn when the lock ends.
+  useEffect(() => { setPending(null); }, [auth.locked]);
 
   const api = useMemo<UnsavedApi>(() => ({ setDirty, guard }), [setDirty, guard]);
   return (
     <UnsavedContext.Provider value={api}>
       {children}
-      {pending && !auth.locked && (
+      {pending && (!auth.locked || pending.whileLocked) && (
         <ConfirmDialog
+          idPrefix={pending.whileLocked ? "reauth-" : ""}
           title={t("unsaved.title")}
-          message={t("unsaved.message", { sections: pending.labels.join(t("unsaved.joiner")) })}
+          message={pending.whileLocked ? t("reauth.close_message") : t("unsaved.message", { sections: pending.labels.join(t("unsaved.joiner")) })}
           cancelLabel={t("unsaved.stay")}
           confirmLabel={t("unsaved.discard")}
           onCancel={() => setPending(null)}
