@@ -64,7 +64,7 @@ export function SecurityPage() {
   );
 }
 
-function VoluntaryEnrolment({ onDone }: { onDone: () => Promise<void> }) {
+export function VoluntaryEnrolment({ onDone }: { onDone: () => Promise<void> }) {
   const { t } = useI18n();
   const auth = useAuth();
   const [password, setPassword] = useState("");

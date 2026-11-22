@@ -218,6 +218,7 @@ public class ConfigurationSchemaContractTests
     private static readonly string[] ApprovedTables =
     [
         CompanySchema.RetentionPolicy.Table, CompanySchema.RetentionRule.Table, CompanySchema.LegalHold.Table,   // Phase R slice R1 (migration 0031): retention policy versions, their rules and legal holds for removed attachments (nothing is deleted)
+        CompanySchema.ApprovalPolicyIdentity.Table,   // Phase 3.13 (migration 0033): one fingerprint per approval policy, kept true by triggers (duplicate active policies are refused)
         CompanySchema.Identity.Table, CompanySchema.BusinessAudit.Table, CompanySchema.Profile.Table, CompanySchema.Settings.Table,
         CompanySchema.Currency.Table, CompanySchema.CompanyCurrency.Table, CompanySchema.ConfigRevision.Table,
         CompanySchema.Branch.Table, CompanySchema.BranchRevision.Table,   // Phase 3.1B (migration 0004)

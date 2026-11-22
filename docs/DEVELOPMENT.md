@@ -725,6 +725,29 @@ dotnet run --project src/backend/Hasm.Admin -- backup-hold-list
 
   An interrupted deletion is completed by the next execution. `backup-status` reports one that is still incomplete.
 
+### Encryption-key retirement report (D-179..D-181)
+```
+dotnet run --project src/backend/Hasm.Admin -- encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>]
+```
+* Run it before retiring an encryption master key (the attachment and import-file key ring). Give EVERY backup root (and, with multiple destinations, every destination).
+* **What it does not see.** It reads only the roots you give. It cannot see another disk, an off-site or offline copy, a second destination, or a standalone `backup-company` set (which can hold attachments under an older key). It also cannot see an upload in flight or an orphan file.
+* **`--all-backup-copies-listed`** is your attestation that the roots you gave are every place a backup of this installation is kept, and that no standalone set or copy under an older key is kept elsewhere. Without it the report is INCOMPLETE and no key is retirable, because the tool cannot know. Give it only when it is true.
+* Each backup root must exist, be a real directory (not a symbolic link) and hold at least one complete run whose signed status verifies. A mistyped path, a share that is not mounted or an empty folder is a blocker, never "nothing needs the key".
+* Inside a root, only run folders (named by a run id), unfinished deletions (`.deleting-*`) and `.retention` are allowed. Anything else there (a run moved or copied under another name such as `archive/<run id>` or `<run id>.bak`, a nested or hidden folder, a file, a link) blocks the report with `backup_root_unrecognised_entry:<names>`, because a run under another name is not read. Move it out of the root (or back to its run-id name), and write `--json` outside the roots.
+* The same applies one level down. `.retention` may hold only the retention tombstones (`.retention/tombstones/<run id>/` with the deleted run's status and the deletion markers); anything else there is `backup_root_unrecognised_entry:.retention/<path>`. A run folder that holds anything a run does not hold, such as another run copied into it, is `backup_run_unrecognised_content:<run id>`. Move such content out of the root.
+* A key is listed `RETIRABLE WITHIN THE SCANNED SCOPE` only when:
+  * it is not the active key;
+  * no live sensitive attachment needs it (active, removed or purged);
+  * no live import original needs it;
+  * no backup run present in any given root lists it. Every run on disk counts, also one that retention would delete: it can still be restored.
+* Anything unknown makes the report INCOMPLETE (exit 8) and lists the blockers: a company that is not Ready, cannot be read, or has no configured attachment or import storage; an unreadable file or key, or a missing company storage folder; a backup root that is missing, not a directory, a symbolic link or without a complete, verified run; an entry of a root that is not a run folder; a run whose key needs are unknown (unfinished, unverifiable or unencrypted) or an unfinished deletion (a `.deleting-*` folder); no attestation. Then no key may be retired.
+* A company that is `Provisioning` or `Failed` blocks every report for as long as it stays so (`company_unreadable:<id>:company_not_ready`). To resolve it, run `provision-company <company-id>` again until the company is `Ready`; it is safe to repeat. A `Pending` company has no database and does not block. There is no command that removes a registered company, so the report stays incomplete until the company is Ready.
+* A file or a key that cannot be read (`attachment_key_unknown`, `import_original_key_unknown`): check that the storage folders are mounted and readable; for attachments, `POST .../attachments/maintenance/verify` lists the unreadable items. Restore the file or the folder, then run the report again.
+* `missing_from_key_directory` means data or a present backup run needs a key that is not in the key directory: restore it from the key backup (`backup-keys`) before anything else.
+* The command is read-only: it writes no audit event and creates no folder (only the optional `--json` file). The JSON names the roots that were scanned, whether the scope was attested and the generation time (UTC): show that file to the approver, and make a new report if anything changed since. Retiring the key is a separate step that needs independent approval (D-080(6)). Keep every retired key with the older recovery kits.
+* After a key rotation, run the attachments' and the imports' rewrap (`POST .../attachments/maintenance/rewrap`, `POST .../imports/maintenance/rewrap`). Each reports `oldKeysMayBeRetired`; the report combines them with the backup runs present in the given roots.
+* Import originals are not part of backup sets today (D-179). The owner decided that they are to be included (D-224); that is not built yet. Until it is, a restore brings back the batch rows without their originals; such a batch needs a new upload.
+
 ### Backup destinations (Phase 4.3 slice 8; S8a: configuration and status only)
 Configure each destination as an administrative-tool setting (D-183). HASM stores no network credentials: a network share must already be mounted, or reachable as a UNC path, under the service account's own identity.
 ```
@@ -741,6 +764,15 @@ Hasm__Backup__Destinations__1__DailyKeep=14
 * `backup-keys` and `trial-restore-company` refuse a folder inside or around a destination (`destination_in_backup_root`): keep the recovery kit and restore staging away from the copies.
 * `backup-status <root>` prints every destination and exits with the OVERALL status: 1 when a destination has no verified copy, a stale, corrupt or conflicting copy, or a tombstone nothing explains; 8 when a destination lags behind the newest run, holds staging older than 24 hours, or is on the same volume as the root. A same-volume destination is not a second copy against disk loss (D-230), so it always warns. `backup-status <destination path>` checks that folder alone.
 * **S8a makes no copies.** Until the copy engine ships (S8b), every configured destination reports `replica_missing` (exit 1), so do not configure destinations in production before then.
+
+## Stock-period database guard (STOCK-PERIOD-DB, owner decision D-220, company migration 0034)
+
+* **What:** PostgreSQL itself refuses to INSERT a stock or cost posting record dated in a Soft Closed period, a Final Closed period, or no fiscal period, whoever writes it (service, tool or plain SQL). Forward-only and additive: two trigger functions and eleven BEFORE INSERT row triggers (the dictionary is `CompanySchema.StockPeriodGuard.cs`, generated by `tools/schema/company-0034-stock-period-guard.cjs`); nothing existing is altered, replaced or disabled; no existing row is read or validated; no UPDATE trigger.
+* **Guarded tables:** cost operations, cost entries, stock postings, stock posting reversals, stock adjustment postings, stock adjustment reversals, negative-stock obligations, settlements and obligation reversals (each by its own effective-date column, function `f_981674fd`), and cost layers and cost consumptions (by the date of the cost entry they reference, function `f_92619584`; the date is the inserting operation's own entry, never the receipt date of an old layer a consumption draws on).
+* **Refusals (exact messages, error code P0001):** `the fiscal period is soft closed`, `the fiscal period is final closed`, `no fiscal period covers the posting date`. They come from the unchanged helper of migration 0006 (`f_a26691bc(date, false)`), which also locks the period row FOR SHARE so a concurrent close waits for the posting. There is NO soft-close override for stock (as in the services). The services keep their own refusal codes (`fiscal_period_soft_closed`, `fiscal_period_final_closed`), which fire first.
+* **Consequences:** opening stock dated before the first fiscal period cannot be posted; a reversal is judged on its own date only (a reversal dated in an Open period of an original in a closed period is accepted); rows already in now-closed periods are untouched by the migration.
+* **Tests:** `StockPeriodGuardTests` and `StockPeriodGuardRuntimeRoleTests` (PostgreSQL; registered in `.github/workflows/backend.yml`). The runtime role cannot switch the triggers off or replace the functions.
+* **Merge order with PR 48 (the Phase 3.8D impact preview and recalculation, X1-A plan-execution layer):** its closed-period tests N10 and N28 must accept either trigger's refusal message in EITHER merge order; its catalog test N17 needs a change only if PR 48 merges first (it must then count the guard objects of company migration 0034, functions `f_981674fd` and `f_92619584` and the eleven triggers, as pre-existing).
 
 ## Load-test harness (stage 1: foundation; Release 1 acceptance 18.2/18.3)
 

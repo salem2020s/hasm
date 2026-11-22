@@ -8,7 +8,13 @@ import { flushSync } from "react-dom";
  * server is the source of truth and is asked on every start (`/auth/status`). Nothing sensitive (token, password, permissions) is ever
  * written to localStorage/sessionStorage; the only stored value is the non-sensitive UI language.
  */
-export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "ready";
+export type Phase = "loading" | "unreachable" | "anonymous" | "mfa" | "needCompany" | "needEnrolment" | "ready";
+/** The server answers 403 with this code when the selected company's MFA policy applies to the user and the user has no authenticator (Phase 4.1 S3b-1b). It is not a permission refusal and never ends the session. */
+export const ENROLMENT_REQUIRED = "mfa_enrolment_required";
+/** 409 answers of a company route whose evaluated company is not the session's current one (the MFA policy was judged for another company; the request was refused, fail closed). */
+export const COMPANY_SELECTION_CHANGED = "company_selection_changed";
+export const isCompanyContextChanged = (e: unknown): boolean => e instanceof ApiError && e.status === 409 && (e.code === COMPANY_SELECTION_CHANGED || e.code === "company_not_selected");
+export const isEnrolmentRequired = (e: unknown): boolean => e instanceof ApiError && e.status === 403 && e.code === ENROLMENT_REQUIRED;
 /** The unfinished second-factor step of a login (Phase 4.1). Held in memory only; the challenge is single use, bound to this client and expires in five minutes. */
 export interface MfaFlow { kind: LoginStep["kind"]; challenge: string | null; secret: EnrolmentSecret | null }
 /** "resume_failed" (D-236): the sign-in succeeded but the company could not be re-entered for a reason that is NOT a refusal (no answer, a server error); still locked, the input is kept, the user signs in again. */
@@ -95,7 +101,13 @@ const AuthContext = createContext<AuthValue | null>(null);
 
 /** Lets the api client tell the provider that the server ended the session (401) without a circular import. */
 export function createSessionBridge() {
-  const bridge = { listener: null as null | (() => void), fire: () => bridge.listener?.() };
+  const bridge = {
+    listener: null as null | (() => void), fire: () => bridge.listener?.(),
+    /** 403 `mfa_enrolment_required` on any authenticated call; `scope` is what {@link scope} answered when that call STARTED. */
+    enrolmentListener: null as null | ((scope?: unknown) => void), fireEnrolment: (scope?: unknown) => bridge.enrolmentListener?.(scope),
+    /** The current company-selection attempt (a counter the provider owns). The api client reads it when a call starts, so an answer that arrives after the selection changed can be told apart. */
+    scopeListener: null as null | (() => unknown), scope: (): unknown => bridge.scopeListener?.(),
+  };
   return bridge;
 }
 export type SessionBridge = ReturnType<typeof createSessionBridge>;
@@ -131,6 +143,15 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   const [notice, setNotice] = useState<Notice>(null);
   const [mfa, setMfa] = useState<MfaFlow | null>(null);
   const mounted = useRef(true);
+  /** The company whose selection the server answered 403 mfa_enrolment_required: selected again after the enrolment. */
+  const pendingCompany = useRef<string | null>(null);
+  /** The selected company as the callbacks below see it (the state value lags a render behind). */
+  const companyRef = useRef<string | null>(null);
+  /** Counts the company-selection attempts and clears: an enrolment-required answer of a call started under an older value belongs to a previous company and is ignored. */
+  const epoch = useRef(0);
+  /** A company selection (or the session restoration) is being answered by the server right now. */
+  const selecting = useRef(0);
+  const setCompany = useCallback((id: string | null) => { companyRef.current = id; setCompanyId(id); }, []);
 
   // The latest values for the listeners that outlive a render (the 401 bridge, the cross-tab channel).
   const live = useRef({ phase, user, companyId });
@@ -146,14 +167,37 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     unsaved.current?.clear();
     setUser(null);
     setCompanies([]);
-    setCompanyId(null);
+    setCompany(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
+    pendingCompany.current = null;
+    epoch.current++;
     setNotice(why);
     setPhase("anonymous");
+  }, [gate, setCompany]);
+
+  /** The company's MFA policy applies and the user has no authenticator: the enrolment prompt replaces the company screens. Idempotent (many calls may fail at once); the session stays and nothing is retried here. */
+  const requireEnrolment = useCallback(() => {
+    if (lock.current) return;                                    // a locked shell is resumed or dropped by the sign-in flow, which handles the refusal itself
+    const p = live.current.phase;
+    if (p === "anonymous" || p === "mfa") return;
+    gate.open();                                                 // the prompt (status, voluntary enrolment) is an authenticated screen without a company: it must be able to talk; no shell is mounted behind it
+    setPhase("needEnrolment");
   }, [gate]);
+
+  /**
+   * The same, for a signal that comes from OUTSIDE the provider's own selection flows (the api client's hook, or a page handing its error to `handleError`). It is honoured only when it belongs to the current selection attempt or
+   * company: a call that started before the selection changed (`scope` is older than the current attempt) is ignored, and so is any signal while no company is selected and no selection is being answered. A late refusal of a
+   * previous company's request therefore cannot raise the prompt from company selection or inside another company.
+   */
+  const signalEnrolment = useCallback((scope?: unknown) => {
+    if (scope !== undefined && scope !== epoch.current) return;
+    if (companyRef.current === null && selecting.current === 0) return;
+    requireEnrolment();
+  }, [requireEnrolment]);
+
 
   /**
    * The server ended the session (401). With unsaved input in a ready shell the application LOCKS instead of signing out (D-236): the gate closes at once, the user
@@ -174,34 +218,49 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     endSession("session_expired");
   }, [gate, endSession]);
 
+  /** Set below, once everything it needs exists: re-reads the session's company context (the 409 `company_selection_changed` / `company_not_selected` answers). */
+  const reloadContextRef = useRef<() => void>(() => undefined);
+
   const handleError = useCallback((error: unknown) => {
     // A call refused by the closed gate was never sent: it says nothing about the session. It is reported as handled and changes NOTHING, whatever the state.
     if (error instanceof ApiError && error.code === "session_locked") return true;
+    if (isEnrolmentRequired(error)) { signalEnrolment((error as ApiError).details.scope); return true; }   // handled either way: a stale refusal is not shown as a page error
+    // The server judged the company policy for one company and then found another selected on this session (409 company_selection_changed), or none (company_not_selected). The request was NOT served. This is not an error to show: the
+    // session context is read again (below) and the screens follow it.
+    if (isCompanyContextChanged(error)) { reloadContextRef.current(); return true; }
     if (error instanceof ApiError && error.status === 401 && error.code !== "mfa_step_up_required" && error.code !== "mfa_step_up_cancelled") {   // a stale second-factor proof is not a session end
       expire();
       return true;
     }
     return false;
-  }, [expire]);
+  }, [expire, signalEnrolment]);
 
   useEffect(() => {
-    if (bridge) bridge.listener = expire;
-    return () => { if (bridge) bridge.listener = null; };
-  }, [bridge, expire]);
+    if (bridge) { bridge.listener = expire; bridge.enrolmentListener = signalEnrolment; bridge.scopeListener = () => epoch.current; }
+    return () => { if (bridge) { bridge.listener = null; bridge.enrolmentListener = null; bridge.scopeListener = null; } };
+  }, [bridge, expire, signalEnrolment]);
+
+  /** Runs one company selection (or the restoration) as the current attempt: calls started before it no longer count, and its own refusal does. */
+  const attempt = useCallback(async <T,>(run: () => Promise<T>): Promise<T> => {
+    epoch.current++;
+    selecting.current++;
+    try { return await run(); } finally { selecting.current--; }
+  }, []);
 
   const applyAccess = useCallback((me: AccessMe) => {
-    setCompanyId(me.companyId);
+    setCompany(me.companyId);
     setPermissions(new Set(me.grants.filter((g) => g.scope === "company").flatMap((g) => g.permissions)));
     setAnyPermissions(new Set(me.grants.flatMap((g) => g.permissions)));
     const perBranch = new Map<string, Set<string>>();
     for (const g of me.grants) if (g.scope === "branch" && g.scopeId) { const set = perBranch.get(g.scopeId) ?? new Set<string>(); g.permissions.forEach((p) => set.add(p)); perBranch.set(g.scopeId, set); }
     setBranchPermissions(perBranch);
     setRoleGrants(me.grants.map((g) => ({ roleId: g.roleId, scope: g.scope, scopeId: g.scopeId })));
-  }, []);
+  }, [setCompany]);
 
   const enterCompany = useCallback(async () => {
     const me = await api.accessMe();
     applyAccess(me);
+    pendingCompany.current = null;                               // a company was entered: a refusal remembered from an earlier selection (another company) must never be selected again (review M1 of PR 185)
     setPhase("ready");
     gate.open();                                                 // a confirmed session with a company: the screens may talk to the server
   }, [api, applyAccess, gate]);
@@ -219,14 +278,14 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   const autoEnterSole = useCallback(async (list: CompanySummary[]): Promise<boolean> => {
     if (list.length !== 1) return false;
     try {
-      await api.selectCompany(list[0].id);
-      await enterCompany();
+      await attempt(async () => { await api.selectCompany(list[0].id); await enterCompany(); });
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) throw e;
+      if (isEnrolmentRequired(e)) { pendingCompany.current = list[0].id; requireEnrolment(); return true; }   // the company's policy needs an authenticator first: the prompt is shown, the screen is not "needCompany"
       return false;
     }
-  }, [api, enterCompany]);
+  }, [api, attempt, enterCompany, requireEnrolment]);
 
   // Session restoration: the server decides (cookie), the client keeps no session data of its own.
   useEffect(() => {
@@ -239,8 +298,9 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
         setUser(status.user);
         const list = (await api.listCompanies()).companies;
         setCompanies(list);
-        try { await enterCompany(); } catch (e) {
+        try { await attempt(enterCompany); } catch (e) {
           if (e instanceof ApiError && e.status === 401) throw e;
+          if (isEnrolmentRequired(e)) { requireEnrolment(); return; }     // a company is selected on the server and its policy needs an authenticator (which company is not known here: see adoptEnrolledSession)
           // 409 company_not_selected (or no usable selection): enter the only company, otherwise ask.
           if (!(await autoEnterSole(list))) setPhase("needCompany");
         }
@@ -251,7 +311,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
       }
     })();
     return () => { mounted.current = false; };
-  }, [api, enterCompany, autoEnterSole]);
+  }, [api, attempt, enterCompany, autoEnterSole, requireEnrolment]);
 
   /**
    * A sign-in succeeded while the shell is locked. `signedIn` is the user the SERVER returned (never the typed name).
@@ -266,7 +326,14 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     if (!held || signedIn.id !== held.userId) return "drop";
     try {
       await api.selectCompany(held.companyId);
-      const me = await api.accessMe();
+      let me: AccessMe;
+      try { me = await api.accessMe(); }
+      catch (e) {
+        // The server says the session has no (or a different) company right now: that is a statement about a request race on the brand-new session, not a refusal to let this user in. Keep the lock and the input and say
+        // that signing in again will retry (review L1 of PR 196).
+        if (isCompanyContextChanged(e)) { setMfa(null); setNotice("resume_failed"); return "retry"; }
+        throw e;
+      }
       if (me.companyId !== held.companyId) return "drop";
       setUser(signedIn);
       applyAccess(me);
@@ -297,16 +364,17 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
     flushSync(() => {
       setLocked(false);
       setShellEpoch((n) => n + 1);
-      setCompanyId(null);
+      setCompany(null);
       setPermissions(new Set());
       setAnyPermissions(new Set());
       setRoleGrants([]);
       setBranchPermissions(new Map());
       setUser(null);
+      setCompanies([]);                                          // the previous user's company list never renders for whoever signs in next (review L2 of PR 196)
       setPhase("loading");
     });
     unsaved.current?.clear();
-  }, [gate]);
+  }, [gate, setCompany]);
 
   const finishLogin = useCallback(async (signedIn: SessionUser) => {
     let dropped = false;
@@ -366,16 +434,32 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
 
   const adoptEnrolledSession = useCallback(async (enrolled: SessionUser) => {
     setUser(enrolled);
-    const previous = companyId;
+    const before = companyRef.current;
+    let target = pendingCompany.current ?? companyRef.current;
+    pendingCompany.current = null;
     try {
-      if (previous) { await api.selectCompany(previous); await enterCompany(); return; }
+      if (!target) {
+        // The prompt came from a session restored with a company already selected on the server: the server refused before saying which one, so it is not known here. With exactly one accessible company it is that one (entered
+        // like after a login); with several the user chooses again.
+        const list = (await api.listCompanies()).companies;
+        setCompanies(list);
+        if (list.length === 1) target = list[0].id;
+      }
+      if (target) {
+        const id = target;
+        // another company than the one the user was in: the shell is a NEW instance and nothing of the previous company's screens or input survives (as changeCompany)
+        if (id !== before) { setShellEpoch((n) => n + 1); unsaved.current?.clear(); }
+        await attempt(async () => { await api.selectCompany(id); await enterCompany(); });
+        return;
+      }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
+    epoch.current++;
     gate.close();
     setShellEpoch((n) => n + 1);
-    setCompanyId(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
+    setCompany(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());   // nothing of the previous company survives into company selection (as changeCompany)
     setPhase("needCompany");                                     // at once (the invariant above); the list refreshes behind it
     try { await loadCompanies(); } catch (e) { handleError(e); }
-  }, [api, companyId, enterCompany, gate, handleError, loadCompanies]);
+  }, [api, attempt, enterCompany, gate, handleError, loadCompanies, setCompany]);
 
   const logout = useCallback(async () => {
     try { await api.logout(); } catch { /* the server session may already be gone; the local state is cleared regardless */ }
@@ -413,23 +497,67 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   }, [api, endSession]);
 
   const chooseCompany = useCallback(async (id: string) => {
-    await api.selectCompany(id);
-    await enterCompany();
-  }, [api, enterCompany]);
+    try {
+      await attempt(async () => { await api.selectCompany(id); await enterCompany(); });
+    } catch (e) {
+      if (!isEnrolmentRequired(e)) throw e;
+      pendingCompany.current = id;        // the server undid the selection; it is made again after the enrolment
+      requireEnrolment();
+    }
+  }, [api, attempt, enterCompany, requireEnrolment]);
 
   // Invariant: outside the lock of D-236 a MOUNTED shell never sits behind a CLOSED gate. Whoever closes the gate leaves the phase "ready" in the same step.
   const changeCompany = useCallback(async () => {
+    epoch.current++;                       // whatever is still in flight belongs to the company being left
+    pendingCompany.current = null;         // leaving a company is also leaving a remembered refusal (review M1 of PR 185)
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }
     gate.close();                                                // no company: nothing for a screen to ask; the next enterCompany opens it again
     setShellEpoch((n) => n + 1);
-    setCompanyId(null);
+    setCompany(null);
     setPermissions(new Set());
     setAnyPermissions(new Set());
     setRoleGrants([]);
     setBranchPermissions(new Map());
     setPhase("needCompany");                                     // at once: the selection shows the list it already has while the fresh one loads
     try { await loadCompanies(); } catch (e) { handleError(e); }
-  }, [api, gate, handleError, loadCompanies]);
+  }, [api, gate, handleError, loadCompanies, setCompany]);
+
+  const reloading = useRef(false);
+  /**
+   * The context reload: ask the server which company this session has NOW and follow it. The same company: only the permissions are refreshed and every screen keeps its input. Another company: the shell becomes a new instance (nothing
+   * of the previous company's screens or input survives, as in changeCompany) with the new company's permissions. No company: back to company selection. A 401 is the usual session end. Anything else changes nothing (the next call decides).
+   */
+  const reloadContext = useCallback(() => {
+    if (reloading.current || live.current.phase !== "ready" || lock.current) return;
+    reloading.current = true;
+    void (async () => {
+      try {
+        for (let tries = 0; tries < 2; tries++) {
+          try {
+            const me = await attempt(() => api.accessMe());
+            if (lock.current || live.current.phase !== "ready") return;   // the session locked (or the phase moved) while asking: the hidden shell and its input are left exactly as they are (review L2 of PR 185)
+            if (me.companyId !== companyRef.current) { setShellEpoch((n) => n + 1); unsaved.current?.clear(); }
+            applyAccess(me);
+            return;
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 409 && e.code === COMPANY_SELECTION_CHANGED) continue;       // it moved again while asking: ask once more
+            throw e;
+          }
+        }
+      } catch (e) {
+        if (lock.current || live.current.phase !== "ready") return;
+        if (e instanceof ApiError && e.status === 409) {
+          gate.close();
+          setShellEpoch((n) => n + 1);
+          unsaved.current?.clear();
+          setCompany(null); setPermissions(new Set()); setAnyPermissions(new Set()); setRoleGrants([]); setBranchPermissions(new Map());
+          setPhase("needCompany");
+          try { await loadCompanies(); } catch (e2) { handleError(e2); }
+        } else if (e instanceof ApiError && e.status === 401) handleError(e);
+      } finally { reloading.current = false; }
+    })();
+  }, [api, applyAccess, attempt, gate, handleError, loadCompanies, setCompany]);
+  reloadContextRef.current = reloadContext;
 
   const refreshCompanies = useCallback(async () => {
     try { await loadCompanies(); } catch (e) { handleError(e); }
