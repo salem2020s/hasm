@@ -467,10 +467,10 @@ describe("approval stage progress on the commercial-document screen (S5a)", () =
     await waitFor(() => expect(progress).toHaveBeenCalledTimes(2));                                          // the progress was reloaded after the decision
   });
 
-  it("translates the refusal codes of the stages: role required, already decided, stage complete", async () => {
-    const approve = vi.fn().mockRejectedValueOnce(apiError(403, "approver_role_required")).mockRejectedValueOnce(apiError(409, "already_decided")).mockRejectedValueOnce(apiError(409, "approval_stage_complete"));
+  it("translates the refusal codes of the stages: forbidden (the server never sends a role-specific code over HTTP), already decided, stage complete", async () => {
+    const approve = vi.fn().mockRejectedValueOnce(apiError(403, "forbidden")).mockRejectedValueOnce(apiError(409, "already_decided")).mockRejectedValueOnce(apiError(409, "approval_stage_complete"));
     await openSubmitted({ plan: [stage(1, 2, 0)], decisions: [] }, { approveCommercialDocument: approve });
-    for (const text of ["المرحلة الحالية تتطلب دوراً لا تملكه.", "سجّلت قرارك على هذه النسخة من قبل.", "اكتملت هذه المرحلة؛ حدّث الصفحة."]) {
+    for (const text of ["ليست لديك صلاحية لهذا الإجراء.", "سجّلت قرارك على هذه النسخة من قبل.", "اكتملت هذه المرحلة؛ حدّث الصفحة."]) {
       await userEvent.click(screen.getByTestId("approve"));
       expect(await within(screen.getByTestId("form-error")).findByText(text)).toBeInTheDocument();
     }

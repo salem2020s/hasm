@@ -14,7 +14,7 @@ using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// The migration itself (owner safeguards 1 and 2 of X1-A): every function, trigger, constraint, index and column that existed before company migration 0033 is byte-identical after it and no trigger is disabled (N17);
+/// The migration itself (owner safeguards 1 and 2 of X1-A): every function, trigger, constraint, index and column that existed before company migration 0034 is byte-identical after it and no trigger is disabled (N17);
 /// a company with an executed epoch survives a dump and a trial restore with an identical catalog and identical data, and the guards work in the restored copy (N18); and a period close racing an execution never
 /// leaves an epoch entry in a closed period (N28).
 /// </summary>
@@ -69,7 +69,7 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
         Assert.Equal(21, after.Keys.Except(before.Keys).Count(k => k.StartsWith("function ")));
     }
 
-    /// <summary>The CHECK constraints (all of earlier migrations) whose printed text changes in a dump and restore: PostgreSQL re-parses the expression. None belongs to migration 0033. Pinned by review L4.</summary>
+    /// <summary>The CHECK constraints (all of earlier migrations) whose printed text changes in a dump and restore: PostgreSQL re-parses the expression. None belongs to migration 0034. Pinned by review L4.</summary>
     private static readonly string[] CosmeticCheckDifferences = [
         "constraint t_28e40627.k_d6ad16bf",
         "constraint t_3069b85b.k_d070c05a",
@@ -106,7 +106,7 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
             var copy = await Catalog(restored);
             Assert.Equal(source.Keys, copy.Keys);
             // A CHECK expression is re-parsed by the restore and PostgreSQL prints it differently afterwards (an expanded BETWEEN, parentheses, ARRAY casts). That is true of exactly the pinned CHECKs of earlier migrations
-            // below (review L4); every other entry (functions, triggers with their enabled state, keys, foreign keys, indexes, columns) and every CHECK of migration 0033 is compared byte for byte, and for the pinned
+            // below (review L4); every other entry (functions, triggers with their enabled state, keys, foreign keys, indexes, columns) and every CHECK of migration 0034 is compared byte for byte, and for the pinned
             // CHECKs the validity and deferrability must be identical.
             var differing = source.Where(kv => kv.Value != copy[kv.Key]).Select(kv => kv.Key).Order(StringComparer.Ordinal).ToList();
             Assert.Equal(CosmeticCheckDifferences.Order(StringComparer.Ordinal), differing);

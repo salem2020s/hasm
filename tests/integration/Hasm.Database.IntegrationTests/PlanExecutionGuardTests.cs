@@ -11,7 +11,7 @@ using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// The entry-level guard of company migration 0033 (design 3.3) for ORDINARY writers: the gap F1 is closed for every entry kind and for every writer, no setting opens it, and the ordinary application paths answer
+/// The entry-level guard of company migration 0034 (design 3.3) for ORDINARY writers: the gap F1 is closed for every entry kind and for every writer, no setting opens it, and the ordinary application paths answer
 /// exactly as before. Tests N1, N4, N6, N7, N12, N16, N22, N23 and N25 of design section 8.
 /// </summary>
 public class PlanExecutionGuardTests : PlanExecutionTestBase

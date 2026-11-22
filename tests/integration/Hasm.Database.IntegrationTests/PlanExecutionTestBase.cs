@@ -23,7 +23,7 @@ using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.8D step 4: the X1-A database layer (company migration 0033, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role, exactly as design section 8 describes the
+/// Phase 3.8D step 4: the X1-A database layer (company migration 0034, provisional number) against real PostgreSQL, driven by SQL through the REAL per-company runtime role, exactly as design section 8 describes the
 /// N-tests. No executor exists: the tests write the plan, approval, execution and epoch rows themselves, which is also what a hostile holder of the runtime role's grants could try. The history is built by the real
 /// services (owner connection, as in every service suite); everything that probes the new rules runs as the runtime role, and an execution runs inside the real audited company transaction, so its business audit
 /// event is a genuine, key-authenticated event written in the same transaction. Role-capable disposable cluster only.

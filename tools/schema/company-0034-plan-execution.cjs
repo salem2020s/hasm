@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-// Deterministic generator for company migration 0033 (Phase 3.8D step 4: the X1-A database layer of plan storage, approval and atomic execution; PROVISIONAL number: it follows the merge order, change MIGRATION below,
+// Deterministic generator for company migration 0034 (Phase 3.8D step 4: the X1-A database layer of plan storage, approval and atomic execution; PROVISIONAL number: it follows the merge order, change MIGRATION below,
 // rename the committed files and regenerate if it moves).
 // SINGLE SOURCE: the SQL template below, written with LOGICAL tokens such as {{CompensationPlan.Status}}. Every opaque physical name (D-029) is derived as
 //   prefix + first 8 hex digits of SHA-256("hasm.company.<MIGRATION>.plan-execution.v1:" + token)
 // (same rules as tools/schema/company-0032-commercial-policies.cjs: a collision aborts the run; names are fixed once committed). References to names that already exist (migrations 0002, 0004 to 0006, 0011, 0013, 0014,
 // 0016 and 0020) are written [[Entity.Name]] and resolved from the committed dictionaries, never re-derived.
-// Usage:  node tools/schema/company-0033-plan-execution.cjs --write | --check
+// Usage:  node tools/schema/company-0034-plan-execution.cjs --write | --check
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
-const MIGRATION = "0033";   // the company migration number: it is part of the name seed, so a renumbering is a regeneration
+const MIGRATION = "0034";   // the company migration number: it is part of the name seed, so a renumbering is a regeneration
 const outSql = path.join(infra, "CompanyDatabase", "Migrations", `${MIGRATION}_company_plan_execution.sql`);
 const outCs = path.join(infra, "CompanyDatabase", "CompanySchema.CompensationPlan.cs");
 
