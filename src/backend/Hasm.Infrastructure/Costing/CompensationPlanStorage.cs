@@ -69,6 +69,35 @@ internal static class CompensationPlanStore
         return null;
     }
 
+    /// <summary>The state of an event document that a plan binds: status, revision, type, warehouses, date, base quantity per item, and whether a stock posting exists. One consistent (RepeatableRead) view.</summary>
+    internal sealed record DocumentState(short Status, long Revision, short Type, Guid? Source, Guid? Target, DateOnly Date, Dictionary<Guid, decimal> Quantities, bool Posted);
+
+    internal static async Task<DocumentState?> ReadDocumentAsync(CompanyDatabaseResolver resolver, Guid company, Guid documentId, CancellationToken ct)
+    {
+        await using var conn = await resolver.OpenAsync(company, ct);
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);   // one consistent view of the document, its lines and its posting
+        DocumentState? doc;
+        await using (var q = new NpgsqlCommand($"SELECT {SD.Status},{SD.Revision},{SD.DocType},{SD.SourceWarehouseId},{SD.TargetWarehouseId},{SD.DocumentDate} FROM {SD.Table} WHERE {SD.Id}=@id", conn, tx))
+        {
+            q.Parameters.AddWithValue("id", documentId);
+            await using var r = await q.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return null;
+            doc = new DocumentState(r.GetInt16(0), r.GetInt64(1), r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetFieldValue<DateOnly>(5), [], false);
+        }
+        await using (var q = new NpgsqlCommand($"SELECT {SL.ItemId},sum({SL.BaseQuantity}) FROM {SL.Table} WHERE {SL.DocumentId}=@id GROUP BY {SL.ItemId}", conn, tx))
+        {
+            q.Parameters.AddWithValue("id", documentId);
+            await using var r = await q.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) doc.Quantities[r.GetGuid(0)] = r.GetDecimal(1);
+        }
+        await using (var q = new NpgsqlCommand($"SELECT 1 FROM {SP.Table} WHERE {SP.DocumentId}=@id", conn, tx))
+        {
+            q.Parameters.AddWithValue("id", documentId);
+            doc = doc with { Posted = await q.ExecuteScalarAsync(ct) is not null };
+        }
+        return doc;
+    }
+
     internal static async Task AddEventAsync(CompanyAuditedWork work, Guid planId, short kind, Guid actor, string? note, DateTimeOffset now, CancellationToken ct)
     {
         await using var q = new NpgsqlCommand($"INSERT INTO {CE.Table} ({CE.Id},{CE.PlanId},{CE.Kind},{CE.ActorUserId},{CE.AtUtc},{CE.Note}) VALUES (@id,@plan,@kind,@actor,@at,@note)", work.Connection, work.Transaction);
@@ -87,8 +116,6 @@ internal static class CompensationPlanStore
 internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, AccessService access, CompanyAuditedTransactions transactions, CostFlowSnapshotService planner, TimeProvider clock)
 {
     private static ConfigResult<T> Fail<T>(ConfigStatus status, string code) => ConfigResult<T>.Fail(status, code);
-
-    private sealed record Document(short Status, long Revision, short Type, Guid? Source, Guid? Target, DateOnly Date, Dictionary<Guid, decimal> Quantities, bool Posted);
 
     internal async Task<ConfigResult<StoredCompensationPlan>> CreateAsync(Guid user, Guid company, CompensationPlanInput input, CancellationToken ct = default)
     {
@@ -120,7 +147,7 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
 
         var planId = Guid.NewGuid();
         var payload = CompensationPlanBinding.PayloadOf(input.Proposal);
-        var doc = (await ReadDocumentAsync(company, input.DocumentId, ct))!;
+        var doc = (await CompensationPlanStore.ReadDocumentAsync(resolver, company, input.DocumentId, ct))!;
         try
         {
             return await transactions.ExecuteAsync<ConfigResult<StoredCompensationPlan>>(company, async work =>
@@ -173,36 +200,10 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
         return await q.ExecuteScalarAsync(ct) is not null;
     }
 
-    private async Task<Document?> ReadDocumentAsync(Guid company, Guid documentId, CancellationToken ct)
-    {
-        await using var conn = await resolver.OpenAsync(company, ct);
-        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);   // one consistent view of the document, its lines and its posting
-        Document? doc;
-        await using (var q = new NpgsqlCommand($"SELECT {SD.Status},{SD.Revision},{SD.DocType},{SD.SourceWarehouseId},{SD.TargetWarehouseId},{SD.DocumentDate} FROM {SD.Table} WHERE {SD.Id}=@id", conn, tx))
-        {
-            q.Parameters.AddWithValue("id", documentId);
-            await using var r = await q.ExecuteReaderAsync(ct);
-            if (!await r.ReadAsync(ct)) return null;
-            doc = new Document(r.GetInt16(0), r.GetInt64(1), r.GetInt16(2), r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetGuid(4), r.GetFieldValue<DateOnly>(5), [], false);
-        }
-        await using (var q = new NpgsqlCommand($"SELECT {SL.ItemId},sum({SL.BaseQuantity}) FROM {SL.Table} WHERE {SL.DocumentId}=@id GROUP BY {SL.ItemId}", conn, tx))
-        {
-            q.Parameters.AddWithValue("id", documentId);
-            await using var r = await q.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) doc.Quantities[r.GetGuid(0)] = r.GetDecimal(1);
-        }
-        await using (var q = new NpgsqlCommand($"SELECT 1 FROM {SP.Table} WHERE {SP.DocumentId}=@id", conn, tx))
-        {
-            q.Parameters.AddWithValue("id", documentId);
-            doc = doc with { Posted = await q.ExecuteScalarAsync(ct) is not null };
-        }
-        return doc;
-    }
-
     /// <summary>The event document must exist, be approved (not posted, not bound to a live plan) and be exactly the event the plan proposes. Null when it is.</summary>
     private async Task<ConfigResult<StoredCompensationPlan>?> PrecheckAsync(Guid company, CompensationPlanInput input, CancellationToken ct)
     {
-        var doc = await ReadDocumentAsync(company, input.DocumentId, ct);
+        var doc = await CompensationPlanStore.ReadDocumentAsync(resolver, company, input.DocumentId, ct);
         if (doc is null) return Fail<StoredCompensationPlan>(ConfigStatus.NotFound, "document_not_found");
         if (doc.Status != 3) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "document_not_approved");
         if (doc.Posted) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "document_already_posted");

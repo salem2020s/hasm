@@ -40,3 +40,27 @@ public class CompensationPlanBindingTests
     [InlineData("{\"Contract\":\"stock-compensation-plan-payload-v1\",\"Id\":\"00000000-0000-0000-0000-000000000001\",\"Date\":\"11/03/2026\",\"Kind\":1,\"Lines\":[]}")]
     public void A_stored_text_that_is_not_a_payload_of_this_contract_is_not_a_proposal(string text) => Assert.Null(CompensationPlanBinding.Proposal(text));
 }
+
+/// <summary>The refusals of the plan tables of migration 0034 and the codes they come back as (Phase 3.8D step 5).</summary>
+public class CompensationPlanRefusalMappingTests
+{
+    private static Npgsql.PostgresException Raise(string message) => new(message, "ERROR", "ERROR", "P0001");
+
+    [Theory]
+    [InlineData("the approval of a compensation plan is not sound: approver_not_independent", "approver_not_independent")]
+    [InlineData("the approval of a compensation plan is not sound: document_not_approved", "document_not_approved")]
+    [InlineData("the approval of a compensation plan is not sound: document_already_posted", "document_already_posted")]
+    [InlineData("the approval of a compensation plan is not sound: approval_fingerprint_mismatch", "approval_fingerprint_mismatch")]
+    [InlineData("the approval of a compensation plan is not sound: closure_hash_mismatch", "closure_hash_mismatch")]
+    [InlineData("document_already_posted: a plan is not written for a document that already has a stock posting", "document_already_posted")]
+    [InlineData("plan_on_epoch_position: a position of the closure was already rewritten by an executed plan", "plan_on_epoch_position")]
+    public void A_database_refusal_comes_back_as_its_result_code(string message, string code) =>
+        Assert.Equal((Hasm.Infrastructure.CompanyConfiguration.ConfigStatus.Conflict, code), CompensationPlanStore.Refusal(Raise(message)));
+
+    [Fact]
+    public void An_unknown_refusal_or_another_error_class_is_not_mapped_so_it_is_never_hidden()
+    {
+        Assert.Null(CompensationPlanStore.Refusal(Raise("compensation plan and epoch records are append-only")));
+        Assert.Null(CompensationPlanStore.Refusal(new Npgsql.PostgresException("approver_not_independent", "ERROR", "ERROR", "XX000")));
+    }
+}
