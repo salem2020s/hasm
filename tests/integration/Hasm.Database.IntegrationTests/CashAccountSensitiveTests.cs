@@ -37,7 +37,36 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         Assert.DoesNotContain("0380000000", Encoding.UTF8.GetString(stored));
         Assert.Equal("HFE1", Encoding.ASCII.GetString(stored, 0, 4));
         Assert.Equal("k1", await Sql<string>($"SELECT {Ca.NumberKeyId} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'"));
-        Assert.Equal("7519", await Sql<string>($"SELECT {Ca.NumberLast4} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'"));
+        Assert.Equal("7519", await Sql<string>($"SELECT {Ca.NumberTail} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'"));
+    }
+
+    [PostgresFact]
+    public async Task The_mask_shows_a_fixed_safe_share_for_every_accepted_length_in_the_record_the_list_the_audit_and_the_stored_column()
+    {
+        await Start();
+        var main = await MainBranch(); var cookie = await Manager();
+        // (length, expected mask): 4, 7 -> nothing; 8, 11 -> the last two; 12, 34 -> the last four
+        (string Number, string Mask)[] cases = [("1234", "****"), ("1234567", "****"), ("12345678", "****78"), ("12345678901", "****01"), ("123456789012", "****9012"), ("1234567890123456789012345678901234", "****1234")];
+        var n = 0;
+        foreach (var (number, mask) in cases)
+        {
+            var created = await Create(cookie, Bank("nb" + n, main, await Gl("11" + (10 + n++)), number));
+            Assert.Equal(mask, created.Json.GetProperty("accountNumberMasked").GetString());
+            var id = IdOf(created);
+            var tail = await Sql<string>($"SELECT {Ca.NumberTail} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'");
+            Assert.Equal(mask[4..], tail);                                                                           // the column holds only what the mask may show
+            Assert.True(tail.Length <= 4 && number.EndsWith(tail, StringComparison.Ordinal));
+        }
+        var list = await Send(HttpMethod.Get, Base, cookie: cookie);
+        Assert.Equal(cases.Select(c => c.Mask).Order().ToArray(), list.Json.GetProperty("accounts").EnumerateArray().Select(a => a.GetProperty("accountNumberMasked").GetString()!).Order().ToArray());
+        // a replacement is audited with the masked values only: a short old number and a long new one
+        var firstId = list.Json.GetProperty("accounts").EnumerateArray().First(a => a.GetProperty("code").GetString() == "NB0").GetProperty("id").GetGuid();
+        var body = new { kind = "bank", code = "nb0", nameAr = "البنك", nameEn = "The bank", branchId = main, accountId = list.Json.GetProperty("accounts").EnumerateArray().First(a => a.GetProperty("code").GetString() == "NB0").GetProperty("accountId").GetGuid(), bankName = "National Bank", bankBranchName = "Downtown", accountNumber = "AB12CD34EF56GH78" };
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Put, $"{Base}/{firstId}", body, cookie, ifMatch: "\"1\"")).Status);
+        var details = await Details();
+        Assert.Contains("number ****->****GH78", details);
+        Assert.DoesNotContain("1234->", details);
+        Assert.DoesNotContain("AB12CD34", details);
     }
 
     [PostgresFact]
@@ -53,6 +82,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         Assert.Contains("no-store", r.Headers.CacheControl!.ToString());
         await Send(HttpMethod.Get, $"{Base}/{id}/account-number", cookie: viewAndReveal);
         Assert.Equal(2L, await Events(CashAuditEvents.AccountNumberRevealed));                                    // one event per reveal
+        Assert.Equal(2L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {CashAuditEvents.AccountNumberRevealed} AND {Audit_.SubjectId} = '{id}'"));   // searchable by account (L2 of PR 206)
         Assert.DoesNotContain(Number, await Details());
         // sensitive without view on the branch, or view without sensitive: refused
         var onlySensitive = await AsMember(Sensitive);
@@ -121,5 +151,92 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         Assert.Equal(HttpStatusCode.ServiceUnavailable, noKey.Status);
         Assert.DoesNotContain(Number, noKey.Body);
         Assert.Equal(0L, await Events(CashAuditEvents.AccountNumberRevealed));                                    // a reveal that failed is not recorded as served
+    }
+
+    // ---- the key lifecycle (M2 of PR 206): re-wrap, key usage
+
+    private string Rotate(string newKeyId) { Keys.Add(newKeyId, System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)); Keys.Activate(newKeyId); return newKeyId; }
+    private Task<string> KeyOf(Guid id) => Sql<string>($"SELECT {Ca.NumberKeyId} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'");
+    private async Task<(string Admin, string Reveal)> Staff() => (await Manager(), await AsMember([PermissionCatalog.Codes.CashAccountsView, .. Sensitive]));
+
+    [PostgresFact]
+    public async Task The_rewrap_moves_every_number_to_the_current_key_once_audits_each_move_and_the_numbers_stay_readable()
+    {
+        await Start();
+        var main = await MainBranch(); var (cookie, reveal) = await Staff();
+        var a = IdOf(await Create(cookie, Bank("nb-a", main, await Gl("1101"), Number)));
+        var b = IdOf(await Create(cookie, Bank("nb-b", main, await Gl("1102"), "GB29NWBK60161331926819")));
+        await Create(cookie, Cashbox("c1", main, await Gl("1103")));                                               // holds no number
+        Assert.Equal(("k1", "k1"), (await KeyOf(a), await KeyOf(b)));
+        var usage = await UsageAsync();
+        Assert.Equal(2, usage["k1"]);
+        var cipherBefore = await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{a}'");
+        Rotate("k2");
+        var r = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
+        Assert.Equal(HttpStatusCode.OK, r.Status);
+        Assert.Equal((2, 0, 0), (r.Json.GetProperty("rewrapped").GetInt32(), r.Json.GetProperty("skipped").GetInt32(), r.Json.GetProperty("failed").GetInt32()));
+        Assert.Equal(("k2", "k2"), (await KeyOf(a), await KeyOf(b)));
+        Assert.NotEqual(cipherBefore, await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{a}'"));
+        Assert.Equal(2L, await Events(CashAuditEvents.NumberRewrapped));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {CashAuditEvents.NumberRewrapped} AND {Audit_.SubjectId} = '{a}'"));
+        var details = await Details();
+        Assert.Contains("from=k1 to=k2", details); Assert.DoesNotContain(Number, details); Assert.DoesNotContain("0380", details);
+        Assert.Equal(Number, (await Send(HttpMethod.Get, $"{Base}/{a}/account-number", cookie: reveal)).Json.GetProperty("accountNumber").GetString());   // still readable under the new key
+        Assert.Equal(2, (await UsageAsync())["k2"]);
+        Assert.False((await UsageAsync()).ContainsKey("k1"));
+        // idempotent: nothing moves twice, no further event
+        var again = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
+        Assert.Equal((0, 2, 0), (again.Json.GetProperty("rewrapped").GetInt32(), again.Json.GetProperty("skipped").GetInt32(), again.Json.GetProperty("failed").GetInt32()));
+        Assert.Equal(2L, await Events(CashAuditEvents.NumberRewrapped));
+        Assert.Equal(2L, await Sql<long>($"SELECT {Ca.Revision} FROM {Ca.Table} WHERE {Ca.Id} = '{a}'"));          // the row guard advanced the revision once
+    }
+
+    [PostgresFact]
+    public async Task The_rewrap_is_fail_closed_a_number_whose_old_key_is_gone_is_left_untouched_counted_and_audited_with_a_reason_and_the_others_still_move()
+    {
+        await Start();
+        var main = await MainBranch(); var cookie = await Manager();
+        var lost = IdOf(await Create(cookie, Bank("nb-lost", main, await Gl("1101"), Number)));              // under k1
+        Rotate("k2");
+        var moved = IdOf(await Create(cookie, Bank("nb-new", main, await Gl("1102"), "GB29NWBK60161331926819")));   // under k2 already
+        Rotate("k3");
+        Assert.True(Keys.Remove("k1"));                                                                         // the old key is gone: its number cannot be re-wrapped
+        var cipher = await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{lost}'");
+        var r = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
+        Assert.Equal(HttpStatusCode.OK, r.Status);
+        Assert.Equal((1, 0, 1), (r.Json.GetProperty("rewrapped").GetInt32(), r.Json.GetProperty("skipped").GetInt32(), r.Json.GetProperty("failed").GetInt32()));
+        Assert.Equal(("k1", "k3"), (await KeyOf(lost), await KeyOf(moved)));
+        Assert.Equal(cipher, await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{lost}'"));   // untouched
+        Assert.Equal((1L, 1L), (await Events(CashAuditEvents.NumberRewrapped), await Events(CashAuditEvents.NumberRewrapFailed)));
+        Assert.Contains("reason=encryption_key_unavailable", await Details());
+        // the active key itself unavailable: the whole call fails closed (503) and nothing changes
+        Keys.Unavailable = true;
+        var down = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, down.Status);
+        Assert.Equal(("k1", "k3"), (await KeyOf(lost), await KeyOf(moved)));
+    }
+
+    [PostgresFact]
+    public async Task The_rewrap_needs_the_privileged_update_permission_company_wide()
+    {
+        await Start();
+        var main = await MainBranch(); var other = (await Make("B2")).Id;
+        await Create(await Manager(), Bank("nb", main, await Gl("1101"), Number));
+        Rotate("k2");
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, await AsMember([PermissionCatalog.Codes.CashAccountsView]))).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, await AsMember(Manage, ScopeKind.Branch, main))).Status);   // one branch is not company-wide
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, await AsMember([PermissionCatalog.Codes.CashAccountsSensitiveView]))).Status);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { })).Status);
+        Assert.Equal(0L, await Events(CashAuditEvents.NumberRewrapped));
+        _ = other;
+        Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, await AsMember([PermissionCatalog.Codes.CashAccountsUpdate]))).Status);
+        Assert.Equal(1L, await Events(CashAuditEvents.NumberRewrapped));
+    }
+
+    private async Task<IReadOnlyDictionary<string, int>> UsageAsync()
+    {
+        await using var conn = new Npgsql.NpgsqlConnection(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName));
+        await conn.OpenAsync();
+        return await CashAccountService.KeyUsageAsync(conn);
     }
 }

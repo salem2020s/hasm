@@ -243,6 +243,8 @@ function CashAccountForm({ editor, branches, branchLabel, canEdit, canReveal, on
   // the full number is memory only: hidden after a short time, when the form closes, and never part of the dirty state or the save
   const hide = useCallback(() => { if (timer.current) clearTimeout(timer.current); timer.current = null; setRevealed(null); }, []);
   useEffect(() => hide, [hide]);
+  // the session lock of D-236 keeps this screen MOUNTED (hidden and inert) to preserve unsaved input: the revealed number is dropped the moment the lock starts, not after its timer (review L1 of PR 206)
+  useEffect(() => { if (auth.locked) hide(); }, [auth.locked, hide]);
 
   const set = (k: keyof Form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
 

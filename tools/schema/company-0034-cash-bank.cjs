@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Deterministic generator for company migration 0033 (Phase 3.14 slice S1: the cash and bank account master). The number is PROVISIONAL and follows the merge order: change MIGRATION below, rename the committed files and re-run --write (the number is part of the name seed, so a renumbering is a regeneration).
+// Deterministic generator for company migration 0034 (Phase 3.14 slice S1: the cash and bank account master). The number is PROVISIONAL and follows the merge order: change MIGRATION below, rename the committed files and re-run --write (the number is part of the name seed, so a renumbering is a regeneration).
 // SINGLE SOURCE: the SQL template below, written with LOGICAL tokens such as {{CashAccount.Code}}. Every opaque physical name (D-029) is derived as
 //   prefix + first 8 hex digits of SHA-256("hasm.company.<MIGRATION>.cash-bank.v1:" + token)
 // (same rules as tools/schema/company-0027-customer-groups.cjs: a collision aborts the run; names are fixed once committed). References to names that already exist are written [[Entity.Name]] and resolved from the committed generated dictionaries, never re-derived.
-// Usage:  node tools/schema/company-0033-cash-bank.cjs --write | --check
+// Usage:  node tools/schema/company-0034-cash-bank.cjs --write | --check
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const root = path.resolve(__dirname, "..", "..");
 const infra = path.join(root, "src", "backend", "Hasm.Infrastructure");
-const MIGRATION = "0033";   // the company migration number (provisional, by merge order)
+const MIGRATION = "0034";   // the company migration number (provisional, by merge order: 0033 is PR 200)
 const outSql = path.join(infra, "CompanyDatabase", "Migrations", `${MIGRATION}_company_cash_accounts.sql`);
 const outCs = path.join(infra, "CompanyDatabase", "CompanySchema.CashBank.cs");
 
@@ -29,7 +29,7 @@ const TEMPLATE = `-- Migration ${MIGRATION}: the cash and bank account master (P
 --
 -- WHAT THIS IS (docs/PHASE-3.14.md, D-211 Q1, Q2, Q8): a cashbox or a bank account is its own master record, bound 1:1 to ONE postable ACTIVE asset account of the chart, with a required branch, in the BASE currency only (foreign-currency
 -- accounts wait for Phase 3.18). It is CONFIGURATION: it holds no balance (the ledger is the source of truth) and creates no journal entry. The full bank account number is sensitive: it is stored ONLY as an authenticated envelope
--- (the key-ring encryption of the attachments), with its last four characters kept apart as the masked form.
+-- (the key-ring encryption of the attachments), with only the tail its masked form may show (the last four characters of a long number, the last two of a medium one, nothing of a short one) kept apart.
 -- Invariants enforced by PostgreSQL:
 --   * rows are never removed; the identity, code, kind and creation data never change; every change advances the revision by one;
 --   * the code is unique; ONE general-ledger account serves at most ONE cash or bank account;
@@ -49,7 +49,7 @@ CREATE TABLE {{CashAccount}} (
     {{CashAccount.BankBranchName}} varchar(200) NULL,
     {{CashAccount.NumberCipher}} bytea NULL,
     {{CashAccount.NumberKeyId}} varchar(40) NULL,
-    {{CashAccount.NumberLast4}} varchar(4) NULL,
+    {{CashAccount.NumberTail}} varchar(4) NULL,   -- the part of the number the mask may show (0 to 4 characters, see the masking rule of the application); never more
     {{CashAccount.IsActive}} boolean NOT NULL DEFAULT true,
     {{CashAccount.Revision}} bigint NOT NULL DEFAULT 1,
     {{CashAccount.CreatedBy}} uuid NOT NULL,
@@ -63,9 +63,9 @@ CREATE TABLE {{CashAccount}} (
         AND ({{CashAccount.NameAr}} IS NULL OR char_length(btrim({{CashAccount.NameAr}})) >= 1) AND ({{CashAccount.NameEn}} IS NULL OR char_length(btrim({{CashAccount.NameEn}})) >= 1)
         AND {{CashAccount.Currency}} ~ '^[A-Z]{3}$'),
     CONSTRAINT {{CashAccount.CkBank}} CHECK (
-        ({{CashAccount.Kind}} = 1 AND {{CashAccount.BankName}} IS NULL AND {{CashAccount.BankBranchName}} IS NULL AND {{CashAccount.NumberCipher}} IS NULL AND {{CashAccount.NumberKeyId}} IS NULL AND {{CashAccount.NumberLast4}} IS NULL)
-        OR ({{CashAccount.Kind}} = 2 AND (({{CashAccount.NumberCipher}} IS NULL AND {{CashAccount.NumberKeyId}} IS NULL AND {{CashAccount.NumberLast4}} IS NULL)
-            OR ({{CashAccount.NumberCipher}} IS NOT NULL AND {{CashAccount.NumberKeyId}} IS NOT NULL AND {{CashAccount.NumberLast4}} IS NOT NULL AND char_length({{CashAccount.NumberLast4}}) BETWEEN 1 AND 4)))
+        ({{CashAccount.Kind}} = 1 AND {{CashAccount.BankName}} IS NULL AND {{CashAccount.BankBranchName}} IS NULL AND {{CashAccount.NumberCipher}} IS NULL AND {{CashAccount.NumberKeyId}} IS NULL AND {{CashAccount.NumberTail}} IS NULL)
+        OR ({{CashAccount.Kind}} = 2 AND (({{CashAccount.NumberCipher}} IS NULL AND {{CashAccount.NumberKeyId}} IS NULL AND {{CashAccount.NumberTail}} IS NULL)
+            OR ({{CashAccount.NumberCipher}} IS NOT NULL AND {{CashAccount.NumberKeyId}} IS NOT NULL AND {{CashAccount.NumberTail}} IS NOT NULL AND char_length({{CashAccount.NumberTail}}) BETWEEN 0 AND 4)))
     )
 );
 CREATE UNIQUE INDEX {{CashAccount.UqCode}} ON {{CashAccount}} ({{CashAccount.Code}});

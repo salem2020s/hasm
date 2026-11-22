@@ -36,7 +36,7 @@ public sealed class NoCashDocuments : ICashAccountUsageProbe
 public sealed class CashAccountService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, EnvelopeEncryptor encryptor, ICashAccountUsageProbe usage, TimeProvider clock)
 {
     private static readonly string Select =
-        $"SELECT c.{CA.Id}, c.{CA.Kind}, c.{CA.Code}, c.{CA.NameAr}, c.{CA.NameEn}, c.{CA.BranchId}, c.{CA.AccountId}, c.{CA.Currency}, c.{CA.BankName}, c.{CA.BankBranchName}, c.{CA.NumberLast4}, c.{CA.IsActive}, c.{CA.Revision}, c.{CA.CreatedAtUtc}, c.{CA.UpdatedAtUtc}, " +
+        $"SELECT c.{CA.Id}, c.{CA.Kind}, c.{CA.Code}, c.{CA.NameAr}, c.{CA.NameEn}, c.{CA.BranchId}, c.{CA.AccountId}, c.{CA.Currency}, c.{CA.BankName}, c.{CA.BankBranchName}, c.{CA.NumberTail}, c.{CA.IsActive}, c.{CA.Revision}, c.{CA.CreatedAtUtc}, c.{CA.UpdatedAtUtc}, " +
         $"x.{Ac.Code}, x.{Ac.NameAr}, x.{Ac.NameEn} FROM {CA.Table} c JOIN {Ac.Table} x ON x.{Ac.Id} = c.{CA.AccountId}";
 
     private sealed class Abort(ConfigStatus status, string code, long? currentRevision = null, IReadOnlyList<FieldError>? fields = null, CashAccountView? unchanged = null) : Exception(code)
@@ -106,8 +106,8 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
             try
             {
                 await using var ins = new NpgsqlCommand(
-                    $"INSERT INTO {CA.Table} ({CA.Id}, {CA.Kind}, {CA.Code}, {CA.NameAr}, {CA.NameEn}, {CA.BranchId}, {CA.AccountId}, {CA.Currency}, {CA.BankName}, {CA.BankBranchName}, {CA.NumberCipher}, {CA.NumberKeyId}, {CA.NumberLast4}, " +
-                    $"{CA.IsActive}, {CA.Revision}, {CA.CreatedBy}, {CA.CreatedAtUtc}, {CA.UpdatedAtUtc}) VALUES (@id, @kind, @code, @ar, @en, @branch, @acct, @ccy, @bank, @bbranch, @cipher, @keyid, @last4, true, 1, @actor, @now, @now)", work.Connection, work.Transaction);
+                    $"INSERT INTO {CA.Table} ({CA.Id}, {CA.Kind}, {CA.Code}, {CA.NameAr}, {CA.NameEn}, {CA.BranchId}, {CA.AccountId}, {CA.Currency}, {CA.BankName}, {CA.BankBranchName}, {CA.NumberCipher}, {CA.NumberKeyId}, {CA.NumberTail}, " +
+                    $"{CA.IsActive}, {CA.Revision}, {CA.CreatedBy}, {CA.CreatedAtUtc}, {CA.UpdatedAtUtc}) VALUES (@id, @kind, @code, @ar, @en, @branch, @acct, @ccy, @bank, @bbranch, @cipher, @keyid, @tail, true, 1, @actor, @now, @now)", work.Connection, work.Transaction);
                 ins.Parameters.AddWithValue("id", id);
                 ins.Parameters.AddWithValue("kind", (short)data.Kind);
                 ins.Parameters.AddWithValue("code", data.Code);
@@ -119,7 +119,7 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
                 await ins.ExecuteNonQueryAsync(ct);
             }
             catch (PostgresException ex) { throw Map(ex); }
-            var changes = Diff(null, data, null, number is null ? null : CashAccountRules.Mask(CashAccountRules.Last4(number)));
+            var changes = Diff(null, data, null, number is null ? null : CashAccountRules.Mask(CashAccountRules.Tail(number)));
             changes["code"] = new JsonObject { ["old"] = null, ["new"] = data.Code };
             changes["kind"] = new JsonObject { ["old"] = null, ["new"] = data.Kind.ToString().ToLowerInvariant() };
             await RecordAsync(work, CashAuditEvents.AccountCreated, actor, id, 1, changes, "cash account created", ct);
@@ -148,14 +148,14 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
                 }
             }
             var bankChanged = data.BankName != current.Data.BankName || data.BankBranchName != current.Data.BankBranchName || number is not null;
-            string? newMasked = number is null ? null : CashAccountRules.Mask(CashAccountRules.Last4(number));
+            string? newMasked = number is null ? null : CashAccountRules.Mask(CashAccountRules.Tail(number));
             var changes = Diff(current.Data, data, current.MaskedNumber, newMasked);
             if (changes.Count == 0) throw new Abort(ConfigStatus.Ok, "unchanged", unchanged: current);
             try
             {
                 await using var upd = new NpgsqlCommand(
                     $"UPDATE {CA.Table} SET {CA.NameAr} = @ar, {CA.NameEn} = @en, {CA.BranchId} = @branch, {CA.AccountId} = @acct, {CA.BankName} = @bank, {CA.BankBranchName} = @bbranch" +
-                    (number is null ? "" : $", {CA.NumberCipher} = @cipher, {CA.NumberKeyId} = @keyid, {CA.NumberLast4} = @last4") +
+                    (number is null ? "" : $", {CA.NumberCipher} = @cipher, {CA.NumberKeyId} = @keyid, {CA.NumberTail} = @tail") +
                     $", {CA.Revision} = {CA.Revision} + 1, {CA.UpdatedAtUtc} = @now WHERE {CA.Id} = @id", work.Connection, work.Transaction);
                 upd.Parameters.AddWithValue("id", id);
                 upd.Parameters.AddWithValue("now", clock.GetUtcNow().UtcDateTime);
@@ -216,21 +216,86 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
                 }
                 if (cipher is null) throw new Abort(ConfigStatus.NotFound, "cash_account_number_not_set");
                 var plain = Encoding.UTF8.GetString(encryptor.Decrypt(cipher, Context(companyId, id)));
-                await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.AccountNumberRevealed, ActorUserId: actor, Detail: $"cash account number revealed id={id:N}"), ct);
+                await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.AccountNumberRevealed, ActorUserId: actor, SubjectId: id, Detail: $"cash account number revealed id={id:N}"), ct);
                 return plain;
             }, ct));
         }
         catch (Abort a) { var r = a.ToResult(); return ConfigResult<string>.Fail(r.Status, r.Code ?? "conflict"); }
     }
 
+    /// <summary>
+    /// Re-wraps the data key of every stored account number under the CURRENT master key (maintenance, the same family as the attachment and import re-wraps): idempotent (a number already under the active key is skipped), one transaction and one
+    /// audit event per account, fail-closed (an account whose old key is missing or whose envelope fails authentication is left untouched, counted and audited with a reason code; the others go on). The ciphertext and its binding to company and
+    /// account are unchanged. The revision advances by one (the row guard), so an editor holding the old revision is asked to reload. When the active key itself is unavailable the whole call fails (503) and nothing changes.
+    /// </summary>
+    public async Task<CashRewrapOutcome> RewrapNumbersAsync(Guid actor, Guid companyId, CancellationToken ct = default)
+    {
+        var active = encryptor.ActiveKeyId;
+        var candidates = new List<(Guid Id, string KeyId)>();
+        await using (var conn = await resolver.OpenAsync(companyId, ct))
+        await using (var cmd = new NpgsqlCommand($"SELECT {CA.Id}, {CA.NumberKeyId} FROM {CA.Table} WHERE {CA.NumberCipher} IS NOT NULL ORDER BY {CA.Id}", conn))
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct)) candidates.Add((r.GetGuid(0), r.GetString(1)));
+        int done = 0, skipped = 0, failed = 0;
+        foreach (var (id, keyId) in candidates)
+        {
+            if (keyId == active) { skipped++; continue; }
+            try
+            {
+                var moved = await transactions.ExecuteAsync(companyId, async work =>
+                {
+                    byte[] cipher; string oldKey; long revision;
+                    await using (var q = new NpgsqlCommand($"SELECT {CA.NumberCipher}, {CA.NumberKeyId}, {CA.Revision} FROM {CA.Table} WHERE {CA.Id} = @id FOR UPDATE", work.Connection, work.Transaction))
+                    {
+                        q.Parameters.AddWithValue("id", id);
+                        await using var r = await q.ExecuteReaderAsync(ct);
+                        if (!await r.ReadAsync(ct) || r.IsDBNull(0)) return false;
+                        cipher = r.GetFieldValue<byte[]>(0); oldKey = r.GetString(1); revision = r.GetInt64(2);
+                    }
+                    if (oldKey == active) return false;                                                    // moved by someone else meanwhile
+                    var rewrapped = encryptor.Rewrap(cipher, Context(companyId, id));                      // throws when the old key is missing or the envelope does not authenticate: the row stays as it is
+                    await using (var u = new NpgsqlCommand($"UPDATE {CA.Table} SET {CA.NumberCipher} = @c, {CA.NumberKeyId} = @k, {CA.Revision} = {CA.Revision} + 1, {CA.UpdatedAtUtc} = @now WHERE {CA.Id} = @id", work.Connection, work.Transaction))
+                    {
+                        u.Parameters.Add(new NpgsqlParameter("c", NpgsqlTypes.NpgsqlDbType.Bytea) { Value = rewrapped });
+                        u.Parameters.AddWithValue("k", EnvelopeEncryptor.KeyIdOf(rewrapped));
+                        u.Parameters.AddWithValue("now", clock.GetUtcNow().UtcDateTime);
+                        u.Parameters.AddWithValue("id", id);
+                        await u.ExecuteNonQueryAsync(ct);
+                    }
+                    await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.NumberRewrapped, ActorUserId: actor, SubjectId: id, Detail: $"cash account number rewrapped id={id:N} r{revision + 1} from={oldKey} to={EnvelopeEncryptor.KeyIdOf(rewrapped)}"), ct);
+                    return true;
+                }, ct);
+                if (moved) done++; else skipped++;
+            }
+            catch (Exception ex) when (ex is CryptographicException or EncryptionUnavailableException)
+            {
+                failed++;
+                var reason = ex is EncryptionUnavailableException e ? e.Code : "authentication_failed";
+                try { await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.NumberRewrapFailed, ActorUserId: actor, SubjectId: id, Detail: $"cash account number rewrap failed id={id:N} reason={reason}"), ct); return true; }, ct); }
+                catch (Exception audit) when (audit is not OperationCanceledException) { /* the failure is counted; the audit of the failure is best effort */ }
+            }
+        }
+        return new CashRewrapOutcome(done, skipped, failed);
+    }
+
+    /// <summary>The number of encrypted account numbers per master key id (key usage for the retirement report: a key must stay available while any number is protected by it). No secret and no number is read.</summary>
+    public static async Task<IReadOnlyDictionary<string, int>> KeyUsageAsync(NpgsqlConnection conn, CancellationToken ct = default)
+    {
+        var usage = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        await using var cmd = new NpgsqlCommand($"SELECT {CA.NumberKeyId}, count(*) FROM {CA.Table} WHERE {CA.NumberKeyId} IS NOT NULL GROUP BY 1", conn);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) usage[r.GetString(0)] = (int)r.GetInt64(1);
+        return usage;
+    }
+
     // ------------------------------------------------------------------------------------------------------------- plumbing
 
-    private sealed record Sealed(byte[] Cipher, string KeyId, string Last4);
+    private sealed record Sealed(byte[] Cipher, string KeyId, string Tail);
 
     private Sealed Seal(string number, Guid companyId, Guid id)
     {
         var cipher = encryptor.Encrypt(Encoding.UTF8.GetBytes(number), Context(companyId, id));
-        return new Sealed(cipher, EnvelopeEncryptor.KeyIdOf(cipher), CashAccountRules.Last4(number));
+        return new Sealed(cipher, EnvelopeEncryptor.KeyIdOf(cipher), CashAccountRules.Tail(number));
     }
 
     private static void BindData(NpgsqlCommand cmd, CashAccountData d)
@@ -248,7 +313,7 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
     {
         cmd.Parameters.Add(new NpgsqlParameter("cipher", NpgsqlTypes.NpgsqlDbType.Bytea) { Value = s is null ? DBNull.Value : s.Cipher });
         cmd.Parameters.Add(new NpgsqlParameter("keyid", NpgsqlTypes.NpgsqlDbType.Varchar) { Value = s is null ? DBNull.Value : s.KeyId });
-        cmd.Parameters.Add(new NpgsqlParameter("last4", NpgsqlTypes.NpgsqlDbType.Varchar) { Value = s is null ? DBNull.Value : s.Last4 });
+        cmd.Parameters.Add(new NpgsqlParameter("tail", NpgsqlTypes.NpgsqlDbType.Varchar) { Value = s is null ? DBNull.Value : s.Tail });
     }
 
     private async Task<ConfigResult<CashAccountView>> MutateAsync(Guid companyId, Func<CompanyAuditedWork, Task<CashAccountView>> work, CancellationToken ct)
@@ -326,10 +391,10 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
 
     private static string? S(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);
 
-    // Columns: 0 id, 1 kind, 2 code, 3 ar, 4 en, 5 branch, 6 account, 7 currency, 8 bank, 9 bank branch, 10 last4, 11 active, 12 revision, 13 created, 14 updated, 15-17 the ledger account (code, Arabic and English name).
+    // Columns: 0 id, 1 kind, 2 code, 3 ar, 4 en, 5 branch, 6 account, 7 currency, 8 bank, 9 bank branch, 10 tail, 11 active, 12 revision, 13 created, 14 updated, 15-17 the ledger account (code, Arabic and English name).
     private static CashAccountView Read(NpgsqlDataReader r) => new(r.GetGuid(0),
         new CashAccountData((CashAccountKind)r.GetInt16(1), r.GetString(2), S(r, 3), S(r, 4), r.GetGuid(5), r.GetGuid(6), S(r, 8), S(r, 9)),
-        r.GetString(7), S(r, 10) is { } last4 ? CashAccountRules.Mask(last4) : null, r.GetBoolean(11), r.GetInt64(12), r.GetFieldValue<DateTimeOffset>(13), r.GetFieldValue<DateTimeOffset>(14),
+        r.GetString(7), S(r, 10) is { } tail ? CashAccountRules.Mask(tail) : null, r.GetBoolean(11), r.GetInt64(12), r.GetFieldValue<DateTimeOffset>(13), r.GetFieldValue<DateTimeOffset>(14),
         new GlAccountRef(r.GetGuid(6), r.GetString(15), S(r, 16), S(r, 17)));
 
     /// <summary>The changed fields. Names and ids are recorded with their values; the number only as its MASKED old and new form.</summary>

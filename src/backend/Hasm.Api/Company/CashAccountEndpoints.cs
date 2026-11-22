@@ -42,6 +42,7 @@ public static class CashAccountEndpoints
         g.MapPost("/{id:guid}/activate", Activate).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}/account-number", RevealNumber);
         g.MapGet("/gl-candidates", Candidates);
+        g.MapPost("/maintenance/rewrap", Rewrap).WithMetadata(new BodyLimit());
     }
 
     private static object Body(CashAccountView a) => new
@@ -111,6 +112,14 @@ public static class CashAccountEndpoints
         if (failure is not null) return failure;
         if (!CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return CompanyConfigurationEndpoints.Error(400, "invalid_if_match");
         return CompanyConfigurationEndpoints.Map(await svc.ReactivateAsync(actor!.UserId, actor.CompanyId, id, expected, http.RequestAborted), Body, v => v.Revision);
+    }
+
+    /// <summary>Re-wraps the stored account numbers under the current master key (the family of the attachment and import re-wraps); privileged, company-wide; idempotent; fail-closed.</summary>
+    private static async Task<IResult> Rewrap(HttpContext http, AccessService access, CashAccountManagementService svc)
+    {
+        var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return CompanyConfigurationEndpoints.Map(await svc.RewrapNumbersAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), v => new { rewrapped = v.Rewrapped, skipped = v.Skipped, failed = v.Failed });
     }
 
     /// <summary>The ledger accounts that could be bound (bounded, searchable), for those who may create or update an account: they need not hold the chart permission.</summary>

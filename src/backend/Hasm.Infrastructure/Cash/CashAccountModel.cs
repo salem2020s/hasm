@@ -16,7 +16,14 @@ public static class CashAuditEvents
     public const short BankDetailsChanged = 2104;
     /// <summary>The FULL account number was shown to a holder of the sensitive permission (every reveal is one event).</summary>
     public const short AccountNumberRevealed = 2105;
+    /// <summary>The encrypted account number of one account was re-wrapped under the current master key (maintenance; the id and the key ids only).</summary>
+    public const short NumberRewrapped = 2106;
+    /// <summary>A re-wrap of one account's number failed and nothing was changed (the id and a reason code only).</summary>
+    public const short NumberRewrapFailed = 2107;
 }
+
+/// <summary>The outcome of the number re-wrap: how many were moved to the current key, how many already were under it (or hold no number), and how many failed (key missing, authentication failure) and were left untouched.</summary>
+public sealed record CashRewrapOutcome(int Rewrapped, int Skipped, int Failed);
 
 /// <summary>A cashbox (physical cash, never negative) or a bank account. Stored as a smallint.</summary>
 public enum CashAccountKind : short { Cashbox = 1, Bank = 2 }
@@ -47,8 +54,8 @@ public static partial class CashAccountRules
     [GeneratedRegex("^[A-Z0-9][A-Z0-9._-]{0,29}$")] private static partial Regex CodeShape();
     [GeneratedRegex("^[A-Z0-9]{4,34}$")] private static partial Regex NumberShape();
 
-    /// <summary>The masked form shown in lists, reports and exports: four asterisks and the last four characters.</summary>
-    public static string Mask(string last4) => MaskPrefix + last4;
+    /// <summary>The masked form shown in lists, reports and exports: four asterisks and the tail the masking rule allows (see <see cref="Tail"/>).</summary>
+    public static string Mask(string tail) => MaskPrefix + tail;
 
     /// <summary>A number never legitimately contains these characters, so anything that looks masked is never stored as a number.</summary>
     public static bool LooksMasked(string? value) => value is not null && (value.Contains('*') || value.Contains('•') || value.Contains('·'));
@@ -61,7 +68,11 @@ public static partial class CashAccountRules
         return NumberShape().IsMatch(n) ? n : null;
     }
 
-    public static string Last4(string normalizedNumber) => normalizedNumber[^4..];
+    /// <summary>
+    /// The masking rule (a TECHNICAL rule, not a business rule: it changes which accepted numbers are exposed, never which numbers are accepted): the mask reveals no more than a fixed safe share of the number. From 12 characters the last four,
+    /// from 8 to 11 the last two, below 8 nothing. Only this tail is stored next to the encrypted number and it is the only part any reader, audit event, report or export may ever show.
+    /// </summary>
+    public static string Tail(string normalizedNumber) => normalizedNumber.Length >= 12 ? normalizedNumber[^4..] : normalizedNumber.Length >= 8 ? normalizedNumber[^2..] : "";
 
     private static string? Trim(string? s) { var t = s?.Trim(); return string.IsNullOrEmpty(t) ? null : t; }
 

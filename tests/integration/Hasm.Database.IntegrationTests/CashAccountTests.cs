@@ -26,6 +26,16 @@ public sealed class SwitchableCashProbe : ICashAccountUsageProbe
 /// Phase 3.14 slice S1: the cash and bank account master over real HTTP. The permission codes are in the code catalog; the system migration that grants them to the preset roles waits for the owner, so every member here
 /// holds them through a role the test creates.
 /// </summary>
+/// <summary>SQL that puts a bank account row (with a number envelope under a named master key) into a freshly provisioned company, for the tests of the key inventory (the row does not need a real envelope: only its key id is read).</summary>
+public static class CashTestSql
+{
+    public static string BankRow(string code, string glCode, string keyId) =>
+        $"INSERT INTO {Cc.Table} ({Cc.Code}, {Cc.IsBase}, {Cc.Enabled}, {Cc.Revision}, {Cc.UpdatedAtUtc}) VALUES ('JOD', true, true, 1, now()) ON CONFLICT DO NOTHING; " +
+        $"INSERT INTO {Ac.Table} ({Ac.Id}, {Ac.Code}, {Ac.NameEn}, {Ac.Type}, {Ac.Nature}, {Ac.Statement}, {Ac.IsGroup}, {Ac.IsActive}, {Ac.CurrencyPolicy}, {Ac.Revision}, {Ac.CreatedAtUtc}, {Ac.UpdatedAtUtc}) VALUES ('{Guid.NewGuid()}', '{glCode}', 'gl', 1, 1, 1, false, true, 1, 1, now(), now()); " +
+        $"INSERT INTO {Ca.Table} ({Ca.Id}, {Ca.Kind}, {Ca.Code}, {Ca.NameEn}, {Ca.BranchId}, {Ca.AccountId}, {Ca.Currency}, {Ca.BankName}, {Ca.BankBranchName}, {Ca.NumberCipher}, {Ca.NumberKeyId}, {Ca.NumberTail}, {Ca.IsActive}, {Ca.Revision}, {Ca.CreatedBy}, {Ca.CreatedAtUtc}, {Ca.UpdatedAtUtc}) " +
+        $"VALUES ('{Guid.NewGuid()}', 2, '{code}', 'Bank', (SELECT {CompanySchema.Branch.Id} FROM {CompanySchema.Branch.Table} WHERE {CompanySchema.Branch.IsMain}), (SELECT {Ac.Id} FROM {Ac.Table} WHERE {Ac.Code} = '{glCode}'), 'JOD', 'B', 'BB', '\\x00ff'::bytea, '{keyId}', '7519', true, 1, '{Guid.NewGuid()}', now(), now())";
+}
+
 public abstract class CashAccountTestBase : HttpApiTestBase
 {
     protected const string Base = "/api/v1/company/cash-accounts";

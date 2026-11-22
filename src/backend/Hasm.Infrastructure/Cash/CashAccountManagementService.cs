@@ -72,6 +72,11 @@ public sealed class CashAccountManagementService(AccessService access, CashAccou
         return current is null || !eff.Has(PermissionCatalog.Codes.CashAccountsActivate, ScopeTarget.Branch(current.Data.BranchId)) ? Unknown<CashAccountView>() : null;
     }
 
+    /// <summary>Re-wraps the stored account numbers under the current master key (maintenance across all branches): needs the privileged update permission COMPANY-WIDE.</summary>
+    public async Task<ConfigResult<CashRewrapOutcome>> RewrapNumbersAsync(Guid userId, Guid companyId, CancellationToken ct = default) =>
+        await access.IsAllowedAsync(userId, companyId, PermissionCatalog.Codes.CashAccountsUpdate, ScopeTarget.Company, ct)
+            ? ConfigResult<CashRewrapOutcome>.Ok(await accounts.RewrapNumbersAsync(userId, companyId, ct)) : Denied<CashRewrapOutcome>();
+
     /// <summary>The FULL account number (audited): needs the sensitive permission on the account's branch AND the view permission there.</summary>
     public async Task<ConfigResult<string>> RevealNumberAsync(Guid userId, Guid companyId, Guid id, CancellationToken ct = default)
     {

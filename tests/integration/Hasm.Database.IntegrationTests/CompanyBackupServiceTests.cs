@@ -310,6 +310,20 @@ public class CompanyBackupServiceTests : PostgresTestBase
     }
 
     [PostgresFact]
+    public async Task The_key_inventory_of_a_backup_includes_the_keys_of_encrypted_cash_numbers_even_for_a_company_without_attachments()
+    {
+        await Init();
+        var c = await NewCompany();                                                                                  // no attachment at all
+        await Exec(Db(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-1", "1101", "k1"));
+        await Exec(Db(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-9", "1102", "k9"));                          // a number under a key the key directory does not hold
+        var backup = await Service().BackupCompanyAsync(c.Id, Path.Combine(work, "set-cash"));
+        Assert.Equal(new[] { "k1", "k9" }, backup.Manifest.KeyIdsRequired);                                          // never reported complete (empty) while bank numbers need keys
+        Assert.Equal(new[] { "k9" }, backup.MissingKeyIds);
+        var none = await NewCompany();                                                                                // a company with neither attachments nor numbers needs no key
+        Assert.Empty((await Service().BackupCompanyAsync(none.Id, Path.Combine(work, "set-none"))).Manifest.KeyIdsRequired);
+    }
+
+    [PostgresFact]
     public async Task Check_b_attachment_rows_against_files_failures_and_key_warnings()
     {
         await Init();

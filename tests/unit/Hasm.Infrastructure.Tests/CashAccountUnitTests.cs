@@ -10,12 +10,12 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// Phase 3.14 slice S1, no database needed: the validation and masking rules, the derivation and shape of the migration (company 0033, provisional: the number follows the merge order), and the guard that the cash module stays
+/// Phase 3.14 slice S1, no database needed: the validation and masking rules, the derivation and shape of the migration (company 0034, provisional: the number follows the merge order), and the guard that the cash module stays
 /// clear of the ledger and the numbering (D-214: financial posting for cash and bank is closed until the independent accounting and security reviews).
 /// </summary>
 public class CashAccountUnitTests
 {
-    private const string Number = "0033";   // a renumbering changes this constant, the generator constant and regenerates the files
+    private const string Number = "0034";   // a renumbering changes this constant, the generator constant and regenerates the files
 
     private static readonly Guid B = Guid.NewGuid(), A = Guid.NewGuid();
     private static CashAccountInput In(string? kind = "bank", string? code = "nb-1", string? ar = "البنك", string? en = null, string? bank = "National", string? branch = "Down", string? number = "SA03 8000 0000 6080 1016 7519") =>
@@ -26,7 +26,7 @@ public class CashAccountUnitTests
     {
         Assert.True(CashAccountRules.TryNormalize(In(), null, null, out var d, out var n, out var errors), string.Join(",", errors));
         Assert.Equal(("NB-1", CashAccountKind.Bank, "SA0380000000608010167519"), (d.Code, d.Kind, n));
-        Assert.Equal("7519", CashAccountRules.Last4(n!));
+        Assert.Equal("7519", CashAccountRules.Tail(n!));
         Assert.Equal("****7519", CashAccountRules.Mask("7519"));
     }
 
@@ -37,6 +37,34 @@ public class CashAccountUnitTests
         Assert.False(CashAccountRules.TryNormalize(In(number: number), null, null, out _, out var n, out var errors));
         Assert.Null(n);
         Assert.Contains(errors, e => e.Field == "accountNumber");
+    }
+
+    [Theory]
+    [InlineData(4, "", "****")] [InlineData(5, "", "****")] [InlineData(7, "", "****")]
+    [InlineData(8, "78", "****78")] [InlineData(9, "89", "****89")] [InlineData(11, "01", "****01")]
+    [InlineData(12, "9012", "****9012")] [InlineData(13, "0123", "****0123")] [InlineData(34, "6789", "****6789")]
+    public void The_mask_reveals_no_more_than_a_fixed_safe_share_of_the_number(int length, string tail, string masked)
+    {
+        var number = string.Concat(Enumerable.Range(0, length).Select(i => (char)('0' + (i + 1) % 10)));            // 1234567890123...
+        Assert.Equal(length, CashAccountRules.NormalizeNumber(number)!.Length);                                   // every length from 4 to 34 is still ACCEPTED (the rule changes the mask, not the accepted length)
+        var expectedTail = length >= 12 ? number[^4..] : length >= 8 ? number[^2..] : "";
+        Assert.Equal(expectedTail, CashAccountRules.Tail(number));
+        Assert.Equal(tail.Length, CashAccountRules.Tail(number).Length);
+        Assert.Equal(masked.Length - 4, CashAccountRules.Mask(CashAccountRules.Tail(number)).Length - 4);
+        Assert.True(CashAccountRules.Mask(CashAccountRules.Tail(number)).Length - 4 <= Math.Max(0, length / 3));  // never more than a third of the number is shown
+    }
+
+    [Fact]
+    public void A_short_number_is_not_exposed_by_its_mask_in_any_form_a_reader_can_see()
+    {
+        foreach (var n in new[] { "1234", "12345", "1234567" })
+        {
+            Assert.True(CashAccountRules.TryNormalize(In(number: n), null, null, out _, out var number, out _));
+            var mask = CashAccountRules.Mask(CashAccountRules.Tail(number!));
+            Assert.Equal("****", mask);
+            Assert.DoesNotContain(n[^1].ToString(), mask);
+        }
+        Assert.Equal("****", CashAccountRules.Mask(""));
     }
 
     [Fact]
@@ -81,7 +109,7 @@ public class CashAccountUnitTests
     [Fact]
     public void The_audit_codes_are_the_allocated_block_and_the_permissions_are_classified()
     {
-        short[] codes = [CashAuditEvents.AccountCreated, CashAuditEvents.AccountUpdated, CashAuditEvents.AccountDeactivated, CashAuditEvents.AccountReactivated, CashAuditEvents.BankDetailsChanged, CashAuditEvents.AccountNumberRevealed];
+        short[] codes = [CashAuditEvents.AccountCreated, CashAuditEvents.AccountUpdated, CashAuditEvents.AccountDeactivated, CashAuditEvents.AccountReactivated, CashAuditEvents.BankDetailsChanged, CashAuditEvents.AccountNumberRevealed, CashAuditEvents.NumberRewrapped, CashAuditEvents.NumberRewrapFailed];
         Assert.Equal(codes.Length, codes.Distinct().Count());
         Assert.All(codes, c => Assert.InRange(c, (short)2100, (short)2199));
         Assert.True(PermissionCatalog.Default.TryGet("company.cashaccounts.view", out var view));

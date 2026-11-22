@@ -289,6 +289,28 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     expect(document.body.textContent).not.toContain("0380000000");
   });
 
+  it("the revealed number is dropped the moment the session locks (D-236 keeps the screen mounted, hidden): it is in neither the DOM nor the state, and does not come back after signing in again (L1 of PR 206)", async () => {
+    const client = setup([bank()], { updateCashAccount: vi.fn().mockRejectedValue(apiErr(401, "unauthenticated")) });
+    await go();
+    await edit("NB1");
+    await userEvent.type(await form().findByLabelText(A("cash.name_en")), "x");                       // unsaved input: the 401 will LOCK instead of signing out
+    await userEvent.click(within(screen.getByTestId("cash-tabs")).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
+    await userEvent.click(screen.getByTestId("cash-number-reveal"));
+    expect(await screen.findByTestId("cash-number-shown")).toHaveTextContent("SA0380000000608010167519");
+    await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
+    await screen.findByTestId("reauth-dialog");                                                         // locked
+    expect(screen.getByTestId("shell-root")).toHaveAttribute("hidden");
+    expect(document.body.textContent).not.toContain("0380000000");                                       // gone at once, though the shell is still mounted
+    const dialog = within(screen.getByTestId("reauth-dialog"));
+    await userEvent.type(dialog.getByLabelText(/اسم المستخدم/), "amal");
+    await userEvent.type(dialog.getByLabelText(/كلمة المرور/), "secret-password");
+    await userEvent.click(dialog.getByRole("button", { name: "دخول" }));
+    await waitFor(() => expect(screen.queryByTestId("reauth-dialog")).toBeNull());
+    expect(client.login).toHaveBeenCalled();
+    expect(screen.queryByTestId("cash-number-shown")).toBeNull();                                        // resumed: still hidden until asked again
+    expect(document.body.textContent).not.toContain("0380000000");
+  });
+
   it("a failed reveal (the key is unavailable) says so and shows no number", async () => {
     setup([bank()], { revealCashAccountNumber: vi.fn().mockRejectedValue(apiErr(503, "encryption_unavailable")) });
     await go();

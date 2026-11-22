@@ -145,7 +145,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1316 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1322 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -248,7 +248,7 @@ jobs:
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
                 "BackupRestoreDrillTests": 2,
                 # Phase 4.3 slice 3: registry-bound backup, trial restore with the 21.8 pre-cutover checks, kept trial databases and the Hasm.Admin commands (no migration).
-                "CompanyBackupServiceTests": 11, "CompanyRestoreIsolationTests": 2,
+                "CompanyBackupServiceTests": 12, "CompanyRestoreIsolationTests": 2,
                 # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
                 "BackupRunTests": 6,
                 # Gapless numbering under failure for stock documents, stocktakes, stock adjustments and journal posting: reuse after a failure after the issue, and a number collision refused as number_already_issued (no migration).
@@ -258,7 +258,7 @@ jobs:
                 # Per-endpoint 403 matrix of every mutating /api/v1/company/** route (no permission, read-only, other branch, cost center or warehouse; route-table completeness).
                 "EndpointPermissionMatrixTests": 5, "EndpointPermissionMatrixWarehouseTests": 1,
                 # Phase 4.3 slice 5: encrypted, signed backups, trial restore with the recovery key, forged-set refusal, backup-keys, the recovery test, encryption by default (no migration).
-                "EncryptedBackupTests": 6,
+                "EncryptedBackupTests": 7,
                 # Release 1 accounting acceptance (gap items 4-5): stock posting racing a period close (race and deterministic), stocktake approval in closed periods (no migration).
                 "InventoryPeriodInvariantTests": 3,
                 # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
@@ -276,6 +276,6 @@ jobs:
                 # Constraint-violation matrix, part 2, batch 4: commercial documents and imports on their own fixtures (no migration).
                 "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
                 # Phase 3.14 slice S1 cash and bank account master (company migration 0033, provisional number): binding, base currency, branch scope, sensitive bank number, runtime guards, HTTP API; constraint matrix batch 5 (cash accounts).
-                "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 4, "EndpointConstraintMatrixPart2CashTests": 1,
+                "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 8, "EndpointConstraintMatrixPart2CashTests": 1,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

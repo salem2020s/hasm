@@ -34,6 +34,7 @@ public class EndpointConstraintMatrixPart2CashTests : CashAccountTestBase
         Assert.Equal(1, contenders.Count(r => (int)r.Status is >= 200 and < 300));
         Assert.All(contenders.Where(r => (int)r.Status >= 300), r => Assert.Equal("gl_account_already_bound", r.Error));
         _ = other;
+        await Race("cash rewrap", ["2xx"], HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie, mode: Mode.Same);   // idempotent: every answer is a 200, nothing to move here
         races.AssertNoFindings();
         races.AssertRan(EndpointConstraintMatrixPart2Tests.Shares[nameof(Cash_and_bank_accounts_end_in_a_mapped_4xx_never_a_5xx)]);
     }
