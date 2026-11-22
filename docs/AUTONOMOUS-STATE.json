@@ -2,8 +2,8 @@
   "schema": 2,
   "updatedAt": "2026-11-22",
   "main": {
-    "verifiedHead": "bd3306ec36a3f5ed85f72a9d53a90a34b4b10169",
-    "note": "Refresh after the merges of #201, #209 and #206 (and #208, the previous refresh). main = bd3306e (merge of #206), read from git and GitHub REST on 2026-11-22. PostgreSQL registry 1371 (step title of .github/workflows/backend.yml on main, equal to the per-class sum). Migrations on main: company 0001-0035, system 0001-0034. Next free company number 0036 (#48 X1-A, open, renumbering in progress; per the lead, NOT VERIFIED); test migration 0037 only if #48 needs it. System plan (per the lead, NOT VERIFIED): 0035 the owner-only trigger of #210 (open, provisional), 0036 short-close permission (on hold with the owner), 0037 cash preset grant (on hold with the owner)."
+    "verifiedHead": "6770786808cabd8502736f6425a35384ff53bf32",
+    "note": "Refresh after the merges of #201, #209, #206 and #211 (and #208, the previous refresh). main = 6770786 (merge of #211), read from git and GitHub REST on 2026-11-22. PostgreSQL registry 1372 (step title of .github/workflows/backend.yml on main, equal to the per-class sum). Migrations on main: company 0001-0035, system 0001-0034. Next free company number 0036 (#48 X1-A, open, renumbering in progress; per the lead, NOT VERIFIED); test migration 0037 only if #48 needs it. System plan (per the lead, NOT VERIFIED): 0035 the owner-only trigger of #210 (open, provisional), 0036 short-close permission (on hold with the owner), 0037 cash preset grant (on hold with the owner)."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -535,10 +535,20 @@
         "docs/review-records/PR-206-delta-confirmation.md",
         "docs/review-records/PR-206-merge-confirmation-2.md"
       ]
+    },
+    {
+      "pr": 211,
+      "phase": "cash key usage required and fail closed (L5) and the failed-rewrap audit failure logged (L3), the follow-up of the #206 review (no migration)",
+      "mergeCommit": "6770786808cabd8502736f6425a35384ff53bf32",
+      "headMerged": "77d54dccf4d9c2cce46c8bd7b5ede8f3c9777a80",
+      "mergedAt": "2026-11-22T15:01:43Z",
+      "reviewRecords": [
+        "docs/review-records/PR-211-review.md"
+      ]
     }
   ],
   "active": {
-    "phase": "Refresh after the merges of #201, #209 and #206 (2026-11-22); three design proposals on main await the owner; team running",
+    "phase": "Refresh after the merges of #201, #209, #206 and #211 (2026-11-22); three design proposals on main await the owner; team running",
     "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh. D-237: #183 merged on the owner's condition; FH's record states the single exception (hbe_not_authenticated accepted under the test helper's digest for the SPKI-length bytes 53/54, the false flaky assertion, replaced by a stricter check under the parser-framed digest).",
     "knownIssues": [
       "Decisions: next free ID D-240. D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
@@ -550,7 +560,7 @@
     ]
   },
   "next": [
-    "Next tasks (2026-11-22, per the lead; NOT VERIFIED): the #48 renumber to company 0036, then the independent confirmation of its delta; the #210 security review; the #211 review; S8b (no pull request yet). #188 only on the owner's explicit instruction.",
+    "Next tasks (2026-11-22, per the lead; NOT VERIFIED): the #48 renumber to company 0036, then the independent confirmation of its delta; the #210 security review; S8b (no pull request yet). #211 is merged. #188 only on the owner's explicit instruction.",
     "Merge queue (registry serial, main = 1265): #181 (system 0034; security confirmation in progress after the High fix, per the lead) then #185 (stacked); #182 (+8; round 3); #200 (company 0033); #201 (M2-TOTP); #202 (test-pg). #188 only on the owner's explicit instruction. Each: merge main, registry, exact-head verify-head, CI, --match-head-commit. #191 and #196 are merged.",
     "#176 merged (2d5da1f). BINDING for the slice 8 implementation (FG's L-FG3, Low, recorded on the merged plan's review record): when a backup-retention-apply finds a matching 2015 with no 2016 and the run folder present, it closes that orphan 2015 with an audit event (2017 deletion_not_started with run id, status hash and destination id), and a closed 2015 is never a basis for resume, recovery or the 2015/2016 pair; with its test (crash before the rename, hold placed, folder removed by hand: the run must stay pending and be copied again). ALSO BINDING for slice 8 (owner, MD-Q2, D-230): deletion cannot be enabled while the backup destinations lack the required independent protection (no-second-destination case included until decided otherwise).",
     "Consolidated package (D-198..D-239): the lead assigns the unblocked slices in dependency order (list in docs/INTEGRATION-STATUS.md, 'Now unblocked'); implementation gaps first in 3.13: backend Reject rule (D-208) and duplicate-policy rule with its migration (D-209).",
@@ -597,8 +607,8 @@
     {
       "pr": 48,
       "branch": "feature/phase-3-8d-impact-preview",
-      "head": "f32d81e6422a1f0832300b79670399f046c2cd17",
-      "state": "Phase 3.8D impact preview and recalculation, X1-A layer; REST: draft, not mergeable (dirty), no hosted check-run listed on this head; per the lead (NOT VERIFIED): blocked on the renumber to the next free company number (0036) and on the independent confirmation of its delta; merges only after the phase completes"
+      "head": "9fbe3a6cb7b2d76d49bec55dad80c8d8d98be2c8",
+      "state": "Phase 3.8D impact preview and recalculation, X1-A layer; REST: draft, not mergeable (dirty), hosted CI on this head 6 listed checks success and 1 in progress at this read; the head moved since the first version of this refresh (f32d81e); per the lead (NOT VERIFIED): blocked on the renumber to the next free company number (0036) and on the independent confirmation of its delta; merges only after the phase completes"
     },
     {
       "pr": 188,
@@ -611,12 +621,6 @@
       "branch": "feature/m2-totp-owner-only-trigger",
       "head": "fdf87e5d0d4320f931cae5a8fa0de8d6b3fe0c5a",
       "state": "owner-only trigger on the TOTP secret material (D-235 second part; system migration 0035, provisional); REST: draft, not mergeable (dirty), hosted CI on this head all 7 listed checks success; per the lead (NOT VERIFIED): under security review"
-    },
-    {
-      "pr": 211,
-      "branch": "fix/cash-key-usage-required",
-      "head": "cf4cc53a202b932f74b8454b2c79b454efa52d5a",
-      "state": "key-retirement cash usage required and fail closed (L5) and the failed-rewrap audit failure logged (L3), follow-up of #206; REST: draft, mergeable (clean), hosted CI on this head all 7 listed checks success; per the lead (NOT VERIFIED): under independent review"
     }
   ],
   "inertPullRequests": [],
@@ -759,9 +763,9 @@
     }
   },
   "registry": {
-    "mainPostgreSqlTests": 1371,
+    "mainPostgreSqlTests": 1372,
     "queued": {},
-    "note": "main read from the step title (equal to the per-class sum: 1332, #201 +9, #209 +3, #206 +27); queued additions are re-read at each merge"
+    "note": "main read from the step title (equal to the per-class sum: 1332, #201 +9, #209 +3, #206 +27, #211 +1); queued additions are re-read at each merge"
   },
   "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging.",
   "flaggedForOwnerNotBlocking": {
@@ -799,7 +803,7 @@
     "Test-stability note: sessionLock and dashboard frontend tests can time out under heavy local load only",
     "#208 L1: the CASH-ACCOUNTS wording of the mask tail (register item and this file) predates #206's fix at 2be383b (the stored tail is only what the mask may show: 0, 2 or 4 characters by length); the register item is deliberately NOT reworded by this refresh",
     "#201 L-R3: one sentence in docs/DEVELOPMENT.md naming the two company-MFA-policy catalog entries (other Lows resolved in the record)",
-    "#206 L5 (CashNumbers required, fail closed) and L3 (log the failed-rewrap audit failure): in #211 (open)",
+    "#206 L5 (CashNumbers required, fail closed) and L3 (log the failed-rewrap audit failure): DONE via #211 (merged 6770786); the #211 record lists three accepted Lows (explicit empty cash usage of a pending company, defensive null guard, logging test not mutation-checked by the reviewer)",
     "#209 L1 (same-volume limit sentence for DEVELOPMENT.md and PHASE-4.3.md, not on main), L2 (Windows 8.3 and case-folded alias paths), L3 (status notes of D-183, D-184 and D-186 still name the feature branch, still on main); the lead's report names only L2 as residual: NOT CONFIRMED by this read",
     "#48 step-5 Lows (per the lead, NOT VERIFIED; the record is on the #48 branch) and #210 residuals once its review lands (NOT VERIFIED)"
   ],
