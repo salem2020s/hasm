@@ -147,6 +147,7 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.CommercialDocumentLine.Table, ["SELECT", "INSERT", "UPDATE", "DELETE"]),   // lines are replaceable ONLY while the document is a draft (PostgreSQL trigger); every replacement is audited
         (CompanySchema.CommercialDocumentEvent.Table, ["SELECT", "INSERT"]),
         (CompanySchema.DocumentLink.Table, ["SELECT", "INSERT"]),   // Phase 3.13 S2 (company 0030): links are append-only, so never UPDATE, DELETE or TRUNCATE
+        (CompanySchema.DocumentShortClose.Table, ["SELECT", "INSERT"]),   // Phase 3.13 short close (D-201, company 0033 provisional): append-only, so never UPDATE, DELETE or TRUNCATE
         // Phase R slice R1 (company migration 0031): never DELETE or TRUNCATE (append-only guards in PostgreSQL as well). The rules of a version are written once with it.
         (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
         (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),

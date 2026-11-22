@@ -51,6 +51,7 @@ public class CompanyRuntimePrivilegesCompletenessTests
         string[] Of(string table) => [.. CompanyRuntimePrivileges.Tables.Single(t => t.Table == table).Privileges];
         Assert.Equal(["SELECT", "INSERT"], Of(CompanySchema.CommercialDocumentEvent.Table));
         Assert.Equal(["SELECT", "INSERT"], Of(CompanySchema.DocumentLink.Table));
+        Assert.Equal(["SELECT", "INSERT"], Of(CompanySchema.DocumentShortClose.Table));
         Assert.DoesNotContain("DELETE", Of(CompanySchema.CommercialDocument.Table));
     }
 

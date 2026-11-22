@@ -10,6 +10,7 @@ using NpgsqlTypes;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
 using DL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentLink;
+using SC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentShortClose;
 
 namespace Hasm.Infrastructure.Commercial;
 
@@ -212,12 +213,12 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var q = new NpgsqlCommand($"SELECT l.{CL.LineNo}, l.{CL.Quantity}, " +
-            $"COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 1), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 2), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 3), 0) " +
+            $"COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 1), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 2), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 3), 0), (SELECT COALESCE(sum(s.{SC.Quantity}), 0) FROM {SC.Table} s WHERE s.{SC.LineId} = l.{CL.Id}) " +
             $"FROM {CL.Table} l LEFT JOIN {DL.Table} k ON k.{DL.FromLineId} = l.{CL.Id} WHERE l.{CL.DocumentId} = @d GROUP BY l.{CL.Id}, l.{CL.LineNo}, l.{CL.Quantity} ORDER BY l.{CL.LineNo}", conn);
         q.Parameters.AddWithValue("d", documentId);
         var list = new List<LineQuantityView>();
         await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct)) list.Add(new LineQuantityView(r.GetInt32(0), r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3), r.GetDecimal(4)));
+        while (await r.ReadAsync(ct)) list.Add(new LineQuantityView(r.GetInt32(0), r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3), r.GetDecimal(4), r.GetDecimal(5)));
         return list;
     }
 

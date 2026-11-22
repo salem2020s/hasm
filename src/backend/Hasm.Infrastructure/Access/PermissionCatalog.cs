@@ -155,7 +155,7 @@ public sealed partial class PermissionCatalog
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
         // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to the Commercial Approver preset role (system migration 0029), which is granted offline (AccessService.GrantCommercialApproverOfflineAsync) or copied into custom roles.
-        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
+        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Close]),   // Close = the short-close action (D-201, system migration 0034 provisional): in the Company Administrator preset so that it can be held and delegated (a role can only grant what its creator holds)
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
         // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
@@ -287,6 +287,7 @@ public sealed partial class PermissionCatalog
         public const string CommercialSubmit = "company.commercialdocs.submit";
         public const string CommercialCancel = "company.commercialdocs.cancel";
         public const string CommercialApprove = "company.commercialdocs.approve";
+        public const string CommercialClose = "company.commercialdocs.close";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
         public const string PartyRolesView = "company.partyroles.view";

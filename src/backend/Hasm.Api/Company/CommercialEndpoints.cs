@@ -51,6 +51,8 @@ public static class CommercialEndpoints
         g.MapPost("/links", CreateLink).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapGet("/{id:guid}/links", ListLinks);
         g.MapGet("/{id:guid}/line-quantities", LineQuantities);
+        g.MapPost("/{id:guid}/short-close", ShortClose).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);   // D-201: needs company.commercialdocs.close on the branch
+        g.MapGet("/{id:guid}/short-closes", ListShortCloses);
     }
 
     private static object Body(CommercialDocumentView d) => new
@@ -85,7 +87,7 @@ public static class CommercialEndpoints
         Run(http, access, false, (u, c, _) => svc.ApprovalProgressAsync(u, c, id, http.RequestAborted),
             v => new { plan = v.Plan.Select(p => new { stage = p.Stage, required = p.Required, approved = p.Approved, roleId = p.RoleId }), decisions = v.Decisions.Select(d => new { id = d.Id, revision = d.DocumentRevision, approver = d.Approver, stage = d.Stage, decidedAtUtc = d.DecidedAtUtc }) }, null);
     private static Task<IResult> Types(HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
-        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }) }, null);
+        Run(http, access, false, (u, c, _) => svc.TypesAsync(u, c, http.RequestAborted), v => new { types = v.Types, linkPairs = v.LinkPairs.Select(p => new { source = p.Source, target = p.Target, kind = p.Kind }), shortCloseTypes = v.ShortCloseTypes ?? [] }, null);
     private static Task<IResult> Get(Guid id, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.GetAsync(u, c, id, http.RequestAborted), Body, d => d.Revision);
     private static Task<IResult> Create(CommercialDocumentInput? body, HttpContext http, AccessService access, CommercialDocumentManagementService svc) =>
@@ -110,5 +112,10 @@ public static class CommercialEndpoints
         Run(http, access, false, (u, c, _) => svc.ListAsync(u, c, id, http.RequestAborted), v => new { links = v.Select(LinkBody) }, null);
     private static Task<IResult> LineQuantities(Guid id, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
         Run(http, access, false, (u, c, _) => svc.QuantitiesAsync(u, c, id, http.RequestAborted),
-            v => new { lines = v.Select(q => new { lineNo = q.LineNo, ordered = q.Ordered, fulfilled = q.Fulfilled, invoiced = q.Invoiced, returned = q.Returned, remainingToFulfil = q.RemainingToFulfil, remainingToInvoice = q.RemainingToInvoice, remainingToReturn = q.RemainingToReturn }) }, null);
+            v => new { lines = v.Select(q => new { lineNo = q.LineNo, ordered = q.Ordered, fulfilled = q.Fulfilled, invoiced = q.Invoiced, returned = q.Returned, remainingToFulfil = q.RemainingToFulfil, remainingToInvoice = q.RemainingToInvoice, remainingToReturn = q.RemainingToReturn, shortClosed = q.ShortClosed, open = q.Open }) }, null);
+    private static object ShortCloseBody(ShortCloseView v) => new { operationId = v.OperationId, documentId = v.DocumentId, reason = v.Reason, createdBy = v.CreatedBy, createdAtUtc = v.CreatedAtUtc, lines = v.Lines.Select(l => new { lineNo = l.LineNo, quantity = l.Quantity }), replayed = v.Replayed };
+    private static Task<IResult> ShortClose(Guid id, ShortCloseInput? body, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
+        Run(http, access, true, (u, c, rev) => svc.ShortCloseAsync(u, c, id, rev, body, http.RequestAborted), ShortCloseBody, null);
+    private static Task<IResult> ListShortCloses(Guid id, HttpContext http, AccessService access, DocumentLinkManagementService svc) =>
+        Run(http, access, false, (u, c, _) => svc.ListShortClosesAsync(u, c, id, http.RequestAborted), v => new { shortCloses = v.Select(ShortCloseBody) }, null);
 }

@@ -51,7 +51,7 @@ public sealed class CommercialDocumentManagementService(AccessService access, Co
     {
         var eff = await access.GetEffectivePermissionsAsync(user, company, ct);
         return HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialView) || HoldsAnywhere(eff, PermissionCatalog.Codes.CommercialCreate)
-            ? ConfigResult<CommercialTypesView>.Ok(new CommercialTypesView(documents.RegisteredTypes, documents.RegisteredLinkPairs)) : Denied<CommercialTypesView>();
+            ? ConfigResult<CommercialTypesView>.Ok(new CommercialTypesView(documents.RegisteredTypes, documents.RegisteredLinkPairs, documents.RegisteredShortCloseTypes)) : Denied<CommercialTypesView>();
     }
 
     public async Task<ConfigResult<CommercialDocumentView>> GetAsync(Guid user, Guid company, Guid id, CancellationToken ct = default) =>
