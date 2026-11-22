@@ -17,8 +17,10 @@ public static class ReplicaStatusReport
         var primaryRuns = RetentionInventory.Scan(BackupSet.RealPath(primaryRoot), trust).Runs;
         var primaryNewest = primaryRuns.Where(ReplicaStatus.IsReplicable).OrderByDescending(r => r.RunId, StringComparer.Ordinal).FirstOrDefault()?.RunId;
         var reports = new List<DestinationReport>();
-        foreach (var d in destinations)
+        foreach (var listed in destinations)
         {
+            // existence is read NOW: a destination folder may have been created by the copy that just ran (the configuration was checked before it)
+            var d = listed with { Exists = Directory.Exists(listed.ResolvedPath) };
             var state = ReplicaStatus.Inspect(d, primaryRuns, trust, now);
             var findings = ReplicaStatus.Contribution(state, primaryNewest, now, defaultMaxAge);
             var lines = new List<string>

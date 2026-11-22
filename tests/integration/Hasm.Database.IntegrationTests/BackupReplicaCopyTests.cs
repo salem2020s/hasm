@@ -3,6 +3,7 @@ using Hasm.Infrastructure.Attachments;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Backup;
 using Hasm.Infrastructure.Companies;
+using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.SystemDatabase;
 using E = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
