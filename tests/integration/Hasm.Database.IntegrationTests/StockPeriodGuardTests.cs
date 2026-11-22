@@ -610,6 +610,20 @@ public class StockPeriodGuardRuntimeRoleTests : StockPeriodGuardTestBase
     // the date of its stock posting, so a copy with another date is refused there first. The runtime role cannot switch a trigger off to isolate the guard.
     private static bool OlderTriggerFirst(Guarded g) => g.Table == NO.Table || g.Table == NX.Table;
 
+    // PRECEDENCE with the entry guard of the plan-execution migration (company 0036), documented in docs/DEVELOPMENT.md: on the cost entry table that guard (next sequence number, back-dated rule, epoch rules) and this period
+    // guard can both refuse the same row. PostgreSQL fires BEFORE INSERT triggers in trigger-name order and the plan guard's name derives from its migration number, so the order is not part of the contract. The rule:
+    // (1) a row that violates only the period rule is refused by THIS guard with its exact message (asserted below with a next-sequence, not back-dated copy in a closed future period); (2) a row that violates both
+    // is refused with ONE of the two messages, and only that pair is accepted; (3) either way the row is refused and the table is unchanged.
+    private const string PlanBackDatedMessage = "a back-dated cost entry is accepted only inside the execution of an approved compensation plan";
+
+    /// <summary>A copy of the first cost entry with the NEXT sequence number of its position, so the plan guard's sequence rule accepts it; only the date (and with it possibly the back-dated rule) decides.</summary>
+    private static string NextSeqEntryClone(string date) =>
+        $"INSERT INTO {EN.Table} OVERRIDING SYSTEM VALUE SELECT (jsonb_populate_record(NULL::{EN.Table}, to_jsonb(s) || jsonb_build_object('{EN.EffectiveDate}', '{date}'::date, '{EN.Seq}', (SELECT p.{CompanySchema.CostPosition.LastSeq} + 1 FROM {CompanySchema.CostPosition.Table} p WHERE p.{CompanySchema.CostPosition.Id} = s.{EN.PositionId})))).* FROM {EN.Table} s LIMIT 1";
+
+    private static void AssertPeriodOrPlanGuard(PostgresException? ex, string periodMessage, string what) =>
+        Assert.True(ex is { SqlState: "P0001" } && (ex.MessageText.Contains(periodMessage, StringComparison.Ordinal) || ex.MessageText.Contains(PlanBackDatedMessage, StringComparison.Ordinal)),
+            $"{what}: expected '{periodMessage}' or the plan guard's back-dated refusal, got {ex?.SqlState} {ex?.MessageText}");
+
     [PostgresRoleFact]
     public async Task The_runtime_role_is_refused_in_every_guarded_table_and_can_still_write_into_an_open_period()
     {
@@ -621,19 +635,36 @@ public class StockPeriodGuardRuntimeRoleTests : StockPeriodGuardTestBase
         {
             foreach (var (date, message) in new[] { (SoftDate, SoftMessage), (FinalDate, FinalMessage), (MissingDate, MissingMessage) })
             {
-                var ex = await Attempt(runtime, Clone(g, date));
-                if (OlderTriggerFirst(g)) Assert.True(ex is { SqlState: "P0001" }, $"{g.Name} dated {date}: {ex?.SqlState} {ex?.MessageText}");
+                var entry = g.Table == EN.Table;
+                var rows = await Sql<long>($"SELECT count(*) FROM {g.Table}");
+                var ex = await Attempt(runtime, entry ? NextSeqEntryClone(date) : Clone(g, date));
+                if (entry) AssertPeriodOrPlanGuard(ex, message, $"{g.Name} dated {date} as the runtime role");      // dated before the position's last date: both guards apply (precedence rule 2)
+                else if (OlderTriggerFirst(g)) Assert.True(ex is { SqlState: "P0001" }, $"{g.Name} dated {date}: {ex?.SqlState} {ex?.MessageText}");
                 else AssertGuard(ex, message, $"{g.Name} dated {date} as the runtime role");
+                Assert.Equal(rows, await Sql<long>($"SELECT count(*) FROM {g.Table}"));                         // refused, and the table is unchanged (precedence rule 3)
             }
             // An Open date passes the guard with the runtime role's own rights (EXECUTE on both functions, the share lock on the period row): the copy ends at the primary key.
             if (!OlderTriggerFirst(g))
             {
-                var open = await Attempt(runtime, Clone(g, OpenDate));
+                var open = await Attempt(runtime, g.Table == EN.Table ? NextSeqEntryClone(OpenDate) : Clone(g, OpenDate));
                 Assert.True(open is { SqlState: PostgresErrorCodes.UniqueViolation }, $"{g.Name} in an open period as the runtime role: {open?.SqlState} {open?.MessageText}");
             }
         }
         Assert.Null(await Attempt(runtime, NewCostOperation("2026-03-15")));
         AssertGuard(await Attempt(runtime, NewCostOperation(SoftDate)), SoftMessage, "new cost operation as the runtime role");
+    }
+
+    [PostgresRoleFact]
+    public async Task A_cost_entry_that_violates_only_the_period_rule_is_refused_by_the_period_guard_and_not_masked_by_the_plan_guard()
+    {
+        // precedence rule 1: a copy with the next sequence number of its position, dated AFTER the position's last date (so the plan guard has nothing to refuse), in a Soft Closed future period
+        await Populate();
+        var may = await Period(5);
+        Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, may.Id, may.Revision));
+        await using var runtime = await AsRuntime();
+        var entries = await Sql<long>($"SELECT count(*) FROM {EN.Table}");
+        AssertGuard(await Attempt(runtime, NextSeqEntryClone(OpenDate)), SoftMessage, "a next-sequence cost entry in a Soft Closed future period as the runtime role");
+        Assert.Equal(entries, await Sql<long>($"SELECT count(*) FROM {EN.Table}"));
     }
 
     [PostgresRoleFact]
