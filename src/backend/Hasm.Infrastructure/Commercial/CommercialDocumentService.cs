@@ -548,8 +548,12 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             await AppendEventAsync(work, cur.Id, CommercialEventKind.Approved, CommercialStatus.Submitted, CommercialStatus.Approved, cur.Revision + 1, actor, null, CommercialAuditEvents.Approved, $"commercial document approved r{cur.Revision + 1} number={number}", ct);
         }, ct);
 
-    /// <summary>Submitted to rejected with a mandatory reason; the submitter's independence rule is the same as for approval. A rejected document may be edited (reopened as a draft) or cancelled.</summary>
-    public Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, string? reason, CancellationToken ct = default)
+    /// <summary>
+    /// Submitted to rejected with a mandatory reason; the submitter's independence rule is the same as for approval. When a policy governs the revision, the rejection is a decision on the FIRST OPEN stage: a stage
+    /// bound to a role is rejected only by a holder of that role (<c>rejecter_role_required</c>; the caller supplies the roles held for the document's branch, and none supplied means none held). A stage without a
+    /// role, and a document without a plan, keep the rule above. A rejected document may be edited (reopened as a draft) or cancelled.
+    /// </summary>
+    public Task<ConfigResult<CommercialDocumentView>> RejectAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, string? reason, CancellationToken ct = default, IReadOnlySet<Guid>? rejecterRoles = null)
     {
         var text = reason?.Trim() ?? "";
         if (text.Length is < 1 or > 500 || text.Any(char.IsControl)) return Task.FromResult(ConfigResult<CommercialDocumentView>.Invalid([new FieldError("reason", "reason_required")]));
@@ -557,6 +561,8 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
         {
             if (cur.Status != CommercialStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "document_not_submitted");
             if (actor == cur.SubmittedBy || actor == cur.CreatedBy || actor == cur.LastEditedBy) throw new Abort(ConfigStatus.Conflict, "approver_not_independent");
+            var open = (await PlanAsync(work.Connection, work.Transaction, cur.Id, cur.DocType, cur.Revision, ct)).FirstOrDefault(p => p.Approved < p.Required);
+            if (open?.RoleId is { } stageRole && (rejecterRoles is null || !rejecterRoles.Contains(stageRole))) throw new Abort(ConfigStatus.Forbidden, "rejecter_role_required");
             await SetStatusAsync(work, cur, CommercialStatus.Rejected, cur.SubmittedBy, ct);
             await AppendEventAsync(work, cur.Id, CommercialEventKind.Rejected, CommercialStatus.Submitted, CommercialStatus.Rejected, cur.Revision + 1, actor, text, CommercialAuditEvents.Rejected, $"commercial document rejected r{cur.Revision + 1}", ct);
         }, ct);

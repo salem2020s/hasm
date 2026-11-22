@@ -266,3 +266,12 @@ button.link:hover:not(:disabled) { background: none; }
 .search-picker { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .search-picker input, .search-picker select { min-width: 0; max-width: 100%; }
 .field .field-label { font-weight: var(--weight-medium); font-size: var(--text-ui); color: var(--color-text); }
+
+/* D-236: the application shell while its user must sign in again. `display: contents` keeps the wrapper out of the layout; once it is `hidden` it is not rendered at
+   all, on screen or on paper (the rule is !important so that no layout rule can show it again), and the sign-in-again dialog is the only content. */
+.shell-root { display: contents; }
+.shell-root[hidden] { display: none !important; }
+@media print { .shell-root[hidden], .shell-root[hidden] * { display: none !important; visibility: hidden !important; } }
+.reauth { position: fixed; inset: 0; z-index: 60; overflow: auto; background: var(--color-bg, #fff); }
+.reauth ~ .dialog-backdrop { z-index: 70; }   /* the window-close question asked while locked sits above the sign-in-again dialog */
+.reauth-discard { margin-block-start: var(--space-4); text-align: center; }

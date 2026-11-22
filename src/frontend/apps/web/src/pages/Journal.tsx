@@ -139,6 +139,11 @@ function EntryScreen({ id, adjustsId, lookups, can, onBack, onOpen }: { id: stri
   if (loadError) return <Banner kind="error" testId="jrn-load-error">{loadError}</Banner>;
   if (id && !entry) return <Loading />;
   const h = entry?.entry;
+  // A role-bound stage is decided (approved OR rejected) only by a holder of its role for everything the entry touches: company-wide, or for the entry's branch and every line branch. A cost-center assignment of
+  // the role may also cover the entry; only the server can tell (tree and allocations), so the buttons stay when one exists. The server decides in every case.
+  const openStage = entry?.plan?.find((s) => s.approved < s.required);
+  const touchedBranches = entry ? [entry.entry.branchId, ...entry.lines.map((l) => l.branchId)].filter((b): b is string => !!b) : [];
+  const stageRoleMissing = !!openStage?.roleId && !(touchedBranches.every((b) => auth.hasRoleOnBranch(openStage.roleId!, b)) || auth.hasRoleOnCostCenter(openStage.roleId));
   const lineView = (l: LineDraft, i: number) => {
     const acc = accountById.get(l.accountId);
     const foreign = l.currency && l.currency !== base;
@@ -249,6 +254,7 @@ function EntryScreen({ id, adjustsId, lookups, can, onBack, onOpen }: { id: stri
             </p>
           )}
           {editable && problems.some(Boolean) && <p className="hint" data-testid="jrn-problems">{t(problems.find(Boolean)!)}</p>}
+          {entry && h && status === "pending_approval" && can.approve && stageRoleMissing && <p className="hint" data-testid="jrn-stage-role-missing">{t("jrn.stage_role_missing")}</p>}
         </Card>
         {runner.error && <Banner kind="error" testId="jrn-error">{runner.error}</Banner>}
         {runner.conflict && <Banner kind="warning" testId="jrn-conflict">{t("common.conflict")}</Banner>}
@@ -257,7 +263,7 @@ function EntryScreen({ id, adjustsId, lookups, can, onBack, onOpen }: { id: stri
           {editable && <button type="submit" className="primary" disabled={!formOk || runner.busy}>{t("jrn.save_draft")}</button>}
           {entry && h && can.create && status === "draft" && !dirty && <button type="button" className="primary" disabled={runner.busy} onClick={() => void step((e) => auth.api.submitJournalEntry(e.entry.id, e.entry.revision), t("jrn.submitted"))}>{t("jrn.submit")}</button>}
           {entry && h && (status === "pending_approval" || status === "approved") && can.create && <button type="button" disabled={runner.busy} onClick={() => void step((e) => auth.api.withdrawJournalEntry(e.entry.id, e.entry.revision), t("jrn.withdrawn"))}>{t("jrn.withdraw")}</button>}
-          {entry && h && status === "pending_approval" && can.approve && <><button type="button" className="primary" disabled={runner.busy} onClick={() => setPrompt("approve")}>{t("jrn.approve")}</button><button type="button" disabled={runner.busy} onClick={() => setPrompt("reject")}>{t("jrn.reject")}</button></>}
+          {entry && h && status === "pending_approval" && can.approve && !stageRoleMissing && <><button type="button" className="primary" disabled={runner.busy} onClick={() => setPrompt("approve")}>{t("jrn.approve")}</button><button type="button" disabled={runner.busy} onClick={() => setPrompt("reject")}>{t("jrn.reject")}</button></>}
           {entry && h && status === "approved" && can.post && <button type="button" className="primary" disabled={runner.busy} onClick={() => void step((e) => auth.api.postJournalEntry(e.entry.id, e.entry.revision), t("jrn.posted"))}>{t("jrn.post")}</button>}
           {entry && h && status === "posted" && h.type !== "reversal" && can.reverse && <button type="button" disabled={runner.busy} onClick={() => setPrompt("reverse")}>{t("jrn.reverse")}</button>}
           {entry && h && (status === "posted" || status === "reversed") && can.create && <button type="button" onClick={() => onOpen(`adjust:${h.id}`)}>{t("jrn.adjust")}</button>}

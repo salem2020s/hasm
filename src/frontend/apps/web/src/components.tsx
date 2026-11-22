@@ -1,6 +1,6 @@
 import { ApiError } from "@hasm/api-client";
 import { useI18n } from "@hasm/ui";
-import { useEffect, useRef, type ReactNode } from "react";
+import { createContext, useEffect, useRef, type ReactNode } from "react";
 
 export type BannerKind = "error" | "success" | "warning" | "info";
 
@@ -65,7 +65,16 @@ export function Field({ id, label, error, hint, required, children }: FieldProps
   );
 }
 
+/**
+ * Prefix for the element ids of the sign-in forms (title, fields). Empty on the sign-in page. The sign-in-again dialog (D-236) is shown while the application shell is
+ * still in the document (hidden), and every shell page has its own `page-title` and field ids: an id used twice would let `aria-labelledby` / `aria-describedby` /
+ * `<label for>` point at the HIDDEN element, so the dialog gives its forms ids of their own.
+ */
+export const AuthIdPrefix = createContext("");
+
 interface ConfirmProps {
+  /** Prefix for the dialog's own element ids; set when another confirmation may exist in the document at the same time (see AuthIdPrefix). */
+  idPrefix?: string;
   title: string;
   message: string;
   confirmLabel: string;
@@ -80,16 +89,16 @@ interface ConfirmProps {
 }
 
 /** Confirmation for sensitive actions. Focus starts on Cancel (the safe choice); Escape cancels. */
-export function ConfirmDialog({ title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmDisabled, children }: ConfirmProps) {
+export function ConfirmDialog({ idPrefix = "", title, message, confirmLabel, cancelLabel, onConfirm, onCancel, confirmDisabled, children }: ConfirmProps) {
   const { t } = useI18n();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => cancel.current?.focus(), []);
   return (
     <div className="dialog-backdrop">
-      <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" className="dialog"
+      <div role="dialog" aria-modal="true" aria-labelledby={`${idPrefix}confirm-title`} aria-describedby={`${idPrefix}confirm-message`} className="dialog"
         onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}>
-        <h2 id="confirm-title">{title}</h2>
-        <p id="confirm-message">{message}</p>
+        <h2 id={`${idPrefix}confirm-title`}>{title}</h2>
+        <p id={`${idPrefix}confirm-message`}>{message}</p>
         {children}
         <div className="actions">
           <button type="button" ref={cancel} onClick={onCancel}>{cancelLabel ?? t("cancel")}</button>
