@@ -121,6 +121,30 @@ for (const mode of MODES) {
       expect(api.created.accounts[0]).toMatchObject({ type: "liability", nameEn: "Accounts payable", isGroup: true });
     });
 
+    test("company MFA policy: the first write sends If-Match \"0\", a concurrent change meets 412 and keeps the choice, the reload takes the new revision and the re-applied save succeeds", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      await go(page, "#/company/mfa-policy");
+      await expect(page.getByRole("heading", { name: E("mfapolicy.title"), level: 1 })).toBeVisible();
+      await page.getByLabel(new RegExp(E("mfapolicy.kind.all"))).check();
+      await page.getByTestId("mfapolicy-save").click();
+      await page.getByRole("dialog").getByRole("button", { name: E("mfapolicy.confirm") }).click();
+      await expect(page.getByTestId("mfapolicy-notice")).toContainText(E("mfapolicy.saved"));
+      expect(api.policyWrites.map((w) => w.ifMatch)).toEqual(['"0"']);
+      api.changePolicyElsewhere();                                                                            // revision 1 -> 2 behind the user's back
+      await page.getByLabel(new RegExp(E("mfapolicy.kind.off"))).check();
+      await page.getByTestId("mfapolicy-save").click();
+      await expect(page.getByTestId("mfapolicy-conflict")).toContainText(E("mfapolicy.conflict"));
+      await expect(page.getByLabel(new RegExp(E("mfapolicy.kind.off")))).toBeChecked();                       // the unsaved choice is kept
+      await page.getByTestId("mfapolicy-reload").click();
+      await expect(page.getByTestId("mfapolicy-reloaded")).toBeVisible();
+      await page.getByTestId("mfapolicy-save").click();
+      await expect(page.getByTestId("mfapolicy-notice")).toContainText(E("mfapolicy.saved"));
+      expect(api.policyWrites.map((w) => w.ifMatch)).toEqual(['"0"', '"1"', '"2"']);
+    });
+
     test("journal draft: exact decimal text is saved as a draft through the API", async ({ page }) => {
       const api = await start(page, mode);
       await toEnglish(page);

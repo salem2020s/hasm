@@ -32,6 +32,8 @@ import { PartyApprovalsPage } from "./pages/PartyApprovals";
 import { FiscalYearsPage } from "./pages/FiscalYears";
 import { ChartOfAccountsPage } from "./pages/ChartOfAccounts";
 import { ApprovalPoliciesPage } from "./pages/ApprovalPolicies";
+import { EnrolmentRequiredPage } from "./pages/EnrolmentRequired";
+import { MfaPolicyPage } from "./pages/MfaPolicy";
 import { CostCentersPage } from "./pages/CostCenters";
 import { CostCenterPoliciesPage } from "./pages/CostCenterPolicies";
 import { PricingPage } from "./pages/Pricing";
@@ -95,6 +97,7 @@ const ROUTES: RouteDef[] = [
   { path: "/company/attachment-retention", permission: "company.attachmentretention.view", element: <AttachmentRetentionPage /> },
   { path: "/company/fiscal-closing", permission: "company.fiscalclosing.view", element: <FiscalClosingPage /> },
   { path: "/company/approval-policies", permission: "company.approvalpolicies.view", element: <ApprovalPoliciesPage /> },
+  { path: "/company/mfa-policy", permission: "access.mfapolicy.view", element: <MfaPolicyPage /> },
   { path: "/accounting/journal", anyScope: "company.journal.view", element: <JournalPage /> },
   { path: "/accounting/reports", anyScope: "company.ledgerreports.view", element: <LedgerReportsPage /> },
   { path: "/accounting/report-center", anyScope: "company.ledgerreports.view", element: <ReportCenterPage /> },
@@ -156,6 +159,7 @@ function Shell() {
       { id: "/company/attachment-retention", label: t("nav.attachment_retention"), permission: "company.attachmentretention.view" },
       { id: "/company/fiscal-closing", label: t("nav.fiscal_closing"), permission: "company.fiscalclosing.view" },
       { id: "/company/approval-policies", label: t("nav.approval_policies"), permission: "company.approvalpolicies.view" },
+      { id: "/company/mfa-policy", label: t("nav.mfa_policy"), permission: "access.mfapolicy.view" },
       { id: "/company/parties", label: t("nav.parties"), permission: "company.parties.view" },
       { id: "/company/history", label: t("nav.history"), permission: "company.config.view" },
     ].filter((i) => i.permission.split("|").some((p) => auth.can(p) || (i.anyScope === true && auth.canAny(p)))).map(({ id, label }) => ({ id, label }));
@@ -292,6 +296,7 @@ function Gate() {
   }
   if (auth.phase === "anonymous" || auth.phase === "mfa") return <AuthLayout><LoginPage /></AuthLayout>;
   if (auth.phase === "needCompany") return <AuthLayout><CompanySelectPage /></AuthLayout>;
+  if (auth.phase === "needEnrolment") return <AuthLayout><EnrolmentRequiredPage /></AuthLayout>;
   // D-236: when the session ends with unsaved input the shell stays MOUNTED (its state is the preserved input, in memory only) but is taken away from whoever sits at
   // the screen: `hidden` (not rendered, not printed), `inert` (no focus, no pointer, no keyboard, no clipboard or drag events) and `aria-hidden` (not in the
   // accessibility tree). The sign-in-again dialog is then the only content. `shellEpoch` makes a later shell a NEW instance, never this one.
@@ -316,7 +321,7 @@ export function App({ client, bridge, stepUpBridge, gate }: { client?: ApiClient
     const step = stepUpBridge ?? createStepUpBridge();
     if (client) return { api: client, bridge, step };
     const b = createSessionBridge();
-    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, stepUp: step.request }), bridge: b, step };
+    return { api: createApiClient(apiBaseUrl, undefined, { client: isTauri() ? "desktop" : "web", onUnauthenticated: b.fire, onEnrolmentRequired: b.fireEnrolment, requestScope: b.scope, stepUp: step.request }), bridge: b, step };
   }, [client, bridge, stepUpBridge]);
   return (
     <AuthProvider api={own.api} bridge={own.bridge} gate={gate}>
