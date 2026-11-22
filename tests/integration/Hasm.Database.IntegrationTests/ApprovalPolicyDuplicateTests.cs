@@ -1,4 +1,5 @@
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Commercial;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -44,9 +45,9 @@ public class ApprovalPolicyDuplicateTests : JournalTestBase
         catch (PostgresException ex) { return (ex.SqlState, ex.ConstraintName); }
     }
 
-    private static string RawPolicy(Guid id, int required = 1, string min = "0", string branch = "NULL", bool active = true, string created = "now()") =>
+    private static string RawPolicy(Guid id, int required = 1, string min = "0", string branch = "NULL", bool active = true, string created = "now()", string docType = "journal_entry", int source = 3) =>
         $"INSERT INTO {AP.Table} ({AP.Id}, {AP.DocType}, {AP.Source}, {AP.BranchId}, {AP.MinAmount}, {AP.RequiredApprovals}, {AP.NameEn}, {AP.IsActive}, {AP.Revision}, {AP.CreatedAtUtc}, {AP.UpdatedAtUtc}) " +
-        $"VALUES ('{id}', 'journal_entry', 3, {branch}, {min}, {required}, 'raw', {(active ? "true" : "false")}, 1, {created}, now())";
+        $"VALUES ('{id}', '{docType}', {source}, {branch}, {min}, {required}, 'raw', {(active ? "true" : "false")}, 1, {created}, now())";
 
     [PostgresFact]
     public async Task An_identical_active_policy_is_refused_with_409_and_nothing_is_written_while_every_genuine_difference_is_accepted()
@@ -262,5 +263,67 @@ public class ApprovalPolicyDuplicateTests : JournalTestBase
         var marked = (await policies.GetAsync(legacy.Id, dup))!;
         Ok(await policies.DeactivateAsync(Admin.Id, legacy.Id, dup, marked.Revision));
         Ok(await policies.CreateAsync(Admin.Id, legacy.Id, P()));
+    }
+
+    [PostgresFact]
+    public async Task For_a_commercial_type_manual_and_any_are_the_same_selection_and_the_second_is_refused_by_the_service_and_by_raw_SQL_while_the_journal_keeps_them_apart()
+    {
+        await PrepareJournal();
+        var commercial = new ApprovalPolicyService(Resolver, Tx, Clock, new CommercialDocumentTypeRegistry([CommercialTestType.Name], []));
+        ApprovalPolicyInput C(string source, decimal min = 0m) => new(CommercialTestType.Name, source, null, min, 1, "سياسة", "Commercial");
+        var type = CommercialTestType.Name;
+
+        // the commercial picker takes a policy of source 1 or 3 and a commercial document has no source: manual and any are picked for exactly the same documents
+        var manual = Ok(await commercial.CreateAsync(Admin.Id, Company.Id, C("manual")));
+        Duplicate(await commercial.CreateAsync(Admin.Id, Company.Id, C("any")));
+        Duplicate(await commercial.CreateAsync(Admin.Id, Company.Id, C("manual")));
+        // the other way round, and by update: an "any" policy of another amount cannot be edited into the manual one
+        var any5 = Ok(await commercial.CreateAsync(Admin.Id, Company.Id, C("any", 5m)));
+        Duplicate(await commercial.CreateAsync(Admin.Id, Company.Id, C("manual", 5m)));
+        Duplicate(await commercial.UpdateAsync(Admin.Id, Company.Id, any5.Id, any5.Revision, D("any")));
+        // an automatic commercial policy is never picked (a different, empty selection): allowed once, and a second one is the same (empty) selection
+        Ok(await commercial.CreateAsync(Admin.Id, Company.Id, C("automatic")));
+        Duplicate(await commercial.CreateAsync(Admin.Id, Company.Id, C("automatic")));
+        // everything else still distinguishes: the amount
+        Ok(await commercial.CreateAsync(Admin.Id, Company.Id, C("any", 6m)));
+
+        // raw SQL (the database decides, whichever of the pair is written second)
+        Assert.Equal(("23505", PI.UqActive), await Direct(Company, RawPolicy(Guid.NewGuid(), docType: type, source: 1)));
+        Assert.Equal(("23505", PI.UqActive), await Direct(Company, RawPolicy(Guid.NewGuid(), docType: type, source: 3)));
+        Assert.Equal((null, null), await Direct(Company, RawPolicy(Guid.NewGuid(), docType: type, source: 1, min: "77")));
+        Assert.Equal(("23505", PI.UqActive), await Direct(Company, RawPolicy(Guid.NewGuid(), docType: type, source: 3, min: "77")));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(DISTINCT {PI.FnFingerprint}({AP.Id})) FROM {AP.Table} WHERE {AP.DocType} = '{type}' AND {AP.IsActive} AND {AP.MinAmount} = 0 AND {AP.Source} IN (1, 3)"));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM (SELECT {PI.Fingerprint} FROM {PI.Table} WHERE {PI.IsActive} GROUP BY 1 HAVING count(*) > 1) x"));
+
+        // the JOURNAL compares the policy source with the source of the entry, so manual, automatic and any are three selections and stay allowed (service and raw SQL)
+        Ok(await Policies.CreateAsync(Admin.Id, Company.Id, P("manual")));
+        Ok(await Policies.CreateAsync(Admin.Id, Company.Id, P("any")));
+        Ok(await Policies.CreateAsync(Admin.Id, Company.Id, P("automatic")));
+        Assert.Equal((null, null), await Direct(Company, RawPolicy(Guid.NewGuid(), min: "3", source: 1), RawPolicy(Guid.NewGuid(), min: "3", source: 2)));
+        Assert.Equal((null, null), await Direct(Company, RawPolicy(Guid.NewGuid(), min: "3", source: 3)));
+        Assert.Equal(("23505", PI.UqActive), await Direct(Company, RawPolicy(Guid.NewGuid(), min: "3", source: 3)));
+        Assert.Equal(3L, await Sql<long>($"SELECT count(DISTINCT {PI.FnFingerprint}({AP.Id})) FROM {AP.Table} WHERE {AP.DocType} = 'journal_entry' AND {AP.IsActive} AND {AP.MinAmount} = 0"));
+        Assert.Equal(manual.Id, await Sql<Guid>($"SELECT {PI.PolicyId} FROM {PI.Table} WHERE {PI.Fingerprint} = {PI.FnFingerprint}('{manual.Id}')"));
+    }
+
+    [PostgresFact]
+    public async Task The_migration_marks_a_commercial_manual_and_any_pair_as_identical_but_not_the_journal_pair()
+    {
+        await PrepareJournal();
+        var legacy = await ReadyCompany([.. MigrationScript.LoadEmbeddedCompany().Where(s => s.Version <= 32)]);
+        var type = CommercialTestType.Name;
+        Guid cManual = Guid.NewGuid(), cAny = Guid.NewGuid(), cAuto = Guid.NewGuid(), jManual = Guid.NewGuid(), jAny = Guid.NewGuid();
+        Assert.Equal((null, null), await Direct(legacy,
+            RawPolicy(cManual, docType: type, source: 1, created: "'2026-01-01Z'"), RawPolicy(cAny, docType: type, source: 3, created: "'2026-01-02Z'"), RawPolicy(cAuto, docType: type, source: 2),
+            RawPolicy(jManual, source: 1, created: "'2026-01-01Z'"), RawPolicy(jAny, source: 3, created: "'2026-01-02Z'")));
+        Assert.Equal(CompanyMigrationStatus.Migrated, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync(), o => o.CompanyId == legacy.Id).Status);
+        // the later one of the commercial pair is marked (the older holds the identity); the automatic one and the journal pair are not
+        Assert.Equal(cAny.ToString(), await Sql<string>($"SELECT string_agg({PI.PolicyId}::text, ',') FROM {PI.Table} WHERE {PI.PreExisting}", legacy));
+        Assert.Equal(5L, await Count(legacy, PI.Table));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {PI.Table} WHERE {PI.PolicyId} IN ('{jManual}', '{jAny}', '{cAuto}') AND {PI.PreExisting}", legacy));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(DISTINCT {PI.Fingerprint}) FROM {PI.Table} WHERE {PI.PolicyId} IN ('{cManual}', '{cAny}')", legacy));
+        Assert.Equal(2L, await Sql<long>($"SELECT count(DISTINCT {PI.Fingerprint}) FROM {PI.Table} WHERE {PI.PolicyId} IN ('{jManual}', '{jAny}')", legacy));
+        // the marked policy is not blocked from being deactivated, but a new identical one is refused
+        Assert.Equal(("23505", PI.UqActive), await Direct(legacy, RawPolicy(Guid.NewGuid(), docType: type, source: 1)));
     }
 }

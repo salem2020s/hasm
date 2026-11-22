@@ -7,8 +7,8 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// The opaque names of the commercial-policies company migration (Phase 3.13 S5a, provisional number 0032) are DERIVED, not invented: prefix + the first 8 hex digits of SHA-256("hasm.company.&lt;number&gt;.approval-policy-identity.v1:" +
-/// logical token), exactly as <c>tools/schema/company-0032-commercial-policies.cjs</c> generates them. The migration is ADDITIVE and touches nothing of the journal: it creates no table, replaces no function and drops nothing.
+/// The opaque names of the approval-policy-identity company migration (Phase 3.13, duplicate approval policies refused, number 0033) are DERIVED, not invented: prefix + the first 8 hex digits of SHA-256("hasm.company.&lt;number&gt;.approval-policy-identity.v1:" +
+/// logical token), exactly as <c>tools/schema/company-0033-approval-policy-identity.cjs</c> generates them. The migration is ADDITIVE: it creates one table with its functions, triggers and unique index, and alters, replaces and drops nothing that exists.
 /// </summary>
 public class ApprovalPolicyIdentitySchemaDerivationTests
 {

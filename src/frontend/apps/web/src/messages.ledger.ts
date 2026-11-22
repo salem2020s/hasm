@@ -132,7 +132,7 @@ export const ledgerAr: Record<string, string> = {
   "pol.required": "عدد المعتمدين",
   "pol.required_hint": "من 1 إلى 5 معتمدين مختلفين.",
   "pol.saved": "حُفظت السياسة.",
-  "pol.error.approval_policy_not_found": "السياسة غير موجودة.", "pol.error.approval_policy_duplicate": "توجد سياسة فعّالة مطابقة تماماً (النوع والمصدر والفرع والحد الأدنى والشروط والمراحل). عدّل السياسة القائمة أو غيّر أحد هذه العناصر.",
+  "pol.error.approval_policy_not_found": "السياسة غير موجودة.", "pol.error.approval_policy_duplicate": "توجد سياسة فعّالة مطابقة تماماً: نفس النوع والفرع والحد الأدنى والشروط والمراحل، ونفس المصدر في قيود اليومية. عدّل السياسة القائمة أو غيّر أحد هذه العناصر.",
   "pol.error.validation_failed": "راجع القيم المُدخلة.",
 
   "jrn.title": "قيود اليومية",
@@ -676,7 +676,7 @@ export const ledgerEn: Record<string, string> = {
   "pol.required": "Number of approvers",
   "pol.required_hint": "From 1 to 5 different approvers.",
   "pol.saved": "The policy was saved.",
-  "pol.error.approval_policy_not_found": "The policy was not found.", "pol.error.approval_policy_duplicate": "An identical active policy already exists (same type, source, branch, minimum amount, conditions and stages). Edit the existing policy or change one of these.",
+  "pol.error.approval_policy_not_found": "The policy was not found.", "pol.error.approval_policy_duplicate": "An identical active policy already exists: the same type, branch, minimum amount, conditions and stages, and for journal entries the same source. Edit the existing policy or change one of these.",
   "pol.error.validation_failed": "Check the entered values.",
 
   "jrn.title": "Journal entries",
