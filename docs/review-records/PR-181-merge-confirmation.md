@@ -1,0 +1,18 @@
+# Independent review record
+
+* **Pull request:** #181 (Phase 4.1 S3b-1b, company MFA policy and enforcement; delta confirmation of the merge of main on top of the security confirmation)
+* **Head SHA reviewed (full 40 characters):** 9be287acd3d381f8261b7be66ac34bc3a679789b
+* **Reviewer context:** Agent OSEC (independent security reviewer, separate agent; not the author; took the confirmation over from Agent FG); model family Claude Opus. Prompt (summary): "short delta confirmation bound to 9be287a: merge recomputed, registry equal to the per-class sum, ci-guard against origin/main, hosted CI on 9be287a green, read by REST". The code of the PR was confirmed at e46f46074a19eca75da680d70639d548afcc9109 in `PR-181-security-confirmation.md` (approve; L5-L7 Low); this record covers only the delta e46f460..9be287a.
+* **Scope read:** delta `e46f460..9be287a`: 3ee1e17 (the security confirmation record, docs only) and 9be287a, the merge of origin/main e6d3e7f (PR 191 approval rejection by stage authority, PR 196 session expiry with unsaved input).
+* **Checks run (commands and results):**
+  * Merge: `git merge-tree --write-tree 3ee1e17 e6d3e7f` conflicts in `.github/workflows/backend.yml` only; the conflicted tree and 9be287a's tree differ only in that file, 1 line added and 5 removed: the conflict markers and the two registry titles (1284 on the PR side, 1265 on main) replaced by "Verify all 1287 PostgreSQL tests". No other file was changed by hand, so the merge brings main plus the registry title.
+  * Registry: title 1287 equals the per-class sum (216 classes; 1262 base + 22 of this PR + 3 of main; MfaPolicyTests 12, MfaPolicyApiTests 10, ApprovalStageTests 9, CommercialPolicyTests 13).
+  * `node tools/verify/ci-guard.js --base origin/main` (origin/main e6d3e7f): "no weakening of verification found against origin/main".
+  * Hosted CI on 9be287a, read by REST (`gh api repos/salem2020s/hasm/commits/9be287a.../check-runs`): backend-build-test, postgres-integration, ci-guard, secret-scan, dependency-scan, docs-traceability, guard-selftest all completed success; the self-hosted twins are skipped (the other runner mode); workflow runs "Backend" and "Verification" success. The PR touches no frontend path, so no frontend check is required.
+  * Main's `tools/verify/verify-head.js` (copied from origin/main) with main's `.github/required-checks.json`, fed through its `--input` mode with the PR's 31 files and the 14 check runs read by REST (its live mode calls GraphQL, which is not available in this session): "All required checks are green on 9be287a". PR head read by REST: 9be287acd3d381f8261b7be66ac34bc3a679789b; mergeable true.
+* **Findings:** 0 Critical, 0 High, 0 Medium, 0 Low in this delta (the Low follow-ups L5-L7 of the security confirmation stand unchanged).
+* **Blocker or High findings open:** none
+* **NOT VERIFIED:** the merged tree was not built or tested locally (hosted CI on the exact SHA is the evidence); main's PRs 191 and 196 were not re-reviewed (they carry their own records).
+* **Verdict:** approve
+
+Confirmation: Reviewer: Agent OSEC (independent security reviewer, separate agent; not the author; took over from Agent FG); model family Claude Opus; prompt: delta confirmation of the merge of main into PR 181; Head SHA reviewed 9be287acd3d381f8261b7be66ac34bc3a679789b; executed: merge recomputed (only the registry title resolved by hand), registry 1287 equal to the per-class sum, ci-guard clean against origin/main e6d3e7f, hosted CI on 9be287a read by REST (all required checks success), main's verify-head.js green via REST input; verdict approve; findings none in the delta.
