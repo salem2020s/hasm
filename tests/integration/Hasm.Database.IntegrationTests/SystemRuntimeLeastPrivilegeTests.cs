@@ -462,6 +462,145 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         Assert.Empty((await SystemRuntimePrivileges.FindAsync(conn, runtimeRole)).Violations);
     }
 
+    [PostgresRoleFact]
+    public async Task The_owner_only_trigger_refuses_a_secret_change_by_any_other_role_even_with_the_update_grant_and_the_rewrap_flag_but_the_owner_and_the_progress_columns_work()
+    {
+        await StartRestricted();
+        var user = await NewUser();
+        await using var mfa = RuntimeMfa();
+        var secret = Totp.GenerateSecret();
+        var id = await mfa.CreatePendingAsync(user.Id, secret, null);
+        Assert.True(await mfa.ActivatePendingAsync(user.Id, id, Step, null));
+        string Material() => $"SELECT encode({TO.Cipher} || {TO.Nonce} || {TO.Tag}, 'hex') || {TO.KekId} FROM {TO.Table} WHERE {TO.SecretId} = '{id}'";
+        var before = await Scalar<string>(Material());
+        Assert.True(await mfa.TryAdvanceLastStepAsync(id, Step + 6, default));                                  // the verifier's own write, as in the API (before the mis-grant below: the gate would refuse a mis-granted account)
+
+        // the runtime role is WRONGLY granted UPDATE on the four secret columns (the least-privilege check calls this a violation, but a mis-grant must not be enough to change a secret)
+        await Exec($"GRANT UPDATE ({TO.Cipher}, {TO.Nonce}, {TO.Tag}, {TO.KekId}) ON TABLE {TO.Table} TO {Q(runtimeRole)}");
+        Assert.Contains("totp_runtime_overgrant", (await Findings()).Violations);
+        var (otherRole, otherPassword) = await NewLoginRole();                                                   // and so is another role (an operator's reporting account)
+        await Exec($"GRANT USAGE ON SCHEMA public TO {Q(otherRole)}");
+        await Exec($"GRANT SELECT, UPDATE ON TABLE {TO.Table} TO {Q(otherRole)}");
+        foreach (var options in new[] { RuntimeOptions, OptionsFor(otherRole, otherPassword) })
+        {
+            await using var conn = await As(options);
+            foreach (var (column, value) in new[] { (TO.Cipher, "decode(repeat('00', 20), 'hex')"), (TO.Nonce, "decode(repeat('00', 12), 'hex')"), (TO.Tag, "decode(repeat('00', 16), 'hex')"), (TO.KekId, "'k9'") })
+            {
+                await using var tx = await conn.BeginTransactionAsync();
+                await using (var flag = new NpgsqlCommand("SELECT set_config('hasm.totp_rewrap', 'on', true)", conn, tx)) await flag.ExecuteNonQueryAsync();   // the rewrap flag is on: the 0031 layer alone would allow it
+                await using var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {column} = {value} WHERE {TO.SecretId} = '{id}'", conn, tx);
+                var refused = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.RaiseException, refused.SqlState);
+                Assert.Contains("only by the table owner", refused.MessageText);
+            }
+        }
+        Assert.Equal(before, await Scalar<string>(Material()));                                                  // nothing changed
+
+        // the progress columns, and a statement that does not change the material, still work for the runtime role (the guard looks at the four columns only)
+        await using (var conn = await As(RuntimeOptions))
+        {
+            await using var ok = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.FailedConfirmations} = {TO.FailedConfirmations} + 1, {TO.LastStep} = {Step + 7} WHERE {TO.SecretId} = '{id}'", conn);
+            Assert.Equal(1, await ok.ExecuteNonQueryAsync());
+            await using var same = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.Cipher} = {TO.Cipher} WHERE {TO.SecretId} = '{id}'", conn);
+            Assert.Equal(1, await same.ExecuteNonQueryAsync());                                                  // an unchanged value is no change
+        }
+
+        // the owner (the rewrap account) changes it, with the flag; without the flag the 0031 layer still refuses even the owner
+        await using (var owner = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true)))
+        {
+            await owner.OpenAsync();
+            await using (var noFlag = await owner.BeginTransactionAsync())
+            {
+                await using var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.KekId} = 'k8' WHERE {TO.SecretId} = '{id}'", owner, noFlag);
+                var refused = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+                Assert.Contains("only through rewrap", refused.MessageText);
+            }
+            await using var tx = await owner.BeginTransactionAsync();
+            await using (var flag = new NpgsqlCommand("SELECT set_config('hasm.totp_rewrap', 'on', true)", owner, tx)) await flag.ExecuteNonQueryAsync();
+            await using (var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.KekId} = 'k8' WHERE {TO.SecretId} = '{id}'", owner, tx)) Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+            await tx.RollbackAsync();
+        }
+        Assert.Equal(["totp_other_grantee"], (await SystemRuntimeAdministration.GrantAsync(RuntimeOptions)).Findings.Violations);   // the command takes the runtime role's mis-grant away; the other role's grant is the operator's: it stays and is reported
+        await Exec($"REVOKE ALL ON TABLE {TO.Table} FROM {Q(otherRole)}");
+        Assert.Empty((await Findings()).Violations);
+    }
+
+    [PostgresRoleFact]
+    public async Task A_role_holding_TRIGGER_with_grant_option_cannot_pass_as_the_owner_by_granting_TRIGGER_to_itself()
+    {
+        await StartRestricted();
+        var user = await NewUser();
+        await using var mfa = RuntimeMfa();
+        var id = await mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);
+        Assert.True(await mfa.ActivatePendingAsync(user.Id, id, Step, null));
+        string Material() => $"SELECT encode({TO.Cipher} || {TO.Nonce} || {TO.Tag}, 'hex') || {TO.KekId} FROM {TO.Table} WHERE {TO.SecretId} = '{id}'";
+        var before = await Scalar<string>(Material());
+
+        // a broad grant by an operator: SELECT, UPDATE and TRIGGER WITH GRANT OPTION to an ordinary login role (review of PR 210, M1)
+        var (attacker, attackerPassword) = await NewLoginRole();
+        await Exec($"GRANT USAGE ON SCHEMA public TO {Q(attacker)}");
+        await Exec($"GRANT SELECT, UPDATE ON TABLE {TO.Table} TO {Q(attacker)}");
+        await Exec($"GRANT TRIGGER ON TABLE {TO.Table} TO {Q(attacker)} WITH GRANT OPTION");
+        await using var conn = await As(OptionsFor(attacker, attackerPassword));
+        await using (var self = new NpgsqlCommand($"GRANT TRIGGER ON TABLE {TO.Table} TO {Q(attacker)}", conn)) await self.ExecuteNonQueryAsync();   // a self-grant: accepted by PostgreSQL, creates a row granted by the role to itself (not grantable)
+        await using (var seen = new NpgsqlCommand($"SELECT count(*) FROM information_schema.table_privileges WHERE table_name = '{TO.Table}' AND grantor = grantee AND privilege_type = 'TRIGGER' AND is_grantable = 'NO'", conn))
+            Assert.Equal(1L, await seen.ExecuteScalarAsync());                                                   // the attack row exists, and the attacker sees it (the owner's row is grantable)
+        foreach (var (column, value) in new[] { (TO.Cipher, "decode(repeat('00', 20), 'hex')"), (TO.Nonce, "decode(repeat('00', 12), 'hex')"), (TO.Tag, "decode(repeat('00', 16), 'hex')"), (TO.KekId, "'k9'") })
+        {
+            await using var tx = await conn.BeginTransactionAsync();
+            await using (var flag = new NpgsqlCommand("SELECT set_config('hasm.totp_rewrap', 'on', true)", conn, tx)) await flag.ExecuteNonQueryAsync();   // the rewrap flag: open to any role
+            await using var cmd = new NpgsqlCommand($"UPDATE {TO.Table} SET {column} = {value} WHERE {TO.SecretId} = '{id}'", conn, tx);
+            var refused = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.RaiseException, refused.SqlState);
+            Assert.Contains("only by the table owner", refused.MessageText);
+        }
+        Assert.Equal(before, await Scalar<string>(Material()));                                                  // the material is unchanged
+    }
+
+    [PostgresRoleFact]
+    public async Task The_owner_only_migration_adds_one_function_and_one_trigger_and_changes_nothing_else_in_the_catalog()
+    {
+        await StartRestricted();
+        // the catalog as one comparable set of text rows: functions, triggers, tables with owner and ACL, columns with ACL, constraints, indexes, rules, policies, event triggers, schema and default ACLs
+        const string Snapshot = """
+            SELECT 'proc:' || p.proname || ':' || p.prosecdef::text || ':' || p.proowner::regrole::text || ':' || coalesce(p.proacl::text, '') || ':' || md5(p.prosrc) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+            UNION ALL SELECT 'trigger:' || t.tgname || ':' || t.tgrelid::regclass::text || ':' || t.tgenabled::text || ':' || pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE NOT t.tgisinternal
+            UNION ALL SELECT 'class:' || c.relname || ':' || c.relkind::text || ':' || c.relowner::regrole::text || ':' || coalesce(c.relacl::text, '') || ':' || coalesce(c.reloptions::text, '') || ':' || c.relrowsecurity::text FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+            UNION ALL SELECT 'column:' || a.attrelid::regclass::text || ':' || a.attname || ':' || a.atttypid::regtype::text || ':' || a.attnotnull::text || ':' || coalesce(a.attacl::text, '') FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relnamespace = 'public'::regnamespace AND a.attnum > 0 AND NOT a.attisdropped
+            UNION ALL SELECT 'constraint:' || o.conname || ':' || o.conrelid::regclass::text || ':' || pg_get_constraintdef(o.oid) FROM pg_constraint o WHERE o.connamespace = 'public'::regnamespace
+            UNION ALL SELECT 'index:' || i.indexrelid::regclass::text || ':' || pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid WHERE c.relnamespace = 'public'::regnamespace
+            UNION ALL SELECT 'rule:' || r.rulename || ':' || r.ev_class::regclass::text FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class WHERE c.relnamespace = 'public'::regnamespace
+            UNION ALL SELECT 'policy:' || y.polname FROM pg_policy y
+            UNION ALL SELECT 'eventtrigger:' || e.evtname FROM pg_event_trigger e
+            UNION ALL SELECT 'schema:' || n.nspname || ':' || coalesce(n.nspacl::text, '') FROM pg_namespace n WHERE n.nspname = 'public'
+            UNION ALL SELECT 'defaultacl:' || d.defaclobjtype::text || ':' || d.defaclacl::text FROM pg_default_acl d
+            """;
+        async Task<HashSet<string>> Take(NpgsqlConnection conn, NpgsqlTransaction tx)
+        {
+            var rows = new HashSet<string>(StringComparer.Ordinal);
+            await using var cmd = new NpgsqlCommand(Snapshot, conn, tx);
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) rows.Add(r.GetString(0));
+            return rows;
+        }
+        await using var owner = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await owner.OpenAsync();
+        await using var tx = await owner.BeginTransactionAsync();
+        var with = await Take(owner, tx);
+        // take the two objects of the migration away INSIDE a transaction that is rolled back: what is left is the catalog as it was before the migration
+        foreach (var sql in new[] { $"DROP TRIGGER {SystemSchema.TotpGuard.TrOwnerOnly} ON {TO.Table}", $"DROP FUNCTION {SystemSchema.TotpGuard.FnOwnerOnly}()" })
+            await using (var cmd = new NpgsqlCommand(sql, owner, tx)) await cmd.ExecuteNonQueryAsync();
+        var without = await Take(owner, tx);
+        await tx.RollbackAsync();
+        Assert.Empty(without.Except(with));                                                                      // nothing the migration touched existed before in another form: additions only
+        var added = with.Except(without).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(2, added.Count);
+        Assert.StartsWith($"proc:{SystemSchema.TotpGuard.FnOwnerOnly}:false:", added.Single(a => a.StartsWith("proc:")));         // not SECURITY DEFINER
+        Assert.Contains($"trigger:{SystemSchema.TotpGuard.TrOwnerOnly}:{TO.Table}:O:", added.Single(a => a.StartsWith("trigger:")));   // enabled, on the TOTP table
+        Assert.Contains(with, r => r.StartsWith("trigger:") && r.Contains(" BEFORE DELETE OR UPDATE ON ") && r.Contains(TO.Table));    // the 0031 guard is still there, untouched
+        Assert.Contains(with, r => r.StartsWith("proc:") && r.Contains(":false:") && r.Contains("f_55ca2d2a"));                            // and so is its function
+    }
+
     private WebApplicationFactory<Program> Api(HasmDatabaseOptions runtime, bool? optOut, LogCapture logs) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
     {
         b.UseEnvironment("Production");
