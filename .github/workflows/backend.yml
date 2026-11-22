@@ -54,6 +54,8 @@ jobs:
         run: node tools/schema/company-0034-stock-period-guard.cjs --check
       - name: TOTP owner-only schema files match the deterministic generator (D-235 second part, system migration 0035 provisional)
         run: node tools/schema/system-totp-owner-only.cjs --check
+      - name: Plan-execution schema files (company 0036, provisional number) match their generator
+        run: node tools/schema/company-0036-plan-execution.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
@@ -149,7 +151,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1385 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1699 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -227,7 +229,7 @@ jobs:
                 # Phase 3.8B-3 negative-stock exception: obligations, settlements, reversals, close probe (company migration 0020, system migration 0022).
                 "NegativeStockTests": 15, "NegativeStockReviewTests": 4, "NegativeStockApiTests": 1,
                 # STOCK-PERIOD-DB (D-220, company migration 0034): the database guard against stock and cost postings into closed or missing periods. The role class needs the CREATEROLE test account (CI service only).
-                "StockPeriodGuardTests": 21, "StockPeriodGuardRuntimeRoleTests": 5,
+                "StockPeriodGuardTests": 21, "StockPeriodGuardRuntimeRoleTests": 6,
                 # Phase 3.9A party registry: shared identity, central approval, outbox and reconciliation (company migration 0021, system migration 0023).
                 "PartyRegistryTests": 5, "PartyOutboxTests": 3, "PartyAccessTests": 1, "PartyDatabaseGuardTests": 1, "PartyApiTests": 1, "PartyReviewTests": 5,
                 # Phase 3.9C slice 2 party import adapter: creation through the party service, queued proposals, validation and conflicts, atomic rollback, stale plan.
@@ -287,5 +289,24 @@ jobs:
                 "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
                 # Phase 3.14 slice S1 cash and bank account master (company migration 0033, provisional number): binding, base currency, branch scope, sensitive bank number, runtime guards, HTTP API; constraint matrix batch 5 (cash accounts).
                 "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 9, "EndpointConstraintMatrixPart2CashTests": 1,
+                # Phase 3.8D-1 authorized, repeatable-read/read-only ordinary-history snapshots; unsupported histories fail closed.
+                "CostHistorySnapshotTests": 15, "NegativeCostHistorySnapshotTests": 2, "StockDocumentCostHistorySnapshotTests": 4,
+                "CostFlowSnapshotTests": 49, "StockDocumentCostFlowSnapshotTests": 6, "NegativeCostFlowSnapshotTests": 2,
+                "CostFlowComparisonTests": 17,
+                "CostFlowPreviewTests": 13,
+                "CostReadBudgetTests": 4, "ReadBudgetRoleTests": 2,
+                "CostFlowItemsTests": 22,
+                "StockReadValidationTests": 15,
+                "CostSourceEvidenceTests": 40,
+                "CostSourceFiscalTests": 17,
+                "ClassificationEvidenceTests": 17,
+                "CompensationPlanTests": 4,
+                "CompensationPlanServiceTests": 12,
+                # Phase 3.8D step 4 (company migration 0036, provisional number): the X1-A database layer driven by SQL through the real runtime role (tests N1-N32 of the plan-execution design; no executor exists)
+                "PlanExecutionGuardTests": 10, "PlanExecutionPlanTests": 7, "PlanExecutionEpochTests": 28, "PlanExecutionCatalogTests": 4,
+                # Phase 3.8D step 5 slices 1 and 2: the plan storage and approval services
+                "CompensationPlanStorageTests": 7, "CompensationPlanApprovalTests": 9,
+                # Phase 3.8D part 1 (owner-approved re-scope of PR 48): the execution path is disabled and cannot be activated; migration 0036 is additive and compatible with an existing database
+                "PlanExecutionDisabledTests": 4, "PlanExecutionRuntimeRoleDisabledTests": 2, "PlanExecutionMigrationCompatibilityTests": 1,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
