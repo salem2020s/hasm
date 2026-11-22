@@ -409,7 +409,7 @@ function CashAccountForm({ editor, branches, branchLabel, canEdit, canReveal, on
         </Banner>
       )}
       {error && <Banner kind="error" testId="form-error">{error}</Banner>}
-      <form onSubmit={submit} noValidate className="form-grid">
+      <form onSubmit={submit} noValidate className="form-grid" aria-label={t("cash.form_section")}>
         {/* the identity of the record stays visible whichever tab is open */}
         <div className="fields">
           <Field id="cash-kind-field" label={t("cash.kind_field")} hint={t("cash.kind_hint")} error={errors.kind}>

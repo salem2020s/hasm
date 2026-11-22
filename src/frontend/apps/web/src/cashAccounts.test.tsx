@@ -49,8 +49,9 @@ function setup(accounts: CashAccount[] = [box(), bank()], extra: Record<string, 
 }
 
 const apiErr = (status: number, code: string, details: ConstructorParameters<typeof ApiError>[2] = {}) => new ApiError(status, code, details);
+const form = () => within(screen.getByRole("form", { name: A("cash.form_section") }));
 const edit = async (code: string) => { await userEvent.click(within(await screen.findByTestId(`cash-${code}`)).getByRole("button", { name: A("cash.edit") })); };
-const chooseGl = async (label: string | RegExp) => { const picker = await screen.findByTestId("cash-gl-picker"); await userEvent.selectOptions(within(picker).getByRole("listbox"), await within(picker).findByRole("option", { name: label })); };
+const chooseGl = async (label: string | RegExp) => { const picker = await screen.findByTestId("cash-gl-picker"); await userEvent.selectOptions(within(picker).getByRole("combobox", { name: A("cash.gl_field") }), await within(picker).findByRole("option", { name: label })); };
 
 let setItem: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.location.hash = ""; setItem = vi.spyOn(Storage.prototype, "setItem"); });
@@ -117,7 +118,7 @@ describe("cash accounts screen: list and permissions", () => {
     fireEvent.click(screen.getByRole("button", { name: "English" }));
     expect(await screen.findByRole("heading", { name: E("cash.title"), level: 1 })).toBeInTheDocument();
     expect(document.documentElement.dir).toBe("ltr");
-    expect(screen.getByText(E("cash.kind.bank"))).toBeInTheDocument();
+    expect(within(screen.getByTestId("cash-NB1")).getByText(E("cash.kind.bank"))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "العربية" }));
     await screen.findByRole("heading", { name: A("cash.title"), level: 1 });
     expect(document.documentElement.dir).toBe("rtl");
@@ -136,9 +137,9 @@ describe("cash accounts screen: create", () => {
     await go();
     await userEvent.click(await screen.findByRole("button", { name: A("cash.new") }));
     expect(screen.queryByTestId("cash-tabs")).toBeNull();                                   // a cashbox is one group: no tabs
-    await userEvent.type(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "north-cash");
-    await userEvent.type(screen.getByLabelText(A("cash.name_en")), "North cash");
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b2");
+    await userEvent.type(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "north-cash");
+    await userEvent.type(form().getByLabelText(A("cash.name_en")), "North cash");
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b2");
     await chooseGl(/1103/);
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     await waitFor(() => expect(client.createCashAccount).toHaveBeenCalledTimes(1));
@@ -150,7 +151,7 @@ describe("cash accounts screen: create", () => {
     const client = setup();
     await go();
     await userEvent.click(await screen.findByRole("button", { name: A("cash.new") }));
-    await userEvent.type(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "bad code!");
+    await userEvent.type(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "bad code!");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByTestId("form-error")).toHaveTextContent(A("form.fix_errors"));
     expect(screen.getByText(A("cash.branch_required"))).toBeInTheDocument();
@@ -163,19 +164,19 @@ describe("cash accounts screen: create", () => {
     const client = setup();
     await go();
     await userEvent.click(await screen.findByRole("button", { name: A("cash.new") }));
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.kind_field")}`)), "bank");
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.kind_field")}`)), "bank");
     const tabs = await screen.findByTestId("cash-tabs");
     expect(within(tabs).getAllByRole("tab").map((x) => x.textContent)).toEqual([expect.stringContaining(A("cash.tab.details")), expect.stringContaining(A("cash.tab.bank"))]);
-    await userEvent.type(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "nb2");
-    await userEvent.type(screen.getByLabelText(A("cash.name_en")), "Second bank");
+    await userEvent.type(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "nb2");
+    await userEvent.type(form().getByLabelText(A("cash.name_en")), "Second bank");
     await userEvent.click(within(tabs).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
-    await userEvent.type(screen.getByLabelText(A("cash.bank_name")), "Second Bank");
-    await userEvent.type(screen.getByLabelText(A("cash.number_new")), "SA03 8000 0000 6080 1016 7519");
+    await userEvent.type(form().getByLabelText(A("cash.bank_name")), "Second Bank");
+    await userEvent.type(form().getByLabelText(A("cash.number_new")), "SA03 8000 0000 6080 1016 7519");
     expect(screen.getByRole("button", { name: A("cash.save") })).toBeVisible();              // Save and the record identity are outside the tabs
-    expect(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`))).toHaveValue("nb2");
+    expect(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`))).toHaveValue("nb2");
     await userEvent.click(within(tabs).getByRole("tab", { name: new RegExp(A("cash.tab.details")) }));
-    expect(screen.getByLabelText(A("cash.name_en"))).toHaveValue("Second bank");               // nothing was reset
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
+    expect(form().getByLabelText(A("cash.name_en"))).toHaveValue("Second bank");               // nothing was reset
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
     await chooseGl(/1103/);
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     await waitFor(() => expect(client.createCashAccount).toHaveBeenCalledTimes(1));
@@ -186,18 +187,18 @@ describe("cash accounts screen: create", () => {
     const client = setup();
     await go();
     await userEvent.click(await screen.findByRole("button", { name: A("cash.new") }));
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.kind_field")}`)), "bank");
-    await userEvent.type(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "nb2");
-    await userEvent.type(screen.getByLabelText(A("cash.name_en")), "Second");
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.kind_field")}`)), "bank");
+    await userEvent.type(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "nb2");
+    await userEvent.type(form().getByLabelText(A("cash.name_en")), "Second");
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
     await chooseGl(/1103/);
     const tabs = screen.getByTestId("cash-tabs");
     await userEvent.click(within(tabs).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
-    await userEvent.type(screen.getByLabelText(A("cash.number_new")), "****7519");
+    await userEvent.type(form().getByLabelText(A("cash.number_new")), "****7519");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByText(A("cash.number_masked_input"))).toBeInTheDocument();
-    await userEvent.clear(screen.getByLabelText(A("cash.number_new")));
-    await userEvent.type(screen.getByLabelText(A("cash.number_new")), "12");
+    await userEvent.clear(form().getByLabelText(A("cash.number_new")));
+    await userEvent.type(form().getByLabelText(A("cash.number_new")), "12");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByText(A("cash.number_invalid"))).toBeInTheDocument();
     expect(client.createCashAccount).not.toHaveBeenCalled();
@@ -210,9 +211,9 @@ describe("cash accounts screen: create", () => {
       .mockRejectedValueOnce(apiErr(400, "validation_failed", { fields: [{ field: "accountId", code: "account_not_asset" }] })) });
     await go();
     await userEvent.click(await screen.findByRole("button", { name: A("cash.new") }));
-    await userEvent.type(screen.getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "x1");
-    await userEvent.type(screen.getByLabelText(A("cash.name_en")), "X");
-    await userEvent.selectOptions(screen.getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
+    await userEvent.type(form().getByLabelText(new RegExp(`^${A("cash.code_field")}`)), "x1");
+    await userEvent.type(form().getByLabelText(A("cash.name_en")), "X");
+    await userEvent.selectOptions(form().getByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b1");
     await chooseGl(/1103/);
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByTestId("form-error")).toHaveTextContent(A("cash.error.cash_account_code_taken"));
@@ -220,7 +221,7 @@ describe("cash accounts screen: create", () => {
     expect(await screen.findByTestId("form-error")).toHaveTextContent(A("cash.error.gl_account_already_bound"));
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByText(A("field.cash.account_not_asset"))).toBeInTheDocument();
-    expect(screen.getByLabelText(A("cash.name_en"))).toHaveValue("X");                                  // nothing was lost
+    expect(form().getByLabelText(A("cash.name_en"))).toHaveValue("X");                                  // nothing was lost
     expect(client.createCashAccount).toHaveBeenCalledTimes(3);
   });
 });
@@ -233,8 +234,8 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     expect(await screen.findByText(A("cash.number_masked").replace("{number}", "****7519"))).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/0380000000/);
     await userEvent.click(within(screen.getByTestId("cash-tabs")).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
-    await userEvent.clear(screen.getByLabelText(A("cash.bank_branch")));
-    await userEvent.type(screen.getByLabelText(A("cash.bank_branch")), "Uptown");
+    await userEvent.clear(form().getByLabelText(A("cash.bank_branch")));
+    await userEvent.type(form().getByLabelText(A("cash.bank_branch")), "Uptown");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     await waitFor(() => expect(client.updateCashAccount).toHaveBeenCalledTimes(1));
     const [id, body, revision] = (client.updateCashAccount as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>, number];
@@ -251,12 +252,12 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     await userEvent.click(within(await screen.findByTestId("cash-tabs")).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
     expect(screen.queryByLabelText(A("cash.number_new"))).toBeNull();                                    // not offered until the user chooses to replace
     await userEvent.click(screen.getByTestId("cash-number-replace"));
-    await userEvent.type(screen.getByLabelText(A("cash.number_new")), "DE89 3704 0044 0532 0130 00");
+    await userEvent.type(form().getByLabelText(A("cash.number_new")), "DE89 3704 0044 0532 0130 00");
     await userEvent.click(screen.getByRole("button", { name: A("cash.number_keep") }));
     expect(screen.queryByLabelText(A("cash.number_new"))).toBeNull();
     await userEvent.click(screen.getByTestId("cash-number-replace"));
-    expect(screen.getByLabelText(A("cash.number_new"))).toHaveValue("");
-    await userEvent.type(screen.getByLabelText(A("cash.number_new")), "DE89 3704 0044 0532 0130 00");
+    expect(form().getByLabelText(A("cash.number_new"))).toHaveValue("");
+    await userEvent.type(form().getByLabelText(A("cash.number_new")), "DE89 3704 0044 0532 0130 00");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     await waitFor(() => expect(client.updateCashAccount).toHaveBeenCalledTimes(1));
     expect((client.updateCashAccount as ReturnType<typeof vi.fn>).mock.calls[0]![1]).toMatchObject({ accountNumber: "DE89 3704 0044 0532 0130 00" });
@@ -303,15 +304,15 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     await go();
     await edit("NB1");
     await userEvent.click(within(await screen.findByTestId("cash-tabs")).getByRole("tab", { name: new RegExp(A("cash.tab.bank")) }));
-    await userEvent.clear(screen.getByLabelText(A("cash.bank_name")));
-    await userEvent.type(screen.getByLabelText(A("cash.bank_name")), "Changed Bank");
+    await userEvent.clear(form().getByLabelText(A("cash.bank_name")));
+    await userEvent.type(form().getByLabelText(A("cash.bank_name")), "Changed Bank");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByTestId("form-conflict")).toHaveTextContent(A("cash.error.revision_conflict"));
-    expect(screen.getByLabelText(A("cash.bank_name"))).toHaveValue("Changed Bank");
+    expect(form().getByLabelText(A("cash.bank_name"))).toHaveValue("Changed Bank");
     await userEvent.click(within(screen.getByTestId("form-conflict")).getByRole("button", { name: A("form.reload_latest") }));
     await waitFor(() => expect(client.getCashAccount).toHaveBeenCalledWith("ca2"));
-    await waitFor(() => expect(screen.getByLabelText(A("cash.bank_name"))).toHaveValue("National Bank"));
-    await userEvent.type(screen.getByLabelText(A("cash.bank_branch")), "x");
+    await waitFor(() => expect(form().getByLabelText(A("cash.bank_name"))).toHaveValue("National Bank"));
+    await userEvent.type(form().getByLabelText(A("cash.bank_branch")), "x");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     await waitFor(() => expect((client.updateCashAccount as ReturnType<typeof vi.fn>).mock.calls.at(-1)![2]).toBe(5));
   });
@@ -320,10 +321,10 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     setup([box()], { updateCashAccount: vi.fn().mockRejectedValue(apiErr(409, "binding_frozen")) });
     await go();
     await edit("BOX1");
-    await userEvent.selectOptions(await screen.findByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b2");
+    await userEvent.selectOptions(await form().findByLabelText(new RegExp(`^${A("cash.branch_field")}`)), "b2");
     await userEvent.click(screen.getByRole("button", { name: A("cash.save") }));
     expect(await screen.findByTestId("form-error")).toHaveTextContent(A("cash.error.binding_frozen"));
-    expect(screen.getByLabelText(new RegExp(`^${A("cash.branch_field")}`))).toHaveValue("b2");
+    expect(form().getByLabelText(new RegExp(`^${A("cash.branch_field")}`))).toHaveValue("b2");
   });
 
   it("deactivate and activate ask for confirmation, send the revision and report the change; a refusal is worded", async () => {
@@ -349,8 +350,8 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     expect(bankTab).toHaveAttribute("aria-selected", "true");
     await userEvent.keyboard("{ArrowRight}");
     expect(details).toHaveAttribute("aria-selected", "true");
-    await userEvent.clear(screen.getByLabelText(A("cash.name_en")));
-    await userEvent.type(screen.getByLabelText(A("cash.name_en")), "Renamed{Enter}");
+    await userEvent.clear(form().getByLabelText(A("cash.name_en")));
+    await userEvent.type(form().getByLabelText(A("cash.name_en")), "Renamed{Enter}");
     await waitFor(() => expect(client.updateCashAccount).toHaveBeenCalledTimes(1));
   });
 
@@ -358,9 +359,8 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     setup([bank()]);
     await go();
     await edit("NB1");
-    await userEvent.type(await screen.findByLabelText(A("cash.name_en")), "x");
-    window.location.hash = "#/company/details";
-    fireEvent(window, new HashChangeEvent("hashchange"));
+    await userEvent.type(await form().findByLabelText(A("cash.name_en")), "x");
+    await userEvent.click(screen.getByRole("button", { name: A("cash.close_form") }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();                                      // the Stay / Discard question: the form counts as unsaved
   });
 });

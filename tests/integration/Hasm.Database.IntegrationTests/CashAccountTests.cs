@@ -3,7 +3,9 @@ using System.Text;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Cash;
 using Hasm.Infrastructure.CompanyDatabase;
+using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Security;
+using Hasm.Infrastructure.SystemDatabase;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Ac = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Account;
@@ -31,7 +33,6 @@ public abstract class CashAccountTestBase : HttpApiTestBase
     protected static readonly string[] Sensitive = [PermissionCatalog.Codes.CashAccountsSensitiveView];
     protected readonly SwitchableCashProbe Probe = new();
     protected InMemoryKekRing Keys = new("k1");
-    private int seq;
 
     protected async Task Start(bool keyUnavailable = false, bool baseCurrency = true)
     {
@@ -58,7 +59,38 @@ public abstract class CashAccountTestBase : HttpApiTestBase
     protected static object Bank(string code, Guid branch, Guid account, string? number = "SA03 8000 0000 6080 1016 7519") => new { kind = "bank", code, nameAr = "البنك", nameEn = "The bank", branchId = branch, accountId = account, bankName = "National Bank", bankBranchName = "Downtown", accountNumber = number };
 
     protected async Task<string> AsAdmin() => await SignIn(Admin);
-    protected async Task<string> AsMember(string[] permissions, ScopeKind scope = ScopeKind.Company, Guid? scopeId = null) => await SignIn((await Member(permissions, scope, scopeId)).User);
+    private int holders;
+
+    /// <summary>
+    /// A member holding the permissions through a role the TEST creates. The Company Administrator preset does not hold the cash codes until the system migration that grants them lands, and an administrator cannot grant what the preset
+    /// lacks, so the role is created with a permission the administrator holds and the cash codes are added, and the assignment made, directly in the system database (test infrastructure only).
+    /// </summary>
+    protected async Task<UserRecord> Holder(string[] permissions, ScopeKind scope = ScopeKind.Company, Guid? scopeId = null)
+    {
+        var n = Interlocked.Increment(ref holders);
+        var user = await NewUser($"cashholder{n}");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, user.Login)).IsOk);
+        var role = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, $"cashrole{n}", [PermissionCatalog.Codes.ConfigView]);
+        Assert.True(role.IsOk, role.Code);
+        await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync();
+        foreach (var code in permissions)
+        {
+            await using var rp = new NpgsqlCommand($"INSERT INTO {SystemSchema.RolePermission.Table} ({SystemSchema.RolePermission.RoleId}, {SystemSchema.RolePermission.Permission}) VALUES (@r, @p)", conn);
+            rp.Parameters.AddWithValue("r", role.Value!.Id); rp.Parameters.AddWithValue("p", code);
+            await rp.ExecuteNonQueryAsync();
+        }
+        var A = SystemSchema.RoleAssignment.Table;
+        await using var ins = new NpgsqlCommand(
+            $"INSERT INTO {A} ({SystemSchema.RoleAssignment.Id}, {SystemSchema.RoleAssignment.UserId}, {SystemSchema.RoleAssignment.CompanyId}, {SystemSchema.RoleAssignment.RoleId}, {SystemSchema.RoleAssignment.ScopeKind}, {SystemSchema.RoleAssignment.ScopeId}, " +
+            $"{SystemSchema.RoleAssignment.ScopeEpoch}, {SystemSchema.RoleAssignment.GrantedAtUtc}, {SystemSchema.RoleAssignment.GrantedBy}) VALUES (@i, @u, @c, @r, @k, @s, @e, now(), @g)", conn);
+        ins.Parameters.AddWithValue("i", Guid.NewGuid()); ins.Parameters.AddWithValue("u", user.Id); ins.Parameters.AddWithValue("c", Company.Id); ins.Parameters.AddWithValue("r", role.Value!.Id);
+        ins.Parameters.AddWithValue("k", (short)scope); ins.Parameters.AddWithValue("s", (object?)scopeId ?? DBNull.Value); ins.Parameters.AddWithValue("e", scope == ScopeKind.Branch ? 1L : DBNull.Value); ins.Parameters.AddWithValue("g", Admin.Id);
+        await ins.ExecuteNonQueryAsync();
+        return user;
+    }
+
+    protected async Task<string> AsMember(string[] permissions, ScopeKind scope = ScopeKind.Company, Guid? scopeId = null) => await SignIn(await Holder(permissions, scope, scopeId));
     protected Task<long> Events(short type) => Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {type}");
     protected Task<long> AccountRows() => Sql<long>($"SELECT count(*) FROM {Ca.Table}");
     protected async Task<Guid> MainBranch() => (await Domain.ListAsync(Company.Id)).Single(b => b.IsMain).Id;
@@ -169,7 +201,7 @@ public class CashAccountTests : CashAccountTestBase
         Assert.Equal(("accountNumber", "not_allowed_for_cashbox"), await Bad(new { kind = "cashbox", code = "a", nameEn = "x", branchId = main, accountId = g, accountNumber = "123456" }));
         Assert.Equal(("accountNumber", "invalid"), await Bad(Bank("b", main, g, number: "12")));
         Assert.Equal(("accountNumber", "masked_value"), await Bad(Bank("b", main, g, number: "****7519")));        // a masked-looking value is never stored as a number
-        var inactive = await Make("OFF"); await Sql($"UPDATE {CompanySchema.Branch.Table} SET {CompanySchema.Branch.IsActive} = false, {CompanySchema.Branch.Revision} = {CompanySchema.Branch.Revision} + 1 WHERE {CompanySchema.Branch.Id} = '{inactive.Id}'");
+        var inactive = await Make("OFF"); Assert.True((await Domain.DeactivateAsync(Admin.Id, Company.Id, inactive.Id, 1)).IsOk);
         var closed = await Create(cookie, Cashbox("a", inactive.Id, g), HttpStatusCode.Conflict);
         Assert.Equal("branch_inactive", closed.Error);
         var unknown = await Create(cookie, Cashbox("a", Guid.NewGuid(), g), HttpStatusCode.BadRequest);

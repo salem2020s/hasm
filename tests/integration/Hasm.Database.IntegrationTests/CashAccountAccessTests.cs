@@ -80,7 +80,7 @@ public class CashAccountAccessTests : CashAccountTestBase
         var service = new CashAccountService(resolver, new CompanyAuditedTransactions(resolver, Audit, Clock), new EnvelopeEncryptor(Keys), Probe, Clock);
         Assert.Empty(await service.ListAsync(foreign.Id));
         Assert.Null(await service.GetAsync(foreign.Id, id));
-        var none = await SignIn((await Member(Manage, ScopeKind.Company, null)).User, selectCompany: false);
+        var none = await SignIn(await Holder(Manage), selectCompany: false);
         var r = await Send(HttpMethod.Get, Base, cookie: none);
         Assert.Equal((HttpStatusCode.Conflict, "company_not_selected"), (r.Status, r.Error));
     }
