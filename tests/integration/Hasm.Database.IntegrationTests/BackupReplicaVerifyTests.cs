@@ -43,6 +43,7 @@ public class BackupReplicaVerifyTests : PostgresTestBase
     private AttachmentOptions Attachments => new() { StorageDirectory = Storage };
     private SigningTrust Trust => new([new TrustedSigningKey(signingId, signingPem, SigningKeyStatus.Active)]);
     private BackupMaterial Material() => new(RecoveryPublicKey.FromPem(pair.PublicKeyPem), BackupSigningKeys.Load(SigningDir, signingId, true));
+    private readonly StrictlyOrderedClock clock = new();                                                // runs created in one test are strictly ordered by creation (no same-second ordering by random suffix)
     private string SystemConnection => Options.BuildSystemConnectionString(admin: true);
     private AuditTrail Trail() => AuditTrail.FromOptions(new AuditOptions { KeyDirectory = AuditKeys, ActiveKeyId = "a1", CheckpointDirectory = Path.Combine(work, "checkpoints"), AllowInsecureFilePermissions = true }, TimeProvider.System);
     private ReplicationService Service() => new(Options, Trust, new SystemReplicaEvents(SystemConnection, Trail())) { LockWait = TimeSpan.FromSeconds(5) };
@@ -79,7 +80,7 @@ public class BackupReplicaVerifyTests : PostgresTestBase
 
     private async Task<string> RunAsync()
     {
-        var (report, dir) = await new BackupRunService(Options, Attachments, Encryption, TimeProvider.System).RunAsync(Root, Material());
+        var (report, dir) = await new BackupRunService(Options, Attachments, Encryption, clock).RunAsync(Root, Material());
         Assert.Equal("ok", report.Verdict);
         return Path.GetFileName(dir);
     }
@@ -181,7 +182,8 @@ public class BackupReplicaVerifyTests : PostgresTestBase
         await Init();
         var one = await RunAsync();
         var two = await RunAsync();
-        var (older, newest) = string.CompareOrdinal(one, two) < 0 ? (one, two) : (two, one);
+        Assert.True(string.CompareOrdinal(one, two) < 0);                                                // the fixture's runs are strictly ordered by creation
+        var (older, newest) = (one, two);
         Directory.CreateDirectory(Nas);
         await Replicate(older); await Replicate(newest);
         FlipBit(Dump(Path.Combine(Nas, older)));                                                          // damage only the OLDER copy
