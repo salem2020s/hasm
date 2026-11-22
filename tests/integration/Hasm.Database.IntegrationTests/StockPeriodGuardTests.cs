@@ -124,12 +124,20 @@ public abstract class StockPeriodGuardTestBase : NegativeStockTestBase
     protected static string NewCostOperation(string date) =>
         $"INSERT INTO {CO.Table} ({CO.Key}, {CO.Kind}, {CO.RequestHash}, {CO.EffectiveDate}, {CO.CreatedBy}, {CO.CreatedAtUtc}) VALUES ('raw-' || gen_random_uuid(), 1, repeat('a', 64), '{date}', gen_random_uuid(), now())";
 
-    /// <summary>Waits until at least <paramref name="sessions"/> sessions of this database are blocked on a lock.</summary>
+    /// <summary>Awaits a task that must finish; when it does not within 40 s the failure names every session of the database and what it waits for (never a silent hang).</summary>
+    protected async Task<T> Within<T>(Task<T> task, string what)
+    {
+        if (await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(40))) == task) return await task;
+        var sessions = await Sql<string>("SELECT coalesce(string_agg(usename || '|' || state || '|' || coalesce(wait_event_type, '') || '|' || left(query, 70), E'\\n'), '') FROM pg_stat_activity WHERE datname = current_database()");
+        throw new Xunit.Sdk.XunitException($"{what} did not finish in 40 s. Sessions:\n{sessions}");
+    }
+
+    /// <summary>Waits until at least <paramref name="sessions"/> sessions are blocked on a lock (read from pg_locks, which every role sees in full; pg_stat_activity hides the wait of another role's session from the runtime role's peers).</summary>
     protected async Task<bool> Blocked(int sessions = 1)
     {
         for (var i = 0; i < 100; i++)
         {
-            if (await Sql<long>("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'") >= sessions) return true;
+            if (await Sql<long>("SELECT count(DISTINCT pid) FROM pg_locks WHERE NOT granted AND (database = (SELECT oid FROM pg_database WHERE datname = current_database()) OR locktype IN ('transactionid', 'tuple'))") >= sessions) return true;
             await Task.Delay(100);
         }
         return false;
@@ -143,13 +151,13 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
     {
         await PrepareNegative();
         var rows = await Sql<string>(
-            "SELECT string_agg(c.relname || '|' || t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || p.proname || '|' || convert_from(t.tgargs, 'UTF8'), ';' ORDER BY c.relname) " +
+            "SELECT string_agg(c.relname || '|' || t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || p.proname || '|' || replace(encode(t.tgargs, 'escape'), '\\000', ''), ';' ORDER BY c.relname) " +
             $"FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid WHERE p.proname = '{G.FnGuard}'");
-        // tgtype 7 = ROW (1) + BEFORE (2) + INSERT (4); tgargs is the argument followed by a NUL
-        var expected = string.Join(';', All.OrderBy(g => g.Table, StringComparer.Ordinal).Select(g => $"{g.Table}|{g.Trigger}|O|7|{G.FnGuard}|{g.DateColumn}\0"));
+        // tgtype 7 = ROW (1) + BEFORE (2) + INSERT (4); tgargs is the argument followed by a NUL, removed by the query
+        var expected = string.Join(';', All.OrderBy(g => g.Table, StringComparer.Ordinal).Select(g => $"{g.Table}|{g.Trigger}|O|7|{G.FnGuard}|{g.DateColumn}"));
         Assert.Equal(expected, rows);
         // not SECURITY DEFINER, no settings of its own (no search_path clause), plpgsql
-        Assert.Equal("f|t|plpgsql", await Sql<string>(
+        Assert.Equal("false|true|plpgsql", await Sql<string>(
             $"SELECT p.prosecdef::text || '|' || (p.proconfig IS NULL)::text || '|' || l.lanname FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.proname = '{G.FnGuard}'"));
     }
 
@@ -238,11 +246,11 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         var receipt = await Approved(Receipt(W1, "2026-03-11", L(Avg, Pcs, 5)));
         var posting = Ok(await Post(receipt, Amounts(70m)));
         await PostJournal(posting);                                                                  // a posted journal may be reversed in a later period (3.7C)
+        var late = await Approved(Receipt(W1, "2026-03-25", L(Avg, Pcs, 1)));                        // approved while March is still Open (the service refuses to approve into a closed period too)
         var march = await March();
         var soft = Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
 
-        // March is closed for stock: the service refuses a new posting there, and nothing is written
-        var late = await Approved(Receipt(W1, "2026-03-25", L(Avg, Pcs, 1)));
+        // March is closed for stock: the service refuses to post there, and nothing is written
         var counts = await Counts();
         Fails(await Post(late, Amounts(10m)), ConfigStatus.Conflict, "fiscal_period_soft_closed");
         Assert.Equal(counts, await Counts());
@@ -263,6 +271,52 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         Ok(await Post(await Approved(Transfer(W1, W2, "2026-04-09", L(Fifo, Pcs, 1)))));
         Ok(await Post(await Approved(Issue(W1, "2026-04-10", L(Fifo, Pcs, 1)))));
         Assert.Equal((1m, 1m), ((await Pos(Fifo)).Quantity, (await Pos(Fifo, W2)).Quantity));
+    }
+
+    [PostgresFact]
+    public async Task A_final_closed_period_reopened_to_soft_closed_still_refuses_and_accepts_again_only_once_it_is_open()
+    {
+        await Populate();
+        var march = await March();
+        var soft = Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
+        var final = Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));
+        await using var owner = await Owner();
+        AssertGuard(await Attempt(owner, NewCostOperation("2026-03-15")), FinalMessage, "Final Closed");
+
+        // exceptional reopening: a request approved by a different user lands in Soft Closed, never straight in Open
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
+        var request = Ok(await Calendar.RequestPeriodReopenAsync(requester.Id, Company.Id, march.Id, final.Revision, new ReasonInput("Correction approved by finance")));
+        AssertGuard(await Attempt(owner, NewCostOperation("2026-03-15")), FinalMessage, "Final Closed with a pending request");
+        Ok(await Calendar.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, true));
+        var reopened = await March();
+        Assert.Equal(FiscalPeriodState.SoftClosed, reopened.State);
+        AssertGuard(await Attempt(owner, NewCostOperation("2026-03-15")), SoftMessage, "reopened to Soft Closed");
+
+        Ok(await Calendar.ReopenAsync(Admin.Id, Company.Id, reopened.Id, reopened.Revision));
+        Assert.Null(await Attempt(owner, NewCostOperation("2026-03-15")));
+    }
+
+    [PostgresFact]
+    public async Task The_services_keep_their_own_refusal_codes_for_adjustments_and_transfers_dated_in_a_closed_period()
+    {
+        await PrepareNegative();
+        await Receive(Fifo2, 10m, 100m);
+        var take = await ApprovedTake(W1, C(Fifo2, Pcs, 7m));
+        var adjustment = Ok(await Generate(take));
+        await Receive(Fifo, 5m, 50m);
+        var transfer = await Approved(Transfer(W1, W2, "2026-03-20", L(Fifo, Pcs, 1)));
+        var march = await March();
+        var soft = Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
+        var counts = await Counts();
+
+        Fails(await Adj.PostAsync(Admin.Id, Company.Id, adjustment.Id, null), ConfigStatus.Conflict, "fiscal_period_soft_closed");
+        Fails(await Post(transfer), ConfigStatus.Conflict, "fiscal_period_soft_closed");
+        Assert.Equal(counts, await Counts());
+        Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));
+        Fails(await Adj.PostAsync(Admin.Id, Company.Id, adjustment.Id, null), ConfigStatus.Conflict, "fiscal_period_final_closed");
+        Fails(await Post(transfer), ConfigStatus.Conflict, "fiscal_period_final_closed");
+        Assert.Equal(counts, await Counts());
     }
 
     // ---------------------------------------------------------------- concurrency: a period being closed
@@ -448,6 +502,9 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         // (they write a consumption only together with its own new entry); a statement like this one is accepted by the database today.
         var attached = await Attempt(owner, $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT {LY.EntryId}, {LY.Id}, 1, 1 FROM {LY.Table} LIMIT 1");
         Assert.Null(attached);
+        // the same for a new cost layer attached to an existing entry (the layer table has no date and no insert trigger either)
+        var layer = await Attempt(owner, $"INSERT INTO {LY.Table} SELECT (jsonb_populate_record(NULL::{LY.Table}, to_jsonb(s) || jsonb_build_object('{LY.Id}', gen_random_uuid(), '{LY.Seq}', 999999999))).* FROM {LY.Table} s LIMIT 1");
+        Assert.Null(layer);
     }
 }
 
@@ -493,6 +550,40 @@ public class StockPeriodGuardRuntimeRoleTests : StockPeriodGuardTestBase
         }
         Assert.Null(await Attempt(runtime, NewCostOperation("2026-03-15")));
         AssertGuard(await Attempt(runtime, NewCostOperation(SoftDate)), SoftMessage, "new cost operation as the runtime role");
+    }
+
+    [PostgresRoleFact]
+    public async Task The_runtime_role_insert_in_flight_makes_a_close_wait_and_the_next_insert_is_refused()
+    {
+        await Populate();
+        var march = await March();
+        await using var runtime = await AsRuntime();
+        // an insert in flight (share lock taken with the runtime role's own rights) makes the close wait, and the next insert is refused
+        await using (var tx = await runtime.BeginTransactionAsync())
+        {
+            await using (var ins = new NpgsqlCommand(NewCostOperation("2026-03-15"), runtime, tx)) await ins.ExecuteNonQueryAsync();
+            var close = Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision);
+            Assert.True(await Blocked(), "the close did not wait for the runtime role's insert");
+            await tx.RollbackAsync();
+            Ok(await Within(close, "the close"));
+        }
+        AssertGuard(await Attempt(runtime, NewCostOperation("2026-03-15")), SoftMessage, "runtime insert after the close");
+    }
+
+    [PostgresRoleFact]
+    public async Task The_runtime_role_waits_for_a_close_in_flight_and_follows_its_outcome()
+    {
+        await Populate();
+        await using var runtime = await AsRuntime();
+        var again = await March();
+        await using var closer = await Owner();
+        await using var closing = await closer.BeginTransactionAsync();
+        await using (var upd = new NpgsqlCommand($"UPDATE {FP.Table} SET {FP.Status} = 2, {FP.StatusChangedAtUtc} = now(), {FP.StatusChangedBy} = '{Admin.Id}', {FP.Revision} = {FP.Revision} + 1 WHERE {FP.Id} = '{again.Id}'", closer, closing))
+            Assert.Equal(1, await Within(upd.ExecuteNonQueryAsync(), "the close statement"));
+        var insert = Attempt(runtime, NewCostOperation("2026-03-16"));
+        Assert.True(await Blocked(), "the runtime role's insert did not wait for the close in flight: " + (insert.IsCompleted ? (await insert)?.MessageText ?? "accepted" : "still pending"));
+        await closing.CommitAsync();
+        AssertGuard(await Within(insert, "the runtime insert"), SoftMessage, "runtime insert that waited for a committed close");
     }
 
     [PostgresRoleFact]
