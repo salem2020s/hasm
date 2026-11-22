@@ -64,7 +64,9 @@ public static partial class CashAccountRules
     public static string? NormalizeNumber(string? raw)
     {
         if (raw is null) return null;
-        var n = new string(raw.Where(c => c is not (' ' or '-')).ToArray()).ToUpperInvariant();
+        var stripped = new string(raw.Where(c => c is not (' ' or '-')).ToArray());
+        if (stripped.Any(c => c > 127)) return null;                    // ASCII BEFORE upper-casing: the invariant upper-case of some non-ASCII letters (the dotless i, the long s) is an ASCII letter and would otherwise slip in (review L4 of PR 206)
+        var n = stripped.ToUpperInvariant();
         return NumberShape().IsMatch(n) ? n : null;
     }
 
@@ -95,7 +97,8 @@ public static partial class CashAccountRules
         else errors.Add(new("kind", "invalid"));
         if (existing is not null && kindText is not null && errors.All(e => e.Field != "kind") && kind != existing.Kind) errors.Add(new("kind", "immutable"));
 
-        var code = Trim(input.Code)?.ToUpperInvariant();
+        var rawCode = Trim(input.Code);
+        var code = rawCode is not null && rawCode.Any(c => c > 127) ? rawCode : rawCode?.ToUpperInvariant();   // a non-ASCII code is left as typed, so the shape check refuses it (same reason as the number)
         if (existing is null) { if (code is null) errors.Add(new("code", "required")); else if (!CodeShape().IsMatch(code)) errors.Add(new("code", "invalid")); }
         else if (code is not null && code != existing.Code) errors.Add(new("code", "immutable"));
         code ??= existing?.Code;

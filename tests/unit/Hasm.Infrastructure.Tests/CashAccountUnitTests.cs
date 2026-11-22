@@ -67,6 +67,26 @@ public class CashAccountUnitTests
         Assert.Equal("****", CashAccountRules.Mask(""));
     }
 
+    [Theory]
+    [InlineData("1234567\u0131")] [InlineData("ABCD\u017F1234")] [InlineData("\u0661\u0662\u0663\u0664\u0665")] [InlineData("12345678\u00E9")] [InlineData("ABCDEFGH\uFF21")]
+    public void A_non_ASCII_character_is_refused_before_upper_casing_so_the_dotless_i_and_the_long_s_never_become_ASCII_letters(string number)
+    {
+        Assert.Null(CashAccountRules.NormalizeNumber(number));
+        Assert.False(CashAccountRules.TryNormalize(In(number: number), null, null, out _, out var n, out var errors));
+        Assert.Null(n);
+        Assert.Contains(errors, e => e is { Field: "accountNumber", Code: "invalid" });
+        Assert.Equal("ABCD1234", CashAccountRules.NormalizeNumber("abcd 12-34"));                                  // plain ASCII is unchanged
+    }
+
+    [Fact]
+    public void A_non_ASCII_code_is_refused_for_the_same_reason()
+    {
+        Assert.False(CashAccountRules.TryNormalize(In(code: "NB\u0131"), null, null, out _, out _, out var errors));
+        Assert.Contains(errors, e => e is { Field: "code", Code: "invalid" });
+        Assert.True(CashAccountRules.TryNormalize(In(code: "nb-1"), null, null, out var d, out _, out _));
+        Assert.Equal("NB-1", d.Code);
+    }
+
     [Fact]
     public void The_masked_form_of_the_current_number_means_unchanged_and_an_omitted_number_too_on_an_update()
     {
