@@ -337,12 +337,14 @@ public sealed class BackupRunService
         finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(canary); }
         var runManifest = new ManifestV2(ManifestV2.CurrentVersion, BackupRunFiles.RunKind, report.RunId, null, report.StartedUtc, material.Recovery.KeyId, material.Signer.KeyId, [canaryEntry], Run: report);
         await SignedDocuments.WriteManifestAsync(runDir, runManifest, material.Recovery, material.Signer, ct);
+        // S8b (D-185 as amended): the signed inventory of every encrypted file, written when they are all final; the signed status names it by hash
+        var digestListSha256 = await CiphertextDigests.WriteAsync(runDir, report.RunId, material.Signer, ct);
         // D-138: version 2 only with a complete key inventory (every written set's key ids and the audit key ids); otherwise version 1 (key needs unknown)
         var inventory = auditKeyIds is not null && report.Companies.Where(c => c.Outcome is "ok" or "ok_missing_keys").All(c => keyIdsByCompany.ContainsKey(c.CompanyId));
         var status = new RunStatus(inventory ? RunStatus.CurrentVersion : 1, RunStatus.KindValue, report.RunId, report.StartedUtc, report.FinishedUtc, report.DurationMs, report.Verdict,
             report.Companies.Count(c => c.Outcome == "ok"), report.Companies.Count(c => c.Outcome == "ok_missing_keys"), report.Companies.Count(c => c.Outcome == "busy"),
             report.Companies.Count(c => c.Outcome == "failed"), report.Skipped, material.Recovery.KeyId, material.Signer.KeyId, canaryHash, report.Excluded, report.Warnings ?? [], true,
-            [.. report.Companies.Select(c => new RunStatusCompany(c.CompanyId, c.Outcome, inventory ? keyIdsByCompany.GetValueOrDefault(c.CompanyId) ?? [] : null))], inventory ? auditKeyIds : null);
+            [.. report.Companies.Select(c => new RunStatusCompany(c.CompanyId, c.Outcome, inventory ? keyIdsByCompany.GetValueOrDefault(c.CompanyId) ?? [] : null))], inventory ? auditKeyIds : null, digestListSha256);
         SignedDocuments.WriteRunStatus(runDir, status, material.Signer);
     }
 
