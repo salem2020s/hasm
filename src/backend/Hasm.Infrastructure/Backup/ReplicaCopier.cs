@@ -21,6 +21,8 @@ public interface IReplicaEvents
     Task VerifiedAsync(string runId, string statusSha256, BackupDestination destination, int files, long bytes, long durationMs, bool reverified, CancellationToken ct);
     /// <summary>2041: the copy of a run failed (or a publish failed after 2040: <paramref name="statusSha256"/> is then the hash of the 2040 it compensates).</summary>
     Task FailedAsync(string runId, BackupDestination destination, string reason, string? statusSha256, CancellationToken ct);
+    /// <summary>2042: a copy found by re-verification to no longer verify; <paramref name="check"/> is the failing check (a stable code, never a path).</summary>
+    Task CorruptAsync(string runId, BackupDestination destination, string check, CancellationToken ct);
     /// <summary>2043: a destination was refused before anything was written (<paramref name="destinationId"/> is null when the configuration names none).</summary>
     Task RefusedAsync(string? destinationId, string reason, CancellationToken ct);
 }
@@ -35,6 +37,10 @@ public sealed class SystemReplicaEvents(string systemConnectionString, AuditTrai
     public Task FailedAsync(string runId, BackupDestination d, string reason, string? statusSha256, CancellationToken ct) =>
         BackupAudit.WriteAsync(systemConnectionString, trail, BackupAuditEvents.ReplicaFailed,
             $"replica failed operator={BackupAudit.Operator()} run={runId} destination={d.Id} reason={reason}{(statusSha256 is null ? "" : " status=" + statusSha256)}", ct: ct);
+
+    public Task CorruptAsync(string runId, BackupDestination d, string check, CancellationToken ct) =>
+        BackupAudit.WriteAsync(systemConnectionString, trail, BackupAuditEvents.ReplicaCorrupt,
+            $"replica corrupt operator={BackupAudit.Operator()} run={runId} destination={d.Id} check={check}", ct: ct);
 
     public Task RefusedAsync(string? destinationId, string reason, CancellationToken ct) =>
         BackupAudit.WriteAsync(systemConnectionString, trail, BackupAuditEvents.DestinationRefused,
@@ -337,6 +343,47 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
             dst.Flush(flushToDisk: true);                                                  // fsync / FlushFileBuffers: an error fails the copy
         }                                                                                    // the write handle is CLOSED here; verification reopens the file
         return new(name, size, Convert.ToHexStringLower(hash.GetHashAndReset()));
+    }
+
+    /// <summary>
+    /// Re-verification of a copy that is already published (S8c, D-185 "re-verification of old copies"): the copy alone, against its own SIGNED inventory, without the primary. Returns null when it
+    /// verifies, or the failing check: <c>status</c> (the status does not verify), <c>digest_list_missing</c>, <c>digest_list</c> (the inventory does not verify or is not the one the status names),
+    /// <c>unexpected_file</c>, <c>link</c>, <c>file_set</c> (an encrypted file the inventory does not list, or a listed one absent), <c>size</c>, <c>hbe_structure</c>, <c>hash</c> or <c>signature</c> (a manifest). Never repairs.
+    /// </summary>
+    internal static async Task<(string? Check, int Files, long Bytes, string? StatusSha256)> VerifyStoredAsync(string dir, SigningTrust trust, CancellationToken ct)
+    {
+        RunStatus status;
+        try { status = SignedDocuments.ReadRunStatus(dir, trust); }
+        catch (BackupException) { return ("status", 0, 0, null); }
+        var statusSha = await HashFileAsync(Path.Combine(dir, SignedDocuments.RunStatusFileName), ct);
+        CiphertextDigestList list;
+        try { list = CiphertextDigests.ReadVerified(dir, status.RunId, status.DigestListSha256, trust); }
+        catch (BackupException ex) { return (ex.Code == "replica_digest_list_missing" ? "digest_list_missing" : "digest_list", 0, 0, statusSha); }
+        try
+        {
+            var names = Names(dir);
+            if (!RetentionInventory.Inspect(dir).Clean) return ("unexpected_file", 0, 0, statusSha);
+            var encrypted = names.Where(n => n.EndsWith(".hbe", StringComparison.Ordinal)).ToList();
+            if (!encrypted.Order(StringComparer.Ordinal).SequenceEqual(list.Files.Select(f => f.Name).Order(StringComparer.Ordinal), StringComparer.Ordinal)) return ("file_set", 0, 0, statusSha);
+            long bytes = 0;
+            foreach (var e in list.Files)
+            {
+                var path = Path.Combine(dir, e.Name.Replace('/', Path.DirectorySeparatorChar));
+                if (new FileInfo(path).Length != e.Size) return ("size", 0, 0, statusSha);
+                string actual;
+                try { actual = await HashAndCheckHbeAsync(path, ct); }
+                catch (ReplicaVerificationException) { return ("hbe_structure", 0, 0, statusSha); }
+                if (!string.Equals(actual, e.Sha256, StringComparison.Ordinal)) return ("hash", 0, 0, statusSha);
+                bytes += e.Size;
+                if (e.Name == SignedDocuments.ManifestFileName || e.Name.EndsWith("/" + SignedDocuments.ManifestFileName, StringComparison.Ordinal))
+                {
+                    try { SignedDocuments.ReadVerified(path, trust); }
+                    catch (BackupException) { return ("signature", 0, 0, statusSha); }
+                }
+            }
+            return (null, names.Count, bytes, statusSha);
+        }
+        catch (ReplicaVerificationException ex) { return (ex.Check, 0, 0, statusSha); }
     }
 
     // ---- verification (read back from the destination through NEW handles) ----------------------------------------

@@ -52,6 +52,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
             Log.Add($"2041 {runId} {d.Id} {reason}{(statusSha256 is null ? "" : " status")}");
             return Task.CompletedTask;
         }
+        public Task CorruptAsync(string runId, BackupDestination d, string check, CancellationToken ct) { Log.Add($"2042 {runId} {d.Id} {check}"); return Task.CompletedTask; }
         public Task RefusedAsync(string? destinationId, string reason, CancellationToken ct) { Log.Add($"2043 {destinationId} {reason}"); return Task.CompletedTask; }
     }
 
@@ -384,5 +385,110 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         Assert.Equal(1, ReplicationService.ReplicationCode([], RunA, 2));                       // nothing verified while destinations are configured
         Assert.Equal(0, ReplicationService.ReplicationCode([], RunA, 0));                       // no destination configured: today's behaviour
         Assert.Equal(0, ReplicationService.ReplicationCode([new ReplicaOutcome("a", RunA, "reverified", null, 3, 1, 1)], RunA, 1));
+    }
+
+    // ---- S8c: re-verification of a published copy, alone, against its own signed inventory ----------------------
+
+    private async Task<string> PublishedCopyAsync(string runId = "20261121T020000Z-0011aabb")
+    {
+        var run = await MakeRunAsync(runId);
+        Assert.Equal("verified", (await Copier().ReplicateAsync(Destination(), Primary, run, default)).Result);
+        return Path.Combine(Dest, runId);
+    }
+
+    [Fact]
+    public async Task A_good_copy_verifies_alone_without_the_primary_and_every_damage_is_named_by_its_check()
+    {
+        var copy = await PublishedCopyAsync();
+        Directory.Delete(Path.Combine(Primary, RunA), true);                                    // the primary is not needed
+        var good = await ReplicaCopier.VerifyStoredAsync(copy, trust, default);
+        Assert.Null(good.Check);
+        Assert.Equal(7, good.Files);
+        string Dump() => Path.Combine(copy, "system", EncryptedSets.DumpName);
+        var original = File.ReadAllBytes(Dump());
+        FlipBit(Dump());
+        Assert.Equal("hash", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.WriteAllBytes(Dump(), original[..^10]);
+        Assert.Equal("size", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.WriteAllBytes(Dump(), RandomNumberGenerator.GetBytes(original.Length));
+        Assert.Equal("hbe_structure", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.WriteAllBytes(Dump(), original);
+        Assert.Null((await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);       // restored: verifies again
+        File.WriteAllText(Path.Combine(copy, "notes.txt"), "x");
+        Assert.Equal("unexpected_file", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.Delete(Path.Combine(copy, "notes.txt"));
+        File.Copy(Dump(), Path.Combine(copy, "canary.hbe"));                                    // an encrypted file the inventory does not list
+        Assert.Equal("file_set", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.Delete(Path.Combine(copy, "canary.hbe"));
+        var manifest = Path.Combine(copy, "system", SignedDocuments.ManifestFileName + ".sig");
+        FlipBit(manifest);
+        Assert.Equal("signature", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+    }
+
+    [Fact]
+    public async Task A_copy_with_a_damaged_status_or_a_missing_or_foreign_inventory_is_named_corrupt_with_its_check()
+    {
+        var copy = await PublishedCopyAsync();
+        var list = Path.Combine(copy, CiphertextDigests.FileName);
+        var listBytes = File.ReadAllBytes(list); var sigBytes = File.ReadAllBytes(list + ".sig");
+        File.Delete(list); File.Delete(list + ".sig");
+        Assert.Equal("digest_list_missing", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.WriteAllBytes(list, listBytes); File.WriteAllBytes(list + ".sig", sigBytes);
+        FlipBit(list + ".sig");
+        Assert.Equal("digest_list", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        File.WriteAllBytes(list + ".sig", sigBytes);
+        Assert.Null((await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+        FlipBit(Path.Combine(copy, "run.status.json.sig"));
+        Assert.Equal("status", (await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).Check);
+    }
+
+    private static RetentionRun Run(string id, params (Guid Company, string Outcome)[] companies) =>
+        new(id, T0, T0, true, true, true, "ok", "r1", false, [.. companies.Select(c => new RunStatusCompany(c.Company, c.Outcome))], "hash-" + id, true, false, null);
+
+    [Fact]
+    public void The_default_selection_is_the_newest_copy_the_newest_per_company_and_held_or_pinned_runs_and_all_selects_every_folder()
+    {
+        Guid a = Guid.NewGuid(), b = Guid.NewGuid(), c = Guid.NewGuid();
+        var r1 = Run("20261101T020000Z-00000001", (a, "ok"), (b, "ok"));
+        var r2 = Run("20261102T020000Z-00000002", (a, "ok"), (b, "failed"));
+        var r3 = Run("20261103T020000Z-00000003", (a, "ok"), (c, "ok_missing_keys"));
+        var r4 = Run("20261104T020000Z-00000004", (a, "ok"));
+        var broken = r2 with { Verified = false, Verdict = null, StatusSha256 = null, Complete = true };
+        IReadOnlyList<RetentionRun> all = [r1, broken, r3, r4];
+        string[] Ids(IEnumerable<RetentionRun> runs) => [.. runs.Select(r => r.RunId)];
+        // newest copy r4; newest with company a is r4, with b is r1, with c is r3; the unverifiable folder is always examined
+        Assert.Equal([r1.RunId, r2.RunId, r3.RunId, r4.RunId], Ids(ReplicaVerifyService.Select(all, [], all: false)));
+        Assert.Equal([r1.RunId, r2.RunId, r3.RunId, r4.RunId], Ids(ReplicaVerifyService.Select(all, [], all: true)));
+        IReadOnlyList<RetentionRun> healthy = [r1, r2, r3, r4];
+        Assert.Equal([r1.RunId, r3.RunId, r4.RunId], Ids(ReplicaVerifyService.Select(healthy, [], all: false)));                  // r2 only holds b "failed" and a (newer elsewhere)
+        Assert.Equal([r1.RunId, r2.RunId, r3.RunId, r4.RunId], Ids(ReplicaVerifyService.Select(healthy, [r2.RunId], all: false)));  // held or pinned
+        Assert.Equal([r1.RunId, r3.RunId, r4.RunId], Ids(ReplicaVerifyService.Select(healthy, ["20200101T000000Z-00000000"], all: false)));   // a hold on a run that is not there
+        Assert.Empty(ReplicaVerifyService.Select([], [], all: false));
+    }
+
+    [Fact]
+    public void The_audit_state_takes_the_last_word_per_copy_parses_tokens_exactly_and_ignores_foreign_rows()
+    {
+        var t = DateTimeOffset.UtcNow;
+        string V(string run, string dest, bool re) => $"replica verified operator=os:x run={run} destination={dest} kind=network status=abc files=1 bytes=1 duration_ms=1 reverified={(re ? "true" : "false")}";
+        string C(string run, string dest) => $"replica corrupt operator=os:x run={run} destination={dest} check=hash";
+        var r = "20261121T020000Z-0011aabb";
+        var state = ReplicaAuditReader.Build([
+            (BackupAuditEvents.ReplicaVerified, V(r, "nas-1", false), t.AddHours(-5)),
+            (BackupAuditEvents.ReplicaCorrupt, C(r, "nas-1"), t.AddHours(-4)),
+            (BackupAuditEvents.ReplicaVerified, V(r, "nas-10", true), t.AddHours(-3)),          // another destination whose id starts with the first
+            (BackupAuditEvents.ReplicaVerified, "garbage without tokens", t),
+            (BackupAuditEvents.ReplicaVerified, V("not-a-run", "nas-1", true), t),
+            (BackupAuditEvents.ReplicaFailed, V(r, "nas-1", true), t),                          // another event type is not read
+        ]);
+        Assert.True(state.ReportedCorrupt("nas-1", r));
+        Assert.False(state.ReportedCorrupt("nas-10", r));                                       // exact match: nas-10 is not nas-1
+        Assert.Null(state.LastReverified("nas-1"));
+        Assert.Equal(t.AddHours(-3), state.LastReverified("nas-10"));
+        // a later verified copy (a fresh copy after the corrupt one was moved away) supersedes the corrupt report
+        var cleared = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaCorrupt, C(r, "nas-1"), t.AddHours(-2)), (BackupAuditEvents.ReplicaVerified, V(r, "nas-1", false), t.AddHours(-1))]);
+        Assert.False(cleared.ReportedCorrupt("nas-1", r));
+        Assert.Equal("nas-1", ReplicaAuditReader.Token("destination=nas-1 run=x", "destination"));
+        Assert.Null(ReplicaAuditReader.Token("xdestination=nas-1", "destination"));
     }
 }

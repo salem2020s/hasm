@@ -27,11 +27,13 @@ public static class BackupAuditEvents
     /// <summary>Slice 6: reserved for the release of a backup legal hold (not available until the Phase 4.1 approval framework).</summary>
     public const short LegalHoldReleased = 2019;
     // 2020-2029: allocated by the lead to slice 7 (cutover)
-    // 2040-2049: slice 8 (multiple backup destinations, D-188). 2042 (a copy found corrupt by re-verification) comes with S8c; 2044-2049 are reserved.
+    // 2040-2049: slice 8 (multiple backup destinations, D-188). 2044-2049 are reserved.
     /// <summary>Slice 8 (D-188): a copy was verified by read-back after flush; written BEFORE the rename, so it records "publish attempted" and is never proof by itself that a copy exists.</summary>
     public const short ReplicaVerified = 2040;
     /// <summary>Slice 8: a copy failed (or a publish failed after 2040, the compensating event).</summary>
     public const short ReplicaFailed = 2041;
+    /// <summary>Slice 8 (S8c): re-verification found a copy that no longer verifies (never repaired in place).</summary>
+    public const short ReplicaCorrupt = 2042;
     /// <summary>Slice 8: a destination was refused before anything was written.</summary>
     public const short DestinationRefused = 2043;
 }
