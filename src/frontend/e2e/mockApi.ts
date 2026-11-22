@@ -21,7 +21,7 @@ const ACCOUNTS = [
   { ...baseAccount, id: "a1", code: "1101", nameAr: "الصندوق", nameEn: "Cash", type: "asset" },
   { ...baseAccount, id: "a2", code: "4101", nameAr: "المبيعات", nameEn: "Sales", type: "revenue", nature: "credit", statement: "profit_and_loss" },
 ];
-const FULL = ["company.profile.view", "company.settings.view", "company.currencies.view", "company.config.view", "company.accounts.view", "company.accounts.create", "company.journal.view", "company.journal.create", "company.branches.view"];
+const FULL = ["company.profile.view", "company.settings.view", "company.currencies.view", "company.config.view", "company.accounts.view", "company.accounts.create", "company.journal.view", "company.journal.create", "company.branches.view", "access.mfapolicy.view", "access.mfapolicy.update"];
 const COMPANIES = [
   { id: "c1", nameAr: "شركة الأمل", nameEn: "Amal Co", permissions: FULL },
   { id: "c2", nameAr: "شركة محدودة", nameEn: "Limited Co", permissions: ["company.profile.view"] },     // no accounts or journal permission: the forbidden screens
@@ -35,12 +35,18 @@ export class MockApi {
   private pending = 0;
   private companyId: string | null = null;
   private accounts: Record<string, unknown>[] = [...ACCOUNTS];
+  /** The company MFA policy (stand-in for GET/PUT /access/mfa-policy: revision 0 = nothing stored). Only the optimistic-concurrency contract is mimicked: 428 without If-Match, 400 for a malformed one, 412 with the current revision. */
+  private policy = { policy: "off", roleIds: [] as string[], revision: 0, updatedAtUtc: null as string | null };
+  readonly policyWrites: { body: Record<string, unknown>; ifMatch: string | undefined }[] = [];
   private entries: { entry: Record<string, unknown>; lines: unknown[] }[] = [];
 
   constructor(readonly mode: Mode) {}
 
   /** Requests received and not yet answered. Zero means every request so far has completed: a deterministic "nothing is in flight" signal (no timer). */
   get inflight(): number { return this.pending; }
+
+  /** Someone else changes the policy (to "roles"; the revision moves): the next save made against the old revision meets 412. */
+  changePolicyElsewhere(): void { this.policy = { policy: "roles", roleIds: ["00000000-0000-0000-0000-0000000000a1"], revision: this.policy.revision + 1, updatedAtUtc: "2026-11-21T09:00:00Z" }; }
 
   /** True while a session exists. The next authenticated call after expire() is answered 401, exactly like an expired or revoked session. */
   get signedIn(): boolean { return this.token !== null; }
@@ -107,6 +113,23 @@ export class MockApi {
     if (!company) return this.json(route, 409, { error: "company_not_selected" });
 
     const can = (p: string) => company.permissions.includes(p);
+    if (path === "/api/v1/access/roles" && method === "GET") return this.json(route, 200, { roles: [{ id: "00000000-0000-0000-0000-0000000000a1", name: "Accountant", preset: false, presetKey: null, active: true, permissions: [] }] });
+    if (path === "/api/v1/access/mfa-policy" && method === "GET") {
+      if (!can("access.mfapolicy.view")) return this.json(route, 403, { error: "forbidden" });
+      return this.json(route, 200, this.policy, { etag: `"${this.policy.revision}"` });
+    }
+    if (path === "/api/v1/access/mfa-policy" && method === "PUT") {
+      if (!can("access.mfapolicy.update")) return this.json(route, 403, { error: "forbidden" });
+      const ifMatch = headers["if-match"];
+      const input = JSON.parse(request.postData() ?? "{}") as { policy: string; roleIds?: string[] };
+      this.policyWrites.push({ body: input, ifMatch });
+      if (ifMatch === undefined) return this.json(route, 428, { error: "precondition_required" });
+      const expected = /^"(\d+)"$/.exec(ifMatch);
+      if (!expected) return this.json(route, 400, { error: "invalid_if_match" });
+      if (Number(expected[1]) !== this.policy.revision) return this.json(route, 412, { error: "revision_conflict", currentRevision: this.policy.revision });
+      this.policy = { policy: input.policy, roleIds: input.roleIds ?? [], revision: this.policy.revision + 1, updatedAtUtc: "2026-11-21T10:00:00Z" };
+      return this.json(route, 200, this.policy, { etag: `"${this.policy.revision}"` });
+    }
     if (path === "/api/v1/company/accounts" && method === "GET") {
       if (!can("company.accounts.view")) return this.json(route, 403, { error: "forbidden" });
       return this.json(route, 200, { accounts: this.accounts, settings: { segmentWidth: 2, autoCodes: true, revision: 0, configured: false }, templates: [], usageChecksImplemented: false, can: { create: can("company.accounts.create"), update: false, activate: false, recode: false, restructure: false, configure: false } });
