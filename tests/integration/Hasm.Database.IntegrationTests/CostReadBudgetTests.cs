@@ -8,6 +8,9 @@ namespace Hasm.Database.IntegrationTests;
 
 public class CostReadBudgetTests : CostingTestBase
 {
+    /// <summary>The runtime privilege check of the schema gate is ONE set-based command whatever the number of tables (review L2 of PR 48); it used to be one command per table.</summary>
+    private const int PrivilegeChecks = 1;
+
     private CompanyDatabaseResolver WarmResolver() => new(Configured(true),
         new CompanyRegistry(Options.BuildSystemConnectionString(admin: true)), Credentials, Clock)
     {
@@ -68,13 +71,13 @@ public class CostReadBudgetTests : CostingTestBase
             resolver.OpenAsync(Company.Id, small.Reserve, default))).Failure); Assert.Equal(3, small.Used);
         var finish = new ReadCommandBudget(1000, default);
         await using (var connection = await resolver.OpenAsync(Company.Id, finish.Reserve, default)) { }
-        Assert.Equal(CompanyRuntimePrivileges.Tables.Count + 5, finish.Used); // Cached registry, complete cold schema/privilege/main-branch checks.
+        Assert.Equal(PrivilegeChecks + 5, finish.Used); // Cached registry, complete cold schema/privilege/main-branch checks (the privilege check is ONE set-based command).
         var warm = new ReadCommandBudget(1, default);
         await using (var connection = await resolver.OpenAsync(Company.Id, warm.Reserve, default)) { }
         Assert.Equal(0, warm.Used);
         resolver.Forget(Company.Id); var cold = new ReadCommandBudget(1000, default);
         await using (var connection = await resolver.OpenAsync(Company.Id, cold.Reserve, default)) { }
-        Assert.Equal(CompanyRuntimePrivileges.Tables.Count + 6, cold.Used); // Registry is now cold too.
+        Assert.Equal(PrivilegeChecks + 6, cold.Used); // Registry is now cold too.
     }
 
     [PostgresFact]

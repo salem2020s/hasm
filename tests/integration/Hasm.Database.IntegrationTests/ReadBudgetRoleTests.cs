@@ -5,6 +5,9 @@ namespace Hasm.Database.IntegrationTests;
 
 public class ReadBudgetRoleTests : CompanyRuntimeTestBase
 {
+    /// <summary>The runtime privilege check of the schema gate is ONE set-based command whatever the number of tables (review L2 of PR 48); it used to be one command per table.</summary>
+    private const int PrivilegeChecks = 1;
+
     protected override bool RolesRequired => true;
     private sealed class RetryCredential(FileCompanyCredentialStore store) : ICompanyCredentialProvider
     {
@@ -29,7 +32,7 @@ public class ReadBudgetRoleTests : CompanyRuntimeTestBase
         Assert.True(granted.LoginVerified);
         var provider = new RetryCredential(new FileCompanyCredentialStore(CredentialDirectory));
         var resolver = new CompanyDatabaseResolver(Configured(), Registry, provider, Clock);
-        var budget = new ReadCommandBudget(limited ? 1 : CompanyRuntimePrivileges.Tables.Count + 8, default);
+        var budget = new ReadCommandBudget(limited ? 1 : PrivilegeChecks + 8, default);
         if (limited)
         {
             var failure = await Assert.ThrowsAsync<ReadCommandBudgetException>(() => resolver.OpenAsync(company.Id, budget.Reserve, default));
@@ -40,7 +43,7 @@ public class ReadBudgetRoleTests : CompanyRuntimeTestBase
         {
             await using var connection = await resolver.OpenAsync(company.Id, budget.Reserve, default);
             Assert.Equal(ConnectionState.Open, connection.State); Assert.Equal(2, provider.Calls);
-            Assert.Equal(CompanyRuntimePrivileges.Tables.Count + 8, budget.Used);
+            Assert.Equal(PrivilegeChecks + 8, budget.Used);
         }
     }
 }
