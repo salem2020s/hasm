@@ -493,7 +493,7 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));              // every stock row of this company now lies in a Final Closed period
         var all = MigrationScript.LoadEmbeddedCompany();
         var mine = all.Single(s => s.Sql.Contains($"CREATE FUNCTION {G.FnGuard}()", StringComparison.Ordinal));
-        Assert.Equal(all.Max(s => s.Version), mine.Version);                                          // this test rebuilds the state "one migration behind": valid while the guard is the newest migration
+        // the guard need not be the newest migration: only its own journal row is removed below and re-applied; later migrations stay applied (the cash migration 0035 follows it)
 
         async Task<string> Fingerprint() => string.Join(';', await Task.WhenAll(All.Select(g => Sql<string>($"SELECT count(*)::text || ':' || coalesce(md5(string_agg(t::text, '|' ORDER BY t::text)), '') FROM {g.Table} t"))));
         var before = await Fingerprint();
