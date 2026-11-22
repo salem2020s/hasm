@@ -21,6 +21,18 @@ public class MfaPolicyApiTests : AccessTestBase
     private WebApplicationFactory<Program>? factory;
     private HttpClient client = null!;
     private readonly InMemoryKekRing ring = new("k1");
+    /// <summary>Test seam for the request pipeline's policy question only (the selection endpoint uses the real service): lets a test act between authorization and the endpoint.</summary>
+    private Func<ICompanyMfaPolicyEvaluator, ICompanyMfaPolicyEvaluator>? wrapEvaluator;
+
+    private sealed class HookedEvaluator(ICompanyMfaPolicyEvaluator inner, Func<Guid, Guid, Task> before) : ICompanyMfaPolicyEvaluator
+    {
+        public async Task<bool> RequiresMfaAsync(Guid userId, Guid companyId, CancellationToken ct = default)
+        {
+            var answer = await inner.RequiresMfaAsync(userId, companyId, ct);
+            await before(userId, companyId);                                                                           // AFTER the decision, BEFORE the endpoint runs
+            return answer;
+        }
+    }
 
     private async Task StartApi()
     {
@@ -43,6 +55,7 @@ public class MfaPolicyApiTests : AccessTestBase
                 s.AddSingleton<TimeProvider>(Clock);
                 s.AddSingleton(_ => Audit);
                 s.AddSingleton<KekRing>(ring);
+                if (wrapEvaluator is { } wrap) s.AddSingleton<ICompanyMfaPolicyEvaluator>(sp => wrap(sp.GetRequiredService<MfaPolicyService>()));   // the last registration wins: what the authorization handler asks
             });
         });
         client = factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), HandleCookies = false, AllowAutoRedirect = false });
@@ -285,5 +298,169 @@ public class MfaPolicyApiTests : AccessTestBase
         await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.UserId} = @u", ("u", plain.Id));
         var plainToken = await PasswordLogin(plain);
         Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(HttpMethod.Post, "/api/v1/admin/users", plainToken, new { login = "nope1", displayName = "No", password = "New-Passphrase-Strong-3" })).Status);
+    }
+
+    // ---- review of PR 181 by FG (H1, L1, L3, L4)
+
+    /// <summary>A second company administrator of the company: holds every company permission and has NO authenticator.</summary>
+    private Task<UserRecord> PasswordOnlyAdmin(Guid company, string login) => NewAdmin(company, login);
+
+    private async Task<(Guid Company, string AdminToken)> CompanyRequiringMfaOfAll()
+    {
+        var company = await NewCompany();
+        var admin = await NewAdmin(company, "owner" + Guid.NewGuid().ToString("N")[..6]);
+        var (adminToken, _) = await MfaLogin(admin);
+        Assert.Equal(HttpStatusCode.OK, await Select(adminToken, company));
+        Assert.Equal(HttpStatusCode.OK, (await PutPolicy(adminToken, new { policy = "all" })).Status);
+        return (company, adminToken);
+    }
+
+    [PostgresFact]
+    public async Task Racing_company_selection_never_serves_a_requiring_company_to_a_password_only_member_who_holds_permissions()
+    {
+        await StartApi();
+        var (company, _) = await CompanyRequiringMfaOfAll();
+        var racer = await PasswordOnlyAdmin(company, "racer");                                                         // HOLDS the permissions: only the MFA policy stands between this session and the company
+        var token = await PasswordLogin(racer);
+
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var selections = new System.Collections.Concurrent.ConcurrentBag<HttpStatusCode>();
+        var reads = new System.Collections.Concurrent.ConcurrentBag<(string Path, HttpStatusCode Status, string Body)>();
+        async Task SelectLoop() { while (!stop.IsCancellationRequested) selections.Add(await Select(token, company)); }
+        async Task ReadLoop(string path) { while (!stop.IsCancellationRequested) { var r = await SendAsync(HttpMethod.Get, path, token); reads.Add((path, r.Status, r.Body)); } }
+        await Task.WhenAll(
+            Task.Run(SelectLoop), Task.Run(SelectLoop),
+            Task.Run(() => ReadLoop("/api/v1/access/me")), Task.Run(() => ReadLoop("/api/v1/access/me")), Task.Run(() => ReadLoop("/api/v1/access/me")),
+            Task.Run(() => ReadLoop("/api/v1/access/roles")), Task.Run(() => ReadLoop("/api/v1/access/roles")), Task.Run(() => ReadLoop("/api/v1/company/branches")));
+
+        Assert.True(selections.Count >= 20 && reads.Count >= 60, $"too few requests to mean anything: {selections.Count} selections, {reads.Count} reads");
+        Assert.All(selections, st => Assert.Equal(HttpStatusCode.Forbidden, st));
+        Assert.DoesNotContain(reads, r => r.Status == HttpStatusCode.OK);                                              // not once: no permissions, no roles, no company data
+        Assert.DoesNotContain(reads, r => r.Body.Contains(company.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.All(reads.Where(r => r.Path.StartsWith("/api/v1/access/")), r => Assert.Contains(r.Body, new[] { "{\"error\":\"company_not_selected\"}" }));   // the selection was never written, so there is nothing else to answer
+        Assert.Null(await Scalar<object?>($"SELECT (SELECT {S.SelectedCompanyId} FROM {S.Table} WHERE {S.UserId} = @u LIMIT 1)", ("u", racer.Id)) as Guid?);
+    }
+
+    [PostgresFact]
+    public async Task A_request_authorized_for_one_company_is_never_served_for_a_company_selected_after_authorization()
+    {
+        Guid target = Guid.Empty; var armed = 0;
+        AccessService? raw = null;
+        Guid sessionId = Guid.Empty;
+        // between the policy decision and the endpoint, "another request" binds the session to the requiring company (written directly: whatever writer does it, the endpoint must not serve it)
+        wrapEvaluator = inner => new HookedEvaluator(inner, async (user, _) =>
+        {
+            if (Interlocked.Exchange(ref armed, 0) == 1) Assert.True(await raw!.SelectCompanyAsync(sessionId, user, target));
+        });
+        await StartApi();
+        raw = Access;
+        var (requiring, _) = await CompanyRequiringMfaOfAll();
+        var open = await NewCompany();
+        var openAdmin = await NewAdmin(open, "openadmin");
+        var racer = await PasswordOnlyAdmin(requiring, "racer");
+        Ok(await Access.GrantMembershipAsync(openAdmin.Id, open, racer.Login));
+        Ok(await Access.AssignRoleAsync(openAdmin.Id, open, racer.Id, PresetRoles.CompanyAdministratorId, ScopeKind.Company, null));
+        var token = await PasswordLogin(racer);
+        sessionId = await Scalar<Guid>($"SELECT {S.Id} FROM {S.Table} WHERE {S.UserId} = @u", ("u", racer.Id));
+        Assert.Equal(HttpStatusCode.OK, await Select(token, open));
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(HttpMethod.Get, "/api/v1/access/me", token)).Status);
+
+        target = requiring; armed = 1;
+        var raced = await SendAsync(HttpMethod.Get, "/api/v1/access/me", token);
+        Assert.Equal(HttpStatusCode.Conflict, raced.Status);                                                           // judged for the open company, not served for the requiring one
+        Assert.Equal("{\"error\":\"company_selection_changed\"}", raced.Body);
+        Assert.Equal(requiring, await Scalar<Guid>($"SELECT {S.SelectedCompanyId} FROM {S.Table} WHERE {S.Id} = @s", ("s", sessionId)));
+        Assert.Equal("mfa_enrolment_required", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));            // the repeated request is judged for the company the session now has
+
+        // the same with no company selected at authorization
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(HttpMethod.Delete, "/api/v1/session/company", token)).Status);
+        // (no company: the handler asks no policy question, so the seam cannot act; the binding itself is asserted through the database instead)
+        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.Id} = @s", ("s", sessionId));
+        Assert.Equal("company_not_selected", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));
+    }
+
+    [PostgresFact]
+    public async Task A_refused_selection_keeps_the_previous_company_and_a_policy_that_begins_to_require_MFA_refuses_the_next_request_of_a_session_selected_before()
+    {
+        await StartApi();
+        var (requiring, _) = await CompanyRequiringMfaOfAll();
+        var open = await NewCompany();
+        var openAdmin = await NewAdmin(open, "openadmin");
+        var (openAdminToken, _) = await MfaLogin(openAdmin);
+        var member = await PasswordOnlyAdmin(requiring, "member");
+        Ok(await Access.GrantMembershipAsync(openAdmin.Id, open, member.Login));
+        Ok(await Access.AssignRoleAsync(openAdmin.Id, open, member.Id, PresetRoles.CompanyAdministratorId, ScopeKind.Company, null));
+        var token = await PasswordLogin(member);
+
+        Assert.Equal(HttpStatusCode.OK, await Select(token, open));
+        var refused = await SendAsync(HttpMethod.Post, "/api/v1/session/company", token, new { companyId = requiring });
+        Assert.Equal(HttpStatusCode.Forbidden, refused.Status);
+        Assert.Contains("mfa_enrolment_required", refused.Body);
+        var me = await SendAsync(HttpMethod.Get, "/api/v1/access/me", token);
+        Assert.Equal(HttpStatusCode.OK, me.Status);                                                                    // still in the company selected before (review L4): nothing was written and undone
+        Assert.Contains(open.ToString(), me.Body);
+        Assert.DoesNotContain(requiring.ToString(), me.Body);
+
+        // the open company begins to require MFA while the member has it selected: the very next request is refused, and so is selecting it again
+        Assert.Equal(HttpStatusCode.OK, await Select(openAdminToken, open));
+        Assert.Equal(HttpStatusCode.OK, (await PutPolicy(openAdminToken, new { policy = "all" })).Status);
+        Assert.Equal("mfa_enrolment_required", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));
+        Assert.Equal("mfa_enrolment_required", await ErrorOf(HttpMethod.Get, "/api/v1/access/roles", token));
+        Assert.Equal(HttpStatusCode.Forbidden, await Select(token, open));
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(HttpMethod.Get, "/api/v1/companies", token)).Status);         // and the member can still list and leave
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(HttpMethod.Delete, "/api/v1/session/company", token)).Status);
+    }
+
+    [PostgresFact]
+    public async Task A_password_only_session_of_a_user_who_enrolled_afterwards_is_no_session_at_all_so_it_is_never_served_and_never_told_to_enrol()
+    {
+        // review L1 of PR 181, "can such a session exist?": no. AuthService.AuthenticateAsync does not accept a session without the proof once its user is not MFA-free, so the request is
+        // unauthenticated (401, no body) before any policy is asked. The 401 mfa_step_up_required answers of the selection and of the company-policy refusal are defence in depth (unit-tested).
+        await StartApi();
+        var (company, _) = await CompanyRequiringMfaOfAll();
+        var late = await PasswordOnlyAdmin(company, "late");
+        var token = await PasswordLogin(late);                                                                         // a password-only session, issued before the user had an authenticator
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(HttpMethod.Get, "/api/v1/auth/status", token)).Status);
+        var mfa = factory!.Services.GetRequiredService<MfaStore>();
+        Assert.True(await mfa.ActivatePendingAsync(late.Id, await mfa.CreatePendingAsync(late.Id, Totp.GenerateSecret(), null), Step - 10, null));   // enrolled elsewhere; THIS session keeps no proof
+        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", ("u", late.Id)));
+        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = @c WHERE {S.UserId} = @u", ("c", company), ("u", late.Id));   // even with a selection from before the policy
+
+        foreach (var (method, path, body) in new (HttpMethod, string, object?)[] { (HttpMethod.Post, "/api/v1/session/company", new { companyId = company }), (HttpMethod.Get, "/api/v1/access/me", null), (HttpMethod.Get, "/api/v1/company/branches", null) })
+        {
+            var r = await SendAsync(method, path, token, body);
+            Assert.Equal(HttpStatusCode.Unauthorized, r.Status);
+            Assert.DoesNotContain("mfa_enrolment_required", r.Body);
+            Assert.DoesNotContain(company.ToString(), r.Body);
+        }
+    }
+
+    [PostgresFact]
+    public async Task Changing_or_switching_off_the_policy_needs_an_authenticator_of_the_person_doing_it_whether_or_not_the_policy_covers_them()
+    {
+        await StartApi();
+        var company = await NewCompany();
+        var enrolled = await NewAdmin(company, "enrolled");
+        var (enrolledToken, _) = await MfaLogin(enrolled);
+        var passwordOnly = await PasswordOnlyAdmin(company, "pwonly");
+        var auditor = await NewMember(company, enrolled, "auditor");
+        Ok(await Access.AssignRoleAsync(enrolled.Id, company, auditor.Id, PresetRoles.AccessAuditorId, ScopeKind.Company, null));
+        var token = await PasswordLogin(passwordOnly);
+        Assert.Equal(HttpStatusCode.OK, await Select(token, company));
+
+        // a roles policy that does NOT cover the password-only administrator, then switching a policy off: both refused, nothing written
+        foreach (var body in new object[] { new { policy = "roles", roleIds = new[] { PresetRoles.AccessAuditorId } }, new { policy = "off" }, new { policy = "all" } })
+        {
+            var r = await PutPolicy(token, body);
+            Assert.Equal(HttpStatusCode.Conflict, r.Status);
+            Assert.Equal("{\"error\":\"mfa_policy_requires_own_enrolment\"}", r.Body);
+        }
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Hasm.Infrastructure.SystemDatabase.SystemSchema.MfaPolicy.Table}"));
+
+        Assert.Equal(HttpStatusCode.OK, await Select(enrolledToken, company));
+        Assert.Equal(HttpStatusCode.OK, (await PutPolicy(enrolledToken, new { policy = "roles", roleIds = new[] { PresetRoles.AccessAuditorId } })).Status);
+        var off = await PutPolicy(token, new { policy = "off" });                                                      // not covered by the policy, still may not switch it off with a password-only session
+        Assert.Equal(HttpStatusCode.Conflict, off.Status);
+        Assert.Equal(HttpStatusCode.OK, (await PutPolicy(enrolledToken, new { policy = "off" })).Status);
     }
 }

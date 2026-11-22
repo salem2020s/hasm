@@ -3,6 +3,7 @@ using Hasm.Infrastructure.Audit;
 using Npgsql;
 using RA = Hasm.Infrastructure.SystemDatabase.SystemSchema.RoleAssignment;
 using RL = Hasm.Infrastructure.SystemDatabase.SystemSchema.Role;
+using SE = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using P = Hasm.Infrastructure.SystemDatabase.SystemSchema.MfaPolicy;
 using PR = Hasm.Infrastructure.SystemDatabase.SystemSchema.MfaPolicyRole;
 
@@ -15,6 +16,9 @@ public enum CompanyMfaPolicyKind : short { Off = 0, RequiredForRoles = 1, Requir
 public sealed record CompanyMfaPolicy(Guid CompanyId, CompanyMfaPolicyKind Kind, IReadOnlyList<Guid> RoleIds, DateTimeOffset? UpdatedAtUtc, long Revision);
 
 /// <summary>The one question the request pipeline asks: does the selected company's policy require MFA of this user? (an interface so the authorization handler is testable without a database)</summary>
+/// <summary>The answer of the atomic company selection (review H1 of PR 181): only <see cref="Selected"/> wrote the selection; every other answer changed nothing, so the previously selected company stays.</summary>
+public enum CompanySelectionOutcome { Selected, Forbidden, EnrolmentRequired, StepUpRequired }
+
 public interface ICompanyMfaPolicyEvaluator
 {
     Task<bool> RequiresMfaAsync(Guid userId, Guid companyId, CancellationToken ct = default);
@@ -71,6 +75,47 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
         return await RequiresAsync(conn, null, userId, companyId, ct);
     }
 
+    /// <summary>
+    /// One lock per company orders policy changes against company selections (review H1 of PR 181): a selection holds it SHARED for its transaction, a policy change holds it EXCLUSIVE. A selection therefore
+    /// either commits before the change (the session then belongs to "selected before the policy required MFA" and is refused per request by the company-policy requirement) or sees the committed change.
+    /// </summary>
+    private static async Task LockCompanyPolicyAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid companyId, bool exclusive, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand($"SELECT {(exclusive ? "pg_advisory_xact_lock" : "pg_advisory_xact_lock_shared")}(hashtextextended(@k, 41))", conn, tx);
+        cmd.Parameters.AddWithValue("k", "hasm-mfa-policy:" + companyId.ToString("N"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Test-only hook inside the selection transaction, after the policy was evaluated and before the selection is written (never set in production).</summary>
+    internal Func<CancellationToken, Task>? AfterSelectionPolicyCheckForTests { get; set; }
+
+    /// <summary>
+    /// Company selection as ONE decision (review H1 of PR 181): membership, then the company's MFA policy, and the selection is written ONLY when both allow it, in one transaction under the company's
+    /// policy lock. Nothing is ever written and undone, so no request can observe a company the session may not enter, and a refused selection leaves the previously selected company in place.
+    /// The policy is asked only after the membership check, so a company the caller cannot enter reveals nothing about its policy (<see cref="CompanySelectionOutcome.Forbidden"/> also covers an unknown or
+    /// unavailable company and a session that is no longer live). <paramref name="mfaState"/> and <paramref name="mfaVerifiedAtUtc"/> are the session's, as validated on this request.
+    /// </summary>
+    public async Task<CompanySelectionOutcome> SelectCompanyAsync(Guid sessionId, Guid userId, Guid companyId, MfaState mfaState, DateTimeOffset? mfaVerifiedAtUtc, CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (!await AccessService.IsActiveMemberAsync(conn, tx, userId, companyId, ct)) return CompanySelectionOutcome.Forbidden;
+        await LockCompanyPolicyAsync(conn, tx, companyId, exclusive: false, ct);
+        var carriesProof = mfaState != MfaState.None && mfaVerifiedAtUtc is not null;
+        if (!carriesProof && await RequiresAsync(conn, tx, userId, companyId, ct))
+            return mfaState == MfaState.None ? CompanySelectionOutcome.EnrolmentRequired : CompanySelectionOutcome.StepUpRequired;
+        if (AfterSelectionPolicyCheckForTests is { } hook) await hook(ct);
+        await using (var cmd = new NpgsqlCommand($"UPDATE {SE.Table} SET {SE.SelectedCompanyId} = @c WHERE {SE.Id} = @s AND {SE.UserId} = @u AND {SE.RevokedAtUtc} IS NULL", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("c", companyId);
+            cmd.Parameters.AddWithValue("s", sessionId);
+            cmd.Parameters.AddWithValue("u", userId);
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1) return CompanySelectionOutcome.Forbidden;
+        }
+        await tx.CommitAsync(ct);
+        return CompanySelectionOutcome.Selected;
+    }
+
     private static async Task<bool> RequiresAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
@@ -79,6 +124,14 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
         cmd.Parameters.AddWithValue("u", userId);
         cmd.Parameters.AddWithValue("c", companyId);
         return await cmd.ExecuteScalarAsync(ct) is true;
+    }
+
+    /// <summary>The role list in the audit detail (review L2 of PR 181): the count and the first 16 hex characters of the SHA-256 of the sorted role ids, so a change from one set of roles to another
+    /// set of the same size is visible (and comparable with the stored list) without putting up to 100 identifiers into the detail. An empty list is <c>0</c>.</summary>
+    internal static string RoleSetLabel(IEnumerable<Guid> roleIds)
+    {
+        var sorted = roleIds.Select(r => r.ToString("N")).Order(StringComparer.Ordinal).ToList();
+        return sorted.Count == 0 ? "0" : $"{sorted.Count}#{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(string.Join(",", sorted))))[..16].ToLowerInvariant()}";
     }
 
     /// <summary>Test-only hook between the locked revision read and the write (a start barrier for the first-write race; never set in production).</summary>
@@ -101,6 +154,7 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
 
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
+        await LockCompanyPolicyAsync(conn, tx, companyId, exclusive: true, ct);                                       // ordered against company selections (review H1 of PR 181)
         // the policy row is locked from here to the commit: a concurrent change of an existing policy waits and then sees the new revision (412). With no row yet there is nothing to lock; the insert below decides.
         var before = await ReadAsync(conn, tx, companyId, forUpdate: true, ct);
         if (before.Revision != expected) return AccessResult<CompanyMfaPolicy>.Stale(before.Revision);
@@ -113,21 +167,10 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
             if (await cmd.ExecuteScalarAsync(ct) is null) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Invalid, "unknown_role");
         }
 
-        // the lock-out guard: a change that would require MFA of the person making it, while they have no authenticator, is refused (the same rule the policy later applies to everyone)
-        var actorState = await identity.GetMfaStateAsync(actorUserId, ct);
-        if (actorState == MfaState.None && kind != CompanyMfaPolicyKind.Off)
-        {
-            var actorWouldBeRequired = kind == CompanyMfaPolicyKind.RequiredForAll;
-            if (!actorWouldBeRequired)
-            {
-                await using var cmd = new NpgsqlCommand($"SELECT 1 FROM {RA.Table} WHERE {RA.UserId} = @u AND {RA.CompanyId} = @c AND {RA.RevokedAtUtc} IS NULL AND {RA.RoleId} = ANY(@roles)", conn, tx);
-                cmd.Parameters.AddWithValue("u", actorUserId);
-                cmd.Parameters.AddWithValue("c", companyId);
-                cmd.Parameters.AddWithValue("roles", roles.ToArray());
-                actorWouldBeRequired = await cmd.ExecuteScalarAsync(ct) is not null;
-            }
-            if (actorWouldBeRequired) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
-        }
+        // The lock-out guard, strict (review L3 of PR 181, a tightening of D-169): EVERY change of the policy, switching it off included, requires that the person making it has an authenticator,
+        // whether or not the policy covers them. (The route requires a FRESH second factor of an enrolled caller; a caller without an authenticator passes that requirement by D-161 and is refused here.)
+        // So a company can never lock its administrators out by a policy change, and a password-only session can never weaken or switch off a company's MFA policy.
+        if (await identity.GetMfaStateAsync(actorUserId, ct) != MfaState.Enrolled) return AccessResult<CompanyMfaPolicy>.Fail(AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
 
         var now = clock.GetUtcNow();
         var revision = expected + 1;
@@ -161,7 +204,7 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
             await cmd.ExecuteNonQueryAsync(ct);
         }
         var receipt = await audit.AppendAsync(conn, tx, AuditStream.System, AuditCanonical.FromMicros(AuditCanonical.ToMicros(now)),
-            new AuditEventData(MfaAuditEvents.PolicyChanged, actorUserId, null, null, $"company {companyId:N} mfa policy {before.Kind} -> {kind} roles {before.RoleIds.Count} -> {roles.Count} r{revision}"), ct);
+            new AuditEventData(MfaAuditEvents.PolicyChanged, actorUserId, null, null, $"company {companyId:N} mfa policy {before.Kind} -> {kind} roles {RoleSetLabel(before.RoleIds)} -> {RoleSetLabel(roles)} r{revision}"), ct);
         await audit.CommitAsync(tx, receipt, ct);
         return AccessResult<CompanyMfaPolicy>.Ok(new CompanyMfaPolicy(companyId, kind, roles.Order().ToList(), now, revision));
     }

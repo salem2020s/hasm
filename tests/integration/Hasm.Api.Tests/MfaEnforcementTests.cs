@@ -224,6 +224,40 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
 
     // ---- handlers
 
+    [Fact]
+    public async Task The_company_policy_handler_records_the_company_it_judged_whenever_the_decision_depended_on_the_company()
+    {
+        // review H1 of PR 181: the endpoint compares this with the company it reads and refuses when they differ
+        var company = Guid.NewGuid();
+        async Task<object?> Judged(AuthenticatedSession session, bool requires)
+        {
+            var (ctx, http) = Context(new MfaCompanyPolicyRequirement(), session);
+            await new MfaCompanyPolicyHandler(new FakePolicies(requires)).HandleAsync(ctx);
+            return http.Items[MfaEnforcement.EvaluatedCompanyItemKey];
+        }
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(company), await Judged(InCompany(MfaState.None, false, company), requires: false));
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(company), await Judged(InCompany(MfaState.None, false, company), requires: true));
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(null), await Judged(InCompany(MfaState.None, false, null), requires: true));   // "no company" is a judgement too: a company selected afterwards was not judged
+        Assert.Null(await Judged(InCompany(MfaState.Enrolled, true, company), requires: true));                         // carries the proof: every company's policy is satisfied, nothing to bind
+    }
+
+    [Theory]
+    [InlineData(MfaState.None, 403, "mfa_enrolment_required")]
+    [InlineData(MfaState.Enrolled, 401, "mfa_step_up_required")]                                                     // review L1 of PR 181: a user WITH an authenticator steps up, is never told to enrol
+    [InlineData(MfaState.RecoveryRequired, 401, "mfa_step_up_required")]
+    public async Task A_company_policy_refusal_asks_a_user_without_an_authenticator_to_enrol_and_any_other_user_to_step_up(MfaState state, int status, string code)
+    {
+        var (ctx, http) = Context(new MfaCompanyPolicyRequirement(), InCompany(state, false, Guid.NewGuid()));
+        http.User = ctx.User;
+        http.Response.Body = new MemoryStream();
+        http.RequestServices = factory.Services;
+        var failure = AuthorizationFailure.Failed([new MfaCompanyPolicyRequirement(), new MfaVerifiedRequirement()]);
+        await new MfaAuthorizationResultHandler().HandleAsync(_ => Task.CompletedTask, http, new AuthorizationPolicyBuilder().AddRequirements(new MfaCompanyPolicyRequirement()).Build(), PolicyAuthorizationResult.Forbid(failure));
+        Assert.Equal(status, http.Response.StatusCode);
+        http.Response.Body.Position = 0;
+        Assert.Equal(code, JsonDocument.Parse(await new StreamReader(http.Response.Body).ReadToEndAsync()).RootElement.GetProperty("error").GetString());
+    }
+
     private static (AuthorizationHandlerContext Context, HttpContext Http) Context(IAuthorizationRequirement requirement, AuthenticatedSession? session)
     {
         var http = new DefaultHttpContext();

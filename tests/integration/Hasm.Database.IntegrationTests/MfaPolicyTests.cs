@@ -7,6 +7,7 @@ using Ra = Hasm.Infrastructure.SystemDatabase.SystemSchema.RoleAssignment;
 using Ro = Hasm.Infrastructure.SystemDatabase.SystemSchema.Role;
 using Pm = Hasm.Infrastructure.SystemDatabase.SystemSchema.MfaPolicy;
 using Pmr = Hasm.Infrastructure.SystemDatabase.SystemSchema.MfaPolicyRole;
+using Se = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -161,8 +162,10 @@ public class MfaPolicyTests : AccessTestBase
         Assert.Equal(CompanyMfaPolicyKind.Off, Ok(await Policies.GetAsync(admin.Id, company)).Kind);
         Assert.Equal(0L, await PolicyEvents());
 
-        Ok(await Set(admin.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [role]));              // a role the administrator does not hold is fine
-        Ok(await Set(admin.Id, company, CompanyMfaPolicyKind.Off, null));                             // and turning it off is always allowed
+        // strict since review L3 of PR 181: a role the administrator does not hold, and switching the policy off, need the authenticator too
+        Fails(await Set(admin.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [role]), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        Fails(await Set(admin.Id, company, CompanyMfaPolicyKind.Off, null), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        Assert.Equal(0L, await PolicyEvents());
 
         await SetMfaState(admin, 2);                                                                                 // once the administrator has an authenticator the same change is allowed
         Ok(await Set(admin.Id, company, CompanyMfaPolicyKind.RequiredForAll, null));
@@ -229,14 +232,23 @@ public class MfaPolicyTests : AccessTestBase
         var admin = await EnrolledAdmin(company);
         var role = await SeedRole(company, "Needs MFA", "company.items.view");
 
-        // the start barrier holds BOTH racers after they read revision 0 (no row, so nothing is locked) and before either writes: the lost race is deterministic, not probable
-        var gate = new StartBarrier(2, TimeSpan.FromSeconds(30));
-        Policies.AfterRevisionReadForTests = gate.WaitAsync;
+        // With no row there is no row lock, so the per-company policy lock (review H1 of PR 181) is what orders two first writers: the first one holds it while it stays inside the hook, and the
+        // second must not get past the revision read before the first has committed (it then reads revision 1 and stops). Two writers inside the hook at once would be the lost-update window.
+        int inside = 0, mostInside = 0, arrived = 0;
+        Policies.AfterRevisionReadForTests = async ct =>
+        {
+            Interlocked.Increment(ref arrived);
+            var now = Interlocked.Increment(ref inside);
+            int seen; do { seen = mostInside; } while (now > seen && Interlocked.CompareExchange(ref mostInside, now, seen) != seen);
+            await Task.Delay(TimeSpan.FromMilliseconds(600), ct);
+            Interlocked.Decrement(ref inside);
+        };
         var results = await Task.WhenAll(
             Task.Run(() => Policies.SetAsync(admin.Id, company, 0, CompanyMfaPolicyKind.RequiredForAll, null)),
             Task.Run(() => Policies.SetAsync(admin.Id, company, 0, CompanyMfaPolicyKind.RequiredForRoles, [role])));
         Policies.AfterRevisionReadForTests = null;
-        Assert.Equal(2, gate.Arrived);
+        Assert.Equal(1, mostInside);                                                                                  // never two writers between the revision read and the write
+        Assert.Equal(1, arrived);                                                                                     // the loser saw the winner's revision under the lock and wrote nothing
 
         var winner = Assert.Single(results, r => r.IsOk);
         var loser = Assert.Single(results, r => !r.IsOk);
@@ -283,5 +295,109 @@ public class MfaPolicyTests : AccessTestBase
         }
         Assert.Equal(expectedChain, (await PolicyDetails(company)).Select(Transition).ToList());                     // one event per revision, an unbroken before/after chain
         Assert.Equal(7L, await PolicyEvents());
+    }
+
+    // ---- review of PR 181 by FG (H1, L2, L3, L4)
+
+    private Task<Guid?> SelectedCompany(Guid session) => Scalar<object>($"SELECT COALESCE({Se.SelectedCompanyId}::text, '') FROM {Se.Table} WHERE {Se.Id} = @s", ("s", session))
+        .ContinueWith(t => (string)t.Result is { Length: > 0 } text ? Guid.Parse(text) : (Guid?)null);
+
+    [PostgresFact]
+    public async Task Company_selection_is_one_decision_membership_then_policy_and_a_refusal_writes_nothing_and_keeps_the_previous_company()
+    {
+        await Setup();
+        var open = await NewCompany();
+        var requiring = await NewCompany();
+        var admin = await EnrolledAdmin(requiring);
+        var openAdmin = await NewAdmin(open, "openadmin");
+        Ok(await Set(admin.Id, requiring, CompanyMfaPolicyKind.RequiredForAll, null));
+        var member = await NewMember(requiring, admin, "member");
+        Ok(await Access.GrantMembershipAsync(openAdmin.Id, open, member.Login));
+        var outsider = await NewMember(open, openAdmin, "outsider");
+        var session = (await LoginOk(member.Login)).SessionId;
+
+        Assert.Equal(CompanySelectionOutcome.Selected, await Policies.SelectCompanyAsync(session, member.Id, open, MfaState.None, null));
+        Assert.Equal(open, await SelectedCompany(session));
+        Assert.Equal(CompanySelectionOutcome.EnrolmentRequired, await Policies.SelectCompanyAsync(session, member.Id, requiring, MfaState.None, null));
+        Assert.Equal(open, await SelectedCompany(session));                                                           // never written, so never undone: the previous company stays (L4)
+        Assert.Equal(CompanySelectionOutcome.StepUpRequired, await Policies.SelectCompanyAsync(session, member.Id, requiring, MfaState.Enrolled, null));
+        Assert.Equal(open, await SelectedCompany(session));
+        Assert.Equal(CompanySelectionOutcome.Selected, await Policies.SelectCompanyAsync(session, member.Id, requiring, MfaState.Enrolled, Clock.GetUtcNow()));
+        Assert.Equal(requiring, await SelectedCompany(session));
+
+        // membership comes first and reveals nothing about the policy; a foreign session is not written either
+        var outsiderSession = (await LoginOk(outsider.Login)).SessionId;
+        Assert.Equal(CompanySelectionOutcome.Forbidden, await Policies.SelectCompanyAsync(outsiderSession, outsider.Id, requiring, MfaState.None, null));
+        Assert.Equal(CompanySelectionOutcome.Forbidden, await Policies.SelectCompanyAsync(outsiderSession, outsider.Id, Guid.NewGuid(), MfaState.None, null));
+        Assert.Equal(CompanySelectionOutcome.Forbidden, await Policies.SelectCompanyAsync(session, outsider.Id, open, MfaState.None, null));
+        Assert.Null(await SelectedCompany(outsiderSession));
+        Assert.Equal(requiring, await SelectedCompany(session));
+    }
+
+    [PostgresFact]
+    public async Task A_policy_change_waits_for_a_selection_in_progress_so_the_selection_is_either_before_the_change_or_sees_it()
+    {
+        await Setup();
+        var company = await NewCompany();
+        var admin = await EnrolledAdmin(company);
+        var member = await NewMember(company, admin, "member");
+        var session = (await LoginOk(member.Login)).SessionId;
+
+        // the selection has evaluated the policy (Off) and has not written yet: a change to "all" must not complete in between
+        Task<AccessResult<CompanyMfaPolicy>>? change = null;
+        var completedInside = true;
+        Policies.AfterSelectionPolicyCheckForTests = async _ =>
+        {
+            change = Task.Run(async () => await Policies.SetAsync(admin.Id, company, 0, CompanyMfaPolicyKind.RequiredForAll, null));
+            completedInside = await Task.WhenAny(change, Task.Delay(TimeSpan.FromMilliseconds(700))) == change;
+        };
+        Assert.Equal(CompanySelectionOutcome.Selected, await Policies.SelectCompanyAsync(session, member.Id, company, MfaState.None, null));
+        Policies.AfterSelectionPolicyCheckForTests = null;
+        Assert.False(completedInside);                                                                                // the change waited for the selection's transaction
+        Ok(await change!);
+        Assert.Equal(company, await SelectedCompany(session));                                                        // selected BEFORE the policy required MFA ...
+        Assert.True(await Policies.RequiresMfaAsync(member.Id, company));                                             // ... and required from now on: the per-request requirement refuses the next request (API test)
+        Assert.Equal(CompanySelectionOutcome.EnrolmentRequired, await Policies.SelectCompanyAsync(session, member.Id, company, MfaState.None, null));   // and selecting again sees the change
+    }
+
+    [PostgresFact]
+    public async Task Every_policy_change_needs_an_authenticator_of_the_actor_and_the_audit_detail_tells_two_role_sets_of_the_same_size_apart()
+    {
+        await Setup();
+        var company = await NewCompany();
+        var passwordOnly = await NewAdmin(company, "pwonly");
+        var enrolled = await EnrolledAdmin(company);
+        var roleA = await SeedRole(company, "A");
+        var roleB = await SeedRole(company, "B");
+        var roleC = await SeedRole(company, "C");
+
+        // strict guard (review L3): not covered by the policy, or switching it off, makes no difference; nothing is written
+        Fails(await Set(passwordOnly.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [roleA]), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        Fails(await Set(passwordOnly.Id, company, CompanyMfaPolicyKind.Off, null), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        Assert.Equal(0L, await Revision(company));
+        Assert.Equal(0L, await PolicyEvents());
+        foreach (var state in new[] { 1, 3 })                                                                         // enrolment required, recovery required: no authenticator either
+        {
+            var other = await NewAdmin(company, "state" + state);
+            await SetMfaState(other, state == 3 ? 2 : state);
+            if (state == 3) await SetMfaState(other, 3);
+            Fails(await Set(other.Id, company, CompanyMfaPolicyKind.Off, null), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        }
+
+        Ok(await Set(enrolled.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [roleA, roleB]));
+        Ok(await Set(enrolled.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [roleB, roleC]));                   // 2 -> 2 with different roles
+        Ok(await Set(enrolled.Id, company, CompanyMfaPolicyKind.RequiredForRoles, [roleC, roleB]));                   // the same set in another order
+        Fails(await Set(passwordOnly.Id, company, CompanyMfaPolicyKind.Off, null), AccessStatus.Conflict, "mfa_policy_requires_own_enrolment");
+        Ok(await Set(enrolled.Id, company, CompanyMfaPolicyKind.Off, null));
+        var details = await PolicyDetails(company);
+        Assert.Equal(4, details.Count);
+        string ab = MfaPolicyService.RoleSetLabel([roleA, roleB]), bc = MfaPolicyService.RoleSetLabel([roleB, roleC]);
+        Assert.NotEqual(ab, bc);
+        Assert.StartsWith("2#", ab);
+        Assert.Equal(bc, MfaPolicyService.RoleSetLabel([roleC, roleB]));
+        Assert.EndsWith($"mfa policy Off -> RequiredForRoles roles 0 -> {ab} r1", details[0]);
+        Assert.EndsWith($"mfa policy RequiredForRoles -> RequiredForRoles roles {ab} -> {bc} r2", details[1]);        // visible although both sides have two roles (review L2)
+        Assert.EndsWith($"roles {bc} -> {bc} r3", details[2]);
+        Assert.EndsWith($"mfa policy RequiredForRoles -> Off roles {bc} -> 0 r4", details[3]);
     }
 }

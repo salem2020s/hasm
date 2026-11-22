@@ -216,7 +216,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
     }
 
-    private static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
+    internal static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             $"SELECT 1 FROM {M.Table} m JOIN {C.Table} c ON c.{C.Id} = m.{M.CompanyId} JOIN {U.Table} u ON u.{U.Id} = m.{M.UserId} " +
