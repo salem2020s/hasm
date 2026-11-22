@@ -47,11 +47,7 @@ public sealed class EncryptionKeyUsageBuilder(string? activeKeyId)
 }
 
 /// <summary>The live key usage of one registered company (<see cref="Readable"/> false: not Ready, not reachable or its storage not configured; then nothing is known and no key may be retired).</summary>
-public sealed record CompanyKeyUsage(Guid CompanyId, bool Readable, string? Problem, EncryptionKeyUsage Attachments, EncryptionKeyUsage ImportOriginals, EncryptionKeyUsage? CashNumbers = null)
-{
-    /// <summary>The master keys that protect the encrypted cash and bank account numbers of the company (Phase 3.14 S1; the numbers live inside the database, so a key must stay available while any number is protected by it).</summary>
-    public EncryptionKeyUsage Cash => CashNumbers ?? EncryptionKeyUsage.Empty;
-}
+public sealed record CompanyKeyUsage(Guid CompanyId, bool Readable, string? Problem, EncryptionKeyUsage Attachments, EncryptionKeyUsage ImportOriginals, EncryptionKeyUsage CashNumbers);
 
 /// <summary>
 /// The encryption keys that the runs PRESENT in one backup root need: every run on disk, also one the retention plan would delete (it is still there and restorable; review M-FH1 of PR 182).
@@ -101,14 +97,16 @@ public static class EncryptionKeyRetirement
         foreach (var c in companies.Where(c => !c.Readable)) blockers.Add($"company_unreadable:{c.CompanyId:N}:{c.Problem ?? "unknown"}");
         foreach (var c in companies.Where(c => c.Readable && c.Attachments.Unknown > 0)) blockers.Add($"attachment_key_unknown:{c.CompanyId:N}:{c.Attachments.Unknown}");
         foreach (var c in companies.Where(c => c.Readable && c.ImportOriginals.Unknown > 0)) blockers.Add($"import_original_key_unknown:{c.CompanyId:N}:{c.ImportOriginals.Unknown}");
-        foreach (var c in companies.Where(c => c.Readable && c.Cash.Unknown > 0)) blockers.Add($"cash_number_key_unknown:{c.CompanyId:N}:{c.Cash.Unknown}");
+        // fail closed: the cash number usage is REQUIRED for every readable company (a record built without it, or with null, never reads as "no cash usage": the report is incomplete and no key is retirable)
+        foreach (var c in companies.Where(c => c.Readable && c.CashNumbers is null)) blockers.Add($"cash_number_usage_missing:{c.CompanyId:N}");
+        foreach (var c in companies.Where(c => c.Readable && c.CashNumbers is { Unknown: > 0 })) blockers.Add($"cash_number_key_unknown:{c.CompanyId:N}:{c.CashNumbers!.Unknown}");
         if (backups.Count == 0) blockers.Add("no_backup_root");
         foreach (var b in backups.Where(b => !b.InventoryComplete)) blockers.Add($"backup_inventory_incomplete:{b.Problem ?? "unknown"}");
         if (!backupScopeAttested) blockers.Add("backup_scope_not_attested");
 
         var attachments = companies.Where(c => c.Readable).SelectMany(c => c.Attachments.KeyIdsInUse).ToHashSet(StringComparer.Ordinal);
         var imports = companies.Where(c => c.Readable).SelectMany(c => c.ImportOriginals.KeyIdsInUse).ToHashSet(StringComparer.Ordinal);
-        var cash = companies.Where(c => c.Readable).SelectMany(c => c.Cash.KeyIdsInUse).ToHashSet(StringComparer.Ordinal);
+        var cash = companies.Where(c => c.Readable).SelectMany(c => c.CashNumbers?.KeyIdsInUse ?? []).ToHashSet(StringComparer.Ordinal);
         var backed = backups.SelectMany(b => b.EncryptionKeysNeeded).ToHashSet(StringComparer.Ordinal);
         var present = presentKeyIds.ToHashSet(StringComparer.Ordinal);
         var all = new SortedSet<string>(present, StringComparer.Ordinal);

@@ -5,6 +5,7 @@ using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.CompanyConfiguration;
 using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Security;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using CA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount;
 using B = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Branch;
@@ -33,7 +34,7 @@ public sealed class NoCashDocuments : ICashAccountUsageProbe
 /// the invariants too (see the migration): the binding rule, the unique code and general-ledger binding, no removal. This service creates NO journal entry and allocates NO number: it is configuration only (D-214: financial posting
 /// for cash and bank stays closed). The full account number is stored only as an envelope under the key ring; the key ring being unavailable fails the write (nothing is stored in clear).
 /// </summary>
-public sealed class CashAccountService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, EnvelopeEncryptor encryptor, ICashAccountUsageProbe usage, TimeProvider clock)
+public sealed class CashAccountService(CompanyDatabaseResolver resolver, CompanyAuditedTransactions transactions, EnvelopeEncryptor encryptor, ICashAccountUsageProbe usage, TimeProvider clock, ILogger? logger = null)
 {
     private static readonly string Select =
         $"SELECT c.{CA.Id}, c.{CA.Kind}, c.{CA.Code}, c.{CA.NameAr}, c.{CA.NameEn}, c.{CA.BranchId}, c.{CA.AccountId}, c.{CA.Currency}, c.{CA.BankName}, c.{CA.BankBranchName}, c.{CA.NumberTail}, c.{CA.IsActive}, c.{CA.Revision}, c.{CA.CreatedAtUtc}, c.{CA.UpdatedAtUtc}, " +
@@ -45,6 +46,9 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
             : fields is not null ? ConfigResult<CashAccountView>.Invalid(fields) : ConfigResult<CashAccountView>.Fail(status, code_(), currentRevision);
         private string code_() => Message;
     }
+
+    /// <summary>Test seam: runs just before the audit of a FAILED rewrap is written (a throw here makes that audit fail, to prove the failure is logged and the call goes on).</summary>
+    internal Func<CancellationToken, Task>? BeforeFailureAuditForTests { get; set; }
 
     private static string Context(Guid companyId, Guid id) => $"cashaccount:{companyId:N}:{id:N}";
 
@@ -271,8 +275,16 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
             {
                 failed++;
                 var reason = ex is EncryptionUnavailableException e ? e.Code : "authentication_failed";
-                try { await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.NumberRewrapFailed, ActorUserId: actor, SubjectId: id, Detail: $"cash account number rewrap failed id={id:N} reason={reason}"), ct); return true; }, ct); }
-                catch (Exception audit) when (audit is not OperationCanceledException) { /* the failure is counted; the audit of the failure is best effort */ }
+                try
+                {
+                    if (BeforeFailureAuditForTests is { } hook) await hook(ct);
+                    await transactions.ExecuteAsync(companyId, async work => { await work.AppendAuditAsync(new AuditEventData(CashAuditEvents.NumberRewrapFailed, ActorUserId: actor, SubjectId: id, Detail: $"cash account number rewrap failed id={id:N} reason={reason}"), ct); return true; }, ct);
+                }
+                catch (Exception audit) when (audit is not OperationCanceledException)
+                {
+                    // the failure is counted and the call goes on; the audit of the failure is best effort, but its failure is LOGGED (review L3 of PR 206): codes and ids only, never a number, a key or an exception message
+                    logger?.LogError("cash.rewrap.failure_audit_failed account={Account} reason={Reason} error={Error}", id.ToString("N"), reason, audit.GetType().Name);
+                }
             }
         }
         return new CashRewrapOutcome(done, skipped, failed);
