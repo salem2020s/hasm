@@ -1,4 +1,4 @@
--- Migration 0034: the STOCK-PERIOD-DB guard (owner decision D-220, option b). Forward-only and ADDITIVE: one new function and nine new BEFORE INSERT triggers. No table is created or altered, no
+-- Migration 0034: the STOCK-PERIOD-DB guard (owner decision D-220, option b). Forward-only and ADDITIVE: two new functions and eleven new BEFORE INSERT triggers. No table is created or altered, no
 -- existing function, trigger or constraint is replaced, disabled or dropped, nothing is seeded and no existing row is read, validated or modified. Opaque physical names (D-029) generated deterministically by
 -- tools/schema/company-0034-stock-period-guard.cjs (logical dictionary: CompanySchema.StockPeriodGuard.cs). Do not edit by hand: re-run the generator.
 --
@@ -9,7 +9,9 @@
 -- period row FOR SHARE until the end of the transaction, so a concurrent close (which updates the row) waits for the posting, and a posting that waited for a close sees the closed state and is refused.
 -- A posting service already holds that share lock (it calls FiscalPeriodGate before its first insert), so the guard adds no lock and no lock order to any service path.
 -- The function returns NEW unchanged and writes nothing. It is not SECURITY DEFINER and sets no search_path: it runs with the rights of the writer, like every other trigger of this schema.
--- Records without an effective date of their own (cost layers and consumptions, which must reference a cost entry) are not guarded here.
+-- Cost layers and cost consumptions have no date of their own and must reference a cost entry (NOT NULL foreign key): a second function reads the date of the REFERENCED entry (the entry that inserts the
+-- record, written in the same transaction by the engine; never the receipt date of an old layer a consumption draws on) and applies the same check. An id that matches no entry is passed on unchanged so the
+-- foreign key gives its usual refusal. Same properties as above: additive, no lock beyond the share lock, no dynamic SQL, not SECURITY DEFINER.
 
 CREATE FUNCTION f_981674fd() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -19,6 +21,18 @@ BEGIN
     v_date := (to_jsonb(NEW) ->> TG_ARGV[0])::date;
     IF v_date IS NULL THEN RAISE EXCEPTION 'a stock or cost posting needs an effective date'; END IF;
     PERFORM f_a26691bc(v_date, false);
+    RETURN NEW;
+END;
+$$;
+
+-- The date of the referenced cost entry, for the records that carry none.
+CREATE FUNCTION f_92619584() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_date date;
+BEGIN
+    IF TG_NARGS <> 1 THEN RAISE EXCEPTION 'the stock period entry guard needs the name of the cost entry column'; END IF;
+    SELECT e.c_12665ffb INTO v_date FROM t_bc727c1d e WHERE e.c_ed61ae1a = (to_jsonb(NEW) ->> TG_ARGV[0])::bigint;
+    IF v_date IS NOT NULL THEN PERFORM f_a26691bc(v_date, false); END IF;
     RETURN NEW;
 END;
 $$;
@@ -41,3 +55,7 @@ CREATE TRIGGER r_1e9a1dfd BEFORE INSERT ON t_b56b119d FOR EACH ROW EXECUTE FUNCT
 CREATE TRIGGER r_2daa25c7 BEFORE INSERT ON t_d370b1d6 FOR EACH ROW EXECUTE FUNCTION f_981674fd('c_5e337f95');
 -- reversals of negative-stock obligations
 CREATE TRIGGER r_9751bdbe BEFORE INSERT ON t_075e0837 FOR EACH ROW EXECUTE FUNCTION f_981674fd('c_9f7cb668');
+-- cost layers (dated by the cost entry that creates them)
+CREATE TRIGGER r_5150b0a5 BEFORE INSERT ON t_3147676c FOR EACH ROW EXECUTE FUNCTION f_92619584('c_07583c02');
+-- cost consumptions and restorations (dated by the cost entry that records them, not by the consumed layer)
+CREATE TRIGGER r_4277fa33 BEFORE INSERT ON t_6df3b92e FOR EACH ROW EXECUTE FUNCTION f_92619584('c_b17f9a0c');

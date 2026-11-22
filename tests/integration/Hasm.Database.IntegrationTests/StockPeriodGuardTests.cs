@@ -112,14 +112,31 @@ public abstract class StockPeriodGuardTestBase : NegativeStockTestBase
     }
 
     /// <summary>The refusal came from the guard function of this migration (PostgreSQL names the functions on the call stack), with the expected reason.</summary>
-    protected static void AssertGuard(PostgresException? ex, string message, string what)
+    protected static void AssertGuard(PostgresException? ex, string message, string what, string? function = null)
     {
+        function ??= G.FnGuard;
         Assert.True(ex is not null, $"{what}: the insert was accepted");
-        Assert.True(ex!.SqlState == "P0001" && ex.MessageText == message && (ex.Where ?? "").Contains($"function {G.FnGuard}()", StringComparison.Ordinal),
+        Assert.True(ex!.SqlState == "P0001" && ex.MessageText == message && (ex.Where ?? "").Contains($"function {function}()", StringComparison.Ordinal),
             $"{what}: expected the guard's '{message}', got {ex.SqlState} '{ex.MessageText}' at {ex.Where}");
     }
 
-    protected static bool FromGuard(PostgresException? ex) => ex is not null && (ex.Where ?? "").Contains($"function {G.FnGuard}()", StringComparison.Ordinal);
+    protected static bool FromGuard(PostgresException? ex, string? function = null) => ex is not null && (ex.Where ?? "").Contains($"function {function ?? G.FnGuard}()", StringComparison.Ordinal);
+
+    /// <summary>The two records without a date of their own: they reference a cost entry, and the entry's date decides.</summary>
+    protected sealed record Referenced(string Name, string Table, string EntryColumn, string Trigger);
+
+    protected static readonly Referenced[] Refs =
+    [
+        new("cost layer", LY.Table, LY.EntryId, G.TrCostLayer),
+        new("cost consumption", CS.Table, CS.EntryId, G.TrCostConsumption),
+    ];
+
+    /// <summary>A new row copied from an existing one (same cost entry, so same entry date); a layer gets a new id and sequence number, a consumption a new generated id.</summary>
+    protected static string CloneRef(Referenced r) => r.Table == LY.Table
+        ? $"INSERT INTO {r.Table} SELECT (jsonb_populate_record(NULL::{r.Table}, to_jsonb(s) || jsonb_build_object('{LY.Id}', gen_random_uuid(), '{LY.Seq}', 999999999))).* FROM {r.Table} s LIMIT 1"
+        : $"INSERT INTO {r.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT {CS.EntryId}, {CS.LayerId}, 1, 1 FROM {r.Table} LIMIT 1";
+
+    protected static string[] OnlyTheEntryGuard(Referenced r) => [$"ALTER TABLE {r.Table} DISABLE TRIGGER USER", $"ALTER TABLE {r.Table} ENABLE TRIGGER {r.Trigger}"];
 
     protected static string NewCostOperation(string date) =>
         $"INSERT INTO {CO.Table} ({CO.Key}, {CO.Kind}, {CO.RequestHash}, {CO.EffectiveDate}, {CO.CreatedBy}, {CO.CreatedAtUtc}) VALUES ('raw-' || gen_random_uuid(), 1, repeat('a', 64), '{date}', gen_random_uuid(), now())";
@@ -159,6 +176,18 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         // not SECURITY DEFINER, no settings of its own (no search_path clause), plpgsql
         Assert.Equal("false|true|plpgsql", await Sql<string>(
             $"SELECT p.prosecdef::text || '|' || (p.proconfig IS NULL)::text || '|' || l.lanname FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.proname = '{G.FnGuard}'"));
+    }
+
+    [PostgresFact]
+    public async Task The_entry_guard_is_one_function_and_two_enabled_insert_triggers_bound_to_the_cost_entry_column()
+    {
+        await PrepareNegative();
+        var rows = await Sql<string>(
+            "SELECT string_agg(c.relname || '|' || t.tgname || '|' || t.tgenabled::text || '|' || t.tgtype::text || '|' || p.proname || '|' || replace(encode(t.tgargs, 'escape'), '\\000', ''), ';' ORDER BY c.relname) " +
+            $"FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_proc p ON p.oid = t.tgfoid WHERE p.proname = '{G.FnEntryGuard}'");
+        Assert.Equal(string.Join(';', Refs.OrderBy(r => r.Table, StringComparer.Ordinal).Select(r => $"{r.Table}|{r.Trigger}|O|7|{G.FnEntryGuard}|{r.EntryColumn}")), rows);
+        Assert.Equal("false|true|plpgsql", await Sql<string>(
+            $"SELECT p.prosecdef::text || '|' || (p.proconfig IS NULL)::text || '|' || l.lanname FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.proname = '{G.FnEntryGuard}'"));
     }
 
     [PostgresTheory]
@@ -429,7 +458,7 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         "UNION ALL SELECT 'grant|' || table_name || '|' || grantee || '|' || privilege_type FROM information_schema.role_table_grants WHERE table_schema = 'public') s(x)";
 
     [PostgresFact]
-    public async Task The_migration_only_adds_its_function_and_its_nine_triggers_and_leaves_every_existing_object_byte_identical()
+    public async Task The_migration_only_adds_its_two_functions_and_its_eleven_triggers_and_leaves_every_existing_object_byte_identical()
     {
         await StartCompanies();
         var all = MigrationScript.LoadEmbeddedCompany();
@@ -443,8 +472,12 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         var after = (await InCompany<string>(legacy.PhysicalDatabaseName, Catalog)).Split('\n');
         Assert.Empty(before.Except(after));                                                           // nothing that existed changed or disappeared: functions, triggers, constraints, indexes, columns, grants
         var added = after.Except(before).ToList();
-        Assert.Equal(10, added.Count);
+        Assert.Equal(13, added.Count);
         Assert.Single(added, a => a.StartsWith($"function|{G.FnGuard}()|", StringComparison.Ordinal));
+        Assert.Single(added, a => a.StartsWith($"function|{G.FnEntryGuard}()|", StringComparison.Ordinal));
+        foreach (var r in Refs)
+            Assert.Single(added, a => a.StartsWith($"trigger|{r.Table}|{r.Trigger}|O|", StringComparison.Ordinal)
+                && a.EndsWith($"BEFORE INSERT ON public.{r.Table} FOR EACH ROW EXECUTE FUNCTION {G.FnEntryGuard}('{r.EntryColumn}')", StringComparison.Ordinal));
         foreach (var g in All)
             Assert.Single(added, a => a.StartsWith($"trigger|{g.Table}|{g.Trigger}|O|", StringComparison.Ordinal)
                 && a.EndsWith($"BEFORE INSERT ON public.{g.Table} FOR EACH ROW EXECUTE FUNCTION {G.FnGuard}('{g.DateColumn}')", StringComparison.Ordinal));
@@ -467,7 +500,9 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
 
         // Back to the database as it was before this migration, history included: the migration created exactly these objects and its journal row.
         foreach (var g in All) await Sql($"DROP TRIGGER {g.Trigger} ON {g.Table}");
+        foreach (var r in Refs) await Sql($"DROP TRIGGER {r.Trigger} ON {r.Table}");
         await Sql($"DROP FUNCTION {G.FnGuard}()");
+        await Sql($"DROP FUNCTION {G.FnEntryGuard}()");
         await Sql($"DELETE FROM {SystemSchema.MigrationJournalTable} WHERE version = {mine.Version}");
         await using var owner = await Owner();
         var entry = All.Single(g => g.Table == EN.Table);
@@ -479,32 +514,74 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         foreach (var g in All) AssertGuard(await Attempt(owner, [.. OnlyTheGuard(g), Clone(g, "2026-03-10")]), FinalMessage, $"{g.Name} after the upgrade");
     }
 
-    // ---------------------------------------------------------------- documented limit
+    // ---------------------------------------------------------------- cost layers and consumptions (dated by their cost entry)
 
-    [PostgresFact]
-    public async Task Documented_limit_layers_and_consumptions_carry_no_date_and_are_not_guarded_but_cannot_exist_without_a_cost_entry()
+    private async Task CloseMarch(bool final)
     {
-        await Populate();
         var march = await March();
         var soft = Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
-        Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));
+        if (final) Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));
+    }
+
+    [PostgresFact]
+    public async Task A_new_layer_or_consumption_follows_the_period_of_its_cost_entry_and_is_refused_once_that_period_is_closed()
+    {
+        await Populate();
         await using var owner = await Owner();
+        foreach (var r in Refs) Assert.True(await Sql<long>($"SELECT count(*) FROM {r.Table}") > 0, $"{r.Name}: no row to copy");
+        foreach (var r in Refs) Assert.Null(await Attempt(owner, CloneRef(r)));                      // the entry's period (March) is Open: accepted
 
-        // Neither table has a date column or a guard trigger...
-        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid WHERE p.proname = '{G.FnGuard}' AND t.tgrelid IN ('{LY.Table}'::regclass, '{CS.Table}'::regclass)"));
-        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM information_schema.columns WHERE table_name IN ('{LY.Table}', '{CS.Table}') AND data_type = 'date'"));
-        // ...and both must reference a cost entry, which is guarded: without one they are refused by their foreign key.
-        var noEntry = await Attempt(owner, $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT 9223372036854775807, {LY.Id}, 1, 1 FROM {LY.Table} LIMIT 1");
-        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, noEntry?.SqlState);
+        await CloseMarch(final: false);
+        foreach (var r in Refs)
+        {
+            var before = await Sql<long>($"SELECT count(*) FROM {r.Table}");
+            AssertGuard(await Attempt(owner, [.. OnlyTheEntryGuard(r), CloneRef(r)]), SoftMessage, $"{r.Name} of an entry in a Soft Closed period", G.FnEntryGuard);
+            AssertGuard(await Attempt(owner, CloneRef(r)), SoftMessage, $"{r.Name} of an entry in a Soft Closed period, every trigger on", G.FnEntryGuard);
+            Assert.Equal(before, await Sql<long>($"SELECT count(*) FROM {r.Table}"));
+        }
+        var march = await March();
+        var final = Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
+        foreach (var r in Refs) AssertGuard(await Attempt(owner, CloneRef(r)), FinalMessage, $"{r.Name} of an entry in a Final Closed period", G.FnEntryGuard);
+
+        // the exceptional reopening lands in Soft Closed (still refused), the routine reopening makes it Open (accepted again)
+        var requester = await NewAdminOf(Company);
+        var approver = await NewAdminOf(Company);
+        var request = Ok(await Calendar.RequestPeriodReopenAsync(requester.Id, Company.Id, final.Id, final.Revision, new ReasonInput("Correction approved by finance")));
+        Ok(await Calendar.ApproveRequestAsync(approver.Id, Company.Id, request.Id, request.Revision, true));
+        var reopened = await March();
+        foreach (var r in Refs) AssertGuard(await Attempt(owner, CloneRef(r)), SoftMessage, $"{r.Name} after the exceptional reopening", G.FnEntryGuard);
+        Ok(await Calendar.ReopenAsync(Admin.Id, Company.Id, reopened.Id, reopened.Revision));
+        foreach (var r in Refs) Assert.Null(await Attempt(owner, CloneRef(r)));
+    }
+
+    [PostgresFact]
+    public async Task Mutation_proof_without_the_entry_guard_trigger_layers_and_consumptions_of_a_closed_entry_are_accepted()
+    {
+        await Populate();
+        await CloseMarch(final: true);
+        await using var owner = await Owner();
+        foreach (var r in Refs)
+        {
+            Assert.Null(await Attempt(owner, $"ALTER TABLE {r.Table} DISABLE TRIGGER {r.Trigger}", CloneRef(r)));       // the old state: the closed period is not noticed
+            Assert.Null(await Attempt(owner, $"ALTER TABLE {r.Table} DISABLE TRIGGER USER", CloneRef(r)));
+            AssertGuard(await Attempt(owner, CloneRef(r)), FinalMessage, $"{r.Name} with the guard back on", G.FnEntryGuard);
+        }
+    }
+
+    [PostgresFact]
+    public async Task A_layer_or_consumption_without_a_cost_entry_still_ends_at_its_own_constraint_and_an_issue_in_an_open_period_may_draw_on_a_layer_of_a_closed_one()
+    {
+        await Populate();
+        await using var owner = await Owner();
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, (await Attempt(owner, $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT 9223372036854775807, {LY.Id}, 1, 1 FROM {LY.Table} LIMIT 1"))?.SqlState);
         Assert.Equal(PostgresErrorCodes.NotNullViolation, (await Attempt(owner, $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT NULL, {LY.Id}, 1, 1 FROM {LY.Table} LIMIT 1"))?.SqlState);
-
-        // THE LIMIT: plain SQL can still attach a new consumption to an EXISTING entry of a period that has since been closed. The services never do
-        // (they write a consumption only together with its own new entry); a statement like this one is accepted by the database today.
-        var attached = await Attempt(owner, $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}) SELECT {LY.EntryId}, {LY.Id}, 1, 1 FROM {LY.Table} LIMIT 1");
-        Assert.Null(attached);
-        // the same for a new cost layer attached to an existing entry (the layer table has no date and no insert trigger either)
-        var layer = await Attempt(owner, $"INSERT INTO {LY.Table} SELECT (jsonb_populate_record(NULL::{LY.Table}, to_jsonb(s) || jsonb_build_object('{LY.Id}', gen_random_uuid(), '{LY.Seq}', 999999999))).* FROM {LY.Table} s LIMIT 1");
-        Assert.Null(layer);
+        Assert.Equal(PostgresErrorCodes.NotNullViolation, (await Attempt(owner, $"INSERT INTO {LY.Table} SELECT (jsonb_populate_record(NULL::{LY.Table}, to_jsonb(s) || jsonb_build_object('{LY.Id}', gen_random_uuid(), '{LY.Seq}', 999999999, '{LY.EntryId}', NULL))).* FROM {LY.Table} s LIMIT 1"))?.SqlState);
+        // The engine draws an issue on a layer received in an earlier period and records it with its own new entry: the consumption is dated by that entry (Open), never by the old layer.
+        await CloseMarch(final: true);
+        var issue = await Approved(Issue(W1, "2026-04-10", L(Fifo2, Pcs, 2)));
+        Ok(await Post(issue));
+        Assert.True(await Sql<long>($"SELECT count(*) FROM {CS.Table} c JOIN {EN.Table} e ON e.{EN.Id} = c.{CS.EntryId} JOIN {LY.Table} l ON l.{LY.Id} = c.{CS.LayerId} JOIN {EN.Table} le ON le.{EN.Id} = l.{LY.EntryId} " +
+            $"WHERE e.{EN.EffectiveDate} = '2026-04-10' AND le.{EN.EffectiveDate} < '2026-04-01'") > 0, "no consumption of a layer of the closed March was written by the April issue");
     }
 }
 
@@ -550,6 +627,21 @@ public class StockPeriodGuardRuntimeRoleTests : StockPeriodGuardTestBase
         }
         Assert.Null(await Attempt(runtime, NewCostOperation("2026-03-15")));
         AssertGuard(await Attempt(runtime, NewCostOperation(SoftDate)), SoftMessage, "new cost operation as the runtime role");
+    }
+
+    [PostgresRoleFact]
+    public async Task With_the_runtime_roles_own_rights_layers_and_consumptions_follow_the_period_of_their_cost_entry()
+    {
+        await Populate();
+        await using var runtime = await AsRuntime();
+        foreach (var r in Refs) Assert.Null(await Attempt(runtime, CloneRef(r)));                    // Open: accepted with the role's own insert right and its right to read the entry
+        var march = await March();
+        var soft = Ok(await Calendar.SoftCloseAsync(Admin.Id, Company.Id, march.Id, march.Revision));
+        foreach (var r in Refs) AssertGuard(await Attempt(runtime, CloneRef(r)), SoftMessage, $"{r.Name} as the runtime role, Soft Closed", G.FnEntryGuard);
+        Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));
+        foreach (var r in Refs) AssertGuard(await Attempt(runtime, CloneRef(r)), FinalMessage, $"{r.Name} as the runtime role, Final Closed", G.FnEntryGuard);
+        foreach (var r in Refs)
+            Assert.Equal("42501", (await Attempt(runtime, $"ALTER TABLE {r.Table} DISABLE TRIGGER {r.Trigger}"))?.SqlState);   // the role cannot switch the trigger off
     }
 
     [PostgresRoleFact]
