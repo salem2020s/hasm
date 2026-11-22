@@ -54,7 +54,7 @@ public class PlanExecutionPlanTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N03_an_execution_needs_a_plan_approved_by_someone_independent_of_the_plan_and_of_the_event_document_and_is_never_run_by_the_creator()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         await ReceiveDoc(Avg, 10m, 100m, "2026-03-10");
         // the event document: created by the administrator, edited by a second user, submitted by a third, approved by a fourth
         var editor = (await Member([PermissionCatalog.Codes.StockDocsView, PermissionCatalog.Codes.StockDocsUpdate], ScopeKind.Company, null)).User;
@@ -141,7 +141,7 @@ public class PlanExecutionPlanTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N05_update_delete_and_truncate_are_refused_on_every_new_table_for_the_runtime_role_and_for_the_owner()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var s = await SimpleEpoch();
         // every new table holds at least one row: a plan line and a plan event are written with a second plan, a journal row with the execution
         s.Script.After("execution", "journal", $"INSERT INTO {CJ.Table} ({CJ.ExecutionId}, {CJ.BucketNo}, {CJ.JournalEntryId}) VALUES ('{s.Plan.Execution}', 1, '{s.Receipt.JournalEntryId}')");
@@ -194,7 +194,7 @@ public class PlanExecutionPlanTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task N32_the_closure_cannot_be_widened_after_the_creating_transaction_and_a_changed_closure_fails_the_hash_at_approval_and_at_execution()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         await ReceiveDoc(Avg, 10m, 100m, "2026-03-10"); await ReceiveDoc(Avg, 5m, 50m, "2026-03-12", W2);
         const string with = "the closure and the lines of a compensation plan are written with the plan, in its creating transaction";
         var p = await ProposedPlan(Avg, "2026-03-11");

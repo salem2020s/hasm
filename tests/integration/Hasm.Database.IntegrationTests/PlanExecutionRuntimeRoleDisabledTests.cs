@@ -27,7 +27,7 @@ public class PlanExecutionRuntimeRoleDisabledTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task The_runtime_role_holds_select_only_on_the_four_execution_tables_and_every_insert_is_refused_with_42501()
     {
-        await PrepareRuntime(executorGrant: false);
+        await PrepareRuntime();
         await using var conn = await AsRuntime();
         foreach (var table in ExecutionTables)
         {
@@ -50,7 +50,7 @@ public class PlanExecutionRuntimeRoleDisabledTests : PlanExecutionTestBase
     [PostgresRoleFact]
     public async Task A_complete_well_formed_epoch_written_by_the_runtime_role_is_refused_and_nothing_persists()
     {
-        await PrepareRuntime(executorGrant: false);
+        await PrepareRuntime();
         var s = await SimpleEpoch();          // an approved plan (written by the runtime role: that grant exists) and the complete script of a valid execution, audit event included
         var before = (await Rows(CX.Table), await Rows(EM.Table), await Rows(EL.Table), await Digest(CompanySchema.CostEntry.Table), await Digest(CompanySchema.CostOperation.Table), await Digest(CompanySchema.StockPosting.Table));
         var outcome = await Run(s.Script);

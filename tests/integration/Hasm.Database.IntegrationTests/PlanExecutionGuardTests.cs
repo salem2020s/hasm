@@ -21,7 +21,7 @@ public class PlanExecutionGuardTests : PlanExecutionTestBase
     /// <summary>AVG1 in W1: 10 for 100.00 on 10 March, issue of 4 on 12 March; and 5 for 50.00 in W2 on 12 March. Every position's last date is 12 March.</summary>
     private async Task<(Guid ReceiptOp, long ReceiptEntry, long IssueEntry)> History()
     {
-        await PrepareRuntime();
+        await PrepareRuntime(executorGrant: true);   // writes execution rows by SQL as the runtime role (a database rule against a writer that CAN insert): needs the test-only executor grant
         var r = await ReceiveDoc(Avg, 10m, 100m, "2026-03-10");
         var i = await IssueDoc(Avg, 4m, "2026-03-12");
         await ReceiveDoc(Avg, 5m, 50m, "2026-03-12", W2);
