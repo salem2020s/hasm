@@ -247,6 +247,27 @@ public class BackupRetentionTests : PostgresTestBase
     }
 
     [PostgresFact]
+    public async Task The_key_retirement_report_keeps_a_key_that_protects_a_stored_bank_account_number()
+    {
+        // Phase 3.14 S1: the encrypted cash and bank account numbers live INSIDE the company database, so the key that wraps one is needed exactly like an attachment key
+        await Init();
+        var c = await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");
+        var clock = new Clock();
+        await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));                                     // the run is taken BEFORE the number exists: only the live scan can know it
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-1", "1101", "k0"));
+        var service = RetirementReport(clock);
+        var report = await service.ReportAsync(FileKekRing.ListKeyIds(Keys), "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(report.Complete, string.Join("; ", report.Blockers));
+        Assert.Equal(["needed_by_cash_numbers"], report.Keys.Single(k => k.KeyId == "k0").Reasons);
+        Assert.Empty(report.Keys.Where(k => k.Retirable));                                                              // k0 is held by the number, k1 is active
+        // rewrapped (or removed) the number no longer needs k0: the same report then frees it
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), $"UPDATE {Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount.Table} SET {Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount.NumberKeyId} = 'k1', {Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount.Revision} = {Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashAccount.Revision} + 1");
+        var after = await service.ReportAsync(FileKekRing.ListKeyIds(Keys), "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.Equal(["k0"], after.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+    }
+
+    [PostgresFact]
     public async Task The_key_retirement_report_is_complete_only_over_a_real_complete_verified_run_and_with_the_scope_attested()
     {
         // D-181 positive case (review H1 of PR 182): a real encrypted run whose signed status verifies, every company readable, the scope attested

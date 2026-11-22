@@ -217,6 +217,23 @@ export interface WarehousesResponse {
   can: { create: boolean; activate: boolean; update: string[] };
 }
 
+/** A cashbox or a bank account (Phase 3.14 S1). The full bank account number is never part of this record: only `accountNumberMasked` (four asterisks and the last four characters); the full number is fetched separately by those who hold the sensitive permission. */
+export type CashAccountKind = "cashbox" | "bank";
+export interface CashAccountGl { id: string; code: string; nameAr: string | null; nameEn: string | null }
+export interface CashAccount {
+  id: string; kind: CashAccountKind; code: string; nameAr: string | null; nameEn: string | null; branchId: string; accountId: string; account: CashAccountGl; currency: string;
+  bankName: string | null; bankBranchName: string | null; accountNumberMasked: string | null; hasAccountNumber: boolean; isActive: boolean; revision: number; createdAtUtc: string; updatedAtUtc: string;
+}
+/** `accountNumber` is the FULL number when one is being set; omit it, or send the masked form back, to leave the stored number as it is. */
+export interface CashAccountInput { kind?: CashAccountKind; code?: string; nameAr: string | null; nameEn: string | null; branchId: string; accountId: string; bankName: string | null; bankBranchName: string | null; accountNumber?: string | null }
+export interface CashAccountsResponse {
+  accounts: CashAccount[];
+  branches: WarehouseBranchRef[];
+  /** The branch ids the caller may act on, per action. The server authorizes every action again; this only shows or hides controls. */
+  can: { create: string[]; update: string[]; activate: string[]; revealNumber: string[] };
+}
+export interface CashGlCandidates { accounts: CashAccountGl[]; total: number }
+
 export type FiscalPeriodStatus = "open" | "soft_closed" | "final_closed";
 export interface FiscalPeriod {
   id: string;
@@ -1053,6 +1070,16 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
       request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/deactivate`, { body: newMainId ? { newMainId } : {}, ifMatch: revision }),
     activateBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/activate`, { ifMatch: revision }),
     makeMainBranch: (id: string, revision: number) => request<Branch>("POST", `/api/v1/company/branches/${enc(id)}/make-main`, { ifMatch: revision }),
+    // Cash and bank accounts (Phase 3.14 S1): the revision is sent as If-Match; the server enforces every rule (branch scope, binding, base currency, encryption of the bank number).
+    listCashAccounts: () => get<CashAccountsResponse>("/api/v1/company/cash-accounts"),
+    getCashAccount: (id: string) => get<CashAccount>(`/api/v1/company/cash-accounts/${enc(id)}`),
+    createCashAccount: (account: CashAccountInput) => request<CashAccount>("POST", "/api/v1/company/cash-accounts", { body: account }),
+    updateCashAccount: (id: string, account: CashAccountInput, revision: number) => request<CashAccount>("PUT", `/api/v1/company/cash-accounts/${enc(id)}`, { body: account, ifMatch: revision }),
+    deactivateCashAccount: (id: string, revision: number) => request<CashAccount>("POST", `/api/v1/company/cash-accounts/${enc(id)}/deactivate`, { ifMatch: revision }),
+    activateCashAccount: (id: string, revision: number) => request<CashAccount>("POST", `/api/v1/company/cash-accounts/${enc(id)}/activate`, { ifMatch: revision }),
+    /** The FULL number (audited on the server; needs the sensitive permission on the branch). Keep it in memory only and for as short a time as possible. */
+    revealCashAccountNumber: (id: string) => get<{ accountNumber: string }>(`/api/v1/company/cash-accounts/${enc(id)}/account-number`),
+    listCashGlCandidates: (search: string, limit = 20) => get<CashGlCandidates>(`/api/v1/company/cash-accounts/gl-candidates?limit=${limit}${search.trim() ? `&search=${enc(search.trim())}` : ""}`),
     // Warehouse management (Phase 3.1C). Same conventions as branches: the warehouse revision is sent as If-Match; the server enforces every rule.
     listWarehouses: () => get<WarehousesResponse>("/api/v1/company/warehouses"),
     getWarehouse: (id: string) => get<Warehouse>(`/api/v1/company/warehouses/${enc(id)}`),

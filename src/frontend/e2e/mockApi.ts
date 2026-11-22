@@ -21,7 +21,7 @@ const ACCOUNTS = [
   { ...baseAccount, id: "a1", code: "1101", nameAr: "الصندوق", nameEn: "Cash", type: "asset" },
   { ...baseAccount, id: "a2", code: "4101", nameAr: "المبيعات", nameEn: "Sales", type: "revenue", nature: "credit", statement: "profit_and_loss" },
 ];
-const FULL = ["company.profile.view", "company.settings.view", "company.currencies.view", "company.config.view", "company.accounts.view", "company.accounts.create", "company.journal.view", "company.journal.create", "company.branches.view", "access.mfapolicy.view", "access.mfapolicy.update"];
+const FULL = ["company.profile.view", "company.settings.view", "company.currencies.view", "company.config.view", "company.accounts.view", "company.accounts.create", "company.journal.view", "company.journal.create", "company.branches.view", "access.mfapolicy.view", "access.mfapolicy.update", "company.cashaccounts.view", "company.cashaccounts.create", "company.cashaccounts.update", "company.cashaccounts.activate", "company.cashaccountssensitive.view"];
 const COMPANIES = [
   { id: "c1", nameAr: "شركة الأمل", nameEn: "Amal Co", permissions: FULL },
   { id: "c2", nameAr: "شركة محدودة", nameEn: "Limited Co", permissions: ["company.profile.view"] },     // no accounts or journal permission: the forbidden screens
@@ -38,6 +38,10 @@ export class MockApi {
   /** The company MFA policy (stand-in for GET/PUT /access/mfa-policy: revision 0 = nothing stored). Only the optimistic-concurrency contract is mimicked: 428 without If-Match, 400 for a malformed one, 412 with the current revision. */
   private policy = { policy: "off", roleIds: [] as string[], revision: 0, updatedAtUtc: null as string | null };
   readonly policyWrites: { body: Record<string, unknown>; ifMatch: string | undefined }[] = [];
+  /** Cash and bank accounts (stand-in for /company/cash-accounts, Phase 3.14 S1). The full number lives only here and is returned only by the reveal route; every list and record carries the masked form. */
+  private cash: { id: string; kind: string; code: string; nameAr: string | null; nameEn: string | null; branchId: string; accountId: string; bankName: string | null; bankBranchName: string | null; number: string | null; isActive: boolean; revision: number }[] = [];
+  readonly cashCreated: Record<string, unknown>[] = [];
+  readonly cashReveals: string[] = [];
   private entries: { entry: Record<string, unknown>; lines: unknown[] }[] = [];
 
   constructor(readonly mode: Mode) {}
@@ -129,6 +133,37 @@ export class MockApi {
       if (Number(expected[1]) !== this.policy.revision) return this.json(route, 412, { error: "revision_conflict", currentRevision: this.policy.revision });
       this.policy = { policy: input.policy, roleIds: input.roleIds ?? [], revision: this.policy.revision + 1, updatedAtUtc: "2026-11-21T10:00:00Z" };
       return this.json(route, 200, this.policy, { etag: `"${this.policy.revision}"` });
+    }
+    const cashBody = (c: (typeof this.cash)[number]) => {
+      const gl = this.accounts.find((a) => a["id"] === c.accountId) as Record<string, unknown> | undefined;
+      return { id: c.id, kind: c.kind, code: c.code, nameAr: c.nameAr, nameEn: c.nameEn, branchId: c.branchId, accountId: c.accountId, account: { id: c.accountId, code: gl?.["code"], nameAr: gl?.["nameAr"], nameEn: gl?.["nameEn"] }, currency: "JOD",
+        bankName: c.bankName, bankBranchName: c.bankBranchName, accountNumberMasked: c.number ? `****${c.number.slice(-4)}` : null, hasAccountNumber: !!c.number, isActive: c.isActive, revision: c.revision, createdAtUtc: "2026-11-21T10:00:00Z", updatedAtUtc: "2026-11-21T10:00:00Z" };
+    };
+    if (path === "/api/v1/company/cash-accounts" && method === "GET") {
+      if (!can("company.cashaccounts.view")) return this.json(route, 403, { error: "forbidden" });
+      return this.json(route, 200, { accounts: this.cash.map(cashBody), branches: [{ id: "b1", code: "MAIN", nameAr: "الرئيسي", nameEn: "Main", isActive: true }], can: { create: ["b1"], update: ["b1"], activate: ["b1"], revealNumber: can("company.cashaccountssensitive.view") ? ["b1"] : [] } });
+    }
+    if (path === "/api/v1/company/cash-accounts/gl-candidates" && method === "GET") {
+      if (!can("company.cashaccounts.create")) return this.json(route, 403, { error: "forbidden" });
+      const free = (this.accounts as Record<string, unknown>[]).filter((a) => a["type"] === "asset" && !this.cash.some((c) => c.accountId === a["id"]));
+      return this.json(route, 200, { accounts: free.map((a) => ({ id: a["id"], code: a["code"], nameAr: a["nameAr"], nameEn: a["nameEn"] })), total: free.length });
+    }
+    if (path === "/api/v1/company/cash-accounts" && method === "POST") {
+      if (!can("company.cashaccounts.create")) return this.json(route, 403, { error: "forbidden" });
+      const input = JSON.parse(request.postData() ?? "{}") as Record<string, string | null>;
+      this.cashCreated.push(input);
+      const number = typeof input["accountNumber"] === "string" ? input["accountNumber"].replace(/[\s-]/g, "").toUpperCase() : null;
+      const created = { id: `ca${this.cash.length + 1}`, kind: String(input["kind"]), code: String(input["code"]), nameAr: input["nameAr"] ?? null, nameEn: input["nameEn"] ?? null, branchId: String(input["branchId"]), accountId: String(input["accountId"]), bankName: input["bankName"] ?? null, bankBranchName: input["bankBranchName"] ?? null, number, isActive: true, revision: 1 };
+      this.cash.push(created);
+      return this.json(route, 201, cashBody(created), { etag: '"1"' });
+    }
+    const reveal = /^\/api\/v1\/company\/cash-accounts\/([^/]+)\/account-number$/.exec(path);
+    if (reveal && method === "GET") {
+      if (!can("company.cashaccountssensitive.view")) return this.json(route, 403, { error: "forbidden" });
+      const c = this.cash.find((x) => x.id === reveal[1]);
+      if (!c?.number) return this.json(route, 404, { error: "cash_account_number_not_set" });
+      this.cashReveals.push(c.id);
+      return this.json(route, 200, { accountNumber: c.number }, { "cache-control": "no-store" });
     }
     if (path === "/api/v1/company/accounts" && method === "GET") {
       if (!can("company.accounts.view")) return this.json(route, 403, { error: "forbidden" });

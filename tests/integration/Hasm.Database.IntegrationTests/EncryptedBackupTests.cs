@@ -132,6 +132,18 @@ public class EncryptedBackupTests : PostgresTestBase
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
 
     [PostgresFact]
+    public async Task The_key_inventory_of_an_encrypted_set_includes_the_keys_of_encrypted_cash_numbers()
+    {
+        await Init();
+        var (c, _) = await NewCompany();
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-1", "1101", "k1"));
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-9", "1102", "k9"));
+        var backup = await Companies().BackupCompanyEncryptedAsync(c.Id, Path.Combine(work, "set-cash"), Material());
+        Assert.Equal(new[] { "k1", "k9" }, backup.Manifest.Company!.KeyIdsRequired);
+        Assert.Equal(new[] { "k9" }, backup.MissingKeyIds);
+    }
+
+    [PostgresFact]
     public async Task An_encrypted_run_holds_no_plaintext_and_its_signed_status_needs_a_recovery_test()
     {
         await Init();
