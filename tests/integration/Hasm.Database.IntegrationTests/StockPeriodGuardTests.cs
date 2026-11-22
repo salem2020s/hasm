@@ -493,7 +493,12 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         Ok(await Calendar.FinalCloseAsync(Admin.Id, Company.Id, march.Id, soft.Revision));              // every stock row of this company now lies in a Final Closed period
         var all = MigrationScript.LoadEmbeddedCompany();
         var mine = all.Single(s => s.Sql.Contains($"CREATE FUNCTION {G.FnGuard}()", StringComparison.Ordinal));
-        // the guard need not be the newest migration: only its own journal row is removed below and re-applied; later migrations stay applied (the cash migration 0035 follows it)
+        // The guard is identified by its generated content AND its number; it need not be the newest migration (later ones, like the cash migration 0035, stay applied). This replaces the earlier check that it IS the newest:
+        // what that check protected is that the state rebuilt below is exactly "before the guard", so the journal is now compared migration by migration.
+        Assert.Equal(34, mine.Version);
+        async Task<string> Journal() => await Sql<string>($"SELECT string_agg(version::text, ',' ORDER BY version) FROM {SystemSchema.MigrationJournalTable}");
+        var everyVersion = string.Join(',', all.Select(s => s.Version).Order());
+        Assert.Equal(everyVersion, await Journal());                                                  // a provisioned company has every migration in its journal
 
         async Task<string> Fingerprint() => string.Join(';', await Task.WhenAll(All.Select(g => Sql<string>($"SELECT count(*)::text || ':' || coalesce(md5(string_agg(t::text, '|' ORDER BY t::text)), '') FROM {g.Table} t"))));
         var before = await Fingerprint();
@@ -504,12 +509,14 @@ public class StockPeriodGuardTests : StockPeriodGuardTestBase
         await Sql($"DROP FUNCTION {G.FnGuard}()");
         await Sql($"DROP FUNCTION {G.FnEntryGuard}()");
         await Sql($"DELETE FROM {SystemSchema.MigrationJournalTable} WHERE version = {mine.Version}");
+        Assert.Equal(string.Join(',', all.Select(s => s.Version).Where(v => v != mine.Version).Order()), await Journal());   // exactly the guard's row is gone, no other migration's row was touched
         await using var owner = await Owner();
         var entry = All.Single(g => g.Table == EN.Table);
         Assert.Equal(PostgresErrorCodes.UniqueViolation, (await Attempt(owner, $"ALTER TABLE {entry.Table} DISABLE TRIGGER USER", Clone(entry, "2026-03-10")))?.SqlState);   // the old state: nothing refuses the closed date
 
         var result = await new MigrationRunner(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName)).ApplyAsync(all);
         Assert.Equal([mine.Version], result.Applied);                                                 // applied over rows in a Final Closed period: the migration reads and validates no existing row
+        Assert.Equal(everyVersion, await Journal());                                                  // re-applied successfully: the journal is whole again, again with no other row touched
         Assert.Equal(before, await Fingerprint());
         foreach (var g in All) AssertGuard(await Attempt(owner, [.. OnlyTheGuard(g), Clone(g, "2026-03-10")]), FinalMessage, $"{g.Name} after the upgrade");
     }
