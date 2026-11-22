@@ -42,6 +42,12 @@ public sealed class HasmDatabaseOptions
     /// the API refuses such a database. Only for disposable single-account test environments.
     /// </summary>
     public bool AllowOverprivilegedCompanyRuntime { get; init; }
+    /// <summary>
+    /// Explicit opt-in to run with a SYSTEM database runtime account that is not least-privilege for the TOTP secret store (owner decision D-235): the administrative account itself, a superuser,
+    /// an over-granted account, or a store readable by another role. Defaults to false: the API refuses to start and the MFA store refuses to work. When true the refusal becomes a critical log
+    /// line at start-up and on every check. Only for disposable single-account test environments.
+    /// </summary>
+    public bool AllowOverprivilegedSystemRuntime { get; init; }
 
     public const int DefaultCompanyMaxPoolSize = 10;
     public const int MaxCompanyMaxPoolSize = 50;
@@ -84,6 +90,10 @@ public sealed class HasmDatabaseOptions
         var allowOver = false;
         if (overText is not null && !bool.TryParse(overText, out allowOver))
             errors.Add($"{SectionName}:AllowOverprivilegedCompanyRuntime must be true or false.");
+        var overSystemText = Get("AllowOverprivilegedSystemRuntime");
+        var allowOverSystem = false;
+        if (overSystemText is not null && !bool.TryParse(overSystemText, out allowOverSystem))
+            errors.Add($"{SectionName}:AllowOverprivilegedSystemRuntime must be true or false.");
         if (errors.Count > 0)
             throw new DatabaseConfigurationException(Format(errors));
 
@@ -101,6 +111,7 @@ public sealed class HasmDatabaseOptions
             CompanyCredentialDirectory = Get("CompanyCredentialDirectory"),
             CompanyMaxPoolSize = poolSize,
             AllowOverprivilegedCompanyRuntime = allowOver,
+            AllowOverprivilegedSystemRuntime = allowOverSystem,
             MaintenanceDatabase = Get("MaintenanceDatabase") ?? "postgres",
             SslMode = sslMode,
             SslRootCertificate = Get("SslRootCertificate"),
