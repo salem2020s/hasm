@@ -929,3 +929,29 @@ describe("the policy save with the real api client", () => {
     writes.mockRestore();
   });
 });
+
+describe("a refused company is not selected again after the user went elsewhere (review M1 of PR 185)", () => {
+  it("after 'choose another company' and entering c1, a later voluntary enrolment keeps c1: the refused c2 is never selected again", async () => {
+    const s = startApp({
+      companies: TWO, perms: ["company.profile.view"],
+      routes: {
+        "POST /api/v1/session/company": [ENROL_REQUIRED, () => json({ companyId: "c1" })],                 // c2 refuses, c1 does not
+        "POST /api/v1/auth/mfa/enrol/begin": [() => json(SECRET)],
+        "POST /api/v1/auth/mfa/enrol/confirm": [() => json({ user: USER })],
+        "GET /api/v1/access/me": [() => json({ error: "company_not_selected" }, 409), () => json({ companyId: "c1", grants: [{ roleId: "r", scope: "company", scopeId: null, permissions: ["company.profile.view"] }] })],
+      },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: /شركة النور/ }));
+    expect(await screen.findByTestId("enrolment-required")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("enrol-required-another"));
+    await userEvent.click(await screen.findByRole("button", { name: /شركة الأمل/ }));
+    expect(await screen.findByTestId("company-name")).toHaveTextContent("شركة الأمل");
+    window.location.hash = "#/account/security";                                                           // a voluntary enrolment from the Security screen of company 1
+    fireEvent(window, new HashChangeEvent("hashchange"));
+    await enrolFromPrompt();
+    await waitFor(() => expect(s.count("GET", "/api/v1/access/me").length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(screen.getByTestId("company-name")).toHaveTextContent("شركة الأمل"));
+    const selections = s.count("POST", "/api/v1/session/company").map((c) => (c.body as { companyId: string }).companyId);
+    expect(selections).toEqual(["c2", "c1", "c1"]);                                                         // the enrolment re-enters the CURRENT company, never the stale refusal
+  });
+});

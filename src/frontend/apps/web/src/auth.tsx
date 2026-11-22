@@ -260,6 +260,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   const enterCompany = useCallback(async () => {
     const me = await api.accessMe();
     applyAccess(me);
+    pendingCompany.current = null;                               // a company was entered: a refusal remembered from an earlier selection (another company) must never be selected again (review M1 of PR 185)
     setPhase("ready");
     gate.open();                                                 // a confirmed session with a company: the screens may talk to the server
   }, [api, applyAccess, gate]);
@@ -425,6 +426,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
 
   const adoptEnrolledSession = useCallback(async (enrolled: SessionUser) => {
     setUser(enrolled);
+    const before = companyRef.current;
     let target = pendingCompany.current ?? companyRef.current;
     pendingCompany.current = null;
     try {
@@ -435,7 +437,13 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
         setCompanies(list);
         if (list.length === 1) target = list[0].id;
       }
-      if (target) { const id = target; await attempt(async () => { await api.selectCompany(id); await enterCompany(); }); return; }
+      if (target) {
+        const id = target;
+        // another company than the one the user was in: the shell is a NEW instance and nothing of the previous company's screens or input survives (as changeCompany)
+        if (id !== before) { setShellEpoch((n) => n + 1); unsaved.current?.clear(); }
+        await attempt(async () => { await api.selectCompany(id); await enterCompany(); });
+        return;
+      }
     } catch (e) { if (e instanceof ApiError && e.status === 401) { handleError(e); return; } }
     epoch.current++;
     gate.close();
@@ -493,6 +501,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
   // Invariant: outside the lock of D-236 a MOUNTED shell never sits behind a CLOSED gate. Whoever closes the gate leaves the phase "ready" in the same step.
   const changeCompany = useCallback(async () => {
     epoch.current++;                       // whatever is still in flight belongs to the company being left
+    pendingCompany.current = null;         // leaving a company is also leaving a remembered refusal (review M1 of PR 185)
     try { await api.clearCompany(); } catch (e) { if (handleError(e)) return; }
     gate.close();                                                // no company: nothing for a screen to ask; the next enterCompany opens it again
     setShellEpoch((n) => n + 1);
@@ -518,6 +527,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
         for (let tries = 0; tries < 2; tries++) {
           try {
             const me = await attempt(() => api.accessMe());
+            if (lock.current || live.current.phase !== "ready") return;   // the session locked (or the phase moved) while asking: the hidden shell and its input are left exactly as they are (review L2 of PR 185)
             if (me.companyId !== companyRef.current) { setShellEpoch((n) => n + 1); unsaved.current?.clear(); }
             applyAccess(me);
             return;
@@ -527,6 +537,7 @@ export function AuthProvider({ api, bridge, gate: givenGate, children }: { api: 
           }
         }
       } catch (e) {
+        if (lock.current || live.current.phase !== "ready") return;
         if (e instanceof ApiError && e.status === 409) {
           gate.close();
           setShellEpoch((n) => n + 1);
