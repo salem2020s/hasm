@@ -24,7 +24,7 @@ public static partial class MigrationGuard
     // physical names that are already taken, and the allowlist has to spell the names of the functions it authorises.
 
     /// <summary>What one migration does that matters across migrations; <see cref="Violation"/> is null when the script itself is acceptable.</summary>
-    internal sealed record Analysis(string? Violation, IReadOnlySet<string> CreatedFunctions, IReadOnlySet<string> ReplacedFunctions);
+    internal sealed record Analysis(string? Violation, IReadOnlySet<string> CreatedFunctions, IReadOnlySet<string> ReplacedFunctions, IReadOnlyList<string> SwitchedTriggers);
 
     private static readonly ConcurrentDictionary<string, Analysis> Cache = new(StringComparer.Ordinal);
 
@@ -130,6 +130,7 @@ public static partial class MigrationGuard
         {
             var analysis = Analyze(script.Sql);
             if (analysis.Violation is not null) throw new MigrationException($"Migration {script.Name} {analysis.Violation}");
+            EnsureTriggerSwitchesApproved(script, analysis);
             foreach (var function in analysis.ReplacedFunctions)
             {
                 if (!createdEarlier.TryGetValue(function, out var origin)) continue;
@@ -142,6 +143,31 @@ public static partial class MigrationGuard
         }
     }
 
+    /// <summary>
+    /// Owner decision 2026-11-22 (Q1): a migration may disable and re-enable a trigger ONLY when it is one of the migrations that already
+    /// used the pattern when the rule was introduced (<see cref="ApprovedTriggerSwitches"/>), bound to its exact set, number, name,
+    /// checksum and the exact triggers it switches. Any other migration with a matched pair is refused, whatever its set or number.
+    /// </summary>
+    private static void EnsureTriggerSwitchesApproved(MigrationScript script, Analysis analysis)
+    {
+        var problem = TriggerSwitchProblem(ApprovedTriggerSwitches, script, analysis.SwitchedTriggers);
+        if (problem is not null) throw new MigrationException(problem);
+    }
+
+    /// <summary>The refusal for a script that switches triggers and is not covered by <paramref name="approved"/>, or null. The list is a parameter so the tests can prove each condition on its own.</summary>
+    internal static string? TriggerSwitchProblem(IReadOnlyList<ApprovedTriggerSwitch> approved, MigrationScript script, IReadOnlyList<string> switched)
+    {
+        if (switched.Count == 0) return null;
+        if (approved.Any(a => a.Set == script.Set && a.Version == script.Version && a.Name == script.Name && a.Checksum == script.Checksum
+                              && a.Triggers.Order(StringComparer.Ordinal).SequenceEqual(switched)))
+            return null;
+        return
+            $"Migration {script.Name} (set {script.Set}, number {script.Version:0000}, checksum {script.Checksum}) disables and re-enables trigger(s) {string.Join(", ", switched)}. " +
+            "Switching a trigger off inside a migration is frozen to the migrations that already did so when the rule was introduced (owner decision 2026-11-22, Q1): a new use " +
+            "needs an explicit owner-approved, independently reviewed entry on MigrationGuard.ApprovedTriggerSwitches, bound to the exact set, number, name and checksum of the migration " +
+            "(procedure in docs/DEVELOPMENT.md, \"Migration guard\"). This migration is refused.";
+    }
+
     internal static Analysis Analyze(string sql)
     {
         var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sql)));
@@ -151,7 +177,7 @@ public static partial class MigrationGuard
     private static Analysis AnalyzeUncached(string sql)
     {
         var none = new HashSet<string>();
-        Analysis Refuse(string violation) => new(violation, none, none);
+        Analysis Refuse(string violation) => new(violation, none, none, []);
 
         // The original check, unchanged: every "--" to the end of the line is ignored, everything else is read.
         if (Destructive().IsMatch(LegacyLineComment().Replace(sql, "")))
@@ -184,6 +210,7 @@ public static partial class MigrationGuard
         // Trigger switching: only "ALTER TABLE <table> DISABLE TRIGGER <trigger>" followed later, in the same migration, by
         // "ALTER TABLE <table> ENABLE TRIGGER <trigger>" for exactly the same table and trigger, both as whole top-level statements.
         var disabled = new List<(string Table, string Trigger)>();
+        var switched = new List<string>();     // every DISABLE of an accepted pair, as "table/trigger" (owner decision Q1: see EnsureAcceptableSet)
         var canonical = 0;
         var acceptedExecutes = 0;
         foreach (var raw in lexed.Statements)
@@ -207,6 +234,7 @@ public static partial class MigrationGuard
             {
                 if (disabled.Contains(pair)) return Refuse($"disables trigger {Show(trigger)} on {Show(table)} twice without re-enabling it; not allowed.");
                 disabled.Add(pair);
+                switched.Add($"{Show(table)}/{Show(trigger)}");
             }
             else
             {
@@ -233,7 +261,8 @@ public static partial class MigrationGuard
             created.Add(name);
             if (m.Groups[1].Success) replaced.Add(name);
         }
-        return new Analysis(null, created, replaced);
+        switched.Sort(StringComparer.Ordinal);
+        return new Analysis(null, created, replaced, switched);
     }
 
     /// <summary>The parts of a (possibly schema-qualified) name: unquoted parts fold to lower case as PostgreSQL does, quoted ones keep their exact spelling.</summary>

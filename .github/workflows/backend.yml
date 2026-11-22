@@ -151,7 +151,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1711 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1717 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -160,6 +160,8 @@ jobs:
                 "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
                 # Migration guard hardening (owner decision 2026-11-21, Q5): the post-migration check (no trigger switched off, removed or re-bound; replication role unchanged), on the system and a company database.
                 "MigrationGuardPostCheckTests": 12,
+                # Owner decisions 2026-11-22 (Q2, Q3): disabled triggers with nothing pending (diagnostics, nothing re-enabled, the application unaffected); the non-superuser administrative account end to end and the superuser refusal.
+                "MigrationAdminRefusalTests": 4, "NonSuperuserMigrationAccountTests": 2,
                 "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
                 "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
                 "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,

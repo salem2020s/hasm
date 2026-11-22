@@ -26,16 +26,24 @@ public class MigrationGuardPostCheckTests : PostgresTestBase
     private Task<long> Tables(string name) => Scalar<long>($"SELECT count(*) FROM information_schema.tables WHERE table_name = '{name}'");
 
     [PostgresFact]
-    public async Task A_paired_disable_and_enable_inside_one_migration_is_applied_and_the_trigger_fires_again()
+    public async Task The_allowlisted_paired_migrations_apply_through_the_runner_and_leave_every_trigger_firing_and_a_new_pair_is_refused()
     {
+        // Owner decision 2026-11-22 (Q1): a NEW migration with a DISABLE/ENABLE pair is refused (it is not on the frozen allowlist). The post-check of the runner still proves the 26
+        // allowlisted migrations that use the pattern: Init applies every one of them, each in its own transaction, and no trigger is left switched off afterwards.
         await Init();
-        var result = await Runner().ApplyAsync(WithExtra(
-            $"CREATE TABLE zz_marker (a int);\nALTER TABLE {RP.Table} DISABLE TRIGGER {RP.GuardTrigger};\nINSERT INTO zz_marker VALUES (1);\nALTER TABLE {RP.Table} ENABLE TRIGGER {RP.GuardTrigger};"));
-
-        Assert.Equal([Next], result.Applied);
         Assert.Equal("O", await State(RP.Table, RP.GuardTrigger));
-        Assert.Equal(1L, await Tables("zz_marker"));
-        Assert.Equal((long)Next, await Journal());
+        Assert.Equal((long)Next - 1, await Journal());
+        Assert.Equal(0L, await Scalar<long>("SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled <> 'O'"));
+
+        var refused = new MigrationScript(Next, $"{Next:0000}_extra.sql",
+            $"CREATE TABLE zz_marker (a int);\nALTER TABLE {RP.Table} DISABLE TRIGGER {RP.GuardTrigger};\nINSERT INTO zz_marker VALUES (1);\nALTER TABLE {RP.Table} ENABLE TRIGGER {RP.GuardTrigger};")
+        { Set = MigrationSet.System };
+        var ex = await Assert.ThrowsAsync<MigrationException>(() => Runner().ApplyAsync([.. MigrationScript.LoadEmbedded(), refused]));
+        Assert.Contains("frozen", ex.Message);
+
+        Assert.Equal(0L, await Tables("zz_marker"));                      // nothing was executed
+        Assert.Equal("O", await State(RP.Table, RP.GuardTrigger));
+        Assert.Equal((long)Next - 1, await Journal());
     }
 
     [PostgresTheory]

@@ -13,7 +13,7 @@ using Npgsql;
 
 // Explicit administrative tool. Never started by the API; uses the privileged database account.
 // Usage:
-//   Hasm.Admin init-system-db
+//   Hasm.Admin init-system-db [--allow-superuser-for-development]  (also provision-company and migrate-companies: these three refuse a PostgreSQL superuser account unless the switch is given; development and tests only; logged)
 //   Hasm.Admin register-company              (registers a Pending company; prints its id only)
 //   Hasm.Admin bootstrap-admin <login> [display name]  (creates the FIRST identity administrator; refuses if one exists)
 //   Hasm.Admin provision-company <company-id> (creates + migrates its separate database; safe to repeat/resume)
@@ -76,6 +76,14 @@ string? replicateRun = null, replicateDestination = null;
 var replicateNewestFirst = false;
 var keepLast = 0;
 int? keepDays = null;
+// Owner decision 2026-11-22 (Q3): the migrating commands refuse a PostgreSQL superuser account. The override exists for development and tests only, is accepted by these three commands
+// only (any other command that receives it fails the usage check) and is logged on every use. It is never read from configuration.
+var allowSuperuserForDevelopment = false;
+if (command is "init-system-db" or "provision-company" or "migrate-companies" && args.Contains(MigrationAccountPolicy.OverrideSwitch, StringComparer.Ordinal))
+{
+    allowSuperuserForDevelopment = true;
+    args = [.. args.Where(a => !string.Equals(a, MigrationAccountPolicy.OverrideSwitch, StringComparison.Ordinal))];
+}
 var validUsage = command switch
 {
     "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
@@ -263,6 +271,7 @@ HasmDatabaseOptions options;
 try
 {
     options = HasmDatabaseOptions.FromConfiguration(configuration);
+    if (allowSuperuserForDevelopment) options.AllowSuperuserMigrationAccountForDevelopment();
     // Verification and anchoring are read-only with respect to the database and use the least-privilege runtime account.
     options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor"));
 }
@@ -439,7 +448,10 @@ try
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
             var outcomes = await new CompanyMigrator(options, registry).MigrateAsync(onlyCompany);
             foreach (var o in outcomes)
-                Console.WriteLine($"Company {o.CompanyId}: {o.Status}" + (o.Applied.Count > 0 ? $" (applied {string.Join(", ", o.Applied.Select(v => v.ToString("0000")))})" : "") + (o.ErrorCode is null ? "" : $" [{o.ErrorCode}]"));
+            {
+                Console.WriteLine(o.Line());
+                if (o.Detail is not null) Console.Error.WriteLine($"  {options.Scrub(o.Detail)}");   // a migration refusal names its triggers (table.trigger); nothing was re-enabled
+            }
             var failed = outcomes.Count(o => o.Status == CompanyMigrationStatus.Failed);
             var busy = outcomes.Count(o => o.Status == CompanyMigrationStatus.Busy);
             var skipped = outcomes.Count(o => o.Status == CompanyMigrationStatus.NotReady);

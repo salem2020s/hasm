@@ -25,11 +25,21 @@ public sealed class MigrationRunner(string connectionString)
     /// </summary>
     internal Func<string>? AdditionalReplicationRoleReading { get; init; }
 
+    /// <summary>TEST SEAM, same rule as above: an additional reading of "is a superuser" that can only add a refusal (see <see cref="MigrationAccountPolicy"/>).</summary>
+    internal Func<bool>? AdditionalSuperuserReading { get; init; }
+
+    /// <summary>The explicit development/test override of owner decision Q3: allows a superuser migration account (logged through <see cref="Log"/>). Never set in production.</summary>
+    public bool AllowSuperuser { get; init; }
+
+    /// <summary>Where the override warning goes (default: the standard error stream of the administrative tool).</summary>
+    public Action<string>? Log { get; init; }
+
     public async Task<MigrationResult> ApplyAsync(IReadOnlyList<MigrationScript> scripts, CancellationToken ct = default)
     {
         MigrationScript.Validate(scripts);
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(ct);
+        await MigrationAccountPolicy.EnsureAsync(conn, AllowSuperuser, Log, AdditionalSuperuserReading, ct);
 
         await Execute(conn, "SELECT pg_advisory_lock(@k)", ct, ("k", AdvisoryLockKey));
         try
@@ -83,16 +93,35 @@ public sealed class MigrationRunner(string connectionString)
                 newlyApplied.Add(script.Version);
             }
             // Also when nothing was applied: a database whose safeguard trigger was switched off by any means is not accepted as migrated.
-            var off = SwitchedOff(await Triggers(conn, null, ct));
-            off.AddRange(await SwitchedOffEventTriggers(conn, null, ct));
-            if (off.Count > 0)
-                throw new MigrationException($"The database has trigger(s) switched off: {string.Join(", ", off)}. Every trigger must be enabled; refusing to continue.");
+            await EnsureNoSwitchedOffAsync(conn, ct);
             return new MigrationResult(newlyApplied, applied.Count);
         }
         finally
         {
             await Execute(conn, "SELECT pg_advisory_unlock(@k)", CancellationToken.None, ("k", AdvisoryLockKey));
         }
+    }
+
+    /// <summary>
+    /// Owner decision 2026-11-22 (Q2): refuses a database that holds a switched-off non-internal trigger or event trigger, whether or not a migration is pending. The message
+    /// names every affected trigger as table.trigger (state letter: D disabled, R replica only); the triggers are NEVER re-enabled here (that needs an investigation of the data
+    /// written while they were off, and a restored trigger does not make that data valid). The API never runs this; only the administrative commands do.
+    /// </summary>
+    private static async Task EnsureNoSwitchedOffAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var off = SwitchedOff(await Triggers(conn, null, ct));
+        off.AddRange(await SwitchedOffEventTriggers(conn, null, ct));
+        if (off.Count > 0)
+            throw new MigrationException($"The database has trigger(s) switched off: {string.Join(", ", off)}. Every trigger must be enabled; refusing to continue. " +
+                                         "The triggers were not changed: find out why they were switched off and check the data written meanwhile before enabling them by hand.");
+    }
+
+    /// <summary>The same refusal on a fresh connection, for a command that would otherwise run no migration at all (a company that is already Ready).</summary>
+    public static async Task EnsureNoSwitchedOffAsync(string connectionString, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        await EnsureNoSwitchedOffAsync(conn, ct);
     }
 
     /// <summary>One non-internal trigger: where it is, what it is called, which function it runs, and its firing state (pg_trigger.tgenabled).</summary>
