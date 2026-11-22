@@ -30,29 +30,57 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
 
     private static IEnumerable<string> Methods(RouteEndpoint e) => e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"];
 
+    private async Task<IReadOnlyList<IAuthorizationRequirement>> Requirements(RouteEndpoint e)
+    {
+        var provider = factory.Services.GetRequiredService<IAuthorizationPolicyProvider>();
+        var all = new List<IAuthorizationRequirement>();
+        foreach (var d in e.Metadata.GetOrderedMetadata<IAuthorizeData>())
+        {
+            var policy = string.IsNullOrEmpty(d.Policy) ? await provider.GetDefaultPolicyAsync() : await provider.GetPolicyAsync(d.Policy);
+            Assert.True(policy is not null, $"{Pattern(e)} names the unknown policy '{d.Policy}'");
+            all.AddRange(policy!.Requirements);
+        }
+        return all;
+    }
+
+    private static bool IsIdentityAdministration(RouteEndpoint e) => MfaEnforcement.IdentityAdministrationPrefixes.Any(p => UnderPrefix(Pattern(e), p));
+
     [Fact]
     public void Every_route_under_a_privileged_prefix_carries_the_MfaVerified_or_MfaFresh_policy()
     {
+        // company-scoped privileged routes name MfaVerified/MfaFresh (with the company policy); identity administration names the variants WITHOUT the company policy (review L2 of PR 181)
         var checkedRoutes = 0;
         foreach (var e in Routes().Where(r => MfaEnforcement.PrivilegedPrefixes.Any(p => UnderPrefix(Pattern(r), p))))
         {
             checkedRoutes++;
-            Assert.True(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
+            if (IsIdentityAdministration(e))
+            {
+                Assert.True(HasPolicy(e, AuthDefaults.AuthenticatedPolicy) || HasPolicy(e, AuthDefaults.AuthenticatedFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
+                Assert.False(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} is identity administration but names a company-scoped MFA policy");
+                Assert.True(HasPolicy(e, AuthDefaults.AdministratorPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} lost the administrator policy");
+            }
+            else
+                Assert.True(HasPolicy(e, AuthDefaults.MfaVerifiedPolicy) || HasPolicy(e, AuthDefaults.MfaFreshPolicy), $"{string.Join("/", Methods(e))} {Pattern(e)} has no MFA policy");
         }
         Assert.True(checkedRoutes >= 15, $"only {checkedRoutes} privileged routes were found; the enumeration is broken");
         foreach (var prefix in MfaEnforcement.PrivilegedPrefixes) Assert.Contains(Routes(), r => UnderPrefix(Pattern(r), prefix));   // no stale prefix
+        foreach (var prefix in MfaEnforcement.IdentityAdministrationPrefixes) Assert.Contains(prefix, MfaEnforcement.PrivilegedPrefixes);   // identity administration is a subset of the privileged set
     }
 
     [Fact]
-    public void The_named_fresh_operations_exist_and_carry_the_MfaFresh_policy()
+    public async Task The_named_fresh_operations_exist_and_carry_the_MfaFresh_policy()
     {
         foreach (var (method, pattern) in MfaEnforcement.FreshOperations)
         {
             var route = Assert.Single(Routes(), r => Pattern(r).Equals(pattern, StringComparison.OrdinalIgnoreCase) && Methods(r).Contains(method, StringComparer.OrdinalIgnoreCase));
-            Assert.True(HasPolicy(route, AuthDefaults.MfaFreshPolicy), $"{method} {pattern} lacks the MfaFresh policy");
+            Assert.True(HasPolicy(route, IsIdentityAdministration(route) ? AuthDefaults.AuthenticatedFreshPolicy : AuthDefaults.MfaFreshPolicy), $"{method} {pattern} lacks the MfaFresh policy");
+            Assert.Contains(await Requirements(route), r => r is MfaFreshRequirement);
         }
-        // and no other route claims MfaFresh: the set is exactly the plan's named operations
-        var fresh = Routes().Where(r => HasPolicy(r, AuthDefaults.MfaFreshPolicy)).SelectMany(r => Methods(r).Select(m => (m.ToUpperInvariant(), Pattern(r)))).ToHashSet();
+        // and no other route requires a fresh proof (by the RESOLVED requirement, whatever the policy is called): the set is exactly the plan's named operations
+        var fresh = new HashSet<(string, string)>();
+        foreach (var r in Routes())
+            if ((await Requirements(r)).Any(x => x is MfaFreshRequirement))
+                foreach (var m in Methods(r)) fresh.Add((m.ToUpperInvariant(), Pattern(r)));
         Assert.Equal(MfaEnforcement.FreshOperations.Select(o => (o.Method, o.Pattern)).ToHashSet(), fresh);
     }
 
@@ -93,7 +121,142 @@ public class MfaEnforcementTests(WebApplicationFactory<Program> factory) : IClas
         Assert.True(offenders.Count == 0, "protected routes without the MfaVerified requirement: " + string.Join(", ", offenders));
     }
 
+    /// <summary>The only authenticated routes exempt from the selected company's MFA policy: a user must always be able to list and change company, change the password and step up (S3b-1b, D-167),
+    /// and identity administration, which is not company-scoped (review L2 of PR 181): each of its routes is NAMED here, so a new one must be added deliberately.</summary>
+    private static readonly HashSet<string> CompanyPolicyExempt = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GET /api/v1/companies", "POST /api/v1/session/company", "DELETE /api/v1/session/company", "POST /api/v1/auth/change-password", "POST /api/v1/auth/mfa/step-up",
+        "POST /api/v1/admin/users/", "POST /api/v1/admin/users/{id:guid}/state",                              // the group root is mapped as "" and reported with the trailing slash
+        "GET /api/v1/admin/parties/proposals", "GET /api/v1/admin/parties/proposals/{id:guid}", "POST /api/v1/admin/parties/proposals/{id:guid}/approve", "POST /api/v1/admin/parties/proposals/{id:guid}/reject",
+        "GET /api/v1/admin/parties/search",
+    };
+
+    [Fact]
+    public async Task Identity_administration_keeps_the_MFA_requirements_and_the_administrator_claim_but_not_the_selected_company_policy()
+    {
+        var seen = 0;
+        foreach (var e in Routes().Where(IsIdentityAdministration))
+        {
+            seen++;
+            var requirements = await Requirements(e);
+            Assert.Contains(requirements, r => r is MfaVerifiedRequirement);
+            Assert.DoesNotContain(requirements, r => r is MfaCompanyPolicyRequirement);
+            Assert.Contains(requirements, r => r is Microsoft.AspNetCore.Authorization.Infrastructure.ClaimsAuthorizationRequirement c && c.ClaimType == AuthDefaults.AdministratorClaim);
+            foreach (var m in Methods(e)) Assert.Contains($"{m.ToUpperInvariant()} {Pattern(e)}", CompanyPolicyExempt);
+        }
+        Assert.Equal(7, seen);
+        // every exemption that is not one of the five always-reachable routes is identity administration: nothing company-scoped can be exempted through this door
+        Assert.Equal(5, CompanyPolicyExempt.Count(k => !MfaEnforcement.IdentityAdministrationPrefixes.Any(p => UnderPrefix(k[(k.IndexOf(' ') + 1)..], p))));
+    }
+
+    [Fact]
+    public async Task Every_protected_route_is_gated_by_the_company_MFA_policy_except_the_named_exempt_routes()
+    {
+        var provider = factory.Services.GetRequiredService<IAuthorizationPolicyProvider>();
+        var offenders = new List<string>();
+        var exemptSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in Routes())
+        {
+            var data = e.Metadata.GetOrderedMetadata<IAuthorizeData>();
+            if (data.Count == 0 || e.Metadata.GetMetadata<IAllowAnonymous>() is not null) continue;
+            var gated = false;
+            foreach (var d in data)
+            {
+                var policy = string.IsNullOrEmpty(d.Policy) ? await provider.GetDefaultPolicyAsync() : await provider.GetPolicyAsync(d.Policy);
+                if (policy is not null && policy.Requirements.Any(r => r is MfaCompanyPolicyRequirement)) gated = true;
+            }
+            foreach (var m in Methods(e))
+            {
+                var key = $"{m.ToUpperInvariant()} {Pattern(e)}";
+                if (CompanyPolicyExempt.Contains(key)) { exemptSeen.Add(key); if (gated) offenders.Add(key + " (exempt route carries the company policy)"); }
+                else if (!gated) offenders.Add(key);
+            }
+        }
+        Assert.True(offenders.Count == 0, "company-policy gating mismatches: " + string.Join(", ", offenders));
+        Assert.Equal(CompanyPolicyExempt.Count, exemptSeen.Count);                                                                    // no stale exemption
+    }
+
+    // ---- company policy handler
+
+    private sealed class FakePolicies(bool requires) : ICompanyMfaPolicyEvaluator
+    {
+        public int Calls;
+        public Task<bool> RequiresMfaAsync(Guid userId, Guid companyId, CancellationToken ct = default) { Calls++; return Task.FromResult(requires); }
+    }
+
+    private static AuthenticatedSession InCompany(MfaState state, bool proof, Guid? company) =>
+        new(Guid.NewGuid(), Guid.NewGuid(), "u", "U", false, SessionClient.Web, Now.AddMinutes(30), Now.AddHours(12), proof ? Now : null, state, company);
+
+    private static async Task<(bool Succeeded, int Queries)> CompanyPolicy(AuthenticatedSession session, bool policyRequires)
+    {
+        var fake = new FakePolicies(policyRequires);
+        var (ctx, _) = Context(new MfaCompanyPolicyRequirement(), session);
+        await new MfaCompanyPolicyHandler(fake).HandleAsync(ctx);
+        return (ctx.HasSucceeded, fake.Calls);
+    }
+
+    [Fact]
+    public async Task The_company_policy_refuses_only_a_user_without_an_authenticator_in_a_company_that_requires_MFA()
+    {
+        var company = Guid.NewGuid();
+        Assert.True((await CompanyPolicy(InCompany(MfaState.None, false, company), policyRequires: false)).Succeeded);   // pass-through when the company has no requirement
+        Assert.False((await CompanyPolicy(InCompany(MfaState.None, false, company), policyRequires: true)).Succeeded);   // required and no authenticator
+        Assert.True((await CompanyPolicy(InCompany(MfaState.Enrolled, true, company), policyRequires: true)).Succeeded); // carries the proof
+        Assert.False((await CompanyPolicy(InCompany(MfaState.Enrolled, false, company), policyRequires: true)).Succeeded);   // defence in depth: enrolled but no proof
+    }
+
+    [Fact]
+    public async Task No_selected_company_means_no_company_policy_and_a_session_with_the_proof_costs_no_query()
+    {
+        Assert.Equal((true, 0), await CompanyPolicy(InCompany(MfaState.None, false, null), policyRequires: true));
+        Assert.Equal((true, 0), await CompanyPolicy(InCompany(MfaState.Enrolled, true, Guid.NewGuid()), policyRequires: true));
+        Assert.Equal((false, 1), await CompanyPolicy(InCompany(MfaState.None, false, Guid.NewGuid()), policyRequires: true));
+    }
+
+    [Fact]
+    public async Task A_company_policy_refusal_is_403_mfa_enrolment_required_and_never_step_up()
+    {
+        var user = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u")], "test"));
+        var (status, body) = await Handle(user, [new MfaCompanyPolicyRequirement()]);
+        Assert.Equal(403, status);
+        Assert.Equal("mfa_enrolment_required", JsonDocument.Parse(body).RootElement.GetProperty("error").GetString());
+    }
+
     // ---- handlers
+
+    [Fact]
+    public async Task The_company_policy_handler_records_the_company_it_judged_whenever_the_decision_depended_on_the_company()
+    {
+        // review H1 of PR 181: the endpoint compares this with the company it reads and refuses when they differ
+        var company = Guid.NewGuid();
+        async Task<object?> Judged(AuthenticatedSession session, bool requires)
+        {
+            var (ctx, http) = Context(new MfaCompanyPolicyRequirement(), session);
+            await new MfaCompanyPolicyHandler(new FakePolicies(requires)).HandleAsync(ctx);
+            return http.Items[MfaEnforcement.EvaluatedCompanyItemKey];
+        }
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(company), await Judged(InCompany(MfaState.None, false, company), requires: false));
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(company), await Judged(InCompany(MfaState.None, false, company), requires: true));
+        Assert.Equal(new MfaEnforcement.EvaluatedCompany(null), await Judged(InCompany(MfaState.None, false, null), requires: true));   // "no company" is a judgement too: a company selected afterwards was not judged
+        Assert.Null(await Judged(InCompany(MfaState.Enrolled, true, company), requires: true));                         // carries the proof: every company's policy is satisfied, nothing to bind
+    }
+
+    [Theory]
+    [InlineData(MfaState.None, 403, "mfa_enrolment_required")]
+    [InlineData(MfaState.Enrolled, 401, "mfa_step_up_required")]                                                     // review L1 of PR 181: a user WITH an authenticator steps up, is never told to enrol
+    [InlineData(MfaState.RecoveryRequired, 401, "mfa_step_up_required")]
+    public async Task A_company_policy_refusal_asks_a_user_without_an_authenticator_to_enrol_and_any_other_user_to_step_up(MfaState state, int status, string code)
+    {
+        var (ctx, http) = Context(new MfaCompanyPolicyRequirement(), InCompany(state, false, Guid.NewGuid()));
+        http.User = ctx.User;
+        http.Response.Body = new MemoryStream();
+        http.RequestServices = factory.Services;
+        var failure = AuthorizationFailure.Failed([new MfaCompanyPolicyRequirement(), new MfaVerifiedRequirement()]);
+        await new MfaAuthorizationResultHandler().HandleAsync(_ => Task.CompletedTask, http, new AuthorizationPolicyBuilder().AddRequirements(new MfaCompanyPolicyRequirement()).Build(), PolicyAuthorizationResult.Forbid(failure));
+        Assert.Equal(status, http.Response.StatusCode);
+        http.Response.Body.Position = 0;
+        Assert.Equal(code, JsonDocument.Parse(await new StreamReader(http.Response.Body).ReadToEndAsync()).RootElement.GetProperty("error").GetString());
+    }
 
     private static (AuthorizationHandlerContext Context, HttpContext Http) Context(IAuthorizationRequirement requirement, AuthenticatedSession? session)
     {

@@ -15,6 +15,8 @@ public static class MfaAuditEvents
     public const short StateChanged = 1330, SecretCreated = 1331, SecretActivated = 1332, SecretsRevoked = 1333, SecretsRewrapped = 1334, RestoreApplied = 1335;
     /// <summary>Phase 4.1 S3a (D-163): a step-up succeeded / was refused for a wrong or replayed code (bounded by the shared MFA throttle). Detail never carries a code.</summary>
     public const short StepUpSucceeded = 1336, StepUpFailed = 1337;
+    /// <summary>Phase 4.1 S3b-1b (D-167): a company's MFA policy was changed (detail: the kinds and the role count; never a secret).</summary>
+    public const short PolicyChanged = 1338;
 }
 
 public sealed record RewrapResult(int Rewrapped, int Remaining);
