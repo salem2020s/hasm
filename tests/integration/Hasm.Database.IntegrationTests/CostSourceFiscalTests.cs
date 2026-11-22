@@ -163,7 +163,18 @@ public class CostSourceFiscalTests : StockPostingTestBase
     [PostgresFact]
     public async Task A_changed_entry_without_a_period_is_not_silently_omitted()
     {
-        await PreparePosting(); await Receive(Fifo, 10, 100); await IssueOf(Fifo, 1, date: new DateOnly(2027, 1, 10));
+        await PreparePosting(); await Receive(Fifo, 10, 100);
+        // The history entry dated outside every fiscal period is legacy data: the stock-period database guard (company 0034) refuses to write it, so the test writes it with the guard triggers paused by the owner for this
+        // one posting (test-only construction of a state that pre-existing data can have) and re-enables them at once.
+        var g = CompanySchema.StockPeriodGuard.TrCostOperation;
+        var guards = string.Join(",", new[] { g, CompanySchema.StockPeriodGuard.TrCostEntry, CompanySchema.StockPeriodGuard.TrStockPosting, CompanySchema.StockPeriodGuard.TrStockReversal, CompanySchema.StockPeriodGuard.TrAdjustmentPosting,
+            CompanySchema.StockPeriodGuard.TrAdjustmentReversal, CompanySchema.StockPeriodGuard.TrNegativeObligation, CompanySchema.StockPeriodGuard.TrNegativeSettlement, CompanySchema.StockPeriodGuard.TrNegativeObligationReversal,
+            CompanySchema.StockPeriodGuard.TrCostLayer, CompanySchema.StockPeriodGuard.TrCostConsumption }.Select(x => $"'{x}'"));
+        string Switch(string verb) => $"DO $$ DECLARE r record; BEGIN FOR r IN SELECT c.relname AS rel, t.tgname AS tg FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE t.tgname IN ({guards}) LOOP EXECUTE format('ALTER TABLE %I {verb} TRIGGER %I', r.rel, r.tg); END LOOP; END $$";
+        await Sql(Switch("DISABLE"));
+        try { await IssueOf(Fifo, 1, date: new DateOnly(2027, 1, 10)); }
+        finally { await Sql(Switch("ENABLE")); }
+        Assert.Equal(11L, await Sql<long>($"SELECT count(*) FROM pg_trigger WHERE tgname IN ({guards}) AND tgenabled = 'O'"));
         var doc = await Approved(Receipt(lines: [L(Fifo)])); Reject(await Read(Reader(), doc), PostingPeriodCheck.NoPeriod);
     }
 

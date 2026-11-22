@@ -24,7 +24,16 @@ using IG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.InventoryAccounting
 
 namespace Hasm.Infrastructure.Costing;
 
-internal sealed record ClassificationLimits(int Postings = 500, int Journals = 1000, int Lines = 10_000, int Commands = 400, TimeSpan? Deadline = null);
+/// <summary>
+/// Bounds of one evidence read. <see cref="Commands"/> is shared by EVERYTHING the read sends to PostgreSQL, including the company schema gate of the first connection (one command per guarded table of
+/// <see cref="CompanyRuntimePrivileges.Tables"/>, which grows with every company migration that adds a table) and the live permission and scope checks of a partially visible caller. The earlier default of 400 had
+/// almost no room left once the schema gate alone cost over 100 commands (hosted failure of ClassificationEvidenceTests at 9fbe3a6); the default is now 1000, and a unit test keeps it above the schema gate cost
+/// with a fixed margin, so a future table count that would exhaust it fails there instead of in a read.
+/// </summary>
+internal sealed record ClassificationLimits(int Postings = 500, int Journals = 1000, int Lines = 10_000, int Commands = ClassificationLimits.DefaultCommands, TimeSpan? Deadline = null)
+{
+    internal const int DefaultCommands = 1000;
+}
 internal sealed record ClassifiedAllocation(Guid CostCenterId, decimal Amount, decimal Base);
 internal sealed record ClassifiedLine(int No, Guid AccountId, string Currency, decimal BaseDebit, decimal BaseCredit, Guid BranchId, bool IsRounding,
     ImmutableArray<ClassifiedAllocation> Allocations);

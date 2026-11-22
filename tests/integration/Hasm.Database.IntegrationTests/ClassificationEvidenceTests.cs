@@ -183,7 +183,8 @@ public class ClassificationEvidenceTests : NegativeStockTestBase
         var partial = (await Member([PermissionCatalog.Codes.AccountsView, PermissionCatalog.Codes.StockDocsView], ScopeKind.Company, null)).User;
         var ledger = await Rbac.CreateRoleAsync(Admin.Id, Company.Id, "ledger-branch", [PermissionCatalog.Codes.JournalView]); Assert.True(ledger.IsOk, ledger.Code);
         Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, partial.Id, ledger.Value!.Id, ScopeKind.Branch, branch)).IsOk);
-        Assert.True((await Read(Svc(), partial.Id, receipt)).IsOk);
+        var partialRead = await Read(Svc(), partial.Id, receipt);
+        Assert.True(partialRead.IsOk, $"{partialRead.Status} {partialRead.Code}");
         var tight = Svc(new ClassificationLimits(Lines: 1));
         Reject(await Read(tight, partial.Id, receipt), ConfigStatus.Forbidden, "forbidden");
         Reject(await Read(tight, null, receipt), ConfigStatus.Conflict, "classification_history_too_large");   // a fully visible caller may see the specific code

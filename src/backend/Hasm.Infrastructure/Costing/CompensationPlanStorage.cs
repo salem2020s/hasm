@@ -131,7 +131,7 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
         if (pre is not null) return pre;
 
         // X5 on the root first: a position of an executed epoch is never planned again, whatever the planner would say about its history (an epoch's own entries are not ordinary history).
-        if (await OnExecutedEpochAsync(company, [(input.ItemId, input.WarehouseId)], ct)) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "plan_on_epoch_position");
+        if (await OverlapsRewrittenClosureAsync(company, [(input.ItemId, input.WarehouseId)], ct)) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "plan_on_epoch_position");
 
         // The read-only planner, under the creator's own permissions. Its refusals are returned unchanged.
         var planned = await planner.LoadCompensationPlanAsync(user, company, input.ItemId, [input.WarehouseId], input.Proposal, ct);
@@ -144,7 +144,7 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
         var expectedHash = CompensationPlanBinding.ClosureHash(closure);
 
         // X5 again, on the whole closure the planner found (the root was checked before the planner ran)
-        if (await OnExecutedEpochAsync(company, closure, ct)) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "plan_on_epoch_position");
+        if (await OverlapsRewrittenClosureAsync(company, closure, ct)) return Fail<StoredCompensationPlan>(ConfigStatus.Conflict, "plan_on_epoch_position");
 
         var planId = Guid.NewGuid();
         var payload = CompensationPlanBinding.PayloadOf(input.Proposal);
@@ -193,7 +193,7 @@ internal sealed class CompensationPlanService(CompanyDatabaseResolver resolver, 
     }
 
     /// <summary>X5: true when any of the positions lies in the closure of a plan that has an execution (an epoch is never rewritten by another epoch).</summary>
-    private async Task<bool> OnExecutedEpochAsync(Guid company, IReadOnlyCollection<(Guid Item, Guid Warehouse)> positions, CancellationToken ct)
+    private async Task<bool> OverlapsRewrittenClosureAsync(Guid company, IReadOnlyCollection<(Guid Item, Guid Warehouse)> positions, CancellationToken ct)
     {
         await using var conn = await resolver.OpenAsync(company, ct);
         await using var q = new NpgsqlCommand($"SELECT 1 FROM {CC.Table} c JOIN {CX.Table} x ON x.{CX.PlanId}=c.{CC.PlanId} JOIN unnest(@items, @whs) AS p(i,w) ON p.i=c.{CC.ItemId} AND p.w=c.{CC.WarehouseId} LIMIT 1", conn);

@@ -94,13 +94,22 @@ public abstract class CompanyRuntimeTestBase : IdentityTestBase
         };
     }
 
+    /// <summary>The company migration scripts a test company is provisioned and gated with when the test names none. Null (the default) means every embedded script; a compatibility test overrides it with the scripts of an older
+    /// schema (a list it may extend after a migration, because the resolver reads the list at every schema check).</summary>
+    protected virtual IReadOnlyList<MigrationScript>? CompanyScripts => null;
+
+    /// <summary>Called once a test company has been provisioned and before anything uses it (default: nothing).</summary>
+    protected virtual Task OnCompanyProvisioned(CompanyRecord company) => Task.CompletedTask;
+
     protected async Task<CompanyRecord> ReadyCompany(IReadOnlyList<MigrationScript>? scripts = null)
     {
         var c = await Registry.RegisterPendingAsync();
         Assert.StartsWith(PostgresTestEnvironment.DatabasePrefix, c.PhysicalDatabaseName);          // safety: only disposable test databases
         lock (rolesToDrop) rolesToDrop.Add(CompanyRuntimeRole.NameFor(c.PhysicalDatabaseName));
-        await new CompanyProvisioner(Options, Registry, scripts).ProvisionAsync(c.Id);
-        return (await Registry.GetAsync(c.Id))!;
+        await new CompanyProvisioner(Options, Registry, scripts ?? CompanyScripts).ProvisionAsync(c.Id);
+        var ready = (await Registry.GetAsync(c.Id))!;
+        await OnCompanyProvisioned(ready);
+        return ready;
     }
 
     /// <summary>Resolver that reaches the company database with the single test principal (no per-company role exists on an ordinary test server).</summary>
@@ -110,7 +119,7 @@ public abstract class CompanyRuntimeTestBase : IdentityTestBase
         if (withCredentialFor is not null)
             Credentials.Set(withCredentialFor.Id, new CompanyCredential(CompanyRuntimeRole.NameFor(withCredentialFor.PhysicalDatabaseName), "unused-in-single-principal-tests"));
         return new CompanyDatabaseResolver(Configured(allowOverprivileged), new CompanyRegistry(Options.BuildSystemConnectionString(admin: true)), Credentials, Clock,
-            Logs.CreateLogger("Hasm.Company"), scripts)
+            Logs.CreateLogger("Hasm.Company"), scripts ?? CompanyScripts)
         {
             ResolutionLifetime = TimeSpan.Zero,
             SchemaCheckLifetime = TimeSpan.Zero,
