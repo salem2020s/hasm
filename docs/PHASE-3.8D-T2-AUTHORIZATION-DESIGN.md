@@ -1,12 +1,13 @@
 # Phase 3.8D threat T2: authorization of replay operations (design proposal)
 
-Status: **DESIGN PROPOSAL, revision 3, documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
+Status: **DESIGN PROPOSAL, revision 4, documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
 
-Review history (record: `review-records/PR-218-t2-design-review.md`):
+Review history (records: `review-records/PR-218-t2-design-review.md`, `PR-218-t2-design-delta-confirmation.md`, `PR-218-t2-design-rev3-confirmation.md`):
 * Revision 1 (`a5010a5`): 1 Critical, 4 Medium, 3 Low.
 * Revision 2 (`d62bc29`): C1, M1 to M4, L1 and L2 resolved; L3 partly resolved. New: 3 Medium (N1 to N3) and 2 Low (N4, N5).
+* Revision 3 (`05055a7`): N1 to N5 resolved; all five v3 vectors independently rebuilt and matching. New: 1 Medium (P1) and 1 Low (P2).
 
-Section 0 maps every finding of both rounds to its resolution.
+Section 0 maps every finding of all rounds to its resolution.
 
 Until this design is independently approved and the owner decisions of section 14 are taken, **replay executor production activation and the runtime INSERT grant on the four execution tables stay disabled** (owner direction of 2026-11-22).
 
@@ -21,6 +22,14 @@ Sources:
 ---
 
 ## 0. Findings and resolutions
+
+### 0.0 Revision 4 (findings at `05055a7`)
+
+| Finding | Resolution in revision 4 |
+|---|---|
+| **P1 (Medium).** Plans with compensation lines are refused only in application code (E3's `ICompensationJournalWriter`), but activation is a single INSERT grant. With runtime credentials and an intercepted grant, the general-ledger side was unbound. | Sections 4.3 and 4.8. The journal-equality check is a **deferred database check in slice A from day one**, through 0036's execution-to-journal link table (`t_d710e042`). A plan with lines needs linked journal lines equal, as a multiset, to the signed lines. A plan without lines must have no linked journal. Until CI writes journals, every plan with lines therefore fails in the database, and CI needs no later trigger change. Signers refuse plans with lines until CI is built (sections 5 and 6). The read side compares journals (section 9). Tests are in section 12, test 4b, and the executor-plan effects in section 13. |
+| **P2 (Low).** The claim that 0014 derives the layer remaining figures was wrong, and the operation metadata was not signed. | Section 4.4. The epoch text gains `R` lines (post-epoch remaining quantity and amount of every layer the epoch creates, consumes or restores) and `O` lines (the metadata of every epoch member operation). The false sentence is removed. A schema-pinning test fails on any new column of the 0014 operation, entry, layer or consumption tables until the column is classified as signed or excluded (section 12, test 4c). The message version is now `hasm-replay-v4`, and every vector is recomputed. |
+| D1 to D6 wording | Section 14 adopts opusSEC's final wording, including the owner-signed participants list in D2. |
 
 ### 0.1 Revision 3 (findings at `d62bc29`)
 
@@ -172,7 +181,12 @@ One additive company migration; the lead allocates its number.
 * its grant is **re-verified**: the signature is checked over the message rebuilt NOW from the rows. A closure or line row added after the grant was inserted therefore fails;
 * `clock_timestamp() <= not_after` still holds;
 * the grant's plan and executor equal the execution's plan and `executed_by`;
-* **the epoch text of 4.4 rebuilt from the cost entries, layers and consumption rows of this execution's epoch members hashes to the grant's signed epoch digest (N3).** Any difference in any entry's position, sequence, role, origin, kind, direction, date, quantity, amount or running figures, or any layer or consumption that differs, is missing or is extra, refuses the commit;
+* **the epoch text of 4.4, rebuilt from the rows of this execution's epoch, hashes to the grant's signed epoch digest (N3, P2).** The rows are the member operations, cost entries, layers, consumption rows and post-epoch layer remaining figures. The commit is refused if any of these differs, is missing or is extra;
+* **the journal binding of 4.8 holds (P1).**
+  * A plan with lines: the journal lines linked to this execution equal the signed plan lines, as a multiset.
+  * A plan without lines: no journal is linked to this execution.
+
+  The same check also runs as a deferred constraint trigger on 0036's execution-journal link table (`t_d710e042`), so a link row added in any transaction is checked at that transaction's commit;
 * in (ii), the approval named by the plan has its verified approval signature, and the grant's signer differs from that signature's signer.
 
 Nothing in 0036 is changed or replaced; these are new triggers on new and existing tables.
@@ -181,7 +195,7 @@ Nothing in 0036 is changed or replaced; these are new triggers on new and existi
 
 ### 4.4 The signed messages, byte-exact
 
-The version line is `hasm-replay-v3`. Revision 3 added `epoch=` and `attestation=`, so revision 2's vectors no longer apply.
+The version line is `hasm-replay-v4`. Revision 3 added `epoch=` and `attestation=`. Revision 4 added the `O` and `R` groups to the epoch text and changed the version. Earlier vectors no longer apply.
 
 **Encoding.**
 * The UTF-8 bytes of ASCII text, except that the attestation's note may hold other UTF-8.
@@ -191,7 +205,7 @@ The version line is `hasm-replay-v3`. Revision 3 added `epoch=` and `attestation
 **Grant message** (resolutions (i) and (ii)):
 
 ```
-hasm-replay-v3
+hasm-replay-v4
 grant
 company=<company id>
 plan=<plan id>
@@ -244,26 +258,54 @@ not-after=<integer>
 * Each line is `<line number>|<posting id, or - when NULL>|<entry date>|<period id>|<branch id>|<account id>|<debit>|<credit>`. Debit and credit are `numeric(28,6)`.
 * A plan with no lines: the hash of the empty string, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 
-**Epoch text (N3).** It covers every cost-ledger row (company migration 0014) that belongs to the epoch of this execution. "Epoch entries" are the cost entries whose operation has an `EpochMember` row of this execution. Entry ids (identity) and layer ids (random uuids) are not deterministic, so rows are keyed by position (item, warehouse) and sequence; 0014 makes (position, sequence) unique for entries and for layers.
+**Epoch text (N3, P2).** It covers every row of the cost ledger (company migration 0014) that belongs to the epoch of this execution.
+* "Epoch operations" are the operations that have an `EpochMember` row of this execution.
+* "Epoch entries" are the cost entries of those operations.
+* Operation ids, entry ids (identity) and layer ids (random uuids) are not deterministic. Rows are therefore keyed by member role and original operation (operations), or by position (item, warehouse) and sequence (entries and layers). 0014 makes (position, sequence) unique for entries and for layers.
 
-Three groups, in this order, every line LF-joined, with no trailing LF:
-1. **`E` lines**, one per epoch entry, ordered by item, warehouse (uuid order) and sequence:
+Five groups, in this order, every line LF-joined, with no trailing LF:
+1. **`O` lines**, one per epoch operation, ordered by role, then original operation id (uuid order; the single event operation has none):
+
+   `O|<role>|<original operation>|<kind>|<effective date>|<reverses operation>|<source type>|<source id>|<key>|<created by>`
+
+   * `role` and `original operation` come from the `EpochMember` row; `original operation` is `-` for role 2.
+   * `kind` and `effective date` come from the operation row.
+   * `reverses operation` is the uuid, or `-` when NULL.
+   * `source type` is the hex SHA-256 of `convert_to(value, 'UTF8')`, or `-` when NULL.
+   * `source id` is `execution-posting` when it equals the execution's posting id (known only at execution), `-` when NULL, and otherwise the uuid.
+   * `key` is the hex SHA-256 of `convert_to(key, 'UTF8')` (the operation's unique key). E2b derives it deterministically from the plan, and E1 emits it.
+   * `created by` is the uuid.
+2. **`E` lines**, one per epoch entry, ordered by item, warehouse (uuid order) and sequence:
 
    `E|<item>|<warehouse>|<seq>|<role>|<origin>|<kind>|<direction>|<date>|<quantity>|<amount>|<quantity after>|<value after>`
 
-   * `role` is the member role: 1 storno, 2 event, 3 rebook.
+   * `role` is the member role of the entry's operation: 1 storno, 2 event, 3 rebook.
    * `origin`: for role 1, the entry's reverses-entry id (the original's existing id); for role 3, the original entry id of its lineage row; for role 2, `-`.
    * Quantities are `numeric(28,10)` and amounts `numeric(28,6)`.
-2. **`L` lines**, one per cost layer whose entry is an epoch entry, ordered by item, warehouse and layer sequence:
+3. **`L` lines**, one per cost layer whose entry is an epoch entry, ordered by item, warehouse and layer sequence:
 
    `L|<item>|<warehouse>|<layer seq>|<entry seq>|<original quantity>|<original amount>|<source>`
 
    `source` is `-` when the layer has no source layer, otherwise `<item>/<warehouse>/<layer seq>` of the source layer.
-3. **`C` lines**, one per consumption row whose entry is an epoch entry, ordered by entry item, entry warehouse, entry sequence, layer item, layer warehouse, layer sequence and restores (`f` before `t`):
+4. **`C` lines**, one per consumption row whose entry is an epoch entry, ordered by entry item, entry warehouse, entry sequence, layer item, layer warehouse, layer sequence and restores (`f` before `t`):
 
    `C|<entry item>|<entry warehouse>|<entry seq>|<layer item>|<layer warehouse>|<layer seq>|<quantity>|<amount>|<restores>`
+5. **`R` lines**, one per layer the epoch creates (an `L` line), consumes or restores (named by a `C` line), each listed once and ordered by item, warehouse and layer sequence:
 
-An epoch with no rows hashes as the empty string. Remaining layer quantities are not listed separately: 0014 derives them from the layers and consumption rows, which are bound. Each position's final quantity and value are bound by its last entry's running figures.
+   `R|<item>|<warehouse>|<layer seq>|<remaining quantity>|<remaining amount>`
+
+   These are the remaining figures at commit, after the whole epoch. 0014 only bounds them to `[0, original]` and does not derive them from the consumption rows. They drive future FIFO cost, so they are signed.
+
+An epoch with no rows hashes as the empty string. Each position's final quantity and value are bound by its last entry's running figures.
+
+**Column classification (pinned by test 4c of section 12).** Every column of the four 0014 tables is either signed or excluded with a reason:
+
+| Table | Signed | Excluded, with reason |
+|---|---|---|
+| Operation | kind, effective date, reverses operation, source type, source id, key, created by; role and original operation from `EpochMember` | id (random); request hash (a technical idempotency digest of the request the signed key identifies); created at (a time); reversed by (NULL for a new operation, and set only by a later reversal, which 0036 X6 refuses for epoch members) |
+| Entry | item, warehouse, sequence, kind, direction, effective date, quantity, amount, quantity after, value after; the reverses entry as `origin` | id (identity); operation id (bound by role and origin); position id (determined by item and warehouse); created at |
+| Layer | item, warehouse, sequence, entry (as its sequence), original quantity, original amount, source layer (as item/warehouse/sequence), remaining quantity, remaining amount | id (random); position id; created at |
+| Consumption | entry (as position and sequence), layer (as position and sequence), quantity, amount, restores | id (identity) |
 
 **Attestation (N2).** The exact bytes stored in the grant, LF-joined, with no trailing LF:
 
@@ -313,33 +355,44 @@ note=<free text, UTF-8, no LF, at most 500 characters>
   2|-|2026-03-12|1a2b3c4d-0000-4000-8000-0000000000aa|2b3c4d5e-0000-4000-8000-0000000000bb|4d5e6f70-0000-4000-8000-0000000000dd|0.000000|12.500000
   ```
   The lines hash is `b5fd4e1d6a1b3265a0c351234a1ffc54b0fe850693aecdb67f1163c38facda49`.
-* **Epoch text.** Six lines, with I = item 7 and W = warehouse 8 written in full:
+* **Operation keys and source types.** The original operation is `eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`, written O below. The operation keys are:
+  * `epoch:22222222-2222-4222-8222-222222222222:1:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`, hash `KS`;
+  * `epoch:22222222-2222-4222-8222-222222222222:2`, hash `KE`;
+  * `epoch:22222222-2222-4222-8222-222222222222:3:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`, hash `KR`.
+
+  The source types are `replay-storno` (hash `ccafea491d240486f275df9056349c5d84f517dafe92fec1cc99defaea3b2a10`), `stock-posting` (hash `2e894c7e770e61084d405fbf348f2fc5a0651051ea182d5a84aa9de8ad81ad1d`) and `replay-rebook` (hash `0397383eedde7014d68ceb3b5cf095472a3d1ad576436b60388de7ce5a22e6bc`). These are written TS, TE and TR below. KS, KE and KR are the hex SHA-256 of the keys above. The executor's uuid 9 is written X.
+* **Epoch text.** Eleven lines. I = item 7, W = warehouse 8, and O, X, TS, TE, TR, KS, KE and KR are written in full in the real text:
   ```
+  O|1|O|2|2026-03-11|-|TS|-|KS|X
+  O|2|-|1|2026-03-11|-|TE|execution-posting|KE|X
+  O|3|O|2|2026-03-11|-|TR|-|KR|X
   E|I|W|41|1|17|2|1|2026-03-11|5.0000000000|62.500000|105.0000000000|1312.500000
   E|I|W|42|2|-|1|1|2026-03-11|20.0000000000|240.000000|125.0000000000|1552.500000
   E|I|W|43|3|17|2|2|2026-03-11|5.0000000000|60.000000|120.0000000000|1492.500000
   L|I|W|9|42|20.0000000000|240.000000|-
   C|I|W|41|I|W|3|5.0000000000|62.500000|t
   C|I|W|43|I|W|3|5.0000000000|60.000000|f
+  R|I|W|3|10.0000000000|120.000000
+  R|I|W|9|20.0000000000|240.000000
   ```
-  With I and W in full, the text is 915 bytes and its hash is `459e3dd2ca09cd91cf403a1dd772a8862c6763f42c1ebff28a522064fb09db71`. The kind and direction codes are illustrative; the vector pins only the format.
-* **Request digest:** `c46bf7cbc1b93068`.
+  In full, the text is 1777 bytes and its hash is `719a4407b03e42328b6ff19850e5be69ff57dffb4a0e9a65919e72054a21fc0a`. The kind, direction, key and source-type values are illustrative; the vector pins only the format.
+* **Request digest:** `7af26e059fb7e332`.
 * **Attestation.**
   ```
   hasm-replay-attestation-v1
   creator=55555555-5555-4555-8555-555555555555|phone|1795650600
   approver=44444444-4444-4444-8444-444444444444|in-person|1795650900
-  request=c46bf7cbc1b93068
+  request=7af26e059fb7e332
   participants=3
   note=plan, document and totals confirmed
   ```
-  It is 236 bytes, and its hash is `ddeb7f2e567e3ab2b14185617734d45e65f45d86566d80f22e46a74393e8fa15`.
+  It is 236 bytes, and its hash is `66ed1fd687167197170dea6145943a63d7c20b43ecd121ce78536839ad7f6f6f`.
 * **Results.**
 
   | Message | Length | SHA-256 |
   |---|---|---|
-  | Grant | 1408 bytes | `76e4fb700472e99a0135321ba28d96bd027ad9c3081844a2eaf5a16925b9464e` |
-  | Approval (signer `4`, which is the approver; key `k1`; `signed-at=1795651200`) | 1151 bytes | `99c0c0360e8c3d0b6ca647eae112e52753bc1c583e972da536391a5423e2602e` |
+  | Grant | 1408 bytes | `ba4b8e2a9f83f426df0f46585567e7e06edc49ef2e0737886dc29ec2364f82ad` |
+  | Approval (signer `4`, which is the approver; key `k1`; `signed-at=1795651200`) | 1151 bytes | `7786134c565c3664ca624303045e2a171e9fdc8a12be29d42ba3965356858713` |
 
 * **RSA vectors.** Slice A's tests also use a fixed 3072-bit test key with a valid signature over the grant vector, and Wycheproof-style invalid cases. Each case must give the same result in SQL and in .NET:
   * wrong length, 383 and 385 bytes;
@@ -382,7 +435,8 @@ note=<free text, UTF-8, no LF, at most 500 characters>
 **What the grant binds.**
 * One plan, one plan revision, one approval and approver, one creator, and one event document revision.
 * The closure, the payload, all seven fingerprints and the lines.
-* **The exact epoch**: every cost entry, layer and consumption, with their amounts and running figures (4.4).
+* **The exact epoch**: every member operation, cost entry, layer and consumption, with their amounts, running figures and post-epoch layer remaining figures (4.4).
+* **The general-ledger side**: the linked compensation journals must equal the signed lines (4.8).
 * One executor id, the attestation, one use and one time window.
 
 **Where the epoch text comes from.** The epoch is deterministic given the pre-state, and the pre-state is fingerprinted. The epoch text is computed at export time by the executor's pure derivation (E1, section 13) from the planner result, and it is signed. At commit, the database rebuilds the text from the rows the execution actually wrote.
@@ -392,11 +446,29 @@ note=<free text, UTF-8, no LF, at most 500 characters>
 * Cost cannot be moved between items, positions, entries or layers: every row is bound.
 * Any change in the pre-state between export and execution makes the epoch differ, and the commit is refused. This fails closed: a new export and a new grant are needed.
 
-**Compensation journals.** These are the general-ledger side, built in slice CI. Until CI, E3 refuses plans with lines (`compensation_not_integrated`, merged executor plan). CI must add a deferred database check: the multiset of (entry date, period, branch, account, debit, credit) of the journal lines carrying this plan's source key equals that of the signed plan lines. This is an activation condition for plans with lines (section 13).
+**Compensation journals.** These are the general-ledger side of the replay. They are bound by the database from slice A on (4.8), not by application code.
 
 **Exposure.** The grant reaches the database only inside the execution transaction. The executor uploads the grant file when executing, and the application inserts the grant, the execution and the grant use together. A grant is therefore never readable from the database before it is consumed. D4 limits its life to 2 hours for (i).
 
 **Until the database-side binding exists**, meaning slice A together with E1's epoch text, activation is not allowed (section 14). The read-side check of section 9 nevertheless compares entry by entry against the signed epoch text, not only against the lines.
+
+### 4.8 Journal binding (P1)
+
+**Why a database check.** Activation is one runtime INSERT grant on the execution tables, not a switch per plan type. A refusal that lives only in application code (E3's `compensation_not_integrated`) is bypassed by anyone writing the rows directly with the runtime credentials and an intercepted grant. Slice A therefore contains, from day one, a deferred database check. CI never needs to change it, which matters because the guard forbids `CREATE OR REPLACE`.
+
+**The check.** It runs at commit, in the trigger function of 4.3, on the execution and on 0036's execution-journal link table `t_d710e042` (execution id, bucket, journal entry id):
+* **A plan with no lines:** no link row may exist for the execution.
+* **A plan with lines:** two multisets must be equal, compared with `EXCEPT ALL` in both directions:
+  * every line of every journal linked to the execution, as (journal date, journal period, line branch, line account, line base debit, line base credit);
+  * the signed plan lines, as (entry date, period, branch, account, debit, credit).
+
+  The comparison is numeric, so scale is irrelevant. Every line counts, including rounding lines. A missing, extra or altered journal or line refuses the commit.
+
+**Before CI exists.** No code writes compensation journals, so every plan with lines fails this check in the database. That is the intended refusal. In addition:
+* the offline tool, and in (ii) the signer component, refuse to sign a plan with lines while the signer's tool release does not support CI;
+* the read side compares journals with the signed lines (section 9).
+
+**Requirement on CI.** CI writes the compensation journals in the execution transaction, in the shape above. They must be either posted, so the ledger's existing immutability applies, or bound by CI so that their lines cannot change before posting. The read side re-compares at every read, so a later change to a linked journal is refused as history.
 
 ## 5. Resolution (i), RECOMMENDED: offline second-person execution grant
 
@@ -406,7 +478,7 @@ note=<free text, UTF-8, no LF, at most 500 characters>
 * The signer generates their own RSA-3072 key pair on their own offline machine with a small offline tool, `Hasm.ReplaySigner keygen`, which uses no network. The private key never leaves that machine.
 * The public key file goes to the owner. The owner registers it in every company database with `Hasm.Admin register-replay-signer <public key file> <signer user id>`, as the owner account, and a system audit event is written. The owner adds the key to the API's pinned list.
 
-**Participants list.** The owner gives each signer a versioned list of the user ids, logins and names of the people allowed to create, approve and execute replays, with a contact channel for each person that is not the application.
+**Participants list.** The owner gives each signer a versioned list, **signed by the owner**, of the user ids, logins and names of the people allowed to create, approve and execute replays, with a contact channel for each person that is not the application. The tool refuses an unsigned list and any list older than the newest it has seen.
 * The list is pinned in the offline tool's own configuration, outside the database.
 * The tool refuses to sign a plan whose creator, approver or executor id is not on the list.
 * Names and contacts come from this list, never from the export. The list's version goes into the attestation.
@@ -432,7 +504,8 @@ note=<free text, UTF-8, no LF, at most 500 characters>
      * per position, the quantity and value before and after the epoch;
      * the debit and credit totals of the lines;
      * the request digest, grouped as 4×4 hex;
-   * refuses if the creator, approver or executor is not on the participants list.
+   * refuses if the creator, approver or executor is not on the participants list;
+   * refuses a plan with lines while its release does not support CI's compensation journals (4.8).
 4. **Confirmation, enforced and recorded.** The signer contacts the creator AND the approver through the contact channels on the participants list, never through the application. Each must state, from their own knowledge, the plan id, the event document, the debit and credit totals, and the request digest they see in their own application session. The signer enters into the tool, for each person, the method (`in-person`, `phone` or `video`) and the time, plus a short note. The tool builds the attestation of 4.4.
 
    This is required because runtime credentials can mint sessions of real users (section 15), so a thief could make a forged plan appear to come from real colleagues. A colleague who never created or approved that plan, or who sees other content, does not confirm it.
@@ -463,7 +536,7 @@ note=<free text, UTF-8, no LF, at most 500 characters>
 * The **approval signature** is by the approver, who must be a registered signer A, at approval time.
 * The **execution grant** is by registered signer B, with B ≠ A, B not the creator, and B not the executor.
 
-**Before B signs the grant (N2).** B performs the confirmation of section 5, step 4, with the creator AND the approver, through contact channels outside the application. The application shows B the same displays as the offline tool, with database names marked as database data, and builds the same attestation, which the database checks (4.3).
+**Before B signs the grant (N2).** B performs the confirmation of section 5, step 4, with the creator AND the approver, through contact channels outside the application. The application shows B the same displays as the offline tool, with database names marked as database data, and builds the same attestation, which the database checks (4.3). Like the offline tool, the signer component refuses to sign a grant for a plan with lines until CI is built (4.8).
 
 **Forged-provenance residual.** Plan creation is unsigned, so the runtime credentials can attribute a forged plan to a real creator. Approver A's own signature, and B's confirmation with the creator, are what stop it. A careless confirmation remains a residual (7.2).
 
@@ -507,7 +580,7 @@ In both tables, "runtime credentials" means the system runtime account AND the c
 |---|---|---|---|---|
 | **Runtime credentials** | Can be written (unsigned); they grant nothing. | **Prevented.** No grant verifies without a signer's private key; the deferred checks roll back the whole epoch. | Refused writes in the database log. | Availability: forged proposed plans can bind documents (X7) until cancelled; cancel, reject and stale are unsigned (D6). |
 | Runtime credentials **+ sessions, users, roles and MFA times they mint** | As above. | **Prevented** unless a signer signs a forged plan. The participants list is pinned outside the database. The creator and approver must confirm from their own knowledge through channels outside the application. The attestation is signed, checked and audited. | The attestation names who confirmed, how and when. | **Procedural residual:** a signer who records a confirmation that did not happen, or confirmers who are deceived. This is attributable to the signer and the confirmers. |
-| Runtime credentials **+ a legitimately issued grant file, intercepted within its window** | | Only the exact signed epoch of that plan, by the signed executor id, once, within 2 hours. Any other epoch is refused at commit. | The audit names the executor. | The authorized replay is executed by someone else, at a time the attacker chooses within the window. Its content is unchanged. |
+| Runtime credentials **+ a legitimately issued grant file, intercepted within its window** | | Only the exact signed epoch of that plan, with journals equal to the signed lines (none before CI), by the signed executor id, once, within 2 hours. Any other epoch or journal is refused at commit. | The audit names the executor. | The authorized replay is executed by someone else, at a time the attacker chooses within the window. Its content is unchanged. |
 | **Full compromise of the API process** | Yes. | **Prevented** for any plan without a grant: there is no signer key on the API host. For a grant delivered to the compromised process: as in the row above. | As above. | |
 | A signer's offline machine and private key | | Without database access: nothing. With runtime credentials as well: equivalent to a malicious signer, one plan per grant, attributable. | Key revocation (4.6). | Collusion or coercion of a signer. |
 | **Database owner or superuser** | Can write any rows and switch triggers off. | Can write an execution without a valid grant. | **Readers, the close probe and the restore check refuse it** (.NET verification against pinned keys, section 9). | Preventing the write (design T10). |
@@ -549,14 +622,14 @@ In both tables, "runtime credentials" means the system runtime account AND the c
   * they rebuild the grant message, the epoch text and the attestation of 4.4 in .NET from the rows;
   * they verify the RSA signature in .NET against the keys **pinned in the application configuration**, with their revoke-from;
   * they compare the rebuilt epoch text with the signed digest, which binds every entry, layer and consumption;
-  * from CI on, they compare the compensation journal lines with the signed plan lines.
+  * from day one, they compare the linked compensation journal lines with the signed plan lines, and require no linked journal for a plan without lines (4.8).
 
   An epoch is refused, and not treated as valid history, if any of these holds:
   * its grant does not verify;
   * its key is not pinned;
   * its acceptance time is not before the pinned revoke-from;
   * its epoch rows differ from the signed epoch text;
-  * its journal lines differ from the signed lines.
+  * its linked journal lines differ from the signed lines, or a plan without lines has a linked journal.
 
   None of the following changes the outcome: a replaced database function, a replaced key row, rows written with triggers switched off, or a restore that loads data before it creates triggers.
 * **After a restore.** The restore check runs this verification over every grant. A failure marks the restored copy unusable.
@@ -638,7 +711,15 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
    * a layer with another source;
    * a consumption marked `restores`;
    * the pre-state changed by an ordinary posting between export and execution.
-   * From CI on, journal lines that differ from the signed lines in any field.
+   * an `O` line deviation: another operation kind, date, key, source, reverses link or creator;
+   * an `R` line deviation: a layer's remaining quantity or amount changed after the epoch's last entry within the same transaction.
+4b. **Journal binding (P1), with a valid grant:**
+   * a plan with lines whose execution has no linked journal (the state before CI): refused at commit;
+   * missing, extra or altered journal lines (date, period, branch, account, debit or credit), or an extra rounding line: refused at commit;
+   * a plan without lines with any linked compensation journal: refused at commit;
+   * a link row added in a later transaction: refused at that transaction's commit;
+   * the read side refuses a linked journal changed after the execution.
+4c. **Schema pinning (P2).** A test lists every column of the 0014 operation, entry, layer and consumption tables from `information_schema` and compares the list with the classification of 4.4. A new or renamed column fails the test until it is classified as signed (with a new message version) or excluded (with a reason).
 5. **Attestation (N2).** Refused at insert when the attestation:
    * names another creator or approver;
    * uses an unknown method;
@@ -665,7 +746,8 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
     * the expiry check at commit;
     * the content re-verification at commit;
     * the epoch comparison at commit;
-    * any single field of the `E`, `L` or `C` lines;
+    * any single field of the `O`, `E`, `L`, `C` or `R` lines;
+    * the journal check, in either direction, and its "no lines, no journal" rule;
     * the attestation checks;
     * the signer independence check;
     * the single-use constraint;
@@ -682,58 +764,78 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
 * **Sequences** are deterministic: "an entry takes the next sequence number of its position" (0036), and the position state is fingerprinted and re-checked by the re-plan (E3 step 3).
 * **Entry ids and layer ids** are not deterministic (identity, `gen_random_uuid()`). The epoch text therefore never uses them, except the existing original entry ids.
 
-**Change 1, E1.** `EpochSchedule` emits the full epoch text of 4.4: every storno, event and rebook entry with position, sequence, kind, direction, date, amounts and running figures, plus every layer and consumption. Today the merged E1 states only "the expected rebook amount per entry, the expected final position and layer state, and the lineage map". New tests check that E2b's writers and the real `PostInWorkAsync` produce rows whose rebuilt text equals E1's, for FIFO and average, one- and two-warehouse chains, and both directions with equal dates.
+**Change 1, E1.** `EpochSchedule` emits the full epoch text of 4.4:
+* every epoch operation's metadata, including the deterministic operation keys E2b uses;
+* every storno, event and rebook entry with position, sequence, kind, direction, date, amounts and running figures;
+* every layer and consumption;
+* the post-epoch remaining figures of every layer the epoch touches.
 
-**Change 2, CI.** The compensation journal writer gains the deferred database check of 4.7: the journal lines equal the signed plan lines. Plans with lines stay refused (`compensation_not_integrated`) until then.
+Today the merged E1 states only "the expected rebook amount per entry, the expected final position and layer state, and the lineage map". New tests check that E2b's writers and the real `PostInWorkAsync` produce rows whose rebuilt text equals E1's, for FIFO and average, one- and two-warehouse chains, and both directions with equal dates.
+
+**Change 2, journal binding moves from CI to slice A (P1).** The deferred journal check of 4.8 is part of slice A's migration from day one; it is not added by CI. Consequences for the merged plan:
+* E3's application refusal `compensation_not_integrated` stays, but it is now only an early answer. The database refuses a plan with lines regardless, because no journal is linked before CI.
+* CI writes the compensation journals and their link rows in the execution transaction, in the shape of 4.8. It needs no change to the trigger. CI's tests add the positive case: journals equal to the signed lines commit.
+* The read side (P) compares the linked journals with the signed lines from day one.
 
 **New slice A, before E3.** It contains:
-* the migrations of section 11;
-* `rsa_verify`, the message builders and the epoch-text and attestation checks, in SQL and .NET;
+* the migrations of section 11, including the journal check of 4.8;
+* `rsa_verify`, the message builders and the epoch-text, journal and attestation checks, in SQL and .NET;
 * the read-side verifier;
-* the tooling of the chosen resolution;
-* the tests of section 12.
+* the tooling of the chosen resolution, which refuses to sign plans with lines until CI;
+* the tests of section 12, including the schema-pinning test 4c.
 
 It stays inert while no key is registered. For (ii) it also contains the system migration and the signer component of 6.1.
 
 **E3.**
 * The executor accepts the grant file, writes the grant, the execution and `ReplayGrantUse` in one transaction, and fails closed without a grant.
-* The rollback matrix gains "grant refused", "grant expired at commit", "attestation refused" and "epoch differs from the signed epoch".
+* The rollback matrix gains these rows:
+  * "grant refused";
+  * "grant expired at commit";
+  * "attestation refused";
+  * "epoch differs from the signed epoch";
+  * "journals differ from the signed lines".
 
 **P.** The close probe and the readers use the .NET verifier (section 9).
 
 **E5 and executor-plan section 7 are replaced by this design.** The runtime INSERT grant on the four execution tables returns only when all of these hold:
-* slice A is merged, with E1's epoch text;
-* for plans with lines, CI's journal binding;
+* slice A is merged, with the journal check and E1's epoch text;
 * the first real caller exists;
 * a revision of this design is approved;
 * the owner has taken the decisions below.
 
+Plans with lines become executable only once CI writes matching journals. No grant or trigger change is needed for that.
+
 ## 14. Owner decisions needed before activation
 
-* **D1 (activation baseline).** Proposed wording for the owner:
+The wording below is opusSEC's final wording (review record `PR-218-t2-design-rev3-confirmation.md`), adopted as is. Bracketed items are for the owner to fill in.
 
-  > "Shall replay execution require, for each execution, a grant signed by a second, owner-registered person with a private key kept on a separate offline machine, after that person has confirmed the plan with its creator and its approver by a channel outside the application? This is resolution (i), recommended: stolen runtime database credentials, sessions minted with them, and a fully compromised application server cannot execute a replay without such a grant. Its residuals: someone who intercepts a grant file can run exactly that signed replay, unchanged, within its validity window; and the protection against a forged plan that names real colleagues depends on the confirmation procedure being followed honestly, which is recorded and attributable.
-  >
-  > Or do you accept owner-registered in-application signers, two different people, who each confirm with a fresh code from their own registered authenticator? This is resolution (ii): stolen runtime database credentials and minted sessions cannot execute a replay, but a fully compromised application server can. Its residuals: a holder of the database credentials can guess codes, bounded to 10 tries per signer before suspension, each try alerting you; forged attribution of a plan to a real creator is stopped only by the approver's signature and the second signer's confirmation.
-  >
-  > In both cases, replay execution is activated only once the database itself checks that the posted replay entries equal the signed ones."
-* **D2 (signer registry and authentication).**
-  * Who may be registered as a replay signer, and by whom. Recommended: the owner account through `Hasm.Admin`, audited.
-  * The rule that a signer is never the creator, approver or executor of a plan they sign, nor the creator, editor or submitter of its document.
-  * For (i): the participants list. The owner maintains it as a single versioned list: user id, login, name and an out-of-application contact for each person allowed to create, approve or execute. The owner delivers each new version to every signer in person or on signed media. Signers install it on their offline machines, and the tool refuses lists older than the newest version it has seen. A person who leaves is removed in a new version on the day they leave.
-  * For (i) and (ii): the confirmation procedure of section 5, step 4, and the alert channel for (ii)'s failures and suspensions.
-  * For (ii): the pinned authenticator, the rule that re-enrolment voids the registration, and owner re-registration after a suspension.
-* **D3 (key custody).**
-  * For (i): per-signer keys, generated and kept on each signer's offline machine, backed up by that signer under a rule the owner sets.
-  * For (ii): the installation signing key in its own owner-only directory, separate from the database credentials, the audit key and the key ring.
-  * For both: the rotation interval, and who may revoke a key.
-* **D4 (grant validity).** Recommended: **2 hours for (i)** and 10 minutes for (ii). A grant is always single-use.
+**D1 - Activation baseline.**
+"Replay execution will require, for every execution, a grant signed by a second, owner-registered person, using a private key kept on a separate offline machine, after that person has confirmed the plan directly with its creator and its approver through a channel outside the application (in person, phone or video), and recorded that confirmation in the signed grant. With this, stolen database credentials, application logins forged with them, and even a fully compromised application server cannot execute a replay without such a grant. Remaining risks you accept: (1) someone who intercepts a grant file can run exactly that signed replay, unchanged, once, within its validity window; (2) protection against a fake plan that names real colleagues depends on the signer and the two colleagues following the confirmation procedure honestly; a false confirmation is signed and attributable to the signer. Do you approve this as the activation baseline?"
 
-  Justification against N3: since the database binds the exact epoch, an intercepted grant can only run the authorized replay unchanged. The window now limits *when* that can happen, and how long a grant file is worth intercepting. Two hours covers carrying the file from the offline machine and executing it. A longer window also raises the chance that the pre-state changes, which fails closed and needs a new grant.
-* **D5 (revocation after a suspected compromise).** When the owner backdates a key's revoke-from to the suspected time, replays accepted after it are refused as history. Decide what then happens to them. Recommended: they are treated as unauthorized and corrected by a new, properly granted plan under owner review.
-* **D6 (unsigned steps).** Accept that plan creation, approval in (i), cancel, reject and stale stay unsigned. None of them changes financial history; the residual is availability, because forged proposed plans can block documents until cancelled. The alternative is to also require a grant for plan creation.
-* **Activation condition (not a decision; stated for the owner).** Activation requires the database-side epoch binding (slice A with E1's epoch text) and, for plans with lines, CI's journal binding (4.7, section 13).
-* **Not a decision of this design, but relevant to activation:** the separate register item on runtime-credential session minting (section 15).
+The alternative, not recommended: two owner-registered in-application signers, each confirming with a fresh code from their own registered authenticator. This stops stolen database credentials and forged logins, but NOT a fully compromised application server. It leaves a bounded code-guessing risk of at most 10 alerted attempts per signer.
+
+**D2 - Who may sign, and the participants list.**
+"Only the owner registers replay signers, through the administration tool, and each registration is audited. A signer may never sign a plan they created, approved or will execute, nor one whose source document they created, edited or submitted. The owner maintains one versioned participants list (user id, login, name and a contact outside the application for each person allowed to create, approve or execute replays), signs each version, and delivers it to every signer in person or on signed media; the signing tool refuses unsigned lists and any list older than the newest it has seen; anyone who leaves is removed in a new version the same day. Failed-confirmation and suspension alerts go to [owner to name the alert channel]. Do you approve?"
+
+**D3 - Key custody.**
+"Each signer generates and keeps their own signing key on their own offline machine and backs it up under a rule you set: [where, and who holds the backup]. Keys are rotated every [interval], and may be revoked by [the owner / named persons]. Do you approve?"
+
+**D4 - Validity of a grant.**
+"A signed grant is valid for 2 hours from signing and can be used once. Longer windows give an intercepted grant more time to be used and make it more likely that the books change in between, which safely refuses the replay and needs a new grant. Do you approve 2 hours?"
+
+**D5 - After a suspected key compromise.**
+"If a signer's key may have been compromised, you set its revocation time back to the suspected moment. Every replay accepted after that moment is then treated as unauthorized and is corrected by a new, properly granted plan under your review; replays accepted before it stay valid. Do you approve?"
+
+**D6 - Steps that stay unsigned.**
+"Creating a plan, approving it in the application, and cancelling, rejecting or marking it stale stay unsigned. None of these changes the books; the only risk is nuisance, because fake proposed plans can block documents until someone cancels them. The alternative is to require a signed grant to create a plan as well. Do you accept that these steps stay unsigned?"
+
+**Activation conditions** (not decisions; for the owner's information). Replay execution stays disabled until all of these hold:
+1. this design is approved after the P1 fix;
+2. the first implementation slice is built and independently reviewed, with the database checking both the signed replay content and (for replays with ledger lines) the signed ledger lines;
+3. the replay calculator outputs the full replay content, and its tests prove the real posting code reproduces it;
+4. D1 to D6 are decided.
+
+**Separate issue.** The application-wide issue that stolen database credentials can forge logins (PR 220) is being fixed on its own track. This replay design does not depend on it, but the rest of the application does (section 15).
 
 ## 15. Residual risks and the separate issue
 
