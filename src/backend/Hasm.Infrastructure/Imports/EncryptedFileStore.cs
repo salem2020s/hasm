@@ -63,6 +63,21 @@ public sealed partial class EncryptedFileStore(ImportOptions options, Encryption
         return File.Exists(path) ? File.ReadAllBytes(path) : null;
     }
 
+    /// <summary>
+    /// The stored bytes for the READ-ONLY key-usage scan (D-180, D-181), or null when the file does not exist. Unlike every other member it never creates a directory and changes no permission
+    /// (review L2 of PR 182). A company folder that does not exist is NOT "no file": the storage may be unmounted or misconfigured, so it throws and the scan counts the item as unknown.
+    /// </summary>
+    public byte[]? ReadWithoutCreating(Guid companyId, string name)
+    {
+        if (!NamePattern().IsMatch(name)) throw new ArgumentException("Invalid stored file name.", nameof(name));
+        if (options.StorageDirectory is not { } root || !Path.IsPathFullyQualified(root))
+            throw new EncryptionUnavailableException("import_storage_not_configured", $"{ImportOptions.SectionName}:StorageDirectory (an absolute path) is required.");
+        var dir = Path.Combine(root, companyId.ToString("N"));
+        if (!System.IO.Directory.Exists(dir)) throw new DirectoryNotFoundException("The company storage folder does not exist.");
+        var path = Path.Combine(dir, name);
+        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
     public bool Exists(Guid companyId, string name) => File.Exists(PathOf(companyId, name));
 
     /// <summary>Deletes the file; true when it existed. Idempotent.</summary>

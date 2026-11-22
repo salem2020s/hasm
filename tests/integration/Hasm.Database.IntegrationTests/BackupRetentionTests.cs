@@ -181,6 +181,309 @@ public class BackupRetentionTests : PostgresTestBase
         Assert.Contains("retention_below_minimum", below.Err);
     }
 
+    private EncryptionKeyRetirementService RetirementReport(Clock clock) =>
+        new(Options, Attachments, new Hasm.Infrastructure.Imports.ImportOptions { StorageDirectory = Path.Combine(work, "imports") }, Encryption, clock);
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_fails_closed_on_a_backup_root_that_is_missing_empty_a_link_or_without_a_complete_verified_run()
+    {
+        // review H1 of PR 182: a typo, an unmounted share or the wrong folder used to read as "no retained run needs any key" (complete, keys retirable)
+        await Init();
+        await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");                                                                             // an older key that nothing needs
+        var clock = new Clock();
+        var service = RetirementReport(clock);
+        async Task Blocked(string root, SigningTrust? trust, string problem)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [root], trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:{problem}"], r.Blockers);
+            Assert.False(r.Complete);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+            Assert.Equal(["report_incomplete"], r.Keys.Single(k => k.KeyId == "k0").Reasons);                         // nothing else keeps k0: only the root does
+        }
+        await Blocked(Path.Combine(work, "does-not-exist"), Trust, "backup_root_missing");
+        var empty = Path.Combine(work, "empty"); Directory.CreateDirectory(empty);
+        await Blocked(empty, Trust, "backup_root_no_complete_verified_run");
+        var file = Path.Combine(work, "a-file"); File.WriteAllText(file, "x");
+        await Blocked(file, Trust, "backup_root_not_a_directory");
+
+        // only an incomplete run (a folder without its signed status): nothing proves the root
+        var incomplete = Path.Combine(work, "incomplete"); Directory.CreateDirectory(Path.Combine(incomplete, "20260301T020000Z-0a0b0c0d"));
+        await Blocked(incomplete, Trust, "backup_root_no_complete_verified_run");
+
+        // a REAL run that cannot be verified is not a verified run: no trusted signing key, or a trust list without the run's key
+        var run = await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        await Blocked(Root, null, "backup_root_no_complete_verified_run");
+        var (otherId, otherPem) = BackupSigningKeys.Generate(Path.Combine(work, "other-signing"));
+        await Blocked(Root, new SigningTrust([new TrustedSigningKey(otherId, otherPem, SigningKeyStatus.Active)]), "backup_root_no_complete_verified_run");
+        // a tampered status (a "failed" run cannot be forged into shape either): the signature no longer verifies
+        var tampered = Path.Combine(work, "tampered"); CopyTree(Root, tampered);
+        var status = Path.Combine(tampered, run, SignedDocuments.RunStatusFileName);
+        File.WriteAllText(status, File.ReadAllText(status).Replace("\"ok\"", "\"failed\""));
+        await Blocked(tampered, Trust, "backup_root_no_complete_verified_run");
+
+        // a symbolic link to the real, good root is refused as a root (the link can be re-pointed); so is a link next to a good root
+        if (!OperatingSystem.IsWindows())
+        {
+            var link = Path.Combine(work, "runs-link"); Directory.CreateSymbolicLink(link, Root);
+            await Blocked(link, Trust, "backup_root_symbolic_link");
+            var mixed = await service.ReportAsync(["k0", "k1"], "k1", [Root, link], Trust, backupScopeAttested: true);
+            Assert.Equal(["backup_inventory_incomplete:backup_root_symbolic_link"], mixed.Blockers);
+            Assert.All(mixed.Keys, k => Assert.False(k.Retirable));
+        }
+        // one good root does not excuse a bad one
+        var withTypo = await service.ReportAsync(["k0", "k1"], "k1", [Root, Path.Combine(work, "does-not-exist")], Trust, backupScopeAttested: true);
+        Assert.Equal(["backup_inventory_incomplete:backup_root_missing"], withTypo.Blockers);
+        Assert.All(withTypo.Keys, k => Assert.False(k.Retirable));
+        Assert.False(Directory.Exists(Path.Combine(work, "does-not-exist")));                                         // read-only: nothing was created
+        Assert.Empty(Directory.GetFileSystemEntries(empty));
+    }
+
+    private static void CopyTree(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var d in Directory.GetDirectories(from, "*", SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, d)));
+        foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories)) File.Copy(f, Path.Combine(to, Path.GetRelativePath(from, f)));
+    }
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_is_complete_only_over_a_real_complete_verified_run_and_with_the_scope_attested()
+    {
+        // D-181 positive case (review H1 of PR 182): a real encrypted run whose signed status verifies, every company readable, the scope attested
+        await Init();
+        await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");                                                                             // an older key that nothing needs
+        var clock = new Clock();
+        await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        var service = RetirementReport(clock);
+        var present = FileKekRing.ListKeyIds(Keys);
+        Assert.Equal(["k0", "k1"], present);
+
+        var report = await service.ReportAsync(present, "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(report.Complete, string.Join("; ", report.Blockers));
+        Assert.Equal(["k0"], report.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+        Assert.Equal(["active_key"], report.Keys.Single(k => k.KeyId == "k1").Reasons);
+        Assert.Equal(EncryptionKeyRetirement.ScopeLimits, report.ScopeLimits);
+
+        // without the attestation the SAME facts are incomplete: other destinations, copies and standalone backup-company sets are invisible to the report
+        var unattested = await service.ReportAsync(present, "k1", [Root], Trust, backupScopeAttested: false);
+        Assert.Equal(["backup_scope_not_attested"], unattested.Blockers);
+        Assert.All(unattested.Keys, k => Assert.False(k.Retirable));
+
+        // the command end to end: exit 0 only with a real root AND the attestation; the scope limits are printed every time; read-only (no audit event, nothing written but --json)
+        var eventsBefore = await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table}");
+        var json = Path.Combine(work, "keys.json");
+        var ok = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed", "--json", json);
+        Assert.True(ok.Exit == 0, ok.All);
+        Assert.Contains("k0 RETIRABLE WITHIN THE SCANNED SCOPE", ok.Out);
+        Assert.Contains("k1 keep: active_key", ok.Out);
+        Assert.Contains("NOT seen: any other backup destination or copy", ok.Out);
+        Assert.Contains("standalone backup-company sets", ok.Out);
+        var written = File.ReadAllText(json);
+        Assert.Contains("\"scopeLimits\"", written);
+        // review L-FH1 of PR 182: the JSON an approver is shown names its roots, the attestation and its time (UTC)
+        using (var doc = System.Text.Json.JsonDocument.Parse(written))
+        {
+            Assert.Equal([Root], doc.RootElement.GetProperty("backupRootsScanned").EnumerateArray().Select(e => e.GetString()));
+            Assert.True(doc.RootElement.GetProperty("backupScopeAttested").GetBoolean());
+            var generated = doc.RootElement.GetProperty("generatedUtc").GetDateTimeOffset();
+            Assert.Equal(TimeSpan.Zero, generated.Offset);
+            Assert.InRange(generated, DateTimeOffset.UtcNow.AddMinutes(-10), DateTimeOffset.UtcNow.AddMinutes(1));
+        }
+        Assert.Contains("EVERY run present", ok.Out);
+        Assert.Contains("Generated 20", ok.Out);
+        var plain = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root);
+        Assert.Equal(8, plain.Exit);
+        Assert.Contains("[BLOCKER] backup_scope_not_attested", plain.Out);
+        Assert.Contains("NOT seen: any other backup destination or copy", plain.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", plain.Out);
+        var typo = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root + "-typo", "--all-backup-copies-listed");
+        Assert.Equal(8, typo.Exit);
+        Assert.Contains("[BLOCKER] backup_inventory_incomplete:backup_root_missing", typo.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", typo.Out);
+        var emptyRoot = Path.Combine(work, "empty"); Directory.CreateDirectory(emptyRoot);
+        var empty = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, emptyRoot, "--all-backup-copies-listed");
+        Assert.Equal(8, empty.Exit);
+        Assert.Contains("[BLOCKER] backup_inventory_incomplete:backup_root_no_complete_verified_run", empty.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", empty.Out);
+        Assert.Equal(2, (await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", "--all-backup-copies-listed")).Exit);   // no root at all: usage
+        Assert.Equal(eventsBefore, await Scalar<long>(SystemConnection, $"SELECT count(*) FROM {E.Table}"));
+        Assert.False(Directory.Exists(Path.Combine(work, "imports")));                                                // no storage folder was created (review L2)
+    }
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_counts_the_keys_of_every_run_present_in_the_root_also_one_that_retention_would_delete()
+    {
+        // review M-FH1 of PR 182: a run the retention plan would delete is still on disk and restorable (automatic deletion is inactive, D-137), so a key only such a run needs is NOT retirable.
+        // The retention preview's own inventory (D-138: the keys of the runs the plan keeps) is unchanged and is asserted here to differ.
+        await Init();
+        var company = await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");
+        var clock = new Clock();
+        var runs = new List<string>();
+        var companyStorage = Path.Combine(Storage, company.Id.ToString("N"));
+        var stored = Path.Combine(companyStorage, Guid.NewGuid().ToString("N") + ".att");
+        for (var d = 2; d <= 13; d++)
+        {
+            // only the run of 4 March holds an attachment envelope under k0 (the header names the key; nothing is decrypted by a backup)
+            if (d == 4) { Directory.CreateDirectory(companyStorage); File.WriteAllBytes(stored, new EnvelopeEncryptor(new InMemoryKekRing("k0")).Encrypt("x"u8, "any")); }
+            runs.Add(await RunAt(clock, new DateTimeOffset(2026, 3, d, 2, 0, 0, TimeSpan.Zero)));
+            if (d == 4) File.Delete(stored);
+        }
+        await Prove(runs[^1]);
+        clock.Now = new DateTimeOffset(2026, 3, 13, 3, 0, 0, TimeSpan.Zero);
+        var onlyK0 = runs[2];
+        var (plan, inputs) = await new RetentionService(Options, Retention, clock).PlanAsync(Root, Trust);
+        Assert.Contains(onlyK0, plan.Eligible.Select(e => e.RunId));                                                  // retention would delete it
+        Assert.Equal(["k0"], inputs.Runs.Single(r => r.RunId == onlyK0).Keys!.EncryptionKeyIds);                         // its signed status names k0
+        Assert.All(inputs.Runs.Where(r => r.RunId != onlyK0), r => Assert.DoesNotContain("k0", r.Keys!.EncryptionKeyIds));   // no other run does
+        Assert.DoesNotContain("k0", plan.EncryptionKeysNeeded);                                                       // D-138: the preview lists the keys of the runs it keeps
+        Assert.True(plan.KeyInventoryComplete);
+
+        var service = RetirementReport(clock);
+        var report = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(report.Complete, string.Join("; ", report.Blockers));
+        Assert.Equal(["needed_by_present_backups"], report.Keys.Single(k => k.KeyId == "k0").Reasons);                // the run is on disk: its key is kept
+        Assert.DoesNotContain(report.Keys, k => k.Retirable);
+        Assert.Equal([Root], report.BackupRootsScanned);
+        Assert.Equal(clock.Now, report.GeneratedUtc);
+        var tool = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed");
+        Assert.True(tool.Exit == 0, tool.All);
+        Assert.Contains("k0 keep: needed_by_present_backups", tool.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", tool.Out);
+
+        // a present run whose key needs are unknown (here an unfinished one) next to good runs: incomplete, and the known keys are still listed
+        var unfinished = Path.Combine(Root, "20260314T020000Z-0a0b0c0d");
+        Directory.CreateDirectory(unfinished);
+        var unknown = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.Equal(["backup_inventory_incomplete:backup_run_key_needs_unknown"], unknown.Blockers);
+        Assert.Contains("needed_by_present_backups", unknown.Keys.Single(k => k.KeyId == "k0").Reasons);
+        Directory.Delete(unfinished);
+
+        // an unfinished deletion (.deleting-*): what is left of that run cannot be read, so its key needs are unknown
+        var deleting = Path.Combine(Root, onlyK0 + ".deleting-0123456789abcdef");
+        Directory.Move(Path.Combine(Root, onlyK0), deleting);
+        var half = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.Equal(["backup_inventory_incomplete:backup_root_deletion_incomplete"], half.Blockers);
+        Assert.All(half.Keys, k => Assert.False(k.Retirable));                                                         // k0 is no longer listed by any readable run, and is still not retirable
+        Directory.Move(deleting, Path.Combine(Root, onlyK0));
+
+        // once that run is really gone (here removed by hand), nothing present needs k0
+        Directory.Delete(Path.Combine(Root, onlyK0), true);
+        var after = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(after.Complete, string.Join("; ", after.Blockers));
+        Assert.Equal(["k0"], after.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+    }
+
+    [PostgresFact]
+    public async Task The_key_retirement_report_blocks_on_any_entry_of_a_root_that_is_not_a_run_folder_so_a_moved_or_copied_run_is_never_invisible()
+    {
+        // review M-FH3 of PR 182: the retention scan reads only folders named by a run id. A complete, signed run moved or copied inside the root under another name was invisible, so the only
+        // key it needs read as RETIRABLE. Every other entry of a root is now a blocker (backup_root_unrecognised_entry); the retention preview is unchanged.
+        await Init();
+        var company = await NewCompany("UTC");
+        FileKekRing.Generate(Keys, "k0");
+        var clock = new Clock();
+        var companyStorage = Path.Combine(Storage, company.Id.ToString("N"));
+        var stored = Path.Combine(companyStorage, Guid.NewGuid().ToString("N") + ".att");
+        Directory.CreateDirectory(companyStorage);
+        File.WriteAllBytes(stored, new EnvelopeEncryptor(new InMemoryKekRing("k0")).Encrypt("x"u8, "any"));                 // only the first run holds an envelope under k0
+        var onlyK0 = await RunAt(clock, new DateTimeOffset(2026, 3, 2, 2, 0, 0, TimeSpan.Zero));
+        File.Delete(stored);
+        var other = await RunAt(clock, new DateTimeOffset(2026, 3, 3, 2, 0, 0, TimeSpan.Zero));                              // a complete, verified run that does not need k0
+        var service = RetirementReport(clock);
+
+        // a clean root still reports: complete, k0 kept by the run that needs it
+        var clean = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(clean.Complete, string.Join("; ", clean.Blockers));
+        Assert.Equal(["needed_by_present_backups"], clean.Keys.Single(k => k.KeyId == "k0").Reasons);
+
+        async Task Blocked(string entry)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:backup_root_unrecognised_entry:{entry}"], r.Blockers);
+            Assert.False(r.Complete);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        }
+        var source = Path.Combine(Root, onlyK0);
+        async Task Moved(string relative, string entry)
+        {
+            var target = Path.Combine(Root, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            Directory.Move(source, target);
+            try { await Blocked(entry); }
+            finally { Directory.Move(target, source); if (entry != relative && Directory.Exists(Path.Combine(Root, entry))) Directory.Delete(Path.Combine(Root, entry)); }
+        }
+        await Moved(Path.Combine("archive", onlyK0), "archive");                                                       // a nested run
+        await Moved(onlyK0 + ".bak", onlyK0 + ".bak");                                                                 // a renamed run
+        await Moved(".old", ".old");                                                                                   // a hidden folder
+        await Moved("run-" + onlyK0, "run-" + onlyK0);
+        await Moved(onlyK0[..17] + "ABCDEF01", onlyK0[..17] + "ABCDEF01");                                                 // an upper-case id is not a run id
+        // a COPY next to the original (the original keeps k0 listed, the copy is still named) and a file
+        CopyTree(source, Path.Combine(Root, "copy-of-run"));
+        await Blocked("copy-of-run");
+        Directory.Delete(Path.Combine(Root, "copy-of-run"), true);
+        var file = Path.Combine(Root, "keys.json"); File.WriteAllText(file, "{}");
+        await Blocked("keys.json");
+
+        // the tool end to end, with the attestation: incomplete (exit 8), the entry named, nothing retirable, the scope text names the rule
+        Directory.Move(source, Path.Combine(Root, onlyK0 + ".bak"));
+        var tool = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed");
+        Assert.Equal(8, tool.Exit);
+        Assert.Contains($"[BLOCKER] backup_inventory_incomplete:backup_root_unrecognised_entry:{onlyK0}.bak,keys.json", tool.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", tool.Out);
+        Assert.Contains("Inside a root only run folders (named by a run id) are read", tool.Out);
+        Assert.Contains("(backup_root_unrecognised_entry)", tool.Out);
+        // the retention preview is unchanged: it still reads only the run folders and ignores the other entries
+        var (plan, inputs) = await new RetentionService(Options, Retention, clock).PlanAsync(Root, Trust);
+        Assert.Equal([other], inputs.Runs.Select(r => r.RunId));
+        Assert.True(plan.KeyInventoryComplete);
+        Directory.Move(Path.Combine(Root, onlyK0 + ".bak"), source);
+        File.Delete(file);
+
+        // clean again: complete
+        var again = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(again.Complete, string.Join("; ", again.Blockers));
+        Assert.Equal(["needed_by_present_backups"], again.Keys.Single(k => k.KeyId == "k0").Reasons);
+
+        // review M-OBKP4 of PR 182: the same blind spot one level down. (1) The run that needs k0 moved INSIDE the other run folder: that run holds something a run does not hold, so its key
+        // needs are unknown (the scan marks it not clean).
+        async Task BlockedWith(string blocker)
+        {
+            var r = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+            Assert.Equal([$"backup_inventory_incomplete:{blocker}"], r.Blockers);
+            Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        }
+        Directory.CreateDirectory(Path.Combine(Root, other, "old"));
+        Directory.Move(source, Path.Combine(Root, other, "old", onlyK0));
+        await BlockedWith($"backup_run_unrecognised_content:{other}");
+        var nested = await AdminTool.RunWith(Options, Env(), "encryption-key-retirement-report", Root, "--all-backup-copies-listed");
+        Assert.Equal(8, nested.Exit);
+        Assert.Contains($"[BLOCKER] backup_inventory_incomplete:backup_run_unrecognised_content:{other}", nested.Out);
+        Assert.DoesNotContain("RETIRABLE WITHIN", nested.Out);
+        Directory.Move(Path.Combine(Root, other, "old", onlyK0), source);
+        Directory.Delete(Path.Combine(Root, other, "old"));
+        // (2) the run kept inside .retention (".retention/archive/<run id>"), and a stray file there: .retention holds only slice 6 tombstones
+        Directory.CreateDirectory(Path.Combine(Root, ".retention", "archive"));
+        Directory.Move(source, Path.Combine(Root, ".retention", "archive", onlyK0));
+        await BlockedWith("backup_root_unrecognised_entry:.retention/archive");
+        Directory.Move(Path.Combine(Root, ".retention", "archive", onlyK0), source);
+        Directory.Delete(Path.Combine(Root, ".retention", "archive"));
+        File.WriteAllText(Path.Combine(Root, ".retention", "notes.txt"), "x");
+        await BlockedWith("backup_root_unrecognised_entry:.retention/notes.txt");
+        File.Delete(Path.Combine(Root, ".retention", "notes.txt"));
+        // (3) a legitimate tombstone, written as slice 6 writes it (the deleted run's signed status and signature, the deletion and completion markers), is still accepted
+        var tombstone = Path.Combine(Root, ".retention", "tombstones", "20260301T020000Z-0a0b0c0d");
+        Directory.CreateDirectory(tombstone);
+        foreach (var name in new[] { SignedDocuments.RunStatusFileName, SignedDocuments.RunStatusFileName + SignedDocuments.SignatureSuffix })
+            File.Copy(Path.Combine(Root, other, name), Path.Combine(tombstone, name));
+        File.WriteAllText(Path.Combine(tombstone, RetentionInventory.DeletedMarker), "{}");
+        File.WriteAllText(Path.Combine(tombstone, RetentionInventory.CompletedMarker), "{}");
+        var withTombstone = await service.ReportAsync(["k0", "k1"], "k1", [Root], Trust, backupScopeAttested: true);
+        Assert.True(withTombstone.Complete, string.Join("; ", withTombstone.Blockers));
+        Assert.Equal(["needed_by_present_backups"], withTombstone.Keys.Single(k => k.KeyId == "k0").Reasons);
+    }
+
     [PostgresFact]
     public async Task Backup_legal_holds_are_audited_append_only_never_released_by_the_tool_and_honoured()
     {
