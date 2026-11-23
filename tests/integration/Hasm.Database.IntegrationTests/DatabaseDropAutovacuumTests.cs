@@ -15,7 +15,13 @@ namespace Hasm.Database.IntegrationTests;
 /// be changed by a superuser, which the test account is not and must not be. So the test loads a table large enough that the worker stays for several seconds, waits until the worker is seen in the
 /// database, proves that the forced drop alone IS refused, and only then calls the product. Nothing is retried and nothing is skipped: if no worker appears the test fails.
 /// </para>
+/// <para>
+/// ALONE, in the serial collection, for the same reason: the launcher starts one worker per <c>autovacuum_naptime</c> divided by the number of databases and always prefers a database no worker has visited
+/// yet. While the other classes run in parallel they create new databases faster than that, so this database can wait far longer than one naptime (observed on the hosted runner: no worker in 4 minutes in
+/// the middle of the suite). The serial collection runs after the parallel classes, when no other class is creating databases, and the worker arrives within about two naptimes.
+/// </para>
 /// </summary>
+[Collection(CompanyBackupSerialCollection.Name)]
 public class DatabaseDropAutovacuumTests : PostgresTestBase
 {
     private readonly string work = Path.Combine(Path.GetTempPath(), "hasm-dda-" + Guid.NewGuid().ToString("N"));
