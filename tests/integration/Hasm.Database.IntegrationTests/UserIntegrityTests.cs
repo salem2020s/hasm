@@ -117,10 +117,14 @@ public class UserIntegrityTests : RestrictedRuntimeIdentityTestBase
             return await Send(client, HttpMethod.Post, "/api/v1/auth/mfa/enrol/begin", null, new { challenge = token, enrolmentCode, client = "web" });
         }
 
-        // control: a code issued by the legitimate writer (the tag stays valid) works with the forged challenge (the challenge binding is slice S-2d)
+        // control 1: the genuine flow works (a real login yields a real, tagged challenge; the legitimately issued code begins the enrolment)
         var legit = await mfa.IssueEnrolmentCodeAsync(user.Id, TimeSpan.FromHours(1), null);
-        var control = await ForgedBegin(legit);
-        Assert.Equal(HttpStatusCode.OK, control.Status);
+        var real = await WebLogin(client, "needsmfa");
+        var realToken = JsonDocument.Parse(real.Body).RootElement.GetProperty("challenge").GetString();
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, "/api/v1/auth/mfa/enrol/begin", null, new { challenge = realToken, enrolmentCode = legit, client = "web" })).Status);
+        // control 2 (slice S-2d closes the gap S-2a left): a FORGED challenge row (the attacker chose the token, the row has no valid tag) is refused even with the legitimately issued code
+        legit = await mfa.IssueEnrolmentCodeAsync(user.Id, TimeSpan.FromHours(1), null);
+        Assert.NotEqual(HttpStatusCode.OK, (await ForgedBegin(legit)).Status);
         // the attack: the attacker's own code, written straight into the user row
         const string attackerCode = "ATTACKERCODE1234";
         Assert.Equal(1, await Attack($"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = @h, {M.EnrolmentCodeExpiresAtUtc} = now() + interval '1 hour', {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {U.Id} = @u", ("h", MfaStore.EnrolmentCodeHash(attackerCode)), ("u", user.Id)));
@@ -129,6 +133,24 @@ public class UserIntegrityTests : RestrictedRuntimeIdentityTestBase
         Assert.False(attack.Body.Contains("secret", StringComparison.OrdinalIgnoreCase));
         Assert.False(await mfa.CheckEnrolmentCodeAsync(user.Id, attackerCode));                                  // the check itself refuses a row that does not verify
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", ("u", user.Id)));   // and no session was issued
+    }
+
+    [PostgresRoleFact]
+    public async Task A_row_that_does_not_verify_reads_as_the_strictest_mfa_state_and_requirement()
+    {
+        // review L1 of PR 235 (follow-up pin): the decisions taken from the user row come from the VERIFIED row; a row that does not verify is the strictest value, never the weaker one
+        await StartRestricted();
+        var user = await NewUser("plainuser");                                                                     // no MFA, no administrator
+        await using var store = RuntimeStore();
+        await using var mfa = RuntimeMfa();
+        Assert.Equal(MfaState.None, await store.GetMfaStateAsync(user.Id));
+        Assert.Equal(MfaState.None, await mfa.GetStateAsync(user.Id));
+        Assert.Equal(MfaMandatoryReason.None, (await store.GetMfaRequirementAsync(user.Id)).Reasons);
+        Assert.Equal(1, await Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = {UI.SecurityRevision} + 1 WHERE {U.Id} = @u", ("u", user.Id)));    // any covered change makes the row unverifiable
+        Assert.Equal(MfaState.RecoveryRequired, await store.GetMfaStateAsync(user.Id));
+        Assert.Equal(MfaState.RecoveryRequired, await mfa.GetStateAsync(user.Id));
+        Assert.True((await store.GetMfaRequirementAsync(user.Id)).Reasons.HasFlag(MfaMandatoryReason.IdentityAdministrator));
+        Assert.Null(await mfa.GetStateAsync(Guid.NewGuid()));                                                      // a user that does not exist is still "no state"
     }
 
     [PostgresRoleFact]

@@ -58,6 +58,8 @@ jobs:
         run: node tools/schema/system-identity-integrity.cjs --check
       - name: User tag (S-2a) schema files match the deterministic generator (system migration 0038 provisional)
         run: node tools/schema/system-user-tag.cjs --check
+      - name: Challenge tag (S-2d) schema files match the deterministic generator (system migration 0039 provisional)
+        run: node tools/schema/system-challenge-tag.cjs --check
       - name: Plan-execution schema files (company 0036, provisional number) match their generator
         run: node tools/schema/company-0036-plan-execution.cjs --check
       - name: Replay signer registry schema files (company 0037, T2 slice A1) match their generator
@@ -159,13 +161,13 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1788 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1794 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
           EXPECTED_REGISTRY: |
             EXPECTED = {
-                "IdentitySessionIntegrityTests": 11, "UserIntegrityTests": 10, "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                "IdentitySessionIntegrityTests": 11, "UserIntegrityTests": 11, "ChallengeIntegrityTests": 5, "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
                 # Migration guard hardening (owner decision 2026-11-21, Q5): the post-migration check (no trigger switched off, removed or re-bound; replication role unchanged), on the system and a company database.
                 "MigrationGuardPostCheckTests": 12,
                 # Owner decisions 2026-11-22 (Q2, Q3): disabled triggers with nothing pending (diagnostics, nothing re-enabled, the application unaffected); the non-superuser administrative account end to end and the superuser refusal.

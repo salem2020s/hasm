@@ -112,7 +112,7 @@ public static class AuthenticationSetup
         });
         services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing()), sp.GetRequiredService<SystemRuntimeGate>(), sp.GetRequiredService<IdentityKeys>()));
         services.AddHostedService(sp => new SystemRuntimeGateService(SystemConnection, sp.GetRequiredService<SystemRuntimeGate>(), sp.GetRequiredService<ILogger<SystemRuntimeGateService>>()));
-        services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), null, sp.GetRequiredService<IdentityKeys>(), id => sp.GetRequiredService<IdentityStore>().AuditRejectedChallengeAsync(id)));
         services.AddSingleton<IMfaAttemptLimiter>(sp => new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new MfaVerifier(sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>(), sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton(sp => new MfaLoginServices(sp.GetRequiredService<MfaChallengeStore>(), sp.GetRequiredService<MfaVerifier>(), sp.GetRequiredService<MfaStore>(), sp.GetRequiredService<IMfaAttemptLimiter>()));
