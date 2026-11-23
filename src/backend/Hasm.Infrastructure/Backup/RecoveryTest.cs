@@ -223,8 +223,7 @@ public sealed class RecoveryTestService
             {
                 await using var maint = new NpgsqlConnection(options.BuildMaintenanceConnectionString());
                 await maint.OpenAsync(CancellationToken.None);
-                await using var drop = new NpgsqlCommand($"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(copy)} WITH (FORCE)", maint);
-                await drop.ExecuteNonQueryAsync(CancellationToken.None);
+                await DatabaseDrop.ExecuteAsync(maint, copy, ifExists: true, CancellationToken.None);
             }
             catch (NpgsqlException) { fail("system_copy_drop_failed", 1); }
         }

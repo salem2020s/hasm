@@ -4,21 +4,23 @@ Status document for resuming autonomous work after a session or model change. It
 
 **Model change 2026-11-23: critical security reviews (identity, replay authorization, audit recovery) are deferred and their PRs stay Draft until a suitable independent reviewer is available.**
 
-## State of main (read by REST and git on 2026-11-23)
-- main = 78bb2e8 (78bb2e849b6e01069f47af9da9590ebc82338617, the merge of PR 239; REST branches/main and `git log origin/main` agree).
-- PostgreSQL registry on main: 1805 (title of the step "Verify all 1805 PostgreSQL tests executed and passed (none skipped)" in .github/workflows/backend.yml; equal to the per-class sum of its 268 registered classes, recomputed for this refresh).
-- Migrations on main (read from the migration directories): system 0001-0040 (highest `0040_append_only_anchor_history.sql`), company 0001-0038 (highest `0038_company_replay_grant_verification.sql`).
-- Merged on 2026-11-22/23 (newest first; PR 239 read by REST as merged with merge commit 78bb2e8 and merged head e0afbe6; the others of this list are as recorded by the lead, NOT VERIFIED one by one in this refresh): 239 (identity S-2c part 1), 237 (S-2d), 236 (T2 A2), 235 (S-2a), 233 (T2 A1), 231 (T2 v5 amendment), 230 (system DB CONNECT only), 229 (cash presets), 227 (identity S-1), 226, 225 (owner decisions D-240..D-260), 224, 223, 222, 221, 220, 219, 218, 217, 216, 215, 214, 213, 212, 211, 210, 209, 206, 201, 188, 48.
+## State of main (read by REST and git on 2026-11-23, second refresh)
+- main = cdd6b1a (cdd6b1a7815bad4ca0ab98279480fb0907740e84, the merge of PR 232), read with `git log origin/main` after the merge gate reported the merge.
+- PostgreSQL registry on main: 1815 (title of the step "Verify all 1815 PostgreSQL tests executed and passed" in .github/workflows/backend.yml; the per-class sum was recomputed by the PR 232 reviewer on the merged head's content, NOT recomputed again for this refresh).
+- Migrations on main: system 0001-0040, company 0001-0038 (unchanged by PR 240 and PR 232, which add no migration).
+- Merged since the first refresh: PR 240 (this handoff and the owner decisions of 2026-11-23, D-261 to D-266; merge commit ab91850) and PR 232 (backup S8d-1, read only; merge commit cdd6b1a; records PR-232-s8d1-review, PR-232-s8d1-delta-confirmation, PR-232-s8d1-fix-confirmation).
 
-## Open pull requests (REST `pulls?state=open`, 2026-11-23: exactly these four, all Draft)
+## Open pull requests (REST, 2026-11-23, second refresh: all Draft)
 | PR | Content | Head | State and next step |
 |---|---|---|---|
-| 238 | T2 slice A3, commit-time grant checks and the epoch comparison (company 0039, provisional) | 2ee2ae0 (a merge of main) | Draft; REST mergeable. Hosted CI on this head at this read: 6 checks success, `postgres-integration` still in progress (not yet green). Awaits the finished CI and the independent security confirmation of the H1 fix and of the merges (the reviewer's approval of the fix on 58fdc55 is as reported by the lead, NOT VERIFIED here); then the merge gate. A critical security review: deferred, see the model-change note. |
-| 232 | Backup S8d-1, read only | 4814c71 | Draft; REST not mergeable (conflicts with main). Approved by the independent reviewer at b2aac3c (record commit 490d466); the Low fixes A1-A3 are pushed as 4814c71. No hosted check-run is listed on 4814c71 (the conflict prevents the PR workflows). Needs a merge-main round (registry and numbering), a delta confirmation of 4814c71 and of the merge, then the gate. |
-| 234 | Audit-head link guard, option (a) (migration numbers provisional) | c773a7c | Draft; REST not mergeable (conflicts with main). Not reviewed. Needs the merge of main, renumbering to the next free migration numbers, and an independent security review (deferred, see the model-change note). |
-| 240 | This PR: restart handoff and the record of the owner decisions of 2026-11-23 (documentation only) | see the PR | Draft; needs an independent full-diff review of the decision record before the gate. |
+| 238 | T2 slice A3, commit-time grant checks and the epoch comparison (company 0039, provisional) | 2ee2ae0 | Hosted CI on 2ee2ae0: all seven checks success, including postgres-integration. Main has moved since (registry 1815), so a merge-only round is needed (registry title = per-class sum). CRITICAL SECURITY REVIEW DEFERRED: the independent security reviewer approved the H1 fix on the pre-merge head 58fdc55 in notes only (no record written); a confirmation record bound to the final head by a suitable independent security reviewer is required before the gate. Stays Draft until then. |
+| 234 | Audit-head link guard, option (a) (migration numbers provisional) | c773a7c | Conflicts with main. Not reviewed. Needs the merge of main, renumbering to the next free numbers (system next free 0041; company next free 0039 unless PR 238 merges first), and an independent security review (deferred). Stays Draft. |
+| 241 | Trial-restore database drop: shared helper, FORCE then plain drop on 42501 (autovacuum worker, non-superuser admin account) | dc00754 | Branch fix/trial-restore-drop-flake. Hosted CI on dc00754 at this read: six checks success, postgres-integration in progress (NOT VERIFIED green). Update read by REST in the resumed session of 2026-11-23: postgres-integration on dc00754 completed with conclusion FAILURE (run 45260494831, job 137993635561, step "Run PostgreSQL integration tests", about 22 minutes); root cause under diagnosis, the PR is NOT green. Based on main ab91850 with registry 1806, so it needs a merge-only round against main (registry 1815 + 1 = 1816, to be recomputed) and an independent review (routine backup/operations change; no privilege added, same databases dropped). |
+| this PR | Second refresh of this handoff (documentation only) | see the PR | Needs an independent review before the gate. |
 
-Merged, no longer open: 239 (identity integrity S-2c part 1; merge commit 78bb2e8).
+Known follow-ups recorded by reviewers (not yet done): PR 232 L3 (make `primaryRoot` required in ReplicationPending before S8d-2 wires deletion), L4 (test counts in docs/PHASE-4.3.md), PR 240 Lows (register consequence cells author-written; ambiguous "section 13" reference; docs/AUTONOMOUS-STATE.json lists and docs/AUTONOMOUS-PROGRESS.md not refreshed), PR 237 L3 done in PR 239, PR 239 follow-up (list only referenced names in the generator scans).
+
+Session note: the lead session is being restarted to reduce context; agents of the previous session are retired. Resume with a maximum of two short-lived agents; start by reading the hosted checks of PR 241 and PR 238.
 
 ## Next slices (not started; each short, reviewed, inert where stated)
 - Identity integrity: S-2c part 2 (identity-tag bound to the reviewed report hash with per-record dispositions; owner-only audited recovery of rows with invalid tags), S-2b (MFA attempt log), S-1b (logout record), S-3 (access-row tags).
