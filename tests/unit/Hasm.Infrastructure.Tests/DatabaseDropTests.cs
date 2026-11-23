@@ -3,12 +3,16 @@ using Npgsql;
 
 namespace Hasm.Infrastructure.Tests;
 
-/// <summary>The statement sequence of <see cref="DatabaseDrop"/> over a fake executor: FORCE; on 42501 the plain drop; on 55006 from that, FORCE once more; everything else is thrown unchanged.</summary>
+/// <summary>
+/// The statement sequence of <see cref="DatabaseDrop"/> over a fake executor: FORCE; on 42501 the account's own sessions in that database are terminated and the plain drop follows; on 55006 from that,
+/// FORCE once more; everything else is thrown unchanged.
+/// </summary>
 public class DatabaseDropTests
 {
     private const string Name = "\"hasm_t_x\"";
     private const string Forced = "DROP DATABASE \"hasm_t_x\" WITH (FORCE)";
     private const string Plain = "DROP DATABASE \"hasm_t_x\"";
+    private const string Own = DatabaseDrop.TerminateOwnSessions;
 
     private static PostgresException Pg(string state) => new("refused", "ERROR", "ERROR", state);
 
@@ -40,27 +44,38 @@ public class DatabaseDropTests
     }
 
     [Fact]
-    public async Task A_forced_drop_refused_with_42501_is_followed_by_the_plain_drop()
+    public async Task A_forced_drop_refused_with_42501_terminates_the_accounts_own_sessions_and_is_followed_by_the_plain_drop()
     {
-        var (log, thrown) = await Run(false, Pg("42501"), null);
+        var (log, thrown) = await Run(false, Pg("42501"), null, null);
         Assert.Null(thrown);
-        Assert.Equal([Forced, Plain], log);
-        Assert.Equal(["DROP DATABASE IF EXISTS \"hasm_t_x\" WITH (FORCE)", "DROP DATABASE IF EXISTS \"hasm_t_x\""], (await Run(true, Pg("42501"), null)).Log);
+        Assert.Equal([Forced, Own, Plain], log);
+        Assert.Equal(["DROP DATABASE IF EXISTS \"hasm_t_x\" WITH (FORCE)", Own, "DROP DATABASE IF EXISTS \"hasm_t_x\""], (await Run(true, Pg("42501"), null, null)).Log);
     }
 
     [Fact]
-    public async Task A_plain_drop_refused_with_55006_is_followed_by_one_more_forced_drop_and_never_a_fourth_statement()
+    public void Only_sessions_of_the_current_role_in_the_named_database_and_never_the_current_backend_are_terminated()
     {
-        var (log, thrown) = await Run(false, Pg("42501"), Pg("55006"), null);
-        Assert.Null(thrown);
-        Assert.Equal([Forced, Plain, Forced], log);
+        // the exact statement, so that no change of it goes unnoticed: the database is a parameter (never text), the role is the current one, the current backend is excluded, and nothing is selected
+        // in a database whose owner the account does not hold
+        Assert.Equal(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = @n AND usesysid = (SELECT oid FROM pg_roles WHERE rolname = current_user) AND pid <> pg_backend_pid()"
+            + " AND (SELECT pg_has_role(datdba, 'USAGE') FROM pg_database WHERE datname = @n)", Own);
+        Assert.DoesNotContain("hasm_t_x", Own);
+    }
 
-        var again = Pg("42501");                                                                 // the third statement is refused again: thrown as it is, no loop
-        var (log2, thrown2) = await Run(false, Pg("42501"), Pg("55006"), again);
+    [Fact]
+    public async Task A_plain_drop_refused_with_55006_is_followed_by_one_more_forced_drop_and_never_a_fifth_statement()
+    {
+        var (log, thrown) = await Run(false, Pg("42501"), null, Pg("55006"), null);
+        Assert.Null(thrown);
+        Assert.Equal([Forced, Own, Plain, Forced], log);
+
+        var again = Pg("42501");                                                                 // the last statement is refused again (a session of a role the account does not hold): thrown as it is, no loop
+        var (log2, thrown2) = await Run(false, Pg("42501"), null, Pg("55006"), again);
         Assert.Same(again, thrown2);
-        Assert.Equal([Forced, Plain, Forced], log2);
+        Assert.Equal([Forced, Own, Plain, Forced], log2);
         var busy = Pg("55006");
-        Assert.Same(busy, (await Run(false, Pg("42501"), Pg("55006"), busy)).Thrown);
+        Assert.Same(busy, (await Run(false, Pg("42501"), null, Pg("55006"), busy)).Thrown);
     }
 
     [Fact]
@@ -73,12 +88,33 @@ public class DatabaseDropTests
             Assert.Same(first, thrown);
             Assert.Equal([Forced], log);
         }
-        // the plain drop: only 55006 leads on; a second 42501 (the account may not drop this database at all) is thrown as before
-        foreach (var second in new Exception[] { Pg("42501"), Pg("3D000"), new NpgsqlException("connection lost"), new OperationCanceledException() })
+        // terminating the own sessions: every error is thrown and the plain drop is not attempted
+        foreach (var second in new Exception[] { Pg("42501"), Pg("55006"), Pg("57014"), new NpgsqlException("connection lost"), new OperationCanceledException() })
         {
             var (log, thrown) = await Run(false, Pg("42501"), second);
             Assert.Same(second, thrown);
-            Assert.Equal([Forced, Plain], log);
+            Assert.Equal([Forced, Own], log);
         }
+        // the plain drop: only 55006 leads on; a second 42501 (the account may not drop this database at all) is thrown as before
+        foreach (var third in new Exception[] { Pg("42501"), Pg("3D000"), new NpgsqlException("connection lost"), new OperationCanceledException() })
+        {
+            var (log, thrown) = await Run(false, Pg("42501"), null, third);
+            Assert.Same(third, thrown);
+            Assert.Equal([Forced, Own, Plain], log);
+        }
+    }
+
+    [Fact]
+    public async Task The_fallback_is_counted_for_a_drop_that_took_it_and_not_for_one_whose_forced_drop_succeeded_or_failed_otherwise()
+    {
+        // the counter is per process and other test classes do not drop databases through the helper; within this class xunit runs the tests one after the other
+        var before = DatabaseDrop.Fallbacks;
+        await Run(false, [null]);
+        await Run(false, Pg("55006"));
+        Assert.Equal(before, DatabaseDrop.Fallbacks);
+        await Run(false, Pg("42501"), null, null);
+        Assert.Equal(before + 1, DatabaseDrop.Fallbacks);
+        await Run(false, Pg("42501"), null, Pg("55006"), Pg("42501"));
+        Assert.Equal(before + 2, DatabaseDrop.Fallbacks);
     }
 }
