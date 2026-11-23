@@ -586,8 +586,7 @@ public sealed class CompanyBackupService
                 if (comment is null) throw new BackupException("trial_database_missing");
                 if (comment is not string s || !string.Equals(s, CommentPrefix + kept.Token, StringComparison.Ordinal)) throw new BackupException("not_a_trial_restore");
             }
-            await using var drop = new NpgsqlCommand($"DROP DATABASE {Quote(kept.Database)} WITH (FORCE)", maint);
-            await drop.ExecuteNonQueryAsync(ct);
+            await DatabaseDrop.ExecuteAsync(maint, kept.Database, ifExists: false, ct);
         }
         await tx.CommitAsync(ct);
         File.Delete(keptFile);
@@ -606,7 +605,13 @@ public sealed class CompanyBackupService
     /// <summary>Drops the trial database this run created (never another one); not cancellable. False when it could not be dropped.</summary>
     private async Task<bool> DropAsync(string trial)
     {
-        try { await MaintenanceAsync($"DROP DATABASE IF EXISTS {Quote(trial)} WITH (FORCE)", CancellationToken.None); return true; }
+        try
+        {
+            await using var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString());
+            await conn.OpenAsync(CancellationToken.None);
+            await DatabaseDrop.ExecuteAsync(conn, trial, ifExists: true, CancellationToken.None);
+            return true;
+        }
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { return false; }
     }
 }
