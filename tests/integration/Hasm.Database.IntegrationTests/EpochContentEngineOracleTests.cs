@@ -146,6 +146,17 @@ public class EpochContentEngineOracleTests : CostingTestBase
         var touched = content.Layers.Select(l => l.Key).ToHashSet();
         foreach (var layer in after.Where(l => !touched.Contains(l.Key))) Assert.Equal((before[layer.Key].Quantity, before[layer.Key].Amount), (layer.Quantity, layer.Amount));
 
+        // ---- the L, C and R groups of the T2 epoch text, rebuilt from the rows the engine wrote, are byte-identical to the text derived from the plan (the E and O groups need the member rows of the later slices)
+        long BaselineLast(Guid warehouse) => snapshot.Positions.Single(p => p.WarehouseId == warehouse).LastSequence;
+        var fromRows = new EpochTextInput([], [],
+            [.. createdInDb.Select(l => new EpochTextLayer(item.Id, l.Key.WarehouseId, l.Rank, l.Key.EntrySequence, l.OriginalQuantity, l.OriginalAmount,
+                l.Source is null ? null : item.Id, l.Source is { } s ? byId[s].Key.WarehouseId : null, l.Source is { } s2 ? byId[s2].Rank : null))],
+            [.. consumptionRows.Where(r => (long)r[1] > BaselineLast((Guid)r[0])).Select(r => new EpochTextConsumption(item.Id, (Guid)r[0], (long)r[1], item.Id, byId[(Guid)r[2]].Key.WarehouseId, byId[(Guid)r[2]].Rank, (decimal)r[3], (decimal)r[4], (bool)r[5]))],
+            [.. content.Layers.Select(r => new EpochTextRemaining(item.Id, r.Key.WarehouseId, afterByKey[r.Key].Rank, afterByKey[r.Key].Quantity, afterByKey[r.Key].Amount))]);
+        var derived = EpochText.FromEpoch(snapshot, plan, content, Guid.NewGuid(), Guid.NewGuid()) with { Operations = [], Entries = [] };
+        Assert.Equal(EpochText.Build(derived).Text, EpochText.Build(fromRows).Text);
+        Assert.Equal(EpochText.Build(derived).Digest, EpochText.Build(fromRows).Digest);
+
         // ---- positions: the P lines
         var positions = (await Rows($"SELECT {PO.WarehouseId}, {PO.Quantity}, {PO.Value}, {PO.LastSeq} FROM {PO.Table} WHERE {PO.ItemId} = '{item.Id}'")).ToDictionary(r => (Guid)r[0]);
         foreach (var p in content.Positions)

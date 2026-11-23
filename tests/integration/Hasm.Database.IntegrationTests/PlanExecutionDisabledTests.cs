@@ -70,7 +70,8 @@ public class PlanExecutionDisabledTests : JournalTestBase
 
     // the ONLY types named like a plan, epoch or execution that may exist besides the services above: values and one static function (slice E1), allowed by identity
     private static readonly Type[] PureEpochTypes = [typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole),
-        typeof(EpochContent), typeof(EpochContentResult), typeof(EpochEntryContent), typeof(EpochConsumption), typeof(EpochLayerCreation), typeof(EpochLayerKey), typeof(EpochLayerRemaining), typeof(EpochPositionTotal), typeof(EpochLayerState)];
+        typeof(EpochContent), typeof(EpochContentResult), typeof(EpochEntryContent), typeof(EpochConsumption), typeof(EpochLayerCreation), typeof(EpochLayerKey), typeof(EpochLayerRemaining), typeof(EpochPositionTotal), typeof(EpochLayerState),
+        typeof(EpochText), typeof(EpochTextOperation), typeof(EpochTextEntry), typeof(EpochTextLayer), typeof(EpochTextConsumption), typeof(EpochTextRemaining), typeof(EpochTextInput), typeof(EpochTextResult)];
 
     /// <summary>
     /// Pins the exact shape of the allowed types so the exception cannot hide an executor: EpochSchedule is a static class whose only own methods are Derive (exact signature) and the private Inconsistent; the
@@ -82,20 +83,26 @@ public class PlanExecutionDisabledTests : JournalTestBase
         const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         bool Generated(MemberInfo m) => m.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null || m.Name.StartsWith('<');
         // the static functions: exactly these own methods, Derive with its exact signature
-        var functions = new (Type Type, string[] Methods, Type[] Parameters, Type Result)[]
+        var functions = new (Type Type, string[] Methods, (string Name, Type[] Parameters, Type Result)[] EntryPoints)[]
         {
-            (typeof(EpochSchedule), ["Derive", "Inconsistent"], [typeof(CostFlowSnapshot), typeof(CostFlowComparisonResult), typeof(CancellationToken)], typeof(EpochScheduleResult)),
-            (typeof(EpochContent), ["A", "CheckSums", "Derive", "Disagree", "Inconsistent", "Q"], [typeof(CostFlowSnapshot), typeof(EpochScheduleResult), typeof(CancellationToken)], typeof(EpochContentResult)),
+            (typeof(EpochSchedule), ["Derive", "Inconsistent"], [("Derive", [typeof(CostFlowSnapshot), typeof(CostFlowComparisonResult), typeof(CancellationToken)], typeof(EpochScheduleResult))]),
+            (typeof(EpochContent), ["A", "CheckSums", "Derive", "Disagree", "Inconsistent", "Q"], [("Derive", [typeof(CostFlowSnapshot), typeof(EpochScheduleResult), typeof(CancellationToken)], typeof(EpochContentResult))]),
+            (typeof(EpochText), ["A", "Build", "Compare", "Date", "Flag", "FromEpoch", "Hex", "Id", "Num", "Q"],
+                [("Build", [typeof(EpochTextInput)], typeof(EpochTextResult)), ("FromEpoch", [typeof(CostFlowSnapshot), typeof(EpochScheduleResult), typeof(EpochContentResult), typeof(Guid), typeof(Guid)], typeof(EpochTextInput))]),
         };
-        foreach (var (type, methods, parameters, result) in functions)
+        foreach (var (type, methods, entryPoints) in functions)
         {
             Assert.True(type.IsAbstract && type.IsSealed, type.Name + " must be a static class");
             var own = type.GetMethods(all).Where(m => !Generated(m)).ToList();
             Assert.Equal(methods.Order(StringComparer.Ordinal), own.Select(m => m.Name).Distinct().OrderBy(n => n, StringComparer.Ordinal));
-            var derive = own.Single(m => m.Name == "Derive");
-            Assert.True(derive.IsStatic && derive.IsAssembly, "Derive is internal static");
-            Assert.Equal(parameters, derive.GetParameters().Select(p => p.ParameterType));
-            Assert.Equal(result, derive.ReturnType);
+            foreach (var (name, parameters, result) in entryPoints)
+            {
+                var entry = own.Single(m => m.Name == name);
+                Assert.True(entry.IsStatic && entry.IsAssembly, name + " is internal static");
+                Assert.Equal(parameters, entry.GetParameters().Select(p => p.ParameterType));
+                Assert.Equal(result, entry.ReturnType);
+            }
+            Assert.All(own.Where(m => !entryPoints.Any(e => e.Name == m.Name)), m => Assert.True(m.IsPrivate && m.IsStatic, type.Name + "." + m.Name + " is a private static helper"));
             Assert.Empty(type.GetConstructors(all)); Assert.Empty(type.GetProperties(all)); Assert.Empty(type.GetEvents(all));
             Assert.All(type.GetFields(all), f => Assert.True(f.IsLiteral, type.Name + " holds constants only: " + f.Name));
         }
@@ -166,6 +173,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
     private static bool PermittedCallee(MethodBase callee)
     {
         var type = callee.DeclaringType!;
+        if (type.Name == "<PrivateImplementationDetails>") return callee.Name is "InlineArrayAsReadOnlySpan" or "InlineArrayElementRef";      // what a params span of the string join compiles to
         if (type.Name.StartsWith("<>f__AnonymousType", StringComparison.Ordinal)) return true;          // the anonymous objects the fingerprint serialises: compiler-generated plain data
         var ns = type.Namespace ?? "";
         var name = type.IsGenericType ? type.GetGenericTypeDefinition().Name : type.Name;
@@ -179,6 +187,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
         if (ns.StartsWith("System.Collections", StringComparison.Ordinal) || ns.StartsWith("System.Linq", StringComparison.Ordinal) || ns.StartsWith("System.Numerics", StringComparison.Ordinal) ||
             ns == "System.Text.Json" || ns.StartsWith("System.Runtime.CompilerServices", StringComparison.Ordinal) || ns == "System.Text") return true;
         if (ns == "System.Runtime.InteropServices") return name == "ImmutableCollectionsMarshal";        // what a collection expression of an ImmutableArray compiles to
+        if (ns == "System.Globalization") return name == "CultureInfo" && callee.Name == "get_InvariantCulture";
         if (ns == "System.Security.Cryptography") return name == "SHA256";
         if (ns == "System.Threading") return name == "CancellationToken";
         if (ns != "System") return false;
@@ -193,7 +202,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
     {
         const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         var scanned = new HashSet<string>(); var offenders = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var root in new[] { typeof(EpochSchedule), typeof(EpochContent) })
+        foreach (var root in new[] { typeof(EpochSchedule), typeof(EpochContent), typeof(EpochText) })
         {
             var types = new List<Type> { root };
             for (var n = 0; n < types.Count; n++) types.AddRange(types[n].GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
@@ -213,7 +222,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
     // the plain non-backend types a member, parameter or return type of the pure derivation may have (primitives are allowed by IsPrimitive): values, immutable and generic collections, tuples
     private static readonly HashSet<Type> PermittedSystemTypes =
     [
-        typeof(Guid), typeof(decimal), typeof(string), typeof(DateOnly), typeof(System.Numerics.BigInteger), typeof(CancellationToken), typeof(Type), typeof(System.Text.StringBuilder),
+        typeof(Guid), typeof(decimal), typeof(string), typeof(DateOnly), typeof(System.Globalization.CultureInfo), typeof(System.Numerics.BigInteger), typeof(CancellationToken), typeof(Type), typeof(System.Text.StringBuilder),
         typeof(Nullable<>), typeof(System.Collections.Immutable.ImmutableArray<>), typeof(System.Collections.Immutable.ImmutableArray<>.Builder),
         typeof(IGrouping<,>), typeof(List<>), typeof(Dictionary<,>), typeof(HashSet<>), typeof(KeyValuePair<,>), typeof(IReadOnlyList<>), typeof(IEnumerable<>),
         typeof(ValueTuple<,>), typeof(ValueTuple<,,>), typeof(ValueTuple<,,,>), typeof(ValueTuple<,,,,>), typeof(ValueTuple<,,,,,>),
@@ -240,7 +249,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
         }
         if (!visited.Add(type)) return;
         // a backend type may appear only as plain data (an enum or a record) or as the static function itself or an exception code: a service, store, resolver or transaction never does
-        var isFunction = type == typeof(EpochSchedule) || type == typeof(EpochContent) || type == typeof(CostingException);
+        var isFunction = type == typeof(EpochSchedule) || type == typeof(EpochContent) || type == typeof(EpochText) || type == typeof(CostingException);
         var data = (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer) && type.IsNestedPrivate) || type.IsEnum || isFunction || type.IsValueType ||      // a struct (a record struct) is data too: its fields are checked below
             type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null;
         Assert.True(data, where + ": " + type + " is not plain data");

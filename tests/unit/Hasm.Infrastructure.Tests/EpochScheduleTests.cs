@@ -425,8 +425,8 @@ public class EpochScheduleReachabilityTests
     public void No_backend_source_outside_the_derivation_itself_references_it()
     {
         var offenders = Directory.EnumerateFiles(SourceRoot(), "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") && Path.GetFileName(f) is not ("EpochSchedule.cs" or "EpochContent.cs"))
-            .Where(f => File.ReadAllText(f).Contains("EpochSchedule", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochScheduleResult", StringComparison.Ordinal))
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") && Path.GetFileName(f) is not ("EpochSchedule.cs" or "EpochContent.cs" or "EpochText.cs"))
+            .Where(f => File.ReadAllText(f).Contains("EpochSchedule", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochContent", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochText", StringComparison.Ordinal))
             .Select(Path.GetFileName).ToList();
         Assert.Empty(offenders);
     }
@@ -438,9 +438,12 @@ public class EpochScheduleReachabilityTests
         foreach (var type in new[] { typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole) })
             Assert.False(type.IsPublic, type.Name);
         // it names no connection, transaction, command, time provider or random source: only costing types and the framework's collections and hashing
-        var source = File.ReadAllText(Path.Combine(SourceRoot(), "Hasm.Infrastructure", "Costing", "EpochSchedule.cs"));
-        foreach (var forbidden in new[] { "Npgsql", "DbConnection", "TimeProvider", "DateTime.", "Random", "Guid.NewGuid", "File.", "HttpClient" })
-            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        foreach (var file in new[] { "EpochSchedule.cs", "EpochContent.cs", "EpochText.cs" })
+        {
+            var source = File.ReadAllText(Path.Combine(SourceRoot(), "Hasm.Infrastructure", "Costing", file));
+            foreach (var forbidden in new[] { "Npgsql", "DbConnection", "TimeProvider", "DateTime.", "Random", "Guid.NewGuid", "File.", "HttpClient" })
+                Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        }
         Assert.NotNull(assembly);
     }
 }

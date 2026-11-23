@@ -312,5 +312,7 @@ jobs:
                 "CompensationPlanStorageTests": 7, "CompensationPlanApprovalTests": 9,
                 # Phase 3.8D part 1 (owner-approved re-scope of PR 48): the execution path is disabled and cannot be activated; migration 0036 is additive and compatible with an existing database
                 "PlanExecutionDisabledTests": 4, "PlanExecutionRuntimeRoleDisabledTests": 2, "PlanExecutionMigrationCompatibilityTests": 1,
+                # Phase 3.8D executor slice E1b: the derived epoch content against the real engine (8 scenarios), the T2 column-pin test 4c (one PostgreSQL test and one pure test)
+                "EpochContentEngineOracleTests": 8, "EpochTextColumnPinTests": 2,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml
