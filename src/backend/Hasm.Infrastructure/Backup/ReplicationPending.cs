@@ -6,7 +6,7 @@ namespace Hasm.Infrastructure.Backup;
 /// AUTHENTICATED audit state. Read only: this only ever makes the primary keep MORE, and it never touches a file.
 /// <para>
 /// This is the PREVIEW check (the "light" check of plan section 5.2): the destination folder is present, its signed status verifies and equals the primary's hash, its signed ciphertext inventory verifies and
-/// is bound to that status, and the folder is clean. Where the primary root is known, a copy that shares storage with the primary's run (the same folder, or one hard-linked file), or whose file identity
+/// is bound to that status, and the folder is clean. The primary root is REQUIRED (review L3 of PR 232: a caller cannot leave the independence check out): a copy that shares storage with the primary's run (the same folder, or one hard-linked file), or whose file identity
 /// cannot be read, is NOT a copy (the rule of <c>replica_not_independent</c>, <see cref="ReplicaIndependence"/>): the run stays pending. It does not re-hash every byte; the apply path (a later slice) re-verifies fully with <c>ReplicaCopier.VerifyStoredAsync</c> before anything is deleted.
 /// </para>
 /// </summary>
@@ -20,9 +20,12 @@ public static class ReplicationPending
         public IReadOnlySet<string> RunIds => new HashSet<string>(MissingAt.Where(kv => kv.Value.Count > 0).Select(kv => kv.Key), StringComparer.Ordinal);
     }
 
+    /// <param name="primaryRoot">The resolved primary root, required: every copy is checked for independence from the primary's run under it. Null, empty or not fully qualified is refused, never read as "no check".</param>
     public static Result Evaluate(IReadOnlyList<RetentionRun> primaryRuns, IReadOnlyList<CheckedDestination> destinations, SigningTrust? trust, ReplicaAuditState? audit,
-        IReadOnlyDictionary<string, string>? primaryTombstoneHashes = null, string? primaryRoot = null, Func<string, FileIdentityInfo?>? identityProbe = null)
+        IReadOnlyDictionary<string, string>? primaryTombstoneHashes, string primaryRoot, Func<string, FileIdentityInfo?>? identityProbe = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(primaryRoot);
+        if (!Path.IsPathFullyQualified(primaryRoot)) throw new ArgumentException("The primary root must be a fully qualified path.", nameof(primaryRoot));
         var missing = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var replicable = primaryRuns.Where(ReplicaStatus.IsReplicable).ToList();
         var perRun = replicable.ToDictionary(r => r.RunId, _ => new List<string>(), StringComparer.Ordinal);
@@ -55,7 +58,7 @@ public static class ReplicationPending
         return new(missing);
     }
 
-    private static bool LightVerified(string root, RetentionRun primary, RetentionRun copy, SigningTrust? trust, ReplicaAuditState? audit, string destinationId, string? primaryRoot,
+    private static bool LightVerified(string root, RetentionRun primary, RetentionRun copy, SigningTrust? trust, ReplicaAuditState? audit, string destinationId, string primaryRoot,
         Func<string, FileIdentityInfo?>? identityProbe)
     {
         if (trust is null || !ReplicaStatus.IsReplicable(copy) || !string.Equals(copy.StatusSha256, primary.StatusSha256, StringComparison.Ordinal)) return false;
@@ -65,13 +68,9 @@ public static class ReplicationPending
         {
             var status = SignedDocuments.ReadRunStatus(dir, trust);
             CiphertextDigests.ReadVerified(dir, copy.RunId, status.DigestListSha256, trust);                     // signed inventory present and bound to the status
-            if (primaryRoot is not null)
-            {
-                // a copy that shares storage with the primary's run is no copy, and one whose identity cannot be read is not counted either: the run stays pending (keeps more, never less)
-                var independence = ReplicaIndependence.Check(dir, Path.Combine(primaryRoot, copy.RunId), identityProbe);
-                if (independence.Shares || independence.Unavailable) return false;
-            }
-            return true;
+            // a copy that shares storage with the primary's run is no copy, and one whose identity cannot be read is not counted either: the run stays pending (keeps more, never less)
+            var independence = ReplicaIndependence.Check(dir, Path.Combine(primaryRoot, copy.RunId), identityProbe);
+            return !independence.Shares && !independence.Unavailable;
         }
         catch (Exception ex) when (ex is BackupException or IOException or UnauthorizedAccessException) { return false; }
     }

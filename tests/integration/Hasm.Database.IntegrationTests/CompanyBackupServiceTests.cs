@@ -275,7 +275,7 @@ public class CompanyBackupServiceTests : PostgresTestBase
         var digest = await Digest(Db(c.PhysicalDatabaseName));
         var set = Path.Combine(work, "set");
         await Service().BackupCompanyAsync(c.Id, set);
-        await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE {c.PhysicalDatabaseName} WITH (FORCE)");
+        await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), c.PhysicalDatabaseName);
 
         var r = await Service().TrialRestoreAsync(set, c.Id, Path.Combine(work, "trial-att"), keep: true, allowUnencrypted: true);
 
@@ -448,7 +448,8 @@ public class CompanyBackupServiceTests : PostgresTestBase
         }
         finally
         {
-            if (keptDatabase is not null) await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE IF EXISTS {keptDatabase} WITH (FORCE)");
+            // the trial database the Hasm.Admin binary created in this test (an opaque generated name, read from its kept file; the binary takes no injected test name), as before
+            if (keptDatabase is not null) await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), keptDatabase, ifExists: true, productGenerated: true);
         }
     }
 }

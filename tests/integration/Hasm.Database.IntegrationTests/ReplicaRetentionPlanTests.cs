@@ -108,7 +108,7 @@ public class ReplicaRetentionPlanTests : PostgresTestBase
         var r1 = await ProvenRun();
         var r2 = await ProvenRun();
         var primaryRuns = RetentionInventory.Scan(Root, Trust).Runs;
-        ReplicationPending.Result Pending(ReplicaAuditState? audit = null) => ReplicationPending.Evaluate(primaryRuns, Destinations(), Trust, audit);
+        ReplicationPending.Result Pending(ReplicaAuditState? audit = null) => ReplicationPending.Evaluate(primaryRuns, Destinations(), Trust, audit, null, BackupSet.RealPath(Root));
 
         Assert.Equal([r1, r2], Pending().RunIds.Order());                                                           // the destination folder does not exist: no copy of anything
         Directory.CreateDirectory(Nas);

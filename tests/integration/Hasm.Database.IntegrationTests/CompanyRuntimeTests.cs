@@ -96,7 +96,7 @@ public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
         var resolver = SinglePrincipalResolver(c);
         await using (var ok = await resolver.OpenAsync(c.Id)) { }
         NpgsqlConnection.ClearAllPools();
-        await Exec($"DROP DATABASE {c.PhysicalDatabaseName} WITH (FORCE)");         // the test's own hasm_test_ database
+        await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), c.PhysicalDatabaseName);         // the test's own hasm_test_ database
 
         var ex = await Assert.ThrowsAsync<CompanyDatabaseException>(() => resolver.OpenAsync(c.Id));
 

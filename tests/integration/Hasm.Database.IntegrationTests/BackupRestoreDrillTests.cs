@@ -60,10 +60,7 @@ public class BackupRestoreDrillTests : PostgresTestBase
 
     private async Task DropDatabase(string name)
     {
-        await using var conn = new NpgsqlConnection(Options.BuildMaintenanceConnectionString());
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand($"DROP DATABASE {new NpgsqlCommandBuilder().QuoteIdentifier(name)} WITH (FORCE)", conn);
-        await cmd.ExecuteNonQueryAsync();
+        await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), name);
     }
 
     private async Task<bool> Exists(string name)

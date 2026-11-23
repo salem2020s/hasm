@@ -131,7 +131,7 @@ public class BackupRunTests : PostgresTestBase
     {
         await Init();
         var a = await NewCompany(); var b = await NewCompany();
-        await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE {b.PhysicalDatabaseName} WITH (FORCE)");
+        await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), b.PhysicalDatabaseName);
 
         var (report, _) = await Service().RunAsync(Root);
 
@@ -212,7 +212,7 @@ public class BackupRunTests : PostgresTestBase
         Assert.Equal((1, "backup_stale"), Code(BackupRunStatus.Evaluate(BackupRunStatus.List(Root), DateTimeOffset.UtcNow.AddHours(30), BackupRunStatus.DefaultMaxAge)));
 
         var b = await NewCompany();
-        await Exec(Options.BuildMaintenanceConnectionString(), $"DROP DATABASE {b.PhysicalDatabaseName} WITH (FORCE)");
+        await TestDatabaseDrop.ExecuteAsync(Options.BuildMaintenanceConnectionString(), b.PhysicalDatabaseName);
         await Task.Delay(1100);                                                                                  // a later run id
         var (partial, _) = await Service().RunAsync(Root);
         Assert.Equal("partial", partial.Verdict);
