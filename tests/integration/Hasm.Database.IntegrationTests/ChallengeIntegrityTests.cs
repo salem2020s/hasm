@@ -114,6 +114,37 @@ public class ChallengeIntegrityTests : RestrictedRuntimeIdentityTestBase
     }
 
     [PostgresRoleFact]
+    public async Task A_challenge_that_has_not_expired_cannot_be_deleted_so_the_budget_and_the_single_use_cannot_be_reset_and_the_expiry_purge_still_works()
+    {
+        // review M1 of PR 237: the tag does not cover the counter or the consumption time, so DELETE and re-INSERT of a genuine tagged row would have reset both
+        await StartRestricted();
+        var user = await NewUser("victim");
+        await using var challenges = new MfaChallengeStore(() => RuntimeConnection, TimeProvider.System, new MfaChallengeOptions(MaxAttempts: 3), Keys);   // real time: the database clock decides what has expired
+        var live = await challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
+        // spend the whole budget, then try the reset
+        for (var i = 0; i < 3; i++) Assert.NotNull(await challenges.TryBeginAttemptAsync(live.Token, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1"));
+        Assert.Null(await challenges.TryBeginAttemptAsync(live.Token, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1"));
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => Attack($"DELETE FROM {C.Table} WHERE {C.Id} = @i", ("i", live.Id)));
+        Assert.Contains("never deleted", ex.MessageText);
+        Assert.Null(await challenges.TryBeginAttemptAsync(live.Token, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1"));                // still refused: the budget was not reset
+        // the same for the single use
+        var used = await challenges.IssueAsync(user.Id, MfaChallengePurpose.Enrol, SessionClient.Web, "10.0.0.1");
+        Assert.True(await challenges.ConsumeAsync(used.Id));
+        await Assert.ThrowsAsync<PostgresException>(() => Attack($"DELETE FROM {C.Table} WHERE {C.Id} = @i", ("i", used.Id)));
+        Assert.Null(await challenges.TryBeginAttemptAsync(used.Token, MfaChallengePurpose.Enrol, SessionClient.Web, "10.0.0.1"));
+        Assert.Equal(2L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.Id} IN (@a, @b)", ("a", live.Id), ("b", used.Id)));
+        // an EXPIRED row (real time: the database clock decides) is deleted by the housekeeping purge; re-inserting an expired row gains nothing because the expiry is covered
+        var past = DateTimeOffset.UtcNow.AddHours(-3);
+        var key = Keys.Active(); var token = SessionToken.Generate();
+        var expired = new ChallengeRow(Guid.NewGuid(), user.Id, Keys.TokenHash(key, token), 0, 0, SessionToken.HashKey("mfa-source:10.0.0.1"), MacInput.Truncate(past), MacInput.Truncate(past.AddMinutes(5)), key.Id, null);
+        expired = expired with { Tag = expired.ComputeTag(Keys, key) };
+        await Insert(expired);
+        Assert.Equal(1, await challenges.PurgeAsync(DateTimeOffset.UtcNow.AddHours(-1)));
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.Id} = @i", ("i", expired.Id)));
+        Assert.Equal(2L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.Id} IN (@a, @b)", ("a", live.Id), ("b", used.Id)));          // the live rows stayed
+    }
+
+    [PostgresRoleFact]
     public async Task A_missing_key_fails_closed_and_a_rejected_challenge_is_audited_through_the_real_wiring()
     {
         await StartRestricted();

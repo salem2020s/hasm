@@ -10,6 +10,8 @@ public static partial class SystemSchema
         public const string KeyId = "c_adb1913a";
         public const string Tag = "c_b95b9a16";
         public const string CkTag = "k_2f9ba9d7";
+        public const string FnDeleteGuard = "f_0e79d101";
+        public const string TrDeleteGuard = "r_8af2e8c2";
     }
 
     private static IReadOnlyDictionary<string, string> ChallengeTagMap { get; } = new Dictionary<string, string>
@@ -17,5 +19,7 @@ public static partial class SystemSchema
         ["ChallengeTag.KeyId"] = ChallengeTag.KeyId,
         ["ChallengeTag.Tag"] = ChallengeTag.Tag,
         ["ChallengeTag.CkTag"] = ChallengeTag.CkTag,
+        ["ChallengeTag.FnDeleteGuard"] = ChallengeTag.FnDeleteGuard,
+        ["ChallengeTag.TrDeleteGuard"] = ChallengeTag.TrDeleteGuard,
     };
 }
