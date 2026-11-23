@@ -777,6 +777,8 @@ function existingNames() {
       if (e.isDirectory()) { if (e.name !== "bin" && e.name !== "obj") scan(p); continue; }
       if (p === outSql || p === outCs) continue;
       if (!/\.(sql|cs)$/.test(e.name)) continue;
+      const later = /^(\d{4})_company_/.exec(e.name);
+      if (later && Number(later[1]) > Number(MIGRATION)) continue;   // a LATER company migration refers to this one's names (public.<table> references); its own names were checked against these when it was generated
       for (const m of fs.readFileSync(p, "utf8").matchAll(/\b[tcfkr]_[0-9a-f]{8}\b/g)) names.add(m[0]);
     }
   };
