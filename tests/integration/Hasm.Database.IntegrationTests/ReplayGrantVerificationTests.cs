@@ -192,6 +192,15 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
     }
 
     // ------------------------------------------------------------------------------------------------------------ every rule refuses, each with its own reason
+    /// <summary>A grant signed by <paramref name="signer"/> with a key registered FOR that person (a key must name its signer), so that the rule under test, not the key's owner, is what refuses.</summary>
+    private async Task<Grant> MakeAs(Bed bed, Guid signer)
+    {
+        var key = "ks-" + signer.ToString("N")[..16];
+        var existing = await Sql<long>($"SELECT count(*) FROM {RK.Table} WHERE {RK.KeyId} = '{key}'");
+        if (existing == 0) Assert.Null(await RegisterKey(bed, key, signer));
+        return await Make(bed, signer: signer, keyId: key);
+    }
+
     private static void Refused(string reason, string? outcome) { Assert.NotNull(outcome); Assert.StartsWith(Refusal, outcome); Assert.Contains(reason, outcome); }
 
     [PostgresRoleFact]
@@ -234,12 +243,12 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
         Assert.Null(await AsOwner(Insert(await Make(bed, notBefore: Now() - 7000, notAfter: Now() - 7000 + 7200))));            // a window of exactly 2 hours that still holds is accepted
 
         // independence: the signer is not the creator, the approver, the executor, the document's creator
-        await Case("grant_signer_not_independent", () => Make(bed, signer: Planner));
-        await Case("grant_signer_not_independent", () => Make(bed, signer: PlanApprover));
-        await Case("grant_signer_not_independent", () => Make(bed, signer: Executor));
-        await Case("grant_signer_not_independent", () => Make(bed, signer: Admin.Id));                                           // the creator, submitter and approver of the event document
+        await Case("grant_signer_not_independent", () => MakeAs(bed, Planner));
+        await Case("grant_signer_not_independent", () => MakeAs(bed, PlanApprover));
+        await Case("grant_signer_not_independent", () => MakeAs(bed, Executor));
+        await Case("grant_signer_not_independent", () => MakeAs(bed, Admin.Id));                                           // the creator, submitter and approver of the event document
         var creatorOfDocument = await Sql<Guid>($"SELECT {SD.CreatedBy} FROM {SD.Table} WHERE {SD.Id} = '{bed.Plan.Doc.Id}'");
-        await Case("grant_signer_not_independent", () => Make(bed, signer: creatorOfDocument));
+        await Case("grant_signer_not_independent", () => MakeAs(bed, creatorOfDocument));
         await Case("grant_signer_not_independent", () => Make(bed, executor: bed.Signer));                                      // the executor is the signer
 
         // the plan's approval must still be sound (0036): a plan whose stored fingerprint no longer matches its approval is refused (the test switches the plan's own guards off as the database owner to forge that state)
