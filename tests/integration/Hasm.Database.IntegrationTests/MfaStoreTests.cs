@@ -15,7 +15,7 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class MfaStoreTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
 
     private async Task Setup()

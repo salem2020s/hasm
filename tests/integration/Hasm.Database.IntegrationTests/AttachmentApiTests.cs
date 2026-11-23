@@ -32,7 +32,7 @@ public class AttachmentApiTests : HttpApiTestBase
             foreach (var (key, value) in settings ?? []) b.UseSetting("Hasm:Attachments:" + key, value);
             b.ConfigureServices(s =>
             {
-                apiRing = new InMemoryKekRing("k1") { Unavailable = keyUnavailable };
+                apiRing = new InMemoryKekRing("k1", TestIdentityKeys.Master) { Unavailable = keyUnavailable };
                 s.AddSingleton<KekRing>(apiRing);
                 s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
             });

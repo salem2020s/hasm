@@ -9,7 +9,7 @@ namespace Hasm.Database.IntegrationTests;
 /// <summary>Phase 4.1 slice S3a against real PostgreSQL: step-up moves the session's second-factor proof, in one transaction with its audit event, through the single verifier. Disposable cluster only.</summary>
 public class MfaStepUpTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
     private AuthService MfaAuth = null!;
 

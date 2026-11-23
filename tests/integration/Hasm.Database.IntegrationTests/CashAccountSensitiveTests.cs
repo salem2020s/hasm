@@ -212,6 +212,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         var moved = IdOf(await Create(cookie, Bank("nb-new", main, await Gl("1102"), "GB29NWBK60161331926819")));   // under k2 already
         Rotate("k3");
         Assert.True(Keys.Remove("k1"));                                                                         // the old key is gone: its number cannot be re-wrapped
+        await RetagAllUsersAsync();                                                                             // and every user tag under it (the retag tool of the rotation slice does this in production)
         cookie = await Manager();                                                                               // and so is every session under it: a new sign-in (under the active key) replaces the cookie
         var cipher = await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{lost}'");
         var r = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
@@ -237,6 +238,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         await Create(cookie, Cashbox("c1", main, await Gl("1102")));
         Rotate("k2");
         Assert.True(Keys.Remove("k1"));                                                                         // the number cannot be re-wrapped: the failure path runs
+        await RetagAllUsersAsync();
         cookie = await Manager();                                                                               // sessions under the retired key are gone with it: sign in again under the active key
         var service = factory!.Services.GetRequiredService<CashAccountService>();
         service.BeforeFailureAuditForTests = _ => throw new InvalidOperationException("audit store secret detail 0380");   // the audit of the failure itself fails

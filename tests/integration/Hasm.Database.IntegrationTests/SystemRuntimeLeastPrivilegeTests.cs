@@ -27,7 +27,7 @@ namespace Hasm.Database.IntegrationTests;
 public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
 {
     private const string RolePrefix = "hasm_srt_";
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private readonly List<string> testRoles = [];
     private string runtimeRole = null!, runtimePassword = null!;
     private HasmDatabaseOptions RuntimeOptions = null!;
@@ -131,7 +131,9 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         using (var active = (await mfa.FindActiveSecretAsync(user.Id, default))!) Assert.Equal(secret, active.Secret);   // the runtime role reads and decrypts its users' secrets: that is its job
         Assert.True(await mfa.TryAdvanceLastStepAsync(id, Step + 1, default));
         Assert.False(await mfa.TryAdvanceLastStepAsync(id, Step + 1, default));                                  // replay still refused: enforcement is unchanged
-        Assert.NotNull(await mfa.RecordStepUpAsync(login.SessionId, user.Id));
+        var stepUpSession = Guid.NewGuid();                                                                      // the enrolment changed the user (revision +1): the earlier session is stale, a session issued now takes the step-up
+        await store.CreateSessionAsync(stepUpSession, user.Id, SessionToken.Generate(), SessionClient.Web, Clock.GetUtcNow().AddMinutes(5), Clock.GetUtcNow().AddHours(1));
+        Assert.NotNull(await mfa.RecordStepUpAsync(stepUpSession, user.Id));
         var second = await mfa.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);                         // re-enrolment: revoke the old pending, insert, activate, revoke the old active
         Assert.True(await mfa.ActivatePendingAsync(user.Id, second, Step + 2, null));
         Assert.Equal(1, await mfa.RevokeAllAsync(user.Id, null, "test"));

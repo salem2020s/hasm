@@ -234,7 +234,7 @@ public class CashPresetRolesMigrationTests : PostgresTestBase
 
         var clock = new FakeClock();
         var audit = new Hasm.Infrastructure.Audit.AuditTrail(new Hasm.Infrastructure.Audit.AuditServices(new Hasm.Infrastructure.Audit.InMemoryAuditKeyRing(), new Hasm.Infrastructure.Audit.InMemoryCheckpointStore(), 0), clock);
-        var store = new IdentityStore(connection, clock, audit);
+        var store = new IdentityStore(connection, clock, audit, keys: TestIdentityKeys.Instance);
         var auth = new AuthService(store, new PasswordService(1000), new AuthOptions());
         var company = Guid.NewGuid();
         await using var conn0 = new NpgsqlConnection(connection);
@@ -244,10 +244,19 @@ public class CashPresetRolesMigrationTests : PostgresTestBase
             ins.Parameters.AddWithValue("i", company); ins.Parameters.AddWithValue("n", Hasm.Infrastructure.Naming.PhysicalIdentifier.GenerateDatabaseName()); ins.Parameters.AddWithValue("s", (short)ProvisioningState.Ready);
             await ins.ExecuteNonQueryAsync();
         }
-        await using var access = new AccessService(connection, clock, PermissionCatalog.Default, audit);
-        var admin = (await auth.CreateUserAsync("upgrade-admin", "Admin", "Correct-Horse-Battery-9", false)).User!;
+        await using var access = new AccessService(connection, clock, PermissionCatalog.Default, audit, keys: TestIdentityKeys.Instance);
+        // the system database is at the migration BEFORE the presets, so the users are written by plain SQL: the current user writer also fills the tag columns of a later migration
+        async Task<UserRecord> LegacyUser(string login)
+        {
+            var id = Guid.NewGuid();
+            await using var cmd = new NpgsqlCommand($"INSERT INTO {SystemSchema.User.Table} ({SystemSchema.User.Id},{SystemSchema.User.Login},{SystemSchema.User.DisplayName},{SystemSchema.User.PasswordHash},{SystemSchema.User.State},{SystemSchema.User.IsIdentityAdministrator},{SystemSchema.User.CreatedAtUtc},{SystemSchema.User.StateChangedAtUtc},{SystemSchema.User.PasswordChangedAtUtc}) VALUES (@i,@l,@l,@h,0,false,now(),now(),now())", conn0);
+            cmd.Parameters.AddWithValue("i", id); cmd.Parameters.AddWithValue("l", login); cmd.Parameters.AddWithValue("h", new PasswordService(1000).Hash("Correct-Horse-Battery-9"));
+            await cmd.ExecuteNonQueryAsync();
+            return new UserRecord(id, login, login, "", UserState.Active, false, DateTimeOffset.UtcNow, null);
+        }
+        var admin = await LegacyUser("upgrade-admin");
         Assert.Equal(AccessService.BootstrapStatus.Granted, await access.BootstrapCompanyAdministratorAsync(admin.Login, company));
-        var approver = (await auth.CreateUserAsync("upgrade-approver", "Approver", "Correct-Horse-Battery-9", false)).User!;
+        var approver = await LegacyUser("upgrade-approver");
         Assert.True((await access.GrantMembershipAsync(admin.Id, company, approver.Login)).IsOk);
         Assert.Equal(AccessService.FiscalApproverStatus.Granted, await access.GrantFiscalApproverOfflineAsync(approver.Login, company));
 

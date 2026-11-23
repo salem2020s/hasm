@@ -36,7 +36,7 @@ public class AttachmentRetentionDatabaseTests : InventoryTestBase
         dir = Path.Combine(Path.GetTempPath(), "hasm-ret-" + Guid.NewGuid().ToString("N"));
         var options = new AttachmentOptions { StorageDirectory = dir, MaxFileBytes = 1024 * 1024 };
         var transactions = new CompanyAuditedTransactions(Resolver, Audit, Clock);
-        Attachments = new AttachmentService(Resolver, transactions, new AttachmentFileStore(options, new EncryptionOptions { AllowInsecureFilePermissions = true }), new EnvelopeEncryptor(new InMemoryKekRing("k1")), options, Clock);
+        Attachments = new AttachmentService(Resolver, transactions, new AttachmentFileStore(options, new EncryptionOptions { AllowInsecureFilePermissions = true }), new EnvelopeEncryptor(new InMemoryKekRing("k1", TestIdentityKeys.Master)), options, Clock);
         Store = new AttachmentRetentionService(Resolver, transactions, Clock);
         Mgmt = new AttachmentRetentionManagementService(Rbac, Store);
         party = Guid.NewGuid();

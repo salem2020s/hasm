@@ -42,11 +42,12 @@ public abstract class CashAccountTestBase : HttpApiTestBase
     protected static readonly string[] Manage = [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate];
     protected static readonly string[] Sensitive = [PermissionCatalog.Codes.CashAccountsSensitiveView];
     protected readonly SwitchableCashProbe Probe = new();
-    protected InMemoryKekRing Keys = new("k1");
+    protected InMemoryKekRing Keys = new("k1", TestIdentityKeys.Master);
+    protected override IdentityKeys SessionKeys => new(Keys);                                            // the users of the suite are tagged under the ring of ITS API (it rotates and loses keys in some tests)
 
     protected async Task Start(bool keyUnavailable = false, bool baseCurrency = true)
     {
-        Keys = new InMemoryKekRing("k1") { Unavailable = keyUnavailable };
+        Keys = new InMemoryKekRing("k1", TestIdentityKeys.Master) { Unavailable = keyUnavailable };
         await StartApi(configure: b => { b.UseSetting("Hasm:Encryption:IdentityPreviousKeyIds", "k1,k2,k3"); b.ConfigureServices(s =>
         {
             s.AddSingleton<KekRing>(Keys);
