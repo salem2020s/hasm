@@ -43,6 +43,7 @@ public abstract class CashAccountTestBase : HttpApiTestBase
     protected static readonly string[] Sensitive = [PermissionCatalog.Codes.CashAccountsSensitiveView];
     protected readonly SwitchableCashProbe Probe = new();
     protected InMemoryKekRing Keys = new("k1", TestIdentityKeys.Master);
+    protected override IdentityKeys SessionKeys => new(Keys);                                            // the users of the suite are tagged under the ring of ITS API (it rotates and loses keys in some tests)
 
     protected async Task Start(bool keyUnavailable = false, bool baseCurrency = true)
     {
