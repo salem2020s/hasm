@@ -66,6 +66,6 @@ public class CashPresetRoleTests
         Assert.Equal(PresetRoles.Definitions.Count, PresetRoles.Definitions.Keys.Distinct().Count());
         Assert.Equal("5c1b0f6e-0000-4a00-8000-00000000000a", PresetRoles.CashAccountManagerId.ToString());
         Assert.Equal("5c1b0f6e-0000-4a00-8000-00000000000b", PresetRoles.CashAccountSensitiveViewerId.ToString());
-        Assert.Equal(10, PresetRoles.Definitions.Count);
+        Assert.Equal(11, PresetRoles.Definitions.Count);   // 10 with the cash presets, 11 with the short-close preset (CommercialDocumentCloserTests)
     }
 }

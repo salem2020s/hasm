@@ -22,6 +22,7 @@ using Npgsql;
 //   Hasm.Admin grant-system-runtime           (D-235: converges the API runtime account's privileges on the SYSTEM database to the reviewed catalog, least-privilege for the TOTP secret store; owner account; idempotent; never creates a role)
 //   Hasm.Admin grant-cash-account-manager <login> <company-id> | revoke-cash-account-manager <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED Cash Account Manager preset; audited; X4-PRESET-ROLE)
 //   Hasm.Admin grant-cash-account-sensitive-viewer <login> <company-id> | revoke-cash-account-sensitive-viewer <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED preset that may read a full bank account number; audited)
+//   Hasm.Admin grant-commercial-document-closer <login> <company-id> | revoke-commercial-document-closer <login> <company-id>  (offline delegation of the dedicated short-close preset, D-201; not privileged; audited; X4-PRESET-ROLE)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 //   Hasm.Admin grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id>  (offline delegation of the Import Approver role: approval of imports; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
@@ -103,7 +104,7 @@ var validUsage = command switch
         && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver"
-        or "grant-cash-account-manager" or "revoke-cash-account-manager" or "grant-cash-account-sensitive-viewer" or "revoke-cash-account-sensitive-viewer" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
+        or "grant-cash-account-manager" or "revoke-cash-account-manager" or "grant-cash-account-sensitive-viewer" or "revoke-cash-account-sensitive-viewer" or "grant-commercial-document-closer" or "revoke-commercial-document-closer" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
     "encryption-keygen" => args.Length == 2 && KekRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
@@ -414,6 +415,8 @@ try
         case "revoke-cash-account-manager":
         case "grant-cash-account-sensitive-viewer":
         case "revoke-cash-account-sensitive-viewer":
+        case "grant-commercial-document-closer":
+        case "revoke-commercial-document-closer":
         {
             // Offline delegation of the Fiscal Approver role (approval of exceptional fiscal reopenings). No HTTP endpoint exists for this: a company administrator
             // cannot grant a permission they do not hold, so this is the supported way to create the first approver and the recovery path. Audited without an actor user.
@@ -422,9 +425,12 @@ try
             var journalRole = command.EndsWith("journal-approver", StringComparison.Ordinal);
             var cashManager = command.EndsWith("cash-account-manager", StringComparison.Ordinal);
             var cashViewer = command.EndsWith("cash-account-sensitive-viewer", StringComparison.Ordinal);
-            var roleName = cashManager ? "Cash Account Manager" : cashViewer ? "Cash Account Sensitive Viewer" : importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
+            var closer = command.EndsWith("commercial-document-closer", StringComparison.Ordinal);
+            var roleName = closer ? "Commercial Document Closer" : cashManager ? "Cash Account Manager" : cashViewer ? "Cash Account Sensitive Viewer" : importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
             var granting = command.StartsWith("grant-", StringComparison.Ordinal);
-            var status = cashManager
+            var status = closer
+                ? (granting ? await access.GrantCommercialDocumentCloserOfflineAsync(args[1], companyId) : await access.RevokeCommercialDocumentCloserOfflineAsync(args[1], companyId))
+                : cashManager
                 ? (granting ? await access.GrantCashAccountManagerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountManagerOfflineAsync(args[1], companyId))
                 : cashViewer
                 ? (granting ? await access.GrantCashAccountSensitiveViewerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountSensitiveViewerOfflineAsync(args[1], companyId))

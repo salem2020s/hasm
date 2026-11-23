@@ -12,7 +12,7 @@ public static partial class MigrationGuard
 {
     /// <summary>
     /// SAFEGUARD-CHANGE ALLOWLIST (frozen). A migration may contain a matched "ALTER TABLE t DISABLE TRIGGER x ... ALTER TABLE t ENABLE TRIGGER x"
-    /// pair ONLY when it is listed here. The first 26 entries are exactly the migrations on <c>main</c> that already used the pattern when the rule was introduced (the 27th is the first approved NEW use, X4); they
+    /// pair ONLY when it is listed here. The first 26 entries are exactly the migrations on <c>main</c> that already used the pattern when the rule was introduced (the 27th and the 28th are the approved NEW uses of X4: the cash account presets and the short-close preset); they
     /// are all SYSTEM migrations (no company migration uses it). Each pauses the permission-immutability trigger (and, in some, the role-permission trigger) of the
     /// system database for exactly one versioned insert of permission rows into a preset role, inside the migration's own transaction, and re-enables it before the
     /// transaction ends (the runner verifies this after every script). Applied migrations are immutable, so they are listed, never rewritten. Adding an entry is a
@@ -75,6 +75,10 @@ public static partial class MigrationGuard
         // X4-PRESET-ROLE (owner Option A, 2026-11-22; plan docs/X4-PRESET-ROLES-PLAN.md): the two dedicated cash and bank account presets. A NEW migration: it creates two preset roles and their permission rows, so
         // both immutability triggers are paused. The number is provisional until the final merge round; when it changes, Version, Name and Checksum of this entry change with it, in the same reviewed change.
         new(MigrationSet.System, 36, "0036_cash_account_presets.sql", "22f90773c2601e80db36ce5282c3cb422746ae7a39bae84f1800ff6322dfb907",
+            ["t_359332ac/r_d3408f58", "t_3e3d4119/r_2601e368"]),
+        // X4-PRESET-ROLE (owner Option A, D-254; plan docs/X4-PRESET-ROLES-PLAN.md section 3.3): the dedicated short-close preset Commercial Document Closer (D-201). A NEW migration: it creates one preset role and its two
+        // permission rows, so both immutability triggers are paused. If the number changes at the merge round, Version, Name and Checksum of this entry change with it, in the same reviewed change.
+        new(MigrationSet.System, 41, "0041_commercial_document_closer.sql", "f9946bb7c4cad858b21afc04a6823c5e177cb082a8b28f87acec0052b2da4977",
             ["t_359332ac/r_d3408f58", "t_3e3d4119/r_2601e368"]),
     ];
 }

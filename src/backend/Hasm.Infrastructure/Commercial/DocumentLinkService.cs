@@ -109,7 +109,9 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
                 if (kind != CommercialLinkKind.Amends)
                 {
                     var used = await Scalar<decimal>(work, $"SELECT COALESCE(sum({DL.Quantity}), 0) FROM {DL.Table} WHERE {DL.FromLineId} = @a AND {DL.Kind} = @k", ("a", fromLine.Id), ("k", (short)kind));
-                    if (used + quantity > fromLine.Quantity) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
+                    // D-201: what was closed short on the source line can no longer be fulfilled or invoiced (tolerance 0 stays; the lines are locked, so the sum is stable; PostgreSQL enforces the same cap)
+                    var closed = kind is CommercialLinkKind.Fulfils or CommercialLinkKind.Invoices ? await Scalar<decimal>(work, $"SELECT COALESCE(sum({SC.Quantity}), 0) FROM {SC.Table} WHERE {SC.LineId} = @a", ("a", fromLine.Id)) : 0m;
+                    if (used + quantity > fromLine.Quantity - closed) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
                     var usedTarget = await Scalar<decimal>(work, $"SELECT COALESCE(sum({DL.Quantity}), 0) FROM {DL.Table} WHERE {DL.ToLineId} = @a AND {DL.Kind} = @k", ("a", toLine.Id), ("k", (short)kind));
                     if (usedTarget + quantity > toLine.Quantity) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
                 }

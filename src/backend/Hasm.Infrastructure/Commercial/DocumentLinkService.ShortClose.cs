@@ -15,7 +15,7 @@ namespace Hasm.Infrastructure.Commercial;
 
 /// <summary>
 /// The short close (Phase 3.13, owner decision D-201): "An explicitly authorised short-close action may close the remaining quantity with a reason and audit, but must not invent deliveries, invoices or stock
-/// movements." A quantity of a line of an APPROVED document of a short-closable type is recorded as closed in one append-only row (<see cref="SC"/>); NO link, stock document, journal entry or reservation is
+/// movements." A quantity of a line of an APPROVED, PARTIALLY FULFILLED document of a short-closable type is recorded as closed in one append-only row (<see cref="SC"/>); NO link, stock document, journal entry or reservation is
 /// created. The open quantity of a line is DERIVED: ordered - max(fulfilled, invoiced) - closed. Tolerance 0 stays (D-076): what was delivered or invoiced is never closed, and after a close a link cannot take more than
 /// ordered - closed (PostgreSQL enforces both). The whole operation (every row, the audit event) is ONE company transaction, idempotent per (creator, key). There is no authorization here by design:
 /// <see cref="DocumentLinkManagementService"/> wraps it. The lock order is the one of a link and of a document edit: the document row (shared) first, its lines second, in id order.
@@ -37,7 +37,7 @@ public sealed partial class DocumentLinkService
 
     /// <summary>
     /// Closes the open remainder of an approved order short. <paramref name="input"/>.<c>Lines</c> null closes the whole open remainder of every line (<c>nothing_to_close</c> when none is open), otherwise exactly the named
-    /// quantities. Refusals: <c>commercial_document_not_found</c>, <c>revision_conflict</c> (412), <c>document_not_approved</c>, <c>short_close_not_allowed_for_type</c>, <c>line_not_found</c>, <c>exceeds_open_quantity</c>,
+    /// quantities. Refusals: <c>commercial_document_not_found</c>, <c>revision_conflict</c> (412), <c>document_not_approved</c>, <c>short_close_not_allowed_for_type</c>, <c>document_not_partially_fulfilled</c>, <c>line_not_found</c>, <c>exceeds_open_quantity</c>,
     /// <c>nothing_to_close</c>, <c>reason_required</c>, <c>idempotency_key_reused</c>. A replay (same creator, key and payload) returns the original operation (<c>Replayed</c>). The document row is NOT changed
     /// (its revision stays), so an approved document is never touched by a close; the revision is checked only so that a client acts on the version it saw.
     /// </summary>
@@ -98,6 +98,8 @@ public sealed partial class DocumentLinkService
                 if (revision != expectedRevision) throw new Abort(ConfigStatus.PreconditionFailed, "revision_conflict");
                 if (doc.Status != CommercialStatus.Approved) throw new Abort(ConfigStatus.Conflict, "document_not_approved");
                 if (!types.IsShortCloseAllowed(doc.DocType)) throw new Abort(ConfigStatus.Conflict, "short_close_not_allowed_for_type");
+                // D-201 closes "the remaining quantity" of a PARTIALLY fulfilled document: at least one fulfilment or invoice link leaves it. A document nothing was delivered or invoiced from is cancelled (its own permission), never closed short.
+                if (!await Scalar<bool>(work, $"SELECT EXISTS (SELECT 1 FROM {DL.Table} WHERE {DL.FromDocumentId} = @a AND {DL.Kind} IN (1, 2))", ("a", documentId))) throw new Abort(ConfigStatus.Conflict, "document_not_partially_fulfilled");
                 var state = new Dictionary<Guid, decimal>();   // open quantity per line
                 foreach (var l in lines)
                 {

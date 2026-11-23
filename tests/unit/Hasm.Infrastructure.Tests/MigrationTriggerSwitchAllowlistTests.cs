@@ -10,7 +10,7 @@ namespace Hasm.Infrastructure.Tests;
 /// </summary>
 public class MigrationTriggerSwitchAllowlistTests
 {
-    // The pinned list, written out independently of the production list: the 27 SYSTEM migrations that contain a matched pair: the 26 that were on main when the rule was introduced, and the cash account presets of X4 (no company migration does).
+    // The pinned list, written out independently of the production list: the 28 SYSTEM migrations that contain a matched pair: the 26 that were on main when the rule was introduced, and the cash account presets and the short-close preset of X4 (no company migration does).
     private static readonly string[] Pinned =
     [
         "0006_company_configuration_support.sql",
@@ -39,7 +39,8 @@ public class MigrationTriggerSwitchAllowlistTests
         "0029_commercial_approver.sql",
         "0030_attachment_retention_access.sql",
         "0034_company_mfa_policy.sql",
-        "0036_cash_account_presets.sql"   // X4-PRESET-ROLE: the first approved NEW use (provisional number; renumbered with its allowlist entry at the final merge round)
+        "0036_cash_account_presets.sql",   // X4-PRESET-ROLE: the first approved NEW use
+        "0041_commercial_document_closer.sql"   // X4-PRESET-ROLE (D-254): the short-close preset (D-201); renumbered with its allowlist entry if the merge order changes
     ];
 
     private static IReadOnlyList<MigrationScript> System_ => MigrationScript.LoadEmbedded();
@@ -63,7 +64,7 @@ public class MigrationTriggerSwitchAllowlistTests
     public void The_allowlist_is_exactly_the_embedded_migrations_that_use_the_pattern_with_their_real_checksums_and_triggers()
     {
         var allowed = MigrationGuard.ApprovedTriggerSwitches;
-        Assert.Equal(27, allowed.Count);
+        Assert.Equal(28, allowed.Count);
         Assert.All(allowed, a => Assert.Equal(MigrationSet.System, a.Set));
         Assert.Equal(Pinned.Order(StringComparer.Ordinal), allowed.Select(a => a.Name).Order(StringComparer.Ordinal));
         Assert.Contains("0034_company_mfa_policy.sql", Pinned);

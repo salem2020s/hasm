@@ -34,7 +34,8 @@ public abstract class CommercialTestBase : InventoryTestBase
     /// <summary>The test composition: the internal test type and a second one (<see cref="CommercialTestType.Other"/>), and the link pairs the S2 tests exercise (only the test type may be linked to itself; the second type has no pair).</summary>
     protected static ICommercialDocumentTypeRegistry TestRegistry() => new CommercialDocumentTypeRegistry([CommercialTestType.Name, CommercialTestType.Other],
         [(CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Fulfils), (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Invoices),
-         (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Returns), (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Amends)]);
+         (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Returns), (CommercialTestType.Name, CommercialTestType.Name, CommercialLinkKind.Amends)],
+        [CommercialTestType.Name]);   // the test type may be closed short (D-201); the second type may not (production registers no closable type until the concrete order types exist)
 
     protected static void RegisterTestType(IServiceCollection s) => s.AddSingleton(TestRegistry());
 
@@ -80,6 +81,17 @@ public abstract class CommercialTestBase : InventoryTestBase
     {
         var (user, _) = await Member([Hasm.Infrastructure.Access.PermissionCatalog.Codes.CommercialView], Hasm.Infrastructure.Access.ScopeKind.Company, null);
         Assert.Equal(Hasm.Infrastructure.Access.AccessService.FiscalApproverStatus.Granted, await Rbac.GrantCommercialApproverOfflineAsync(user.Login, Company.Id));
+        return user;
+    }
+
+    private int closers;
+
+    /// <summary>A company member holding ONLY the dedicated preset Commercial Document Closer (D-201, X4-PRESET-ROLE), assigned the only way it can be: offline, company-wide.</summary>
+    protected async Task<Hasm.Infrastructure.Identity.UserRecord> NewCloserUser()
+    {
+        var user = await NewUser($"closer{Interlocked.Increment(ref closers)}");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, user.Login)).IsOk);
+        Assert.Equal(Hasm.Infrastructure.Access.AccessService.FiscalApproverStatus.Granted, await Rbac.GrantCommercialDocumentCloserOfflineAsync(user.Login, Company.Id));
         return user;
     }
 
