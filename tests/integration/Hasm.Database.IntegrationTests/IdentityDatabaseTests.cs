@@ -38,7 +38,7 @@ public abstract class IdentityTestBase : PostgresTestBase
     protected async Task Start()
     {
         await new SystemDatabaseInitializer(Options).InitializeAsync();
-        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit);
+        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, keys: TestIdentityKeys.Instance);
         Auth = new AuthService(Store, Passwords, AuthSettings);
     }
 

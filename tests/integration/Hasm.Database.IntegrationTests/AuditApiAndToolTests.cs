@@ -77,7 +77,7 @@ public class AuditApiTests : FileEvidenceTestBase
 
     private (AuthService Auth, IdentityStore Store) FileBackedIdentity()
     {
-        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock));
+        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock), keys: TestIdentityKeys.Instance);
         return (new AuthService(store, Passwords, AuthSettings), store);
     }
 
