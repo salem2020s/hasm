@@ -674,7 +674,10 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                         + (o.Result == "corrupt" ? (o.Reported ? "; reported (audit 2042); the copy is left exactly as it is: move the folder away, then run backup-replicate" : "; already reported earlier (no new 2042); the copy is left as it is") : ""));
                 var bad = outcomes.Count(o => !o.IsVerified);
                 Console.WriteLine($"Re-verification: {outcomes.Count(o => o.IsVerified)} copy(ies) verified again, {bad} not ({(replicate.All ? "every run folder" : "default selection: newest copy, newest per company, held and pinned runs")}).");
-                return bad == 0 ? Ok : Failed;
+                // review U2 of PR 214: where the hard-link count could not be read nothing is claimed about independence, and the operator is told once
+                var unavailable = outcomes.Any(o => o.LinkCheckUnavailable);
+                if (unavailable) Console.WriteLine("  [WARNING] link_check_unavailable (the hard-link count of the copies could not be read on this platform, so their independence from other storage was not checked)");
+                return bad > 0 ? Failed : unavailable ? Warnings : Ok;
             }
             case "backup-replicate":
             {

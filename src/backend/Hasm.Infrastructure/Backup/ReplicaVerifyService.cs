@@ -8,7 +8,7 @@ namespace Hasm.Infrastructure.Backup;
 public sealed record ReplicaVerifyRequest(string? DestinationId = null, bool All = false);
 
 /// <summary>The result for one copy: <c>verified</c>, <c>corrupt</c> (with the failing <see cref="Check"/>, a stable code) or <c>unreadable</c> (the destination could not be read).</summary>
-public sealed record ReplicaVerifyOutcome(string DestinationId, string RunId, string Result, string? Check, bool Reported)
+public sealed record ReplicaVerifyOutcome(string DestinationId, string RunId, string Result, string? Check, bool Reported, bool LinkCheckUnavailable = false)
 {
     public bool IsVerified => Result == "verified";
 }
@@ -73,13 +73,13 @@ public sealed class ReplicaVerifyService(HasmDatabaseOptions options, SigningTru
             {
                 var watch = Stopwatch.StartNew();
                 var dir = Path.Combine(d.ResolvedPath, copy.RunId);
-                (string? Check, int Files, long Bytes, string? StatusSha256) result;
+                (string? Check, int Files, long Bytes, string? StatusSha256, bool LinkCheckAvailable) result;
                 try { result = await ReplicaCopier.VerifyStoredAsync(dir, trust, ct); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { outcomes.Add(new(d.Destination.Id, copy.RunId, "unreadable", "destination_unreachable", false)); continue; }
                 if (result.Check is null)
                 {
                     await WriteAsync(() => events.VerifiedAsync(copy.RunId, result.StatusSha256!, d.Destination, result.Files, result.Bytes, (long)watch.Elapsed.TotalMilliseconds, true, ct));
-                    outcomes.Add(new(d.Destination.Id, copy.RunId, "verified", null, false));
+                    outcomes.Add(new(d.Destination.Id, copy.RunId, "verified", null, false, !result.LinkCheckAvailable));
                 }
                 else
                 {
@@ -108,6 +108,9 @@ public sealed class ReplicaVerifyService(HasmDatabaseOptions options, SigningTru
         catch (NpgsqlException) { throw new BackupException("hold_check_failed"); }
     }
 
+    /// <summary>A company whose copies are always selected: an attachment-hold keep, a company that cannot be read, or one whose time zone is missing or does not resolve (retention classifies it `classification_unknown` and keeps all its runs; review U3 of PR 214).</summary>
+    internal static bool IsHeld(RetentionCompany company) => !company.Readable || company.HoldCode is not null || RetentionTime.FindZone(company.TimeZoneId) is null;
+
     /// <summary>The companies whose copies are always selected: the company-scoped holds, plus every company of these copies that has an attachment-hold keep or cannot be read (retention keeps an unreadable company's runs).</summary>
     private async Task<IReadOnlyList<Guid>> HeldCompaniesAsync(IReadOnlyList<RetentionRun> copies, IReadOnlySet<Guid> companyHolds, bool all, CancellationToken ct)
     {
@@ -117,7 +120,7 @@ public sealed class ReplicaVerifyService(HasmDatabaseOptions options, SigningTru
         foreach (var id in copies.SelectMany(r => r.Companies).Select(c => c.CompanyId).Distinct().Where(id => !held.Contains(id)))
         {
             var company = await service.ReadCompanyAsync(id, ct);
-            if (!company.Readable || company.HoldCode is not null) held.Add(id);
+            if (IsHeld(company)) held.Add(id);
         }
         return [.. held];
     }

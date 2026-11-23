@@ -123,6 +123,8 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
                 var existing = RetentionInventory.Read(new DirectoryInfo(final), trust);
                 // a folder under this run id that is not the primary's verified run is evidence and is never touched (D-185 step 2)
                 if (!ReplicaStatus.IsReplicable(existing) || !string.Equals(existing.StatusSha256, run.StatusSha256, StringComparison.Ordinal)) return await FailAsync(d, run, "replica_conflict", watch, ct);
+                // review U1 of PR 214: a destination folder that shares storage with the primary's run (a bind mount, a mount above the destination, a link, a hard-linked file) is no copy
+                if (ReplicaIndependence.Check(final, runDir).Shares) return await FailAsync(d, run, "replica_not_independent", watch, ct);
                 return await ReverifyAsync(d, runDir, final, run, list, watch, ct);
             }
 
@@ -350,47 +352,54 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
     /// verifies, or the failing check: <c>status</c> (the status does not verify), <c>digest_list_missing</c>, <c>digest_list</c> (the inventory does not verify or is not the one the status names),
     /// <c>unexpected_file</c>, <c>link</c>, <c>file_set</c> (an encrypted file the inventory does not list, or a listed one absent), <c>size</c>, <c>hbe_structure</c>, <c>hash</c> or <c>signature</c> (a manifest). Never repairs.
     /// </summary>
-    internal static async Task<(string? Check, int Files, long Bytes, string? StatusSha256)> VerifyStoredAsync(string dir, SigningTrust trust, CancellationToken ct)
+    internal static async Task<(string? Check, int Files, long Bytes, string? StatusSha256, bool LinkCheckAvailable)> VerifyStoredAsync(string dir, SigningTrust trust, CancellationToken ct, Func<string, FileIdentityInfo?>? identity = null)
     {
         // review M1 of #214: the run folder itself must be a real folder of this destination. A symbolic link, a junction (reparse point) or a mount point (a bind mount) there can lead to the primary's own run or
         // to any genuine signed run, which would verify as a "copy" that is no independent copy at all. Checked before anything is read.
         var folder = new DirectoryInfo(dir);
-        if (folder.LinkTarget is not null || folder.Attributes.HasFlag(FileAttributes.ReparsePoint) || BackupDestinations.IsMountPoint(dir)) return ("link", 0, 0, null);
+        if (folder.LinkTarget is not null || folder.Attributes.HasFlag(FileAttributes.ReparsePoint) || BackupDestinations.IsMountPoint(dir)) return ("link", 0, 0, null, true);
         RunStatus status;
         try { status = SignedDocuments.ReadRunStatus(dir, trust); }
-        catch (BackupException) { return ("status", 0, 0, null); }
+        catch (BackupException) { return ("status", 0, 0, null, true); }
         var statusSha = await HashFileAsync(Path.Combine(dir, SignedDocuments.RunStatusFileName), ct);
         CiphertextDigestList list;
         try { list = CiphertextDigests.ReadVerified(dir, status.RunId, status.DigestListSha256, trust); }
-        catch (BackupException ex) { return (ex.Code == "replica_digest_list_missing" ? "digest_list_missing" : "digest_list", 0, 0, statusSha); }
+        catch (BackupException ex) { return (ex.Code == "replica_digest_list_missing" ? "digest_list_missing" : "digest_list", 0, 0, statusSha, true); }
         try
         {
             var names = Names(dir);
             // a file with more than one hard link may be the very file of the primary's run (or of another run): never an independent copy (Linux; where the link count cannot be read nothing is claimed)
+            // a link count that cannot be read is NOT silently skipped (review U2 of PR 214): the result says the check was unavailable and the command warns (link_check_unavailable, exit 8)
+            identity ??= FileIdentity.TryGet;
+            var linkCheckAvailable = true;
             foreach (var n in names)
-                if (HardLinkCount(Path.Combine(dir, n.Replace('/', Path.DirectorySeparatorChar))) is > 1) return ("link", 0, 0, statusSha);
-            if (!RetentionInventory.Inspect(dir).Clean) return ("unexpected_file", 0, 0, statusSha);
+            {
+                var id = identity(Path.Combine(dir, n.Replace('/', Path.DirectorySeparatorChar)));
+                if (id is null) linkCheckAvailable = false;
+                else if (id.Value.Links > 1) return ("link", 0, 0, statusSha, true);
+            }
+            if (!RetentionInventory.Inspect(dir).Clean) return ("unexpected_file", 0, 0, statusSha, true);
             var encrypted = names.Where(n => n.EndsWith(".hbe", StringComparison.Ordinal)).ToList();
-            if (!encrypted.Order(StringComparer.Ordinal).SequenceEqual(list.Files.Select(f => f.Name).Order(StringComparer.Ordinal), StringComparer.Ordinal)) return ("file_set", 0, 0, statusSha);
+            if (!encrypted.Order(StringComparer.Ordinal).SequenceEqual(list.Files.Select(f => f.Name).Order(StringComparer.Ordinal), StringComparer.Ordinal)) return ("file_set", 0, 0, statusSha, true);
             long bytes = 0;
             foreach (var e in list.Files)
             {
                 var path = Path.Combine(dir, e.Name.Replace('/', Path.DirectorySeparatorChar));
-                if (new FileInfo(path).Length != e.Size) return ("size", 0, 0, statusSha);
+                if (new FileInfo(path).Length != e.Size) return ("size", 0, 0, statusSha, true);
                 string actual;
                 try { actual = await HashAndCheckHbeAsync(path, ct); }
-                catch (ReplicaVerificationException) { return ("hbe_structure", 0, 0, statusSha); }
-                if (!string.Equals(actual, e.Sha256, StringComparison.Ordinal)) return ("hash", 0, 0, statusSha);
+                catch (ReplicaVerificationException) { return ("hbe_structure", 0, 0, statusSha, true); }
+                if (!string.Equals(actual, e.Sha256, StringComparison.Ordinal)) return ("hash", 0, 0, statusSha, true);
                 bytes += e.Size;
                 if (e.Name == SignedDocuments.ManifestFileName || e.Name.EndsWith("/" + SignedDocuments.ManifestFileName, StringComparison.Ordinal))
                 {
                     try { SignedDocuments.ReadVerified(path, trust); }
-                    catch (BackupException) { return ("signature", 0, 0, statusSha); }
+                    catch (BackupException) { return ("signature", 0, 0, statusSha, true); }
                 }
             }
-            return (null, names.Count, bytes, statusSha);
+            return (null, names.Count, bytes, statusSha, linkCheckAvailable);
         }
-        catch (ReplicaVerificationException ex) { return (ex.Check, 0, 0, statusSha); }
+        catch (ReplicaVerificationException ex) { return (ex.Check, 0, 0, statusSha, true); }
     }
 
     // ---- verification (read back from the destination through NEW handles) ----------------------------------------
@@ -490,29 +499,11 @@ public sealed class ReplicaCopier(SigningTrust trust, IReplicaEvents events, Tim
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { /* best effort, never relied on */ }
     }
 
-    /// <summary>The number of hard links of a file (Linux x86-64 and arm64 through <c>stat</c>), or null when it cannot be read. Best effort; a null never counts as a link.</summary>
-    internal static long? HardLinkCount(string path)
-    {
-        if (!OperatingSystem.IsLinux()) return null;
-        var offset = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
-        {
-            System.Runtime.InteropServices.Architecture.X64 => 16,     // struct stat: st_dev 0, st_ino 8, st_nlink 16 (8 bytes)
-            System.Runtime.InteropServices.Architecture.Arm64 => 20,   // struct stat: st_dev 0, st_ino 8, st_mode 16, st_nlink 20 (4 bytes)
-            _ => -1,
-        };
-        if (offset < 0) return null;
-        var buffer = new byte[512];
-        try
-        {
-            if (Native.stat(path, buffer) != 0) return null;
-            return offset == 16 ? BitConverter.ToInt64(buffer, 16) : BitConverter.ToUInt32(buffer, 20);
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return null; }
-    }
+    /// <summary>The number of hard links of a file, or null when it cannot be read (see <see cref="FileIdentity"/>). A null never counts as a link.</summary>
+    internal static long? HardLinkCount(string path) => FileIdentity.TryGet(path)?.Links;
 
     private static class Native
     {
-        [DllImport("libc", SetLastError = true)] internal static extern int stat([MarshalAs(UnmanagedType.LPUTF8Str)] string path, byte[] buf);
         [DllImport("libc", SetLastError = true)] internal static extern int open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
         [DllImport("libc", SetLastError = true)] internal static extern int fsync(int fd);
         [DllImport("libc", SetLastError = true)] internal static extern int close(int fd);

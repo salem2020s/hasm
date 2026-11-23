@@ -576,4 +576,96 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         var none = ReplicaAuditReader.Build([(BackupAuditEvents.ReplicaVerified, V(false), t.AddHours(-2)), (BackupAuditEvents.ReplicaFailed, F("replica_publish_failed", true), t.AddHours(-1))]);
         Assert.False(none.LastKind.ContainsKey(("nas", r)));
     }
+
+    // ---- follow-ups U1 to U3 of PR 214 -----------------------------------------------------------------------
+
+    private static void HardLink(string existing, string link)
+    {
+        File.Delete(link);
+        using var ln = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ln") { ArgumentList = { existing, link }, UseShellExecute = false })!;
+        ln.WaitForExit();
+        Assert.Equal(0, ln.ExitCode);
+    }
+
+    [Fact]
+    public async Task File_identity_tells_hard_links_from_separate_files_and_a_link_to_a_folder_from_another_folder()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var copy = await PublishedCopyAsync();
+        var theirs = Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName);
+        var ours = Path.Combine(copy, "system", EncryptedSets.DumpName);
+        var a = FileIdentity.TryGet(theirs)!.Value; var b = FileIdentity.TryGet(ours)!.Value;
+        Assert.True(a.Volume != b.Volume || a.Index != b.Index);                              // a copy is a different file
+        Assert.Equal(1L, b.Links);
+        HardLink(theirs, ours);
+        var linked = FileIdentity.TryGet(ours)!.Value;
+        Assert.Equal((a.Volume, a.Index), (linked.Volume, linked.Index));                     // a hard link is the same file
+        Assert.Equal(2L, linked.Links);
+        var alias = Path.Combine(root, "alias");
+        Directory.CreateSymbolicLink(alias, Path.Combine(Primary, RunA));
+        var dirA = FileIdentity.TryGet(alias)!.Value; var dirB = FileIdentity.TryGet(Path.Combine(Primary, RunA))!.Value;
+        Assert.Equal((dirA.Volume, dirA.Index), (dirB.Volume, dirB.Index));                   // stat follows the link: the same folder
+        Assert.Null(FileIdentity.TryGet(Path.Combine(root, "no-such-path")));
+    }
+
+    [Fact]
+    public async Task A_copy_that_shares_storage_with_the_primary_is_not_independent_and_a_probe_that_reads_nothing_is_reported_unavailable()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var copy = await PublishedCopyAsync();
+        var primary = Path.Combine(Primary, RunA);
+        Assert.Equal(new ReplicaIndependence.Result(false, false), ReplicaIndependence.Check(copy, primary));        // a real, separate copy
+        Assert.Equal(new ReplicaIndependence.Result(true, false), ReplicaIndependence.Check(primary, primary));      // the very same folder (a bind mount or link looks like this)
+        HardLink(Path.Combine(primary, "system", EncryptedSets.DumpName), Path.Combine(copy, "system", EncryptedSets.DumpName));
+        Assert.Equal(new ReplicaIndependence.Result(true, false), ReplicaIndependence.Check(copy, primary));        // one hard-linked file is enough
+        var unreadable = ReplicaIndependence.Check(copy, primary, _ => null);
+        Assert.Equal(new ReplicaIndependence.Result(false, true), unreadable);                                         // nothing claimed, and said so
+    }
+
+    [Fact]
+    public async Task Replicating_over_a_folder_that_shares_storage_with_the_primary_is_refused_as_not_independent_and_status_names_it()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var run = await MakeRunAsync(RunA);
+        await Copier().ReplicateAsync(Destination(), Primary, run, default);
+        var copy = Path.Combine(Dest, RunA);
+        HardLink(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName), Path.Combine(copy, "system", EncryptedSets.DumpName));
+        events.Log.Clear();
+        var outcome = await Copier().ReplicateAsync(Destination(), Primary, run, default);
+        Assert.Equal(("failed", "replica_not_independent"), (outcome.Result, outcome.Code));
+        Assert.Equal([$"2041 {RunA} nas replica_not_independent"], events.Log);                 // no 2040: nothing was verified
+        // the status function, with the primary known, calls the copy not independent and no longer counts it as verified
+        var primaryRuns = RetentionInventory.Scan(Primary, trust).Runs;
+        var state = ReplicaStatus.Inspect(Destination(), primaryRuns, trust, DateTimeOffset.UtcNow, null, Primary);
+        Assert.Equal([RunA], state.NotIndependentRunIds);
+        Assert.Null(state.NewestCopyRunId);
+        Assert.Contains(ReplicaStatus.Contribution(state, RunA, DateTimeOffset.UtcNow, TimeSpan.FromHours(26)), f => f is { Code: "replica_not_independent", ExitCode: 1 });
+        // without the primary (backup-replica-verify, backup-status on a destination) the same folder cannot be judged this way
+        Assert.Empty(ReplicaStatus.Inspect(Destination(), primaryRuns, trust, DateTimeOffset.UtcNow).NotIndependentRunIds);
+    }
+
+    [Fact]
+    public async Task A_link_count_that_cannot_be_read_is_reported_not_silently_skipped()
+    {
+        var copy = await PublishedCopyAsync();
+        var unreadable = await ReplicaCopier.VerifyStoredAsync(copy, trust, default, _ => null);
+        Assert.Null(unreadable.Check);                                                          // everything else still verifies
+        Assert.False(unreadable.LinkCheckAvailable);                                            // and the result says the independence was not checked
+        Assert.True((await ReplicaCopier.VerifyStoredAsync(copy, trust, default)).LinkCheckAvailable || !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows());
+        var twoLinks = await ReplicaCopier.VerifyStoredAsync(copy, trust, default, _ => new FileIdentityInfo(1, 1, 2));
+        Assert.Equal("link", twoLinks.Check);                                                   // a count above one is a link wherever it comes from
+    }
+
+    [Fact]
+    public void A_company_whose_time_zone_is_missing_or_does_not_resolve_is_held_like_an_unreadable_one()
+    {
+        var id = Guid.NewGuid();
+        RetentionCompany C(bool readable, string? zone, string? hold = null) => new(id, readable, zone, [], hold);
+        Assert.False(ReplicaVerifyService.IsHeld(C(true, "UTC")));                              // readable, a zone that resolves, no hold: not held
+        Assert.True(ReplicaVerifyService.IsHeld(C(true, null)));                                // missing zone: retention classifies it unknown and keeps its runs
+        Assert.True(ReplicaVerifyService.IsHeld(C(true, "Not/AZone")));                         // unresolvable zone
+        Assert.True(ReplicaVerifyService.IsHeld(C(true, "")));
+        Assert.True(ReplicaVerifyService.IsHeld(C(false, "UTC")));                              // unreadable
+        Assert.True(ReplicaVerifyService.IsHeld(C(true, "UTC", "attachment_hold")));            // an attachment-hold keep
+    }
 }
