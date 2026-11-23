@@ -770,6 +770,8 @@ public class ImportApiTests : ImportTestBase
 {
     private const string Base = "/api/v1/company/imports";
 
+    private InMemoryKekRing? apiRing;
+
     private async Task Start(bool keyUnavailable = false)
     {
         await StartApi(configure: b =>
@@ -779,6 +781,7 @@ public class ImportApiTests : ImportTestBase
             b.ConfigureServices(s =>
             {
                 var ring = new InMemoryKekRing("k1") { Unavailable = keyUnavailable };
+                apiRing = ring;
                 s.AddSingleton<KekRing>(ring);
                 s.AddSingleton(TestEncryption);
                 s.AddSingleton<IImportAdapter>(new TestImportAdapter());
@@ -903,8 +906,9 @@ public class ImportApiTests : ImportTestBase
     [PostgresFact]
     public async Task Unavailable_encryption_fails_closed_with_503_and_records_nothing()
     {
-        await Start(keyUnavailable: true);
-        var c2 = await SignIn(Admin);
+        await Start();
+        var c2 = await SignIn(Admin);                                                                        // sign-in needs the identity key too (identity integrity S-1), so the key goes away AFTER it
+        apiRing!.Unavailable = true;
         var down = await SendRaw($"{Base}?adapter=test-adapter&fileName=a.csv", Bytes(Csv2), c2);
         Assert.Equal((HttpStatusCode)503, down.Status);
         Assert.Equal("encryption_unavailable", down.Error);

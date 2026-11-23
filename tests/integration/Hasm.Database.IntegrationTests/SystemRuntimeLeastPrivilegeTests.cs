@@ -98,7 +98,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
             : await SystemRuntimePrivileges.FindAsync(conn, role ?? runtimeRole, readAll ?? SystemRuntimePrivileges.PredefinedReader, writeAll ?? SystemRuntimePrivileges.PredefinedWriter);
     }
 
-    private MfaStore RuntimeMfa(SystemRuntimeGate? gate = null) => new(() => RuntimeConnection, Clock, Audit, new TotpSecretProtector(ring), gate ?? new SystemRuntimeGate(false, Clock) { CheckLifetime = TimeSpan.Zero });
+    private MfaStore RuntimeMfa(SystemRuntimeGate? gate = null) => new(() => RuntimeConnection, Clock, Audit, new TotpSecretProtector(ring), gate ?? new SystemRuntimeGate(false, Clock) { CheckLifetime = TimeSpan.Zero }, TestIdentityKeys.Instance);
     private long Step => Totp.StepFor(Clock.GetUtcNow());
 
     /// <summary>Everything the runtime role holds in the schema, table and column level, as one comparable text.</summary>
@@ -116,7 +116,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
     public async Task The_MFA_flows_work_under_the_actual_restricted_runtime_role_and_the_gate_accepts_it()
     {
         await StartRestricted();
-        await using var store = new IdentityStore(RuntimeConnection, Clock, Audit);                              // the identity store under the restricted role too, as in the API
+        await using var store = new IdentityStore(RuntimeConnection, Clock, Audit, keys: TestIdentityKeys.Instance);                              // the identity store under the restricted role too, as in the API
         var auth = new AuthService(store, Passwords, AuthSettings);
         var created = await auth.CreateUserAsync("alice", "Alice", Pw, false);
         Assert.Equal(CreateUserStatus.Created, created.Status);
@@ -196,7 +196,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         var refused = await Assert.ThrowsAsync<PostgresException>(() => mfa.RewrapAsync("k2", 10, null));
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, refused.SqlState);
         Assert.Equal(before, await Scalar<string>($"SELECT encode({TO.Cipher} || {TO.Nonce} || {TO.Tag}, 'hex') || {TO.KekId} FROM {TO.Table} WHERE {TO.SecretId} = @i", ("i", id)));
-        await using var owner = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring));
+        await using var owner = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
         Assert.Equal((1, 0), ((await owner.RewrapAsync("k2", 10, null)) is var done ? (done.Rewrapped, done.Remaining) : default));
         using var active = (await mfa.FindActiveSecretAsync(user.Id, default))!;
         Assert.Equal(secret, active.Secret);
@@ -309,7 +309,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
 
         // the administrative (owner) account as the runtime account: refused, and the MFA store never touches a secret
         var ownerGate = new SystemRuntimeGate(false, Clock, Logs.CreateLogger("gate")) { CheckLifetime = TimeSpan.Zero };
-        await using (var asOwner = new MfaStore(() => Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring), ownerGate))
+        await using (var asOwner = new MfaStore(() => Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring), ownerGate, keys: TestIdentityKeys.Instance))
         {
             var ex = await Assert.ThrowsAsync<SystemRuntimePrivilegeException>(() => asOwner.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null));
             Assert.Contains("totp_owned_by_runtime", ex.Codes);
@@ -322,7 +322,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         // the explicit opt-out: works, and says so at critical level on every check (never silent)
         var optOut = new LogCapture();
         await using (var allowed = new MfaStore(() => Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring),
-                         new SystemRuntimeGate(true, Clock, optOut.CreateLogger("gate")) { CheckLifetime = TimeSpan.Zero }))
+                         new SystemRuntimeGate(true, Clock, optOut.CreateLogger("gate")) { CheckLifetime = TimeSpan.Zero }, keys: TestIdentityKeys.Instance))
         {
             await allowed.CreatePendingAsync(user.Id, Totp.GenerateSecret(), null);
             Assert.Contains(optOut.Entries, e => e.Contains("UNSAFE") && e.Contains("AllowOverprivilegedSystemRuntime") && e.Contains("totp_owned_by_runtime"));
@@ -473,15 +473,15 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         await Exec($"INSERT INTO {SystemSchema.Company.Table} ({SystemSchema.Company.Id},{SystemSchema.Company.PhysicalDatabaseName},{SystemSchema.Company.ProvisioningState},{SystemSchema.Company.CreatedAtUtc},{SystemSchema.Company.StateChangedAtUtc}) VALUES (@i,@n,@s,now(),now())",
             ("i", company), ("n", Hasm.Infrastructure.Naming.PhysicalIdentifier.GenerateDatabaseName()), ("s", (short)Hasm.Infrastructure.Companies.ProvisioningState.Ready));
         var validator = new KnownScopeValidator();
-        await using var ownerAccess = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, validator);
+        await using var ownerAccess = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, validator, keys: TestIdentityKeys.Instance);
         var admin = await NewUser("poladmin");
         Assert.Equal(AccessService.BootstrapStatus.Granted, await ownerAccess.BootstrapCompanyAdministratorAsync(admin.Login, company));
         var plain = await NewUser("polplain");
         Assert.True((await ownerAccess.GrantMembershipAsync(admin.Id, company, plain.Login)).IsOk);
         await Exec($"UPDATE {U.Table} SET {SystemSchema.UserMfa.State} = 2 WHERE {U.Id} = @i", ("i", admin.Id));      // the administrator has an authenticator (the lock-out guard of the policy)
 
-        await using var access = new AccessService(RuntimeConnection, Clock, PermissionCatalog.Default, Audit, validator);
-        await using var identity = new IdentityStore(RuntimeConnection, Clock, Audit);
+        await using var access = new AccessService(RuntimeConnection, Clock, PermissionCatalog.Default, Audit, validator, keys: TestIdentityKeys.Instance);
+        await using var identity = new IdentityStore(RuntimeConnection, Clock, Audit, keys: TestIdentityKeys.Instance);
         await using var policies = new MfaPolicyService(RuntimeConnection, Clock, Audit, access, identity);
 
         var none = (await policies.GetAsync(admin.Id, company)).Value!;                                          // no row yet: Off at revision 0
@@ -683,7 +683,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         await StartRestricted();
         var user = await NewUser("enrolled");
         var secret = Totp.GenerateSecret();
-        await using (var seed = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring)))
+        await using (var seed = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance))
         {
             var id = await seed.CreatePendingAsync(user.Id, secret, null);
             Assert.True(await seed.ActivatePendingAsync(user.Id, id, Totp.StepFor(Clock.GetUtcNow()) - 5, null));

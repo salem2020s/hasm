@@ -361,7 +361,7 @@ public abstract class FileEvidenceTestBase : AuditTestBase
         FileAuditKeyRing.Generate(KeyDir, key);
         var company = await NewCompany();
         var trail = AuditTrail.FromOptions(Opts(key), Clock);
-        var service = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, trail);
+        var service = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, trail, keys: TestIdentityKeys.Instance);
         var user = await NewPerson("fileadmin");
         Assert.Equal(AccessService.BootstrapStatus.Granted, await service.BootstrapCompanyAdministratorAsync(user.Login, company));
         for (var i = 0; i < roles; i++) Ok(await service.CreateRoleAsync(user.Id, company, $"File role {i}", View));
@@ -479,7 +479,7 @@ public class AuditFileEvidenceTests : FileEvidenceTestBase
         var (company, admin, stream, service) = await Written("k1", roles: 2);
         await service.DisposeAsync();
         FileAuditKeyRing.Generate(KeyDir, "k2");
-        await using var rotated = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, AuditTrail.FromOptions(Opts("k2"), Clock));
+        await using var rotated = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, AuditTrail.FromOptions(Opts("k2"), Clock), keys: TestIdentityKeys.Instance);
         Ok(await rotated.CreateRoleAsync(admin.Id, company, "Under the new key", View));
 
         var events = await Events(stream);
@@ -504,7 +504,7 @@ public class AuditFileEvidenceTests : FileEvidenceTestBase
         var company = await NewCompany();
         var admin = await NewAdmin(company);
         var unconfigured = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog,
-            AuditTrail.FromOptions(new AuditOptions(), Clock));
+            AuditTrail.FromOptions(new AuditOptions(), Clock), keys: TestIdentityKeys.Instance);
         await using var _s = unconfigured;
 
         var ex = await Assert.ThrowsAsync<AuditConfigurationException>(() => unconfigured.CreateRoleAsync(admin.Id, company, "Unprotected", View));
@@ -520,7 +520,7 @@ public class AuditFileEvidenceTests : FileEvidenceTestBase
         var blocker = Path.Combine(Root, "blocked");
         await File.WriteAllTextAsync(blocker, "x");
         var broken = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog,
-            AuditTrail.FromOptions(new AuditOptions { KeyDirectory = KeyDir, ActiveKeyId = "k1", CheckpointDirectory = Path.Combine(blocker, "cp") }, Clock));
+            AuditTrail.FromOptions(new AuditOptions { KeyDirectory = KeyDir, ActiveKeyId = "k1", CheckpointDirectory = Path.Combine(blocker, "cp") }, Clock), keys: TestIdentityKeys.Instance);
         await using var _b = broken;
         var company2 = await NewCompany();
         var admin2 = await NewPerson("brokenadmin");
@@ -558,7 +558,7 @@ public class AuditRecoveryTests : AuditTestBase
 
         AuditCheckpoints.FailAppend = false;                                                                // restart: a brand-new trail instance, same keys and store
         await using var restarted = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog,
-            new AuditTrail(new AuditServices(AuditKeys, AuditCheckpoints, 0), Clock));
+            new AuditTrail(new AuditServices(AuditKeys, AuditCheckpoints, 0), Clock), keys: TestIdentityKeys.Instance);
         Ok(await restarted.CreateRoleAsync(admin.Id, company, "After restart", View));
 
         AssertVerified(await Verify(stream), 5);
@@ -571,7 +571,7 @@ public class AuditRecoveryTests : AuditTestBase
         var (company, admin, stream) = await Scenario(2);
         var wiped = new InMemoryCheckpointStore();
         await using var service = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog,
-            new AuditTrail(new AuditServices(AuditKeys, wiped, 0), Clock));
+            new AuditTrail(new AuditServices(AuditKeys, wiped, 0), Clock), keys: TestIdentityKeys.Instance);
 
         var ex = await Assert.ThrowsAsync<AuditIntegrityException>(() => service.CreateRoleAsync(admin.Id, company, "After wipe", View));
 

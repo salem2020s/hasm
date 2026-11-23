@@ -33,7 +33,7 @@ public class CostReadBudgetTests : CostingTestBase
         foreach (var warehouse in warehouses)
             Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, viewer.Id, role.Value!.Id, ScopeKind.Warehouse, warehouse.Id)).IsOk);
         await using var access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit,
-            new CompanyBranchScopeValidator(() => resolver));
+            new CompanyBranchScopeValidator(() => resolver), keys: TestIdentityKeys.Instance);
         Assert.True(await access.IsAllowedAsync(viewer.Id, Company.Id, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(W1.Id)));
         var insufficient = new ReadCommandBudget(6, default);
         var exhausted = await Assert.ThrowsAsync<ReadCommandBudgetException>(() => access.IsAllowedAsync(viewer.Id, Company.Id,
@@ -53,7 +53,7 @@ public class CostReadBudgetTests : CostingTestBase
     {
         await PrepareCosting(); var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
         await using var access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock,
-            PermissionCatalog.Default, Audit, new UnmeteredValidator());
+            PermissionCatalog.Default, Audit, new UnmeteredValidator(), keys: TestIdentityKeys.Instance);
         Assert.True(await access.IsAllowedAsync(viewer.Id, Company.Id, PermissionCatalog.Codes.StockBalanceView, ScopeTarget.Warehouse(W1.Id)));
         var quota = new ReadCommandBudget(1000, default);
         Assert.Equal(ReadBudgetFailure.UnsupportedValidator, (await Assert.ThrowsAsync<ReadCommandBudgetException>(() =>

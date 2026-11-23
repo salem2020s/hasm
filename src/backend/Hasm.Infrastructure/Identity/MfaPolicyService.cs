@@ -105,13 +105,7 @@ public sealed class MfaPolicyService(Func<string> connectionStringFactory, TimeP
         if (!carriesProof && await RequiresAsync(conn, tx, userId, companyId, ct))
             return mfaState == MfaState.None ? CompanySelectionOutcome.EnrolmentRequired : CompanySelectionOutcome.StepUpRequired;
         if (AfterSelectionPolicyCheckForTests is { } hook) await hook(ct);
-        await using (var cmd = new NpgsqlCommand($"UPDATE {SE.Table} SET {SE.SelectedCompanyId} = @c WHERE {SE.Id} = @s AND {SE.UserId} = @u AND {SE.RevokedAtUtc} IS NULL", conn, tx))
-        {
-            cmd.Parameters.AddWithValue("c", companyId);
-            cmd.Parameters.AddWithValue("s", sessionId);
-            cmd.Parameters.AddWithValue("u", userId);
-            if (await cmd.ExecuteNonQueryAsync(ct) != 1) return CompanySelectionOutcome.Forbidden;
-        }
+        if (!await SessionRow.SelectCompanyAsync(conn, tx, identity.RequireKeys(), sessionId, userId, companyId, ct)) return CompanySelectionOutcome.Forbidden;
         await tx.CommitAsync(ct);
         return CompanySelectionOutcome.Selected;
     }

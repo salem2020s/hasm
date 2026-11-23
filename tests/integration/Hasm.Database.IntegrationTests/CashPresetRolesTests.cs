@@ -258,9 +258,9 @@ public class CashPresetRolesMigrationTests : PostgresTestBase
         Assert.Equal(8, rolesBefore.Count);
         Assert.NotEmpty(assignmentsBefore);
 
-        // the upgrade: the real initializer applies exactly the pending migration (this one)
+        // the upgrade: the real initializer applies exactly the pending migrations: this one and any later system migration (they are all pending here)
         var result = await new SystemDatabaseInitializer(Options).InitializeAsync();
-        Assert.Equal([Presets.Version], result.AppliedMigrations);
+        Assert.Equal(All.Where(s => s.Version >= Presets.Version).Select(s => s.Version).ToList(), result.AppliedMigrations);
 
         // every pre-existing preset, permission row, assignment and membership is byte-identical: rows were only ADDED (2 roles, 6 permission rows)
         var rolesAfter = await Rows(Ro.Table);
