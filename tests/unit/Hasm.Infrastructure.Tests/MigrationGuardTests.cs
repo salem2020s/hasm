@@ -261,6 +261,53 @@ public class MigrationGuardTests
     // ---------------------------------------------------------------- review round 2 (residuals of M2 and M3, L9)
 
     [Theory]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int SECURITY DEFINER LANGUAGE sql AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql EXTERNAL SECURITY DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE PROCEDURE p() LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql Security Definer AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql security definer AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY\nDEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY\r\n   \t  DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY /* why */ DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY -- why\n DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SET search_path = pg_catalog, pg_temp SECURITY DEFINER AS $$ SELECT 1 $$;")]
+    [InlineData("SELECT 'SECURITY DEFINER';")]
+    public void SECURITY_DEFINER_is_refused_in_every_spelling(string sql) => Assert.Matches("(?i)SECURITY DEFINER|search_path", Refused(sql));
+
+    [Theory]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY INVOKER AS $$ SELECT 1 $$;")]
+    [InlineData("CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;")]
+    [InlineData("-- SECURITY DEFINER is a comment here\nCREATE TABLE x (a int);")]
+    [InlineData("/* a function that is SECURITY DEFINER would be refused */ CREATE TABLE x (a int);")]
+    [InlineData("CREATE TABLE security_definer (a int);")]
+    [InlineData("CREATE TABLE x (security int, definer int);")]
+    public void Security_invoker_the_default_and_comments_are_not_refused(string sql) => P(sql);
+
+    [Fact]
+    public void Every_SECURITY_DEFINER_spelling_is_refused_by_the_SECURITY_DEFINER_rule_itself()
+    {
+        // the hardened form carries search_path, which is refused first; every OTHER spelling must be refused for the SECURITY DEFINER words, not for another reason
+        foreach (var sql in new[]
+        {
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;", "CREATE FUNCTION f() RETURNS int LANGUAGE sql EXTERNAL SECURITY DEFINER AS $$ SELECT 1 $$;",
+            "CREATE PROCEDURE p() LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;", "CREATE FUNCTION f() RETURNS int LANGUAGE sql security definer AS $$ SELECT 1 $$;",
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY\nDEFINER AS $$ SELECT 1 $$;", "CREATE FUNCTION f() RETURNS int LANGUAGE sql SECURITY /* why */ DEFINER AS $$ SELECT 1 $$;",
+        })
+            Assert.Contains("SECURITY DEFINER", Refused(sql));
+    }
+
+    [Fact]
+    public void No_migration_of_either_set_mentions_SECURITY_DEFINER_in_code()
+    {
+        // Every migration on main still loads (this runs the guard over both sets); the words occur only in comments (company 0034), which the guard strips.
+        MigrationScript.Validate(MigrationScript.LoadEmbedded());
+        MigrationScript.Validate(MigrationScript.LoadEmbeddedCompany());
+        foreach (var script in MigrationScript.LoadEmbedded().Concat(MigrationScript.LoadEmbeddedCompany()))
+            Assert.DoesNotMatch(@"(?i)\bSECURITY\s+DEFINER\b", System.Text.RegularExpressions.Regex.Replace(script.Sql, "--[^\n]*", ""));
+    }
+
+    [Theory]
     // M2 residual: the function name in quotes is still the function
     [InlineData("SELECT \"set_config\"('session_' || 'replication_role', 'replica', true);")]
     [InlineData("SELECT pg_catalog.\"set_config\"('session_' || 'replication_role', 'replica', true);")]

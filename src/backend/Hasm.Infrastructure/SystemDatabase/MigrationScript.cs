@@ -16,8 +16,8 @@ public enum MigrationSet { Unspecified = 0, System = 1, Company = 2 }
 /// <summary>A forward-only, versioned SQL script embedded in the assembly.</summary>
 public sealed partial record MigrationScript(int Version, string Name, string Sql)
 {
-    /// <summary>The set the script was loaded from (<see cref="LoadEmbedded(Assembly?)"/> and <see cref="LoadEmbeddedCompany"/> set it; nothing else does).</summary>
-    public MigrationSet Set { get; init; }
+    /// <summary>The set the script was loaded from (<see cref="LoadEmbedded(Assembly?)"/> and <see cref="LoadEmbeddedCompany"/> set it; nothing else does, and the setter is internal: code outside this assembly and its test assemblies cannot claim a set).</summary>
+    public MigrationSet Set { get; internal init; }
 
     /// <summary>SHA-256 over the script with normalized line endings (git autocrlf-safe).</summary>
     // Computed from the CURRENT text on every read (not captured at construction), so a copy made with "with { Sql = ... }" can never keep the checksum of the text it replaced.

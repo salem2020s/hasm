@@ -103,6 +103,7 @@ public static partial class MigrationGuard
         (new(@"\bCREATE\s+OR\s+REPLACE\s+(?:CONSTRAINT\s+)?TRIGGER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE OR REPLACE TRIGGER (it can re-bind an existing guard trigger; use CREATE TRIGGER)"),
         (new(@"\bCREATE\s+(?:OR\s+REPLACE\s+)?RULE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains CREATE RULE (a rewrite rule can route statements around a guard trigger)"),
         (new(@"\bsearch_path\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "changes or mentions search_path (it decides which function or operator an unqualified name means)"),
+        (new(@"\bSECURITY\s+DEFINER\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "contains SECURITY DEFINER (a function that runs with its owner's privileges needs a hardened search_path, which the guard cannot accept yet; see docs/MIGRATION-GUARD.md, \"Known limitation\")"),
         (new(@"\bset_config\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions set_config, quoted or not (a setting changed through a function call cannot be judged by the guard)"),
         (new(@"\b(?:query_to_xml\w*|cursor_to_xml\w*|ts_stat|ts_rewrite)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions a function that runs a query given as text (dynamic SQL without EXECUTE)"),
         (new(@"\bdblink\w*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), "mentions dblink (statements sent over another connection cannot be read by the guard)"),
