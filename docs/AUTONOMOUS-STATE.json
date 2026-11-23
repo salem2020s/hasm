@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-22",
+  "updatedAt": "2026-11-23",
   "main": {
-    "verifiedHead": "4b52fd52291bd22302cf46fdd060580ef8b3aac4",
-    "note": "Refresh after the merges of #212, #210, #213 and #48. main = 4b52fd5 (merge of #48), read from git and GitHub REST on 2026-11-22. PostgreSQL registry 1699 (step title of .github/workflows/backend.yml equals the per-class sum). Migrations on main, all final: company 0001-0036, system 0001-0035. The short-close preset needs a new system number if it resumes (on hold for the owner)."
+    "verifiedHead": "78bb2e849b6e01069f47af9da9590ebc82338617",
+    "note": "Refresh of 2026-11-23 (restart handoff). main = 78bb2e8 (merge of #239), read from git and GitHub REST on 2026-11-23. PostgreSQL registry 1805 (step title of .github/workflows/backend.yml equals the per-class sum of 268 classes). Migrations on main: company 0001-0038, system 0001-0040. The lists mergedRecently, next, followUpsNew and migrationAllocation below were NOT extended in this refresh for the pull requests merged after #48 (they are listed in docs/RESTART-HANDOFF.md); for those the handoff and GitHub are the record."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -597,7 +597,7 @@
     "phase": "Refresh after the merges of #212, #210, #213 and #48 (2026-11-22); Phase 3.8D part 1 merged with execution disabled (owner Option D); team running",
     "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh. D-237: #183 merged on the owner's condition; FH's record states the single exception (hbe_not_authenticated accepted under the test helper's digest for the SPKI-length bytes 53/54, the false flaky assertion, replaced by a stricter check under the parser-framed digest).",
     "knownIssues": [
-      "Decisions: next free ID D-240. D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
+      "Decisions: next free ID D-267. D-261..D-266 the owner decisions of 2026-11-23 (audit-head recovery D1-D3, off-machine backup protection, container/VM confirmation, identity tagging); D-240..D-260 the owner's consolidated message of 2026-11-22 (on main via #225). D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
       "Audit: 1336/1337 on main; 1338 allocated to S3b-1b (#181); blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
       "4.1 S3 is NOT complete: S3a (#166), S3b-1a (#172) and the S3b-2a UI (#178) merged; S3b-1b is #181 and S3b-2b is #185 (stacked on #181), both open.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
@@ -651,16 +651,28 @@
   },
   "openPullRequests": [
     {
-      "pr": 188,
-      "branch": "security/migration-guard-hardening",
-      "head": "a985ea8ef3f2b865ebaa4c26f89d1007bf2a9a7e",
-      "state": "migration-guard hardening (D-194); REST: draft, merge state unknown, no hosted check-run listed; awaits the owner's explicit merge instruction; needs a one-line allowlist-test change now that #210 is merged (per the lead, NOT VERIFIED)"
+      "pr": 238,
+      "branch": "feature/t2-a3-epoch-comparison",
+      "head": "2ee2ae0d708cf95f8fa7aed4bf34380a2bfb7af0",
+      "state": "T2 slice A3 (company migration 0039, provisional); REST: draft, mergeable; hosted CI at the read of 2026-11-23: 6 success, postgres-integration in progress; awaits the independent security confirmation of the H1 fix and of the merges (deferred after the model change of 2026-11-23)"
     },
     {
-      "pr": 214,
-      "branch": "",
-      "head": "6dce4b3e7d1a39371b936489458f9bbfbe6a7af9",
-      "state": "Phase 4.3 slice 8 S8c, backup-replica-verify, corrupt copies in the status (2042), restore from a copy (no deletion); REST: draft, merge state unknown, hosted CI 6 success, 1 pending, 7 skipped at this read; review state NOT VERIFIED"
+      "pr": 232,
+      "branch": "feature/phase-4-3-s8d1",
+      "head": "4814c713b958fef8ead3f43a3c417fc25cd9c465",
+      "state": "Phase 4.3 S8d-1, read only; REST: draft, not mergeable (conflicts); approved at b2aac3c, Low fixes A1-A3 pushed as 4814c71; no hosted check-run listed on this head; needs a merge-main round and a delta confirmation"
+    },
+    {
+      "pr": 234,
+      "branch": "feature/audit-head-trigger",
+      "head": "c773a7c80f9a25af8206bc25f110b6c84d9980ac",
+      "state": "audit-head link guard, option (a), migration numbers provisional; REST: draft, not mergeable (conflicts); not reviewed; needs the merge of main, renumbering and an independent security review (deferred after the model change of 2026-11-23)"
+    },
+    {
+      "pr": 240,
+      "branch": "docs/restart-handoff-2026-11-23",
+      "head": "see GitHub (this file is part of the pull request, so it cannot name its own head)",
+      "state": "restart handoff and the record of the owner decisions of 2026-11-23 (D-261..D-266), documentation only; draft"
     }
   ],
   "inertPullRequests": [],
@@ -801,9 +813,9 @@
     }
   },
   "registry": {
-    "mainPostgreSqlTests": 1699,
+    "mainPostgreSqlTests": 1805,
     "queued": {},
-    "note": "main read from the step title (equal to the per-class sum 1699); per-PR increments since 1372 not broken down (NOT VERIFIED); queued additions are re-read at each merge"
+    "note": "main read from the step title on 2026-11-23 (equal to the per-class sum 1805); per-PR increments not broken down (NOT VERIFIED); queued additions are re-read at each merge"
   },
   "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging.",
   "flaggedForOwnerNotBlocking": {
@@ -862,5 +874,17 @@
   },
   "decisionsRecorded2026-11-22": {
     "PR48-DELIVERY-D": "Owner Option D: #48 re-scoped and merged intact as a checkpoint with execution disabled; Phase 3.8D NOT complete; replay executor, compensation and accounting integration, close-probe extension and compensation repair, API and Web/Tauri, revaluation and method conversion stay disabled until their own gates pass; rules: short-lived PRs, merge main only before review rounds and the final merge, fix migration numbers at the final round, check guard interactions on the same tables"
+  },
+  "decisionsRecorded2026-11-23": {
+    "rows": "D-261..D-266 in docs/DECISIONS.md (owner wording verbatim)",
+    "registerItems": [
+      "AUDIT-HEAD-RECOVERY-D1-D3 (D-261, D-262, D-263; docs/AUDIT-HEAD-INTEGRITY-PLAN.md)",
+      "OFFMACHINE-ATTESTATION (D-264; docs/PHASE-4.3-S8D-PLAN.md)",
+      "CONTAINER-VM-CONFIRMATION (D-265; docs/PHASE-4.3-S8D-PLAN.md)",
+      "IDENTITY-TAGGING-DISPOSITION (D-266; docs/IDENTITY-INTEGRITY-PLAN.md; applies OD-3, D-242)"
+    ],
+    "nextFreeDecisionId": "D-267",
+    "activation": "nothing is activated: audit-head recovery production activation stays disabled until named administrator, fresh MFA and second-person approval exist; the backup deletion gate and 4.3-ACT stay closed",
+    "reviewPolicy": "Model change 2026-11-23: critical security reviews (identity, replay authorization, audit recovery) are deferred and their PRs stay Draft until a suitable independent reviewer is available."
   }
 }
