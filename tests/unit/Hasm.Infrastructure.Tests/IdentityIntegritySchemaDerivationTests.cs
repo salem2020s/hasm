@@ -6,13 +6,13 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// Identity integrity slice S-1 (provisional system migration 0036): the physical names are the deterministic derivation of their logical tokens (SHA-256 seed WITHOUT the migration number,
+/// Identity integrity slice S-1 (provisional system migration 0037): the physical names are the deterministic derivation of their logical tokens (SHA-256 seed WITHOUT the migration number,
 /// <c>tools/schema/system-identity-integrity.cjs</c>), unique across the system dictionary, and the migration is strictly additive: three NULLable columns and a check on the session table, one
 /// security-revision column with a check and one guard function and trigger on the user table; nothing replaced, dropped, disabled, written or dynamic.
 /// </summary>
 public class IdentityIntegritySchemaDerivationTests
 {
-    private const int Version = 36;   // provisional number: changes with the merge order (together with the generator constant and the file name)
+    private const int Version = 37;   // provisional number: changes with the merge order (together with the generator constant and the file name)
 
     private static string Derive(string token)
     {

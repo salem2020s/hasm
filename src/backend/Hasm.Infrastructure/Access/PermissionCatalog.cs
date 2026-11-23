@@ -351,12 +351,17 @@ public static class PresetRoles
     public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
     public static readonly Guid CommercialApproverId = new("5c1b0f6e-0000-4a00-8000-000000000007");
     public static readonly Guid RetentionApproverId = new("5c1b0f6e-0000-4a00-8000-000000000008");
+    /// <summary>X4-PRESET-ROLE (owner Option A, 2026-11-22; plan docs/X4-PRESET-ROLES-PLAN.md): the cash and bank account configuration role. PRIVILEGED (update and activate, D-158). Dedicated preset: Company Administrator is not widened.</summary>
+    public static readonly Guid CashAccountManagerId = new("5c1b0f6e-0000-4a00-8000-00000000000a");
+    /// <summary>X4-PRESET-ROLE: the role that may read a FULL bank account number. PRIVILEGED (resource company.cashaccountssensitive, D-155, D-158).</summary>
+    public static readonly Guid CashAccountSensitiveViewerId = new("5c1b0f6e-0000-4a00-8000-00000000000b");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
     /// <summary>
-    /// The cash and bank account permissions (Phase 3.14 slice S1) are in the catalog but NOT yet in the Company Administrator preset: granting them is a system migration (the versioned, paired-trigger pattern of migration 0028) that waits for the owner's
-    /// answer on that pattern. When it lands, this exclusion is removed in the same change so that the code definition and the migration seed agree again (the test that pins that equality fails until then).
+    /// The cash and bank account permissions (Phase 3.14 slice S1) are in the catalog but are NOT in the Company Administrator preset, and stay out of it (owner decision X4-PRESET-ROLE, Option A, 2026-11-22; lead direction: widening
+    /// Company Administrator counts as granting new privileges to existing users; D-158: the sensitive view is not in Company Administrator). They are held by two dedicated presets, Cash Account Manager and Cash Account Sensitive Viewer
+    /// (system migration 0036, provisional number), which are assigned offline only. This list is the exclusion that keeps the Company Administrator definition equal to its seed.
     /// </summary>
     private static readonly string[] CashAccountCodes =
         [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
@@ -380,6 +385,9 @@ public static class PresetRoles
             [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
             [CommercialApproverId] = ("commercial-approver", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialApprove }),
             [RetentionApproverId] = ("retention-approver", new HashSet<string> { PermissionCatalog.Codes.RetentionView, PermissionCatalog.Codes.RetentionApprove }),
+            // X4 (system migration 0036, provisional number): dedicated presets, assigned offline only (grant-cash-account-manager / grant-cash-account-sensitive-viewer). Neither is in Company Administrator.
+            [CashAccountManagerId] = ("cash-account-manager", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate }),
+            [CashAccountSensitiveViewerId] = ("cash-account-sensitive-viewer", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsSensitiveView }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,
