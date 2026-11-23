@@ -60,6 +60,8 @@ jobs:
         run: node tools/schema/system-user-tag.cjs --check
       - name: Plan-execution schema files (company 0036, provisional number) match their generator
         run: node tools/schema/company-0036-plan-execution.cjs --check
+      - name: Replay signer registry schema files (company 0037, T2 slice A1) match their generator
+        run: node tools/schema/company-0037-replay-signer-registry.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
@@ -155,7 +157,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1771 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1781 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -318,6 +320,8 @@ jobs:
                 "CompensationPlanStorageTests": 7, "CompensationPlanApprovalTests": 9,
                 # Phase 3.8D part 1 (owner-approved re-scope of PR 48): the execution path is disabled and cannot be activated; migration 0036 is additive and compatible with an existing database
                 "PlanExecutionDisabledTests": 4, "PlanExecutionRuntimeRoleDisabledTests": 2, "PlanExecutionMigrationCompatibilityTests": 1,
+                # Phase 3.8D threat T2 slice A1 (company migration 0037): the replay signer registry, the RSA verifier against fixed vectors and the grant shells (inert)
+                "ReplaySignerRegistryTests": 10,
                 # Phase 3.8D executor slice E1b: the derived epoch content against the real engine (8 scenarios), the T2 column-pin test 4c (one PostgreSQL test and one pure test)
                 "EpochContentEngineOracleTests": 8, "EpochTextColumnPinTests": 2,
             }

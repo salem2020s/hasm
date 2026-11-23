@@ -170,6 +170,11 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.CompensationPlanExecutionJournal.Table, ["SELECT"]),
         (CompanySchema.EpochMember.Table, ["SELECT"]),
         (CompanySchema.EpochEntryLineage.Table, ["SELECT"]),
+        // Phase 3.8D threat T2, slice A1 (company migration 0037): the replay authorization registry. SELECT ONLY: the signer key table is written by the database owner alone, and the two grant tables are inert shells until
+        // the insert-time and commit-time verification of slices A2 to A4 exist (a row written before them would escape them), so the runtime role gets no INSERT here. INSERT on the grant tables arrives with A2.
+        (CompanySchema.ReplaySignerKey.Table, ["SELECT"]),
+        (CompanySchema.ReplayExecutionGrant.Table, ["SELECT"]),
+        (CompanySchema.ReplayGrantUse.Table, ["SELECT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
