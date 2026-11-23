@@ -42,6 +42,10 @@ public sealed record ReplicaState(BackupDestination Destination, bool Reachable,
 {
     /// <summary>Copies the system audit stream last reported corrupt by a re-verification (2042) while their folder is still there (S8c); empty when the audit stream was not read.</summary>
     public IReadOnlyList<string> ReportedCorruptRunIds { get; init; } = [];
+    /// <summary>S8d: deletions HASM started at this destination and did not finish (<c>retention_deletion_incomplete</c>), by run id.</summary>
+    public IReadOnlyList<string> IncompleteDeletionRunIds { get; init; } = [];
+    /// <summary>S8d (D-187): runs whose deletion at this destination is fully accounted for by a verified tombstone and the 2015/2016 pair: NOT pending there. Empty unless the audit state was AUTHENTICATED.</summary>
+    public IReadOnlyList<string> ExplainedDeletionRunIds { get; init; } = [];
     /// <summary>When a copy at this destination was last RE-verified (a 2040 with <c>reverified=true</c>); null when never or when the audit stream was not read.</summary>
     public DateTimeOffset? LastReverifiedUtc { get; init; }
 }
@@ -77,6 +81,7 @@ public static partial class ReplicaStatus
         if (s.ConflictRunIds.Count > 0) findings.Add(new("replica_conflict", 1));
         if (s.CorruptRunIds.Count > 0 || s.ReportedCorruptRunIds.Count > 0) findings.Add(new("replica_corrupt", 1));
         if (s.UnexplainedTombstones > 0) findings.Add(new("replica_tombstone_unexplained", 1));
+        if (s.IncompleteDeletionRunIds.Count > 0) findings.Add(new("retention_deletion_incomplete", 1));
         if (s.StaleIncoming > 0) findings.Add(new("replica_incoming_stale", 8));
         if (s.SameVolumeAsPrimary) findings.Add(new("destination_same_volume", 8));
         return findings;
@@ -93,18 +98,20 @@ public static partial class ReplicaStatus
     /// Reads one destination folder (read-only, no database): every run folder there is read through its signed status, exactly as at the primary (<see cref="RetentionInventory.Scan"/>).
     /// A copy counts as VERIFIED when it is replicable and, if the primary still holds that run id, carries the primary's status hash; a different hash is a conflict, and a run folder that does not
     /// verify is corrupt (a destination folder only ever holds published, verified copies, D-185). The full re-hash of every file is <c>backup-replica-verify</c> (later slice).
-    /// Any tombstone under <c>.retention/tombstones</c> or any <c>.deleting-*</c> folder counts as unexplained: no deletion at a destination exists in this slice, and the audit evidence that can
-    /// explain one (the 2015/2016 pair with the destination id, D-187) is read when retention per destination is built.
+    /// Tombstones and <c>.deleting-*</c> folders are classified by <see cref="ReplicaTombstones.Classify"/> (S8d, D-187): with no audit state every one is unexplained (S8a); with one, a tombstone that verifies
+    /// with the primary's hash and has its 2015 is an unfinished deletion (<c>retention_deletion_incomplete</c>) or, with the 2016 and no later copy, an explained deletion; anything else stays
+    /// <c>replica_tombstone_unexplained</c>. Only an AUTHENTICATED audit state makes a run count as explained (not pending); a raw state classifies for the alert lines only.
     /// </summary>
-    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit = null)
+    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit = null,
+        IReadOnlyDictionary<string, string>? primaryTombstoneHashes = null)
     {
         ReplicaState Unreachable() => new(d.Destination, false, null, null, false, [], [], 0, 0, d.SameVolumeAsPrimary);
         if (!d.Exists) return Unreachable();
-        try { return Read(d, primaryRuns, trust, now, audit); }
+        try { return Read(d, primaryRuns, trust, now, audit, primaryTombstoneHashes); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unreachable(); }   // an unreadable share holds no verified copy
     }
 
-    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit)
+    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit, IReadOnlyDictionary<string, string>? primaryTombstoneHashes)
     {
         var (copies, deletingFolders) = RetentionInventory.Scan(d.ResolvedPath, trust);
         var primaryHash = primaryRuns.Where(r => r.StatusSha256 is not null).ToDictionary(r => r.RunId, r => r.StatusSha256!, StringComparer.Ordinal);
@@ -124,9 +131,15 @@ public static partial class ReplicaStatus
         var newest = verified.OrderByDescending(r => r.RunId, StringComparer.Ordinal).FirstOrDefault();
         var root = new DirectoryInfo(d.ResolvedPath);
         var staleIncoming = root.EnumerateDirectories().Count(x => IncomingFolder().IsMatch(x.Name) && now - new DateTimeOffset(x.LastWriteTimeUtc, TimeSpan.Zero) > StaleIncomingAge);
-        var tombstones = Path.Combine(d.ResolvedPath, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder);
-        var unexplained = deletingFolders.Count + (Directory.Exists(tombstones) ? new DirectoryInfo(tombstones).EnumerateFileSystemInfos().Count() : 0);
-        return new(d.Destination, true, newest?.RunId, newest?.FinishedUtc, newestPrimary is not null && verified.Any(v => v.RunId == newestPrimary), conflicts, corrupt, staleIncoming, unexplained,
-            d.SameVolumeAsPrimary) { ReportedCorruptRunIds = reported, LastReverifiedUtc = audit?.LastReverified(d.Destination.Id) };
+        // the primary's hash of a run: its run folder, else its verified tombstone (the primary may have deleted the run itself)
+        var hashes = new Dictionary<string, string>(primaryTombstoneHashes ?? new Dictionary<string, string>(), StringComparer.Ordinal);
+        foreach (var kv in primaryHash) hashes[kv.Key] = kv.Value;
+        var scan = ReplicaTombstones.Classify(d.ResolvedPath, d.Destination.Id, hashes, trust, audit, deletingFolders);
+        return new(d.Destination, true, newest?.RunId, newest?.FinishedUtc, newestPrimary is not null && verified.Any(v => v.RunId == newestPrimary), conflicts, corrupt, staleIncoming, scan.Unexplained.Count,
+            d.SameVolumeAsPrimary)
+        {
+            ReportedCorruptRunIds = reported, LastReverifiedUtc = audit?.LastReverified(d.Destination.Id),
+            IncompleteDeletionRunIds = scan.Incomplete, ExplainedDeletionRunIds = audit is { Authenticated: true } ? scan.Explained : [],
+        };
     }
 }

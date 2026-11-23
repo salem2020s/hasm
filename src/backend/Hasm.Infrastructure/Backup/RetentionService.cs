@@ -230,6 +230,41 @@ public sealed class RetentionService
         return (RetentionClassifier.Plan(inputs.Runs, inputs.Companies, inputs.Holds, inputs.Pins, retention, clock.GetUtcNow()), inputs);
     }
 
+    /// <summary>The plan of one location with replication taken into account (S8d-1, read only, nothing is deleted).</summary>
+    public sealed record LocationPlan(RetentionPlan Plan, RetentionInputs Inputs, ReplicationPending.Result Pending, string Location);
+
+    /// <summary>
+    /// S8d-1 preview of retention at the PRIMARY (<paramref name="destinationId"/> null) or at one configured destination: the destination root is scanned exactly like a primary root, classified with the
+    /// destination's own <c>DailyKeep</c>/<c>WeeklyKeep</c> (D-187), the GLOBAL holds and pins, and a recovery test that passed on ANY copy of ANY run counts for its key id everywhere. At the primary every
+    /// replicable run that some destination has no verified copy of keeps the reason <c>replication_pending</c> (the light check; see <see cref="ReplicationPending"/>). Only an AUTHENTICATED audit state
+    /// (<see cref="ReplicaAuditState.Authenticated"/>) lets a fully accounted tombstone count as "not pending"; with none, the answer is the conservative one (pending). Writes nothing.
+    /// </summary>
+    public async Task<LocationPlan> PlanLocationAsync(string primaryRoot, string? destinationId, IReadOnlyList<CheckedDestination> destinations, SigningTrust? trust, ReplicaAuditState? audit,
+        CancellationToken ct = default)
+    {
+        retention.Validate();
+        var primary = BackupSet.RealPath(primaryRoot);
+        var live = destinations.Select(d => d with { Exists = Directory.Exists(d.ResolvedPath) }).ToList();
+        CheckedDestination? target = null;
+        if (destinationId is not null)
+            target = live.FirstOrDefault(d => string.Equals(d.Destination.Id, destinationId, StringComparison.Ordinal)) ?? throw new BackupException("destination_unknown");
+        if (target is { Exists: false }) throw new BackupException("destination_unreachable");
+        var root = target is null ? primary : target.ResolvedPath;
+        var inputs = await ReadInputsAsync(root, trust, ct);
+        var primaryRuns = target is null ? inputs.Runs : RetentionInventory.Scan(primary, trust).Runs;
+        var pending = ReplicationPending.Evaluate(primaryRuns, live, trust, audit, ReplicaTombstones.PrimaryHashes(primary, trust));
+        var tested = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var run in primaryRuns.Concat(inputs.Runs).Concat(live.Where(d => d.Exists && d != target).SelectMany(d => RetentionInventory.Scan(d.ResolvedPath, trust).Runs)))
+            if (run is { Complete: true, Verified: true, ProofValid: true, RecoveryKeyId: not null }) tested.Add(run.RecoveryKeyId);
+        var options = target is null ? retention : new RetentionOptions
+        {
+            DailyKeep = target.Destination.DailyKeep ?? retention.DailyKeep, WeeklyKeep = target.Destination.WeeklyKeep ?? retention.WeeklyKeep, WeekStart = retention.WeekStart,
+            InstallationTimeZone = retention.InstallationTimeZone, MaxDeletionsPerRun = retention.MaxDeletionsPerRun, AutomaticDeletion = retention.AutomaticDeletion,
+        };
+        var plan = RetentionClassifier.Plan(inputs.Runs, inputs.Companies, inputs.Holds, inputs.Pins, options, clock.GetUtcNow(), target is null ? pending.RunIds : null, tested);
+        return new LocationPlan(plan, inputs, pending, target is null ? "primary" : target.Destination.Id);
+    }
+
     /// <summary>
     /// The company facts of the classification (D-131, D-134): its configured time zone and fiscal calendar, and its attachment-hold state. A company that is not registered, not Ready or cannot be read
     /// is unreadable (all of its runs are kept).
@@ -315,7 +350,7 @@ public sealed class RetentionService
         // D-137 layers 1 and 3 (also checked again inside the executor's lowest-level routine, review M1)
         if (!BackupRetention.GateOpen(retention) && seam is null)
         {
-            await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason=retention_deletion_inactive", ct);
+            await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason=retention_deletion_inactive destination=primary", ct);
             throw new BackupException("retention_deletion_inactive");
         }
         // layer 2: runtime prerequisites on every execution; a refusal is audited too (review L4 of #134)
@@ -327,7 +362,7 @@ public sealed class RetentionService
         }
         catch (BackupException ex)
         {
-            await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "prerequisite_missing")}", ct);
+            await audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={operatorName} run=* reason={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "prerequisite_missing")} destination=primary", ct);
             throw;
         }
         var resolved = BackupSet.RealPath(root);
@@ -428,7 +463,7 @@ internal static class RetentionExecutor
     internal static async Task<RetentionApplyResult> ExecuteAsync(Context ctx, RetentionGateOverride? seam, CancellationToken ct)
     {
         var deleted = new List<string>(); var skipped = new List<(string, string)>(); var resumed = 0;
-        async Task Refuse(string run, string code) { await ctx.Audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={ctx.Operator} run={run} reason={code}", ct); skipped.Add((run, code)); }
+        async Task Refuse(string run, string code) { await ctx.Audit(BackupAuditEvents.DeletionRefused, $"backup deletion refused operator={ctx.Operator} run={run} reason={code} destination=primary", ct); skipped.Add((run, code)); }
 
         if (!BackupRetention.GateOpen(ctx.Options) && seam is null) { await Refuse("*", "retention_deletion_inactive"); throw new BackupException("retention_deletion_inactive"); }
         // never delete while backups are failing, stale, partial, untested or unreadable
@@ -443,7 +478,7 @@ internal static class RetentionExecutor
             { await Refuse(folder[..25], "resume_unverified"); continue; }
             try { DeleteRunFolder(Path.Combine(ctx.Root, folder), ctx.Options, seam); }
             catch (BackupException ex) when (ex.Code is "symbolic_link_refused" or "path_escaped_deleting_folder") { await Refuse(folder[..25], ex.Code); continue; }
-            await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={folder[..25]} resumed=yes", ct);
+            await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={folder[..25]} resumed=yes destination=primary", ct);
             WriteCompleted(ctx.Root, folder[..25]);
             resumed++;
         }
@@ -454,7 +489,7 @@ internal static class RetentionExecutor
                 continue;                                                                                      // not deleted yet: the run or its resume handles it
             // the folder is absent: the engine removed it before a crash, or something outside the engine did; the event says which facts are known (review L-d of #156)
             if (!await ctx.DeletedRecorded(runId, ct))
-                await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={runId} resumed=yes recovered=audit folder=absent", ct);
+                await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={runId} resumed=yes recovered=audit folder=absent destination=primary", ct);
             WriteCompleted(ctx.Root, runId);
             resumed++;
         }
@@ -482,13 +517,13 @@ internal static class RetentionExecutor
             var info = new DirectoryInfo(dir);
             if (!info.Exists || info.LinkTarget is not null || !BackupSet.IsInside(BackupSet.RealPath(dir), ctx.Root) || !RetentionInventory.Inspect(dir).Clean) { await Refuse(candidate.RunId, "run_not_clean"); continue; }
 
-            await ctx.Audit(BackupAuditEvents.DeletionStarted, $"backup deletion started operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} reasons=none", ct);   // audit first
+            await ctx.Audit(BackupAuditEvents.DeletionStarted, $"backup deletion started operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} reasons=none destination=primary", ct);   // audit first
             WriteTombstone(ctx.Root, candidate.RunId, candidate.StatusSha256!, ctx.Now);
             var renamed = RenameForDeletion(dir, ctx.Options, seam);
             int files; long bytes;
             try { (files, bytes) = DeleteRunFolder(renamed, ctx.Options, seam); }
             catch (BackupException ex) when (ex.Code is "symbolic_link_refused" or "path_escaped_deleting_folder") { await Refuse(candidate.RunId, ex.Code); continue; }   // left for the operator
-            await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} files={files} bytes={bytes} tombstone=yes resumed=no", ct);
+            await ctx.Audit(BackupAuditEvents.Deleted, $"backup deleted operator={ctx.Operator} run={candidate.RunId} status={candidate.StatusSha256} files={files} bytes={bytes} tombstone=yes resumed=no destination=primary", ct);
             WriteCompleted(ctx.Root, candidate.RunId);
             deleted.Add(candidate.RunId);
         }
