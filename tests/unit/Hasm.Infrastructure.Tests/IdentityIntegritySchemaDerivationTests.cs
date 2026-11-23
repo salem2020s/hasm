@@ -49,7 +49,7 @@ public class IdentityIntegritySchemaDerivationTests
         Assert.Single(Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b"));
         Assert.Single(Regex.Matches(sql, @"\bCREATE\s+TRIGGER\b"));
         Assert.Equal(4, Regex.Matches(sql, @"\bADD\s+COLUMN\b").Count);
-        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|GRANT|REVOKE|INSERT|DELETE|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|current_setting|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_", RegexOptions.IgnoreCase), sql.Replace("BEFORE INSERT OR UPDATE ON", "").Replace("NEW.", ""));
+        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|GRANT|REVOKE|INSERT|DELETE|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|current_setting|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_", RegexOptions.IgnoreCase), sql.Replace("BEFORE INSERT OR UPDATE ON", "").Replace("TG_OP = 'INSERT'", "").Replace("NEW.", ""));
         Assert.Empty(Regex.Matches(sql, @"\bpg_\w+"));                                                          // no catalog name at all
         // every new column is NULLable on the session table (a legacy row stays valid as a row and is simply never honoured) and the user revision starts at zero
         Assert.Contains($"{SystemSchema.SessionIntegrity.Tag} bytea NULL", sql);
