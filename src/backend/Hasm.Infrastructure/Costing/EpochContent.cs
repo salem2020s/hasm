@@ -35,6 +35,16 @@ internal sealed record EpochPositionTotal(Guid WarehouseId, decimal BaselineQuan
 /// <summary>The complete content of an epoch as data, in write order. <see cref="Fingerprint"/> covers the schedule it was derived from and all of it.</summary>
 internal sealed record EpochContentResult(ImmutableArray<EpochEntryContent> Entries, ImmutableArray<EpochLayerRemaining> Layers, ImmutableArray<EpochPositionTotal> Positions, string Fingerprint);
 
+/// <summary>The working state of one layer inside the pure simulation (never returned to a caller): the engine layer's figures in integer units, before and after. A top-level record, because the derivation declares no nested types.</summary>
+internal sealed record EpochLayerState(Guid Id, EpochLayerKey Key, long Rank, long? OriginalEntry, bool Created, BigInteger OriginalQuantity, BigInteger OriginalAmount, EpochLayerKey? Source)
+{
+    public BigInteger Quantity { get; set; } = OriginalQuantity;
+    public BigInteger Amount { get; set; } = OriginalAmount;
+    public BigInteger BeforeQuantity { get; set; } = OriginalQuantity;
+    public BigInteger BeforeAmount { get; set; } = OriginalAmount;
+    public bool Touched { get; set; }
+}
+
 /// <summary>
 /// Phase 3.8D executor slice E1b: the PURE derivation of the layers and consumptions an epoch writes (pure data, no text, no generated id), by simulating the semantics of
 /// <c>InventoryCostingService</c> on the ACTUAL layers of the snapshot, in the write order of <see cref="EpochSchedule"/>: a storno of an outflow restores exactly what the original consumed (the same layers and
@@ -46,14 +56,6 @@ internal sealed record EpochContentResult(ImmutableArray<EpochEntryContent> Entr
 /// </summary>
 internal static class EpochContent
 {
-    private sealed class Layer(Guid id, EpochLayerKey key, long rank, long? originalEntry, bool created, BigInteger quantity, BigInteger amount, EpochLayerKey? source)
-    {
-        public readonly Guid Id = id; public readonly EpochLayerKey Key = key; public readonly long Rank = rank; public readonly long? OriginalEntry = originalEntry; public readonly bool Created = created;
-        public readonly BigInteger OriginalQuantity = quantity, OriginalAmount = amount; public readonly EpochLayerKey? Source = source;
-        public BigInteger Quantity = quantity, Amount = amount, BeforeQuantity = quantity, BeforeAmount = amount;
-        public bool Touched;
-    }
-
     private static CostingException Inconsistent() => new("impact_history_inconsistent");
     private static CostingException Disagree() => new("epoch_schedule_inconsistent");
     private static BigInteger Q(decimal v) => CostingMath.ToUnits(v, CostingMath.QuantityScale);
@@ -74,9 +76,9 @@ internal static class EpochContent
         // ---- the actual layers of the snapshot, keyed by (position, creating entry sequence, ordinal)
         var next = 0;
         Guid NewId() => new(++next, 0, 0, new byte[8]);          // internal handle for the engine's planner only: never returned
-        var byActual = new Dictionary<Guid, Layer>();
-        var byOriginalEntry = new Dictionary<long, List<Layer>>();
-        var all = warehouses.ToDictionary(w => w, _ => new List<Layer>());
+        var byActual = new Dictionary<Guid, EpochLayerState>();
+        var byOriginalEntry = new Dictionary<long, List<EpochLayerState>>();
+        var all = warehouses.ToDictionary(w => w, _ => new List<EpochLayerState>());
         var keys = new Dictionary<Guid, EpochLayerKey>();
         if (!fifo && !snapshot.Layers.IsEmpty) throw Inconsistent();
         foreach (var group in snapshot.Layers.GroupBy(l => l.EntryId))
@@ -93,7 +95,7 @@ internal static class EpochContent
             ct.ThrowIfCancellationRequested();
             EpochLayerKey? source = null;
             if (l.SourceLayerId is { } s && !keys.TryGetValue(s, out source)) throw Inconsistent();
-            var layer = new Layer(NewId(), keys[l.Id], l.Sequence, l.EntryId, false, Q(l.OriginalQuantity), A(l.OriginalAmount), source) { Quantity = Q(l.RemainingQuantity), Amount = A(l.RemainingAmount) };
+            var layer = new EpochLayerState(NewId(), keys[l.Id], l.Sequence, l.EntryId, false, Q(l.OriginalQuantity), A(l.OriginalAmount), source) { Quantity = Q(l.RemainingQuantity), Amount = A(l.RemainingAmount) };
             layer.BeforeQuantity = layer.Quantity; layer.BeforeAmount = layer.Amount;
             byActual[l.Id] = layer;
             if (!byOriginalEntry.TryGetValue(l.EntryId, out var list)) byOriginalEntry[l.EntryId] = list = [];
@@ -114,7 +116,7 @@ internal static class EpochContent
         {
             var list = all[entry.WarehouseId];
             var rank = list.Select(l => l.Rank).DefaultIfEmpty(0L).Max() + 1;          // the engine: max(layer sequence) + 1 on the position, zero-remaining layers included
-            var layer = new Layer(NewId(), new EpochLayerKey(entry.WarehouseId, entry.Sequence, ordinal), rank, null, true, quantity, amount, source) { Touched = true, BeforeQuantity = 0, BeforeAmount = 0 };
+            var layer = new EpochLayerState(NewId(), new EpochLayerKey(entry.WarehouseId, entry.Sequence, ordinal), rank, null, true, quantity, amount, source) { Touched = true, BeforeQuantity = 0, BeforeAmount = 0 };
             if (!byKey.TryAdd(layer.Key, layer)) throw Disagree();
             byHandle[layer.Id] = layer; list.Add(layer);
             return new EpochLayerCreation(layer.Key, rank, Q(quantity), A(amount), source);
@@ -217,7 +219,7 @@ internal static class EpochContent
     }
 
     // FIFO: the layers of a position add up exactly to its quantity and value (the ledger and the layers agree); average: no layers exist
-    private static void CheckSums(List<Layer> layers, bool fifo, decimal quantity, decimal value)
+    private static void CheckSums(List<EpochLayerState> layers, bool fifo, decimal quantity, decimal value)
     {
         if (!fifo) return;
         if (layers.Aggregate(BigInteger.Zero, (s, l) => s + l.Quantity) != Q(quantity) || layers.Aggregate(BigInteger.Zero, (s, l) => s + l.Amount) != A(value) ||

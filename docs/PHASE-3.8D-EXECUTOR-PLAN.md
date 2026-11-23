@@ -103,7 +103,10 @@ Split out of E1 (T2 design section 13, change 1; ODC review of PR 219, M1). **De
 * **P lines (T2 follow-up S1):** per-position running totals: baseline and final quantity and value, last sequence, open layers.
 * **The byte-exact T2 epoch-text builder** with T2's known-answer vectors, and **the schema-pinning test 4c** (T2 section 12) unless slice A takes it.
 * **Proofs inside the derivation:** the engine's own planner (`CostingMath.PlanFifo`) recomputes every outflow and must equal the replay's amount; for FIFO the open layers sum to each position's quantity and value at the baseline and the end and equal, in order, the open layers of the revised trace; a stornoed receipt's layers must be untouched at that moment (`epoch_layer_consumed`).
+* **R3 (ODC delta confirmation of PR 219): the P lines change T2's epoch-text format** (T2 4.4, message version `hasm-replay-v4`). Before slice A this needs a T2 amendment with a new message version and recomputed known-answer vectors; E1b must not emit P lines into the signed text under v4.
 * **Tests:** unit and property tests (an independent layer ledger as oracle), mutation proofs, and a PostgreSQL oracle test that performs the same epoch through the REAL `InventoryCostingService` (reversals, event, rebooks) and compares every entry, layer, consumption, remaining figure and position row with the derived content. Nothing is registered, no caller exists.
+* **R2 (ODC delta confirmation of PR 219): the caller allow-list is enforced by IL or reflection in E2 and E3.** The name-based reachability tests cannot see code in a type whose name does not match (for example an extension method in another class); from E2 on, the set of types and methods allowed to reference `EpochSchedule`, `EpochContent`, the scope and the writers is enforced by an IL or reflection scan with a positive control, not by names.
+
 
 ### E2a. The guarded exception in the engine [X] (about 1.5 days; existing-path changes 1 and 2)
 **Specification (the scope alone never opens anything):**
