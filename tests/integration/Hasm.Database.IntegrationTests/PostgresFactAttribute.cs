@@ -136,15 +136,20 @@ public abstract class PostgresTestBase : IAsyncLifetime
                 throw new InvalidOperationException("Refusing to drop a database that is not a test database.");
             // Through the product's drop helper: an autovacuum worker in the database refuses a bare forced drop with 42501 for a non-superuser; the helper's fallback does not need to terminate it.
             // The brief retry stays for what the helper does not cover (a session of a role the account does not hold that is just leaving). Still only ever drops the test's own, prefixed database.
+            // An attempt that was refused only after seconds went through the helper's plain drop (the server waits five seconds there): one more attempt follows such an attempt, not the rest of
+            // the ten, so the foreign-session case lasts about ten seconds per database and not about fifty (review L2 of PR 243). The final refusal is thrown as before.
+            var attempts = 10;
             for (var attempt = 1; ; attempt++)
             {
+                var started = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     await TestDatabaseDrop.ExecuteAsync(conn, name, ifExists: true);
                     break;
                 }
-                catch (PostgresException ex) when (ex.SqlState == "42501" && attempt < 10)
+                catch (PostgresException ex) when (ex.SqlState == "42501" && attempt < attempts)
                 {
+                    if (started.Elapsed > TimeSpan.FromSeconds(3)) attempts = Math.Min(attempts, attempt + 1);
                     await Task.Delay(300);
                 }
             }

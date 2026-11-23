@@ -46,7 +46,7 @@ public static class DeletionReadiness
         var resolved = BackupSet.RealPath(primaryRoot);
         var runs = RetentionInventory.Scan(resolved, trust).Runs;
         var live = destinations.Select(d => d with { Exists = Directory.Exists(d.ResolvedPath) }).ToList();
-        var pending = ReplicationPending.Evaluate(runs, live, trust, audit, ReplicaTombstones.PrimaryHashes(resolved, trust), resolved).RunIds.Count;
+        var pending = ReplicationPending.Evaluate(runs, live, trust, audit, ReplicaTombstones.PrimaryHashes(resolved, trust), BackupSet.QualifiedRoot(resolved)).RunIds.Count;   // a volume root keeps its separator: fully qualified
         var locations = new List<(string, IReadOnlyList<string>)> { ("primary", Reasons(options, live.Count > 0, audit, auditReadable, pending)) };
         foreach (var d in live)
         {

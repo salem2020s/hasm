@@ -20,7 +20,7 @@ public static class ReplicationPending
         public IReadOnlySet<string> RunIds => new HashSet<string>(MissingAt.Where(kv => kv.Value.Count > 0).Select(kv => kv.Key), StringComparer.Ordinal);
     }
 
-    /// <param name="primaryRoot">The resolved primary root, required: every copy is checked for independence from the primary's run under it. Null, empty or not fully qualified is refused, never read as "no check".</param>
+    /// <param name="primaryRoot">The resolved primary root, required: every copy is checked for independence from the primary's run under it. Null, empty or not fully qualified is refused, never read as "no check"; a caller that resolved the root with <c>BackupSet.RealPath</c> passes <c>BackupSet.QualifiedRoot</c> of it (a volume root keeps its separator).</param>
     public static Result Evaluate(IReadOnlyList<RetentionRun> primaryRuns, IReadOnlyList<CheckedDestination> destinations, SigningTrust? trust, ReplicaAuditState? audit,
         IReadOnlyDictionary<string, string>? primaryTombstoneHashes, string primaryRoot, Func<string, FileIdentityInfo?>? identityProbe = null)
     {
