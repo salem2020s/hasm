@@ -44,8 +44,12 @@ public class PlanExecutionMigrationCompatibilityTests : PlanExecutionTestBase
 
     private async Task DropPlaceholders()
     {
-        foreach (var table in placeholders) await Sql($"DROP TABLE {table}");
-        placeholders.Clear();
+        // only the tables migration 0036 itself creates are dropped: a LATER migration's tables (0037 on) stay as placeholders, because the runtime-access check of this backend requires them and this test migrates to 0036 only
+        foreach (var table in placeholders.Where(t => PlanScript.Sql.Contains($"CREATE TABLE {t}", StringComparison.Ordinal) || PlanScript.Sql.Contains($"CREATE TABLE public.{t}", StringComparison.Ordinal)).ToList())
+        {
+            await Sql($"DROP TABLE {table}");
+            placeholders.Remove(table);
+        }
     }
 
     private async Task<List<string>> Tables() =>
@@ -90,12 +94,12 @@ public class PlanExecutionMigrationCompatibilityTests : PlanExecutionTestBase
         var journalBefore = await Sql<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}");
 
         // ---- the real migrator applies exactly migration 0036
-        var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync(), o => o.CompanyId == Company.Id);
+        var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. All.Where(s => s.Version <= PlanScript.Version)]).MigrateAsync(), o => o.CompanyId == Company.Id);       // exactly the scripts up to 0036: later migrations have their own compatibility tests
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
         Assert.Equal([PlanScript.Version], outcome.Applied);
         live.Add(PlanScript);          // the resolvers of this test now know the new script (they read the list at every schema check)
         Assert.Equal(journalBefore + 1, await Sql<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
-        Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync(), o => o.CompanyId == Company.Id).Status);   // idempotent
+        Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry, [.. All.Where(s => s.Version <= PlanScript.Version)]).MigrateAsync(), o => o.CompanyId == Company.Id).Status);   // idempotent
 
         // ---- additive: every earlier catalog entry is byte-identical, no trigger is disabled, the catalog only gained objects
         var after = await Catalog(Company.PhysicalDatabaseName);
@@ -127,7 +131,7 @@ public class PlanExecutionMigrationCompatibilityTests : PlanExecutionTestBase
         Assert.Equal((ConfigStatus.Conflict, "fiscal_period_soft_closed"), (refused.Status, refused.Code));
 
         // ---- and for the per-company runtime role: after the documented grant step an ordinary entry commits and a back-dated one is refused by the new guard
-        var granted = await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
+        var granted = await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry, [.. All.Where(s => s.Version <= PlanScript.Version)]).GrantAsync(Company.Id);
         Assert.True(granted.LoginVerified);
         var op = Guid.NewGuid();
         Assert.Null(await Rt([Op(op, 1, new DateOnly(2026, 3, 20)), .. Move(op, Avg.Id, W1.Id, 1, 1, new DateOnly(2026, 3, 20), 1m, 10m)]));

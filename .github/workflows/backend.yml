@@ -56,6 +56,8 @@ jobs:
         run: node tools/schema/system-totp-owner-only.cjs --check
       - name: Plan-execution schema files (company 0036, provisional number) match their generator
         run: node tools/schema/company-0036-plan-execution.cjs --check
+      - name: Replay signer registry schema files (company 0037, T2 slice A1) match their generator
+        run: node tools/schema/company-0037-replay-signer-registry.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx

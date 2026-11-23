@@ -365,7 +365,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         var g = outcomes.Single(o => o.CompanyId == good.Id);
         var b = outcomes.Single(o => o.CompanyId == bad.Id);
         Assert.Equal(CompanyMigrationStatus.Migrated, g.Status);
-        Assert.Equal([37], g.Applied);
+        Assert.Equal([38], g.Applied);
         Assert.Equal(CompanyMigrationStatus.Failed, b.Status);
         Assert.Equal("pg_P0001", b.ErrorCode);                  // a classification code only, never a message
         Assert.Empty(b.Applied);
