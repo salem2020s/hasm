@@ -121,6 +121,31 @@ public class CashPresetRolesApiTests : CashAccountTestBase
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {Ra.Table} WHERE {Ra.UserId} = @u AND {Ra.RoleId} = @r AND {Ra.RevokedAtUtc} IS NOT NULL", ("u", member.Id), ("r", PresetRoles.CashAccountManagerId)));   // revoked, never deleted
     }
 
+    [PostgresTheory]
+    [InlineData(ProvisioningState.Pending)]
+    [InlineData(ProvisioningState.Failed)]
+    public async Task Grant_and_revoke_refuse_an_EXISTING_company_that_is_not_Ready_and_change_nothing(ProvisioningState state)
+    {
+        await Start();
+        var member = await NewUser($"notready-{(int)state}");
+        Assert.True((await Rbac.GrantMembershipAsync(Admin.Id, Company.Id, member.Login)).IsOk);
+        // an existing company that is Pending (registered, no database) or Failed, with an active assignment of each preset planted in it directly (test infrastructure)
+        var other = Guid.NewGuid();
+        await Exec($"INSERT INTO {Co.Table} ({Co.Id},{Co.PhysicalDatabaseName},{Co.ProvisioningState},{Co.CreatedAtUtc},{Co.StateChangedAtUtc}) VALUES ('{other}','{Hasm.Infrastructure.Naming.PhysicalIdentifier.GenerateDatabaseName()}',{(short)state},now(),now())");
+        await Exec($"INSERT INTO {SystemSchema.UserCompanyAccess.Table} ({SystemSchema.UserCompanyAccess.UserId},{SystemSchema.UserCompanyAccess.CompanyId},{SystemSchema.UserCompanyAccess.GrantedAtUtc}) VALUES ('{member.Id}','{other}',now())");   // membership, so the planted assignments satisfy their foreign keys
+        foreach (var preset in new[] { PresetRoles.CashAccountManagerId, PresetRoles.CashAccountSensitiveViewerId })
+            await Exec($"INSERT INTO {Ra.Table} ({Ra.Id},{Ra.UserId},{Ra.CompanyId},{Ra.RoleId},{Ra.ScopeKind},{Ra.ScopeId},{Ra.GrantedAtUtc}) VALUES ('{Guid.NewGuid()}','{member.Id}','{other}','{preset}',0,NULL,now())");
+        var before = await Scalar<long>($"SELECT count(*) FROM {Ra.Table} WHERE {Ra.CompanyId} = '{other}' AND {Ra.RevokedAtUtc} IS NULL");
+        Assert.Equal(2L, before);
+
+        Assert.Equal(AccessService.FiscalApproverStatus.CompanyUnavailable, await Rbac.GrantCashAccountManagerOfflineAsync(member.Login, other));
+        Assert.Equal(AccessService.FiscalApproverStatus.CompanyUnavailable, await Rbac.GrantCashAccountSensitiveViewerOfflineAsync(member.Login, other));
+        Assert.NotEqual(AccessService.FiscalApproverStatus.Revoked, await Rbac.RevokeCashAccountManagerOfflineAsync(member.Login, other));
+        Assert.NotEqual(AccessService.FiscalApproverStatus.Revoked, await Rbac.RevokeCashAccountSensitiveViewerOfflineAsync(member.Login, other));
+        Assert.Equal(before, await Scalar<long>($"SELECT count(*) FROM {Ra.Table} WHERE {Ra.CompanyId} = '{other}' AND {Ra.RevokedAtUtc} IS NULL"));      // nothing revoked, nothing granted
+        Assert.Equal(2L, await Scalar<long>($"SELECT count(*) FROM {Ra.Table} WHERE {Ra.CompanyId} = '{other}'"));
+    }
+
     [PostgresFact]
     public async Task The_offline_delegation_needs_an_active_member_of_a_ready_company_and_never_creates_membership()
     {
