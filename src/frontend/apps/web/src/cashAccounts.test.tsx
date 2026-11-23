@@ -370,8 +370,12 @@ describe("cash accounts screen: edit, the bank number and conflicts", () => {
     details!.focus();
     await userEvent.keyboard("{ArrowLeft}");                                                            // RTL: left is "next"
     expect(bankTab).toHaveAttribute("aria-selected", "true");
+    // The shared Tabs moves the focus to the chosen tab on the next animation frame. Wait for it before the next key: a frame still pending when the typing below starts would take the focus
+    // out of the field in the middle of the text, and Enter would then land on the tab instead of submitting the form (the intermittent failure of this test on a fast runner).
+    await waitFor(() => expect(bankTab).toHaveFocus());
     await userEvent.keyboard("{ArrowRight}");
     expect(details).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(details).toHaveFocus());
     await userEvent.clear(form().getByLabelText(A("cash.name_en")));
     await userEvent.type(form().getByLabelText(A("cash.name_en")), "Renamed{Enter}");
     await waitFor(() => expect(client.updateCashAccount).toHaveBeenCalledTimes(1));
