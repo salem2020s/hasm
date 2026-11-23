@@ -275,7 +275,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
         Assert.Equal((112, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));   // 112 with the short close (D-201)
-        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 8, 18, 5], Shares.Values.Select(share => share.Count));
+        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 9, 18, 5], Shares.Values.Select(share => share.Count));   // the commercial share is 9 with the short close (D-201)
         // AssertRan resolves each probed request to its route through the route table: every route must be reachable by exactly one template (no ambiguity)
         var ambiguous = all.Where(t => ConstraintRaces.TemplateOf(new HttpMethod(t[..t.IndexOf(' ')]), SamplePath(t[(t.IndexOf(' ') + 1)..]), all) != t).Order(StringComparer.Ordinal).ToList();
         Assert.True(ambiguous.Count == 0, "routes the probe resolver cannot tell apart:\n" + string.Join("\n", ambiguous));
