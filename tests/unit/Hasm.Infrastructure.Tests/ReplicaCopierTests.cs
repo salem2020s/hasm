@@ -668,4 +668,24 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         Assert.True(ReplicaVerifyService.IsHeld(C(false, "UTC")));                              // unreadable
         Assert.True(ReplicaVerifyService.IsHeld(C(true, "UTC", "attachment_hold")));            // an attachment-hold keep
     }
+
+    [Fact]
+    public void The_windows_file_information_struct_has_the_native_52_byte_layout_and_the_windows_branch_stays_disabled_until_verified()
+    {
+        // review H1 of PR 224: BY_HANDLE_FILE_INFORMATION is 52 bytes (a FILETIME is 4-byte aligned); a managed layout of 56 bytes would shift every later field and make every file look hard-linked
+        var type = typeof(FileIdentity.ByHandleFileInformation);
+        Assert.Equal(52, System.Runtime.InteropServices.Marshal.SizeOf(type));
+        int Offset(string field) => (int)System.Runtime.InteropServices.Marshal.OffsetOf(type, field);
+        Assert.Equal(0, Offset("FileAttributes"));
+        Assert.Equal(4, Offset("CreationTimeLow"));
+        Assert.Equal(20, Offset("LastWriteTimeLow"));
+        Assert.Equal(28, Offset("VolumeSerialNumber"));
+        Assert.Equal(32, Offset("FileSizeHigh"));
+        Assert.Equal(36, Offset("FileSizeLow"));
+        Assert.Equal(40, Offset("NumberOfLinks"));
+        Assert.Equal(44, Offset("FileIndexHigh"));
+        Assert.Equal(48, Offset("FileIndexLow"));
+        // no Windows host verifies the branch: it stays off (the commands then report link_check_unavailable, exit 8) until a follow-up records a real Windows run
+        Assert.False(FileIdentity.WindowsVerified);
+    }
 }

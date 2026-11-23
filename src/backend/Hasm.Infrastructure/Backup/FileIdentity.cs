@@ -6,18 +6,22 @@ namespace Hasm.Infrastructure.Backup;
 public readonly record struct FileIdentityInfo(ulong Volume, ulong Index, long Links);
 
 /// <summary>
-/// Reads the identity of a file or folder (Linux x86-64 and arm64 through <c>stat</c>; Windows through <c>GetFileInformationByHandle</c>). Returns null when it cannot be read (another platform or
+/// Reads the identity of a file or folder (Linux x86-64 and arm64 through <c>stat</c>; Windows is implemented but DISABLED, see <see cref="WindowsVerified"/>). Returns null when it cannot be read (another platform or
 /// architecture, glibc before 2.33 without a <c>stat</c> symbol, a path that cannot be opened): a null is never evidence of independence, and callers that need it report <c>link_check_unavailable</c>
-/// instead of claiming nothing (review U2 of PR 214). The Windows branch is not exercised by the test suite (no Windows host).
+/// instead of claiming nothing (review U2 of PR 214). The Windows branch is not exercised by the test suite (no Windows host), so it is disabled and returns null until it has been verified on one.
 /// </summary>
 public static class FileIdentity
 {
+    /// <summary>False until the Windows branch (<c>GetFileInformationByHandle</c>) has been verified on a real Windows host; pinned by a test. Changing it is the follow-up that records that verification.</summary>
+    internal const bool WindowsVerified = false;
+
     public static FileIdentityInfo? TryGet(string path)
     {
         try
         {
             if (OperatingSystem.IsLinux()) return Linux(path);
-            if (OperatingSystem.IsWindows()) return Windows(path);
+            // the Windows branch is DISABLED until it has been verified on a real Windows host (none is available to the test suite): it returns null, so the commands report link_check_unavailable (exit 8)
+            if (OperatingSystem.IsWindows()) return WindowsVerified ? Windows(path) : null;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or IOException or UnauthorizedAccessException) { }
         return null;
@@ -52,11 +56,16 @@ public static class FileIdentity
         [DllImport("libc", SetLastError = true)] internal static extern int stat([MarshalAs(UnmanagedType.LPUTF8Str)] string path, byte[] buf);
     }
 
+    /// <summary>
+    /// The native <c>BY_HANDLE_FILE_INFORMATION</c> (52 bytes): the three FILETIMEs are two 32-bit halves each, because a FILETIME is 4-byte aligned (a <c>long</c> would be 8-byte aligned and
+    /// make the managed struct 56 bytes, shifting every later field: review H1 of PR 224). Offsets: FileAttributes 0, the three times 4 to 27, VolumeSerialNumber 28, FileSizeHigh 32, FileSizeLow 36,
+    /// NumberOfLinks 40, FileIndexHigh 44, FileIndexLow 48. Pinned by a unit test that runs on Linux.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    private struct ByHandleFileInformation
+    internal struct ByHandleFileInformation
     {
         public uint FileAttributes;
-        public long CreationTime, LastAccessTime, LastWriteTime;
+        public uint CreationTimeLow, CreationTimeHigh, LastAccessTimeLow, LastAccessTimeHigh, LastWriteTimeLow, LastWriteTimeHigh;
         public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
     }
 
