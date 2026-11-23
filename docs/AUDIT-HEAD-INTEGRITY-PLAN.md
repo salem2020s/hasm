@@ -2,6 +2,31 @@
 
 Status: PLAN ONLY (documentation). Nothing here is built. It answers a pre-existing HIGH availability finding of the independent security review of the S8d plan (PR 223): **one row with a bad authentication code, inserted at the head of the system audit stream with the runtime credentials, makes every further audited write fail** (logins, MFA, administration, backups), and company streams are affected the same way; there is no recovery path, because the audit table is append-only even for its owner. The plan compares three remedies, recommends a combination, lists the adversarial tests, the migration impact (numbers are NOT allocated here; the lead allocates them) and the owner decision that is needed. No audit key, checkpoint or existing record changes; no existing safeguard is weakened.
 
+> **OWNER DECISION 2026-11-23 - D1, D2 and D3 of section 8 are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-261 for D1, D-262 for D2, D-263 for D3) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (AUDIT-HEAD-RECOVERY-D1-D3). The owner text follows verbatim. The single-operator break-glass is for development and testing only; production activation stays disabled until named administrator, fresh MFA and second-person approval exist. Nothing else of this document changes, nothing is built by this record, and no migration number or audit code is allocated by it.
+>
+> D1 — APPROVED
+> Allow explicit, authorized recovery from a forged audit tail.
+> Mandatory safeguards:
+> * Preserve every original audit record, including forged entries, without modification or deletion.
+> * Mark quarantined entries as untrusted and never use them as authenticated evidence.
+> * Require verification of the trusted prefix and all available protected checkpoints.
+> * Permit recovery only for the explicitly validated contiguous damaged tail. Refuse ambiguous corruption, missing keys, or valid records following an invalid record.
+> * Append an authenticated recovery event identifying the operator, affected range, reason and timestamp.
+> * Use a distinct `VerifiedWithBreaks` status, never ordinary `Verified`.
+> * Ensure all audit consumers, backup retention and recovery checks respect quarantined ranges.
+> * Require an auditable dry run and independent adversarial security tests.
+>
+> D2 — APPROVED WITH A STRICT ENVIRONMENT BOUNDARY
+> During development and testing, allow a documented temporary break-glass recovery by the designated server operator holding the database owner credentials and protected audit key, with explicit authorization and complete audit evidence.
+> Do not permit this single-person exception for production deployments.
+> Production recovery requires a named administrator, fresh MFA verification and independent second-person approval.
+> Design and test the recovery mechanism now. Production activation remains disabled until these controls exist.
+>
+> D3 — APPROVED
+> Recovery must always be a deliberate manual operation.
+> Never automatically skip damaged audit entries or silently repair an audit chain.
+> Repeated attacks must generate visible security findings.
+
 Sources read: `src/backend/Hasm.Infrastructure/Audit/AuditTrail.cs`, `AuditVerifier.cs`, `AuditCanonical.cs`, `AuditModel.cs`, system migration `0005_cryptographic_audit_integrity.sql`, company migration `0002_company_business_audit.sql`, `SystemRuntimePrivileges.cs`, `CompanyRuntimePrivileges.cs`, PR 188's migration guard (`docs/MIGRATION-GUARD.md`), the S8d plan (`docs/PHASE-4.3-S8D-PLAN.md`, section 4B).
 
 ## 1. The problem, exactly
@@ -97,6 +122,8 @@ The writer could walk back to the last valid record and continue with an automat
 13. **Company streams:** the same cases for a `business:<id>` stream in a company database with the company runtime role.
 
 ## 8. Owner decisions needed (the questions, in the owner-facing wording of the independent review, verbatim)
+
+**Decided 2026-11-23: see the owner decision at the top of this document (D1 = D-261, D2 = D-262, D3 = D-263; register item AUDIT-HEAD-RECOVERY-D1-D3). D1: APPROVED with the mandatory safeguards. D2: APPROVED WITH A STRICT ENVIRONMENT BOUNDARY: the single-operator break-glass is for development and testing only; production activation stays disabled until named administrator, fresh MFA and second-person approval exist. D3: APPROVED, recovery is always manual. The questions below are kept as put to the owner.**
 
 * **D1.** "Today, one forged row inserted with the application's database password stops every audited action (sign-in, administration, backups) for good, because the tamper-proof audit trail can never be continued past a damaged entry. Do you allow an explicit, owner-only recovery that keeps the forged rows as evidence, marks them as untrusted, and continues the trail after an authenticated 'break' entry naming who did it, when and why? Without it the system stays down until the database is rebuilt."
   * Recommended: yes, as (b). The alternative is to accept the permanent denial of service as the price of a chain that can never contain a break (then only (a) is built and the vector stays).

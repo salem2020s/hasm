@@ -2,6 +2,10 @@
 
 **Status: slice S-1 BUILT in its own PR (section 13 records exactly what was built and what was left for later slices); every other slice is still a plan. The rest of this text is the plan as approved; where section 13 differs, section 13 is what the code does.** Originally: PLAN ONLY (a proposal; nothing is built; no decision ID, audit code or migration number is allocated). It answers the finding recorded by Agent OSEC during the review of PR 218 (T2), 2026-11-22, severity **High**, and it is **blocking** for T2 and for any control that relies on the application authenticating a person against someone who holds the database credentials. Implementation starts only after an independent review of this plan and the owner decisions of section 12. Everything here that is not a quoted owner decision is a proposal.
 
+> **OWNER DECISION 2026-11-23 - identity tagging of existing records: the conservative default is kept (applies OD-3, D-242).** Recorded once in `docs/DECISIONS.md` (D-266) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (IDENTITY-TAGGING-DISPOSITION). The owner text follows verbatim. Nothing else of this document changes.
+>
+> 3. Identity tagging: keep the conservative default. Require administrator password resets and MFA re-enrolment where provenance cannot be trusted. Other flagged accounts require individual documented verification and appropriate remediation before tagging. Never blindly trust existing records.
+
 > **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-240..D-247) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (SEC-RT-SESSION-OD). The owner text follows verbatim; the decision IDs, which the status line below says were not yet allocated, are D-240 to D-247 for OD-1 to OD-8. Nothing else of this document changes.
 >
 > A. Identity Integrity — OD-1 to OD-8
