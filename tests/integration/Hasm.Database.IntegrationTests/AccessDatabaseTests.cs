@@ -43,7 +43,7 @@ public abstract class AccessTestBase : IdentityTestBase
     protected async Task StartAccess()
     {
         await Start();
-        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit, new KnownScopeValidator(), keys: TestIdentityKeys.Instance);
+        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit, new KnownScopeValidator(), keys: SessionKeys);
     }
 
     public override async Task DisposeAsync()

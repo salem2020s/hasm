@@ -1,9 +1,12 @@
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Identity;
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
+using SI = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionIntegrity;
+using UI = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserIntegrity;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using A = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserCompanyAccess;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
@@ -31,6 +34,8 @@ public abstract class IdentityTestBase : PostgresTestBase
     protected AuditTrail Audit { get; }
     protected IdentityStore Store { get; private set; } = null!;
     protected AuthService Auth { get; private set; } = null!;
+    /// <summary>The identity keys the stores of this suite use: the assembly's disposable ring unless a suite runs its API on a ring of its own (then it overrides this with the same ring).</summary>
+    protected virtual IdentityKeys SessionKeys => TestIdentityKeys.Instance;
     protected IdentityTestBase() => Audit = new AuditTrail(new AuditServices(AuditKeys, AuditCheckpoints, 0), Clock);
 
     protected PasswordService Passwords { get; } = new(1000); // low cost keeps the suite fast; production floor is enforced by AuthOptions
@@ -38,8 +43,25 @@ public abstract class IdentityTestBase : PostgresTestBase
     protected async Task Start()
     {
         await new SystemDatabaseInitializer(Options).InitializeAsync();
-        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, keys: TestIdentityKeys.Instance);
+        Store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, keys: SessionKeys);
         Auth = new AuthService(Store, Passwords, AuthSettings);
+    }
+
+    /// <summary>Sets (or clears) the selected company of every live session of the user through the TAGGED primitive (what a company selection made earlier left behind): a direct column write would be a tampered row, which is no session.</summary>
+    protected async Task SelectCompanyForSessions(Guid userId, Guid? companyId)
+    {
+        await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        var ids = new List<Guid>();
+        await using (var cmd = new NpgsqlCommand($"SELECT {S.Id} FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("u", userId);
+            await using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
+        }
+        foreach (var id in ids) Assert.True(await SessionRow.SelectCompanyAsync(conn, tx, SessionKeys, id, userId, companyId, default));
+        await tx.CommitAsync();
     }
 
     protected async Task<UserRecord> NewUser(string login = "alice", string password = Pw, bool admin = false)
@@ -96,8 +118,8 @@ public class IdentityMigrationTests : IdentityTestBase
         await Start();
         var expected = new Dictionary<string, string[]>
         {
-            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc, M.State, M.StateChangedAtUtc, M.EnrolmentCodeHash, M.EnrolmentCodeExpiresAtUtc, M.EnrolmentCodeConsumedAtUtc],
-            [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind, S.SelectedCompanyId, SM.VerifiedAtUtc, SM.AuthMethods, SM.Emergency],
+            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc, M.State, M.StateChangedAtUtc, M.EnrolmentCodeHash, M.EnrolmentCodeExpiresAtUtc, M.EnrolmentCodeConsumedAtUtc, UI.SecurityRevision],
+            [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind, S.SelectedCompanyId, SM.VerifiedAtUtc, SM.AuthMethods, SM.Emergency, SI.KeyId, SI.Tag, SI.UserRevisionAtIssue],
             [T.Table] = [T.Scope, T.KeyHash, T.Failures, T.WindowStartedAtUtc, T.BlockedUntilUtc],
             [A.Table] = [A.UserId, A.CompanyId, A.GrantedAtUtc, A.GrantedBy, A.RevokedAtUtc, A.RevokedBy],
         };
@@ -385,7 +407,8 @@ public class SessionTests : IdentityTestBase
         Assert.Equal(user.Id, session!.UserId);
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table}"));
         var stored = await Scalar<byte[]>($"SELECT {S.TokenHash} FROM {S.Table}");
-        Assert.Equal(SessionToken.Hash(ok.Token), stored);
+        Assert.Equal(SessionKeys.TokenHash(SessionKeys.Active(), ok.Token), stored);                              // the KEYED hash (identity integrity S-1) ...
+        Assert.NotEqual(SessionToken.Hash(ok.Token), stored);                                                      // ... never the plain SHA-256 of the old design
         Assert.DoesNotContain(ok.Token, Convert.ToBase64String(stored));
     }
 
