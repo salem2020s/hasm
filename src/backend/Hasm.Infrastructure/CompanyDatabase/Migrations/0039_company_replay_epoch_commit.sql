@@ -1,5 +1,5 @@
 -- Migration 0039: the commit-time checks of a replay execution grant (Phase 3.8D threat T2, slice A3; design docs/PHASE-3.8D-T2-AUTHORIZATION-DESIGN.md sections 4.3, 4.4 and 16, message version hasm-replay-v5).
--- Forward-only and ADDITIVE: new functions and two new DEFERRED constraint triggers (one on the execution table of 0036, one on the grant-use table of 0037); no table is created or altered, nothing existing is replaced or switched off.
+-- Forward-only and ADDITIVE: new functions and 15 new DEFERRED constraint triggers (one on each table the epoch text or the grant message reads, plus the execution and grant-use tables); no table is created or altered, nothing existing is replaced or switched off.
 -- The company runtime role still holds SELECT only on the grant tables and on the four execution tables: nothing can reach these triggers through the application, activation stays closed.
 -- Opaque physical names (D-029) generated deterministically by tools/schema/company-0039-replay-epoch-commit.cjs (logical dictionary: CompanySchema.ReplayEpoch.cs). Do not edit by hand: re-run the generator.
 --
@@ -7,7 +7,7 @@
 -- before the grant was accepted, whose signature VERIFIES over the message rebuilt NOW from the rows (a closure, line or approval changed after the grant was accepted fails), and whose signed epoch digest equals the SHA-256 of the
 -- EPOCH TEXT of design 4.4 rebuilt from the rows this execution wrote: operations (O), entries (E), layers (L), consumptions (C), the remaining figures of every layer touched (R) and the totals of every position touched (P).
 -- A position's final figures are bound by its P line (the position row) and by the running figures of its last entry (E line); the cost position guard of 0014 keeps the two equal, so a mismatch cannot exist in the rows. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
--- The execution trigger is named so that it fires AFTER the completeness trigger of 0036 on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
+-- Each trigger is named so that it fires AFTER the 0036 deferred trigger of the same table on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
 -- fixed formats (lower-case uuids, decimal integers, numeric at its declared scale 10 or 6, dates by to_char with a fixed pattern, LF as chr(10)), so no session setting can change a byte.
 
 -- the epoch text of an execution (design 4.4): O, E, L, C, R and P lines in this order, LF-joined with no trailing LF; an execution with no rows gives the empty string
@@ -109,18 +109,31 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION public.f_d3eb8b25() RETURNS trigger LANGUAGE plpgsql AS $$
+-- H1 (review of PR 238): a check queued only at INSERT of the execution can be fired early (SET CONSTRAINTS ... IMMEDIATE) and later changes would commit unchecked. So EVERY table the epoch text or the grant message reads carries
+-- a deferred row trigger on INSERT, UPDATE and DELETE that re-runs the full check for every execution written by THIS transaction (created_xact = pg_current_xact_id()); the last write of the transaction therefore queues a
+-- check that runs after it (at commit, or at the end of that statement in immediate mode). The cost is one full check per queued event at commit (accepted; measured in the tests, see the pull request).
+CREATE FUNCTION public.f_246d6027() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_execution uuid;
 BEGIN
-    PERFORM public.f_217072b6(NEW.c_02771c43);
+    FOR v_execution IN SELECT x.c_02771c43 FROM public.t_5b1a018a x WHERE x.c_fbd0bc4b = pg_current_xact_id() LOOP
+        PERFORM public.f_217072b6(v_execution);
+    END LOOP;
     RETURN NULL;
 END;
 $$;
-CREATE CONSTRAINT TRIGGER r_eec39f16 AFTER INSERT ON public.t_5b1a018a DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_d3eb8b25();
-
-CREATE FUNCTION public.f_d3631d81() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM public.f_217072b6(NEW.c_809c486e);
-    RETURN NULL;
-END;
-$$;
-CREATE CONSTRAINT TRIGGER r_21aaa89e AFTER INSERT ON public.t_a5e631f4 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_d3631d81();
+CREATE CONSTRAINT TRIGGER r_eec39f16 AFTER INSERT OR UPDATE OR DELETE ON public.t_5b1a018a DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_21aaa89e AFTER INSERT OR UPDATE OR DELETE ON public.t_a5e631f4 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_59cea2b3 AFTER INSERT OR UPDATE OR DELETE ON public.t_a648ca40 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_b4fcc7fe AFTER INSERT OR UPDATE OR DELETE ON public.t_3bd31c9d DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_a8f8c2e8 AFTER INSERT OR UPDATE OR DELETE ON public.t_bc727c1d DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_af96927f AFTER INSERT OR UPDATE OR DELETE ON public.t_3147676c DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_c6743ae1 AFTER INSERT OR UPDATE OR DELETE ON public.t_6df3b92e DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_9698bfcc AFTER INSERT OR UPDATE OR DELETE ON public.t_a2903683 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_c2ddf748 AFTER INSERT OR UPDATE OR DELETE ON public.t_c38ba586 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_2de0392b AFTER INSERT OR UPDATE OR DELETE ON public.t_d29d5b43 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_e2f99ea3 AFTER INSERT OR UPDATE OR DELETE ON public.t_a1458a29 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_63128ac4 AFTER INSERT OR UPDATE OR DELETE ON public.t_33eef4c2 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_039cd845 AFTER INSERT OR UPDATE OR DELETE ON public.t_209d0f15 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_790740c4 AFTER INSERT OR UPDATE OR DELETE ON public.t_23985c22 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();
+CREATE CONSTRAINT TRIGGER r_5efc60ea AFTER INSERT OR UPDATE OR DELETE ON public.t_d9cc2112 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.f_246d6027();

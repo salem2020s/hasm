@@ -14,6 +14,12 @@ using RGR2 = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayExecutionGr
 using RGU2 = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayGrantUse;
 using RK2 = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplaySignerKey;
 using RE2 = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayEpoch;
+using EM = Hasm.Infrastructure.CompanyDatabase.CompanySchema.EpochMember;
+using EL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.EpochEntryLineage;
+using EG = Hasm.Infrastructure.CompanyDatabase.CompanySchema.EpochGuard;
+using CA = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompensationPlanApproval;
+using CPL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CompensationPlanLine;
+using ID = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Identity;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -217,22 +223,78 @@ public class ReplayEpochCommitTests : PlanExecutionTestBase
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
     }
 
+    // ------------------------------------------------------------------------------------------------------------ H1 of the review of PR 238: the check cannot be ended early
+    /// <summary>Appends, after the last step of an epoch script, the steps of a probe: <c>probe</c> (the early firing, a SET CONSTRAINTS statement) and <c>tamper</c> (the changes made AFTER it). The dry run that fixes the signed epoch skips both.</summary>
+    private static void AddProbe(Script script, string probe, params string[] tamper)
+    {
+        script.RemoveAll(t => t.Name is "probe" or "tamper");
+        script.Add(("probe", [probe]));
+        if (tamper.Length > 0) script.Add(("tamper", tamper));
+        script.DryRunSql = (step, sql) => step is "probe" or "tamper" ? "SELECT 1" : sql;
+    }
+
+    private string TamperLayer(Guid layer, string sign) => $"UPDATE {CL.Table} SET {CL.RemainingQuantity} = {CL.RemainingQuantity} {sign} 1, {CL.RemainingAmount} = {CL.RemainingAmount} {sign} 10 WHERE {CL.Id} = '{layer}'";
+
+    [PostgresRoleFact]
+    public async Task H1_a_session_that_fires_the_deferred_checks_early_cannot_change_the_epoch_afterwards_in_the_same_transaction()
+    {
+        await PrepareRuntime(executorGrant: true);
+        var (s, layer, _, _, _) = await FifoEpoch();
+        // the probe of the review: ALL IMMEDIATE (every check passes at that moment), then a layer's remaining figures are changed (an R line deviation): the change is refused at ITS statement, nothing persists
+        AddProbe(s.Script, "SET CONSTRAINTS ALL IMMEDIATE", TamperLayer(layer, "+"));
+        RefusedWith("epoch_differs_from_the_signed_epoch", await RunAsOwner(s.Script));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+        // the two original triggers named by themselves, then the same change
+        AddProbe(s.Script, $"SET CONSTRAINTS {RE2.TrCommitExecution}, {RE2.TrCommitUse} IMMEDIATE", TamperLayer(layer, "-"));
+        RefusedWith("epoch_differs_from_the_signed_epoch", await RunAsOwner(s.Script));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+        // ALL IMMEDIATE, then an extra consumption row (a C line deviation) is inserted
+        AddProbe(s.Script, "SET CONSTRAINTS ALL IMMEDIATE", $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}, {CS.Restores}) SELECT {EN.Id}, '{layer}', 1, 10, false FROM {EN.Table} WHERE {EN.OperationId} = '{s.Rebook}' AND {EN.WarehouseId} = '{W1.Id}'");
+        RefusedWith("epoch_differs_from_the_signed_epoch", await RunAsOwner(s.Script));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+        // ALL IMMEDIATE, then the plan row is changed after the grant was accepted (as the owner, with the plan's own guards off): the signature over the message rebuilt now fails
+        AddProbe(s.Script, "SET CONSTRAINTS ALL IMMEDIATE", $"DO $$ DECLARE r record; BEGIN FOR r IN SELECT tgname FROM pg_trigger WHERE tgrelid = 'public.{CP.Table}'::regclass AND NOT tgisinternal AND tgconstraint = 0 LOOP EXECUTE format('ALTER TABLE public.{CP.Table} DISABLE TRIGGER %I', r.tgname); END LOOP; END $$", $"UPDATE {CP.Table} SET {CP.PolicyFingerprint} = '{new string('e', 64)}' WHERE {CP.Id} = '{s.Plan.Id}'");
+        RefusedWith("grant_signature_invalid_at_commit", await RunAsOwner(s.Script));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+        // control: the early firing alone commits
+        AddProbe(s.Script, "SET CONSTRAINTS ALL IMMEDIATE");
+        Assert.Null(await RunAsOwner(s.Script));
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+    }
+
+    [PostgresRoleFact]
+    public async Task H1_in_deferred_mode_the_check_runs_at_commit_against_the_final_state_so_a_change_that_is_undone_commits_and_one_that_is_not_is_refused()
+    {
+        await PrepareRuntime(executorGrant: true);
+        var (s, layer, _, _, _) = await FifoEpoch();
+        AddProbe(s.Script, "SELECT 1", TamperLayer(layer, "+"));                                                         // changed and left: the last queued check, after the last change, refuses at commit
+        RefusedWith("epoch_differs_from_the_signed_epoch", await RunAsOwner(s.Script));
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CX.Table}"));
+        AddProbe(s.Script, "SELECT 1", TamperLayer(layer, "+"), TamperLayer(layer, "-"));                                 // changed and restored: the final rows are the signed epoch
+        Assert.Null(await RunAsOwner(s.Script));
+    }
+
     // ------------------------------------------------------------------------------------------------------------ inertness and the ordering of the triggers
     [PostgresRoleFact]
     public async Task The_new_checks_are_deferred_constraint_triggers_that_fire_after_the_completeness_check_of_0036_and_the_runtime_role_still_cannot_write_in_production()
     {
         await PrepareRuntime();
-        // both are constraint triggers, deferrable and initially deferred, on the execution table and on the grant use table
-        foreach (var (table, trigger) in new[] { (CX.Table, RE2.TrCommitExecution), (RGU2.Table, RE2.TrCommitUse) })
-            Assert.True(await Sql<bool>($"SELECT t.tgdeferrable AND t.tginitdeferred AND t.tgconstraint <> 0 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname = '{table}' AND t.tgname = '{trigger}'"), trigger);
-        // they fire in name order within an event: the execution check sorts after the completeness check of 0036 on the same table, so a 0036 refusal is never masked by this one
-        var names = (await Rows($"SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname = '{CX.Table}' AND t.tgconstraint <> 0 AND NOT t.tgisinternal ORDER BY t.tgname")).Select(r => (string)r[0]).ToList();
-        Assert.Equal(CX.TrCommit, names.First(n => string.CompareOrdinal(n, CX.TrCommit) >= 0));
-        Assert.True(string.CompareOrdinal(RE2.TrCommitExecution, CX.TrCommit) > 0);
+        // every one is a constraint trigger, deferrable and initially deferred, on INSERT, UPDATE and DELETE, on the tables the epoch text or the grant message reads
+        var tables = new (string Table, string Trigger)[] { (CX.Table, RE2.TrCommitExecution), (RGU2.Table, RE2.TrCommitUse), (OP.Table, RE2.TrCommitOperation), (EM.Table, RE2.TrCommitMemberRows), (EN.Table, RE2.TrCommitEntry), (CL.Table, RE2.TrCommitLayer),
+            (CS.Table, RE2.TrCommitConsumption), (PO.Table, RE2.TrCommitPosition), (EL.Table, RE2.TrCommitLineage), (CP.Table, RE2.TrCommitPlan), (CA.Table, RE2.TrCommitApproval), (CPL.Table, RE2.TrCommitLine), (ID.Table, RE2.TrCommitIdentity), (RK2.Table, RE2.TrCommitKey), (RGR2.Table, RE2.TrCommitGrant) };
+        Assert.Equal(15, tables.Select(t => t.Trigger).Distinct().Count());
+        foreach (var (table, trigger) in tables)
+            Assert.True(await Sql<bool>($"SELECT t.tgdeferrable AND t.tginitdeferred AND t.tgconstraint <> 0 AND (t.tgtype & 4) <> 0 AND (t.tgtype & 8) <> 0 AND (t.tgtype & 16) <> 0 AND t.tgfoid = '{RE2.FnRecheck}'::regproc FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname = '{table}' AND t.tgname = '{trigger}'"), trigger);
+        // they fire in name order within an event: each sorts after the deferred trigger of 0036 of the same table, so a 0036 refusal is never masked by this one
+        foreach (var (table, mine, theirs) in new[] { (CX.Table, RE2.TrCommitExecution, CX.TrCommit), (EN.Table, RE2.TrCommitEntry, EG.TrEntryCommit), (EM.Table, RE2.TrCommitMemberRows, EM.TrCommit), (CP.Table, RE2.TrCommitPlan, CP.TrCommit), (CA.Table, RE2.TrCommitApproval, CA.TrCommit) })
+        {
+            var names = (await Rows($"SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relname = '{table}' AND t.tgconstraint <> 0 AND NOT t.tgisinternal ORDER BY t.tgname")).Select(r => (string)r[0]).ToList();
+            Assert.True(names.IndexOf(mine) > names.IndexOf(theirs) && names.Contains(theirs), table);
+        }
         // production grants: still SELECT only on the grant tables and the execution tables
         foreach (var t in new[] { RGR2.Table, RGU2.Table, CX.Table }) Assert.Equal(["SELECT"], CompanyRuntimePrivileges.Tables.Single(x => x.Table == t).Privileges);
         // the functions are invoker-rights readers like those of A2
-        foreach (var f in new[] { RE2.FnRowsText, RE2.FnCheckExecution, RE2.FnCommitExecution, RE2.FnCommitUse })
+        foreach (var f in new[] { RE2.FnRowsText, RE2.FnCheckExecution, RE2.FnRecheck })
         {
             Assert.False(await Sql<bool>($"SELECT prosecdef FROM pg_proc WHERE proname = '{f}'"), f);
             Assert.True(await Sql<bool>($"SELECT proconfig IS NULL FROM pg_proc WHERE proname = '{f}'"), f);

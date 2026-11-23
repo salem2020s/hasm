@@ -26,7 +26,7 @@ public class ReplayEpochSchemaDerivationTests
     public void Every_name_is_the_deterministic_derivation_of_its_logical_token_and_none_collides()
     {
         var entries = OwnEntries().ToList();
-        Assert.Equal(6, entries.Count);          // four functions and two triggers
+        Assert.Equal(18, entries.Count);         // three functions and fifteen triggers
         foreach (var (token, physical) in entries) Assert.Equal(Derive(token), physical);
         var names = entries.Select(e => e.Value).ToList();
         Assert.Equal(names.Count, names.Distinct().Count());
@@ -37,15 +37,18 @@ public class ReplayEpochSchemaDerivationTests
     }
 
     [Fact]
-    public void The_migration_creates_only_functions_and_two_deferred_triggers_names_every_relation_with_its_schema_and_uses_no_unsafe_construct()
+    public void The_migration_creates_only_functions_and_fifteen_deferred_triggers_names_every_relation_with_its_schema_and_uses_no_unsafe_construct()
     {
         var sql = Sql();
         Assert.DoesNotMatch(@"\bCREATE\s+TABLE\b|\bCREATE\s+TRIGGER\b|\bDROP\b|\bALTER\b|\bCREATE\s+OR\s+REPLACE\b|\bGRANT\b|\bREVOKE\b|\bDISABLE\b|\bENABLE\b|\bDELETE\s+FROM\b|\bINSERT\s+INTO\b|\bUPDATE\s+t_", sql);
-        Assert.DoesNotMatch(@"SECURITY\s+DEFINER|search_path|set_config|\bEXECUTE\s+'|CREATE\s+EXTENSION|\bTEMP(?:ORARY)?\b|\bdblink|\bpg_\w+", sql);
-        Assert.Equal(4, Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b").Count);
-        Assert.Equal(2, Regex.Matches(sql, @"\bCREATE\s+CONSTRAINT\s+TRIGGER\b").Count);
-        Assert.Equal(2, Regex.Matches(sql, @"DEFERRABLE INITIALLY DEFERRED").Count);
-        Assert.True(string.CompareOrdinal(CompanySchema.Map["ReplayEpoch.TrCommitExecution"], CompanySchema.Map["CompensationPlanExecution.TrCommit"]) > 0, "it must fire after the completeness trigger of 0036 on the same event");
+        Assert.DoesNotMatch(@"SECURITY\s+DEFINER|search_path|set_config|\bEXECUTE\s+'|CREATE\s+EXTENSION|\bTEMP(?:ORARY)?\b|\bdblink", sql);
+        Assert.DoesNotMatch(@"\bpg_(?!current_xact_id\b)\w+", sql);
+        Assert.Equal(3, Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b").Count);
+        Assert.Equal(15, Regex.Matches(sql, @"\bCREATE\s+CONSTRAINT\s+TRIGGER\b").Count);
+        Assert.Equal(15, Regex.Matches(sql, @"DEFERRABLE INITIALLY DEFERRED").Count);
+        Assert.Equal(15, Regex.Matches(sql, @"AFTER INSERT OR UPDATE OR DELETE ON").Count);
+        foreach (var (mine, theirs) in new[] { ("TrCommitExecution", "CompensationPlanExecution.TrCommit"), ("TrCommitEntry", "EpochGuard.TrEntryCommit"), ("TrCommitMemberRows", "EpochMember.TrCommit"), ("TrCommitPlan", "CompensationPlan.TrCommit"), ("TrCommitApproval", "CompensationPlanApproval.TrCommit") })
+            Assert.True(string.CompareOrdinal(CompanySchema.Map["ReplayEpoch." + mine], CompanySchema.Map[theirs]) > 0, mine + " must fire after the 0036 deferred trigger of the same table on the same event");
         Assert.DoesNotMatch(@"\bLANGUAGE\s+(?!sql\b|plpgsql\b)", sql);
         // every relation named in the text is schema-qualified
         foreach (Match m in Regex.Matches(sql, @"\b(?:FROM|JOIN|INTO|ON)\s+(t_[0-9a-f]{8})\b")) Assert.Fail("an unqualified relation: " + m.Value);

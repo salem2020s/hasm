@@ -3,7 +3,7 @@
 // SINGLE SOURCE: the SQL template below, written with LOGICAL tokens such as {{ReplayEpoch.FnRowsText}}. Every opaque physical name (D-029) is derived as
 //   prefix + first 8 hex digits of SHA-256("hasm.company.<MIGRATION>.replay-epoch.v1:" + token)
 // (same rules as the generators of 0036 to 0038: a collision aborts the run; names are fixed once committed). References to names that already exist are written [[Entity.Name]].
-// The deferred trigger on the execution table must fire AFTER the completeness trigger of 0036 on the same event (deferred triggers run in name order): the generator checks it.
+// The deferred triggers on tables that already carry a deferred trigger of 0036 must fire AFTER the 0036 trigger on the same event (deferred triggers run in name order): the generator checks it.
 // Usage:  node tools/schema/company-0039-replay-epoch-commit.cjs --write | --check
 const fs = require("fs");
 const path = require("path");
@@ -26,7 +26,7 @@ const EXISTING = new Map(["CompanySchema.cs", "CompanySchema.Costing.cs", "Compa
 const ext = (key) => { const v = EXISTING.get(key); if (!v) throw new Error("unknown existing name " + key); return v; };
 
 const TEMPLATE = `-- Migration ${MIGRATION}: the commit-time checks of a replay execution grant (Phase 3.8D threat T2, slice A3; design docs/PHASE-3.8D-T2-AUTHORIZATION-DESIGN.md sections 4.3, 4.4 and 16, message version hasm-replay-v5).
--- Forward-only and ADDITIVE: new functions and two new DEFERRED constraint triggers (one on the execution table of 0036, one on the grant-use table of 0037); no table is created or altered, nothing existing is replaced or switched off.
+-- Forward-only and ADDITIVE: new functions and 15 new DEFERRED constraint triggers (one on each table the epoch text or the grant message reads, plus the execution and grant-use tables); no table is created or altered, nothing existing is replaced or switched off.
 -- The company runtime role still holds SELECT only on the grant tables and on the four execution tables: nothing can reach these triggers through the application, activation stays closed.
 -- Opaque physical names (D-029) generated deterministically by tools/schema/company-${MIGRATION}-replay-epoch-commit.cjs (logical dictionary: CompanySchema.ReplayEpoch.cs). Do not edit by hand: re-run the generator.
 --
@@ -34,7 +34,7 @@ const TEMPLATE = `-- Migration ${MIGRATION}: the commit-time checks of a replay 
 -- before the grant was accepted, whose signature VERIFIES over the message rebuilt NOW from the rows (a closure, line or approval changed after the grant was accepted fails), and whose signed epoch digest equals the SHA-256 of the
 -- EPOCH TEXT of design 4.4 rebuilt from the rows this execution wrote: operations (O), entries (E), layers (L), consumptions (C), the remaining figures of every layer touched (R) and the totals of every position touched (P).
 -- A position's final figures are bound by its P line (the position row) and by the running figures of its last entry (E line); the cost position guard of 0014 keeps the two equal, so a mismatch cannot exist in the rows. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
--- The execution trigger is named so that it fires AFTER the completeness trigger of 0036 on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
+-- Each trigger is named so that it fires AFTER the 0036 deferred trigger of the same table on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
 -- fixed formats (lower-case uuids, decimal integers, numeric at its declared scale 10 or 6, dates by to_char with a fixed pattern, LF as chr(10)), so no session setting can change a byte.
 
 -- the epoch text of an execution (design 4.4): O, E, L, C, R and P lines in this order, LF-joined with no trailing LF; an execution with no rows gives the empty string
@@ -136,21 +136,34 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION public.{{ReplayEpoch.FnCommitExecution}}() RETURNS trigger LANGUAGE plpgsql AS $$
+-- H1 (review of PR 238): a check queued only at INSERT of the execution can be fired early (SET CONSTRAINTS ... IMMEDIATE) and later changes would commit unchecked. So EVERY table the epoch text or the grant message reads carries
+-- a deferred row trigger on INSERT, UPDATE and DELETE that re-runs the full check for every execution written by THIS transaction (created_xact = pg_current_xact_id()); the last write of the transaction therefore queues a
+-- check that runs after it (at commit, or at the end of that statement in immediate mode). The cost is one full check per queued event at commit (accepted; measured in the tests, see the pull request).
+CREATE FUNCTION public.{{ReplayEpoch.FnRecheck}}() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_execution uuid;
 BEGIN
-    PERFORM public.{{ReplayEpoch.FnCheckExecution}}(NEW.[[CompensationPlanExecution.Id]]);
+    FOR v_execution IN SELECT x.[[CompensationPlanExecution.Id]] FROM public.[[CompensationPlanExecution.Table]] x WHERE x.[[CompensationPlanExecution.CreatedXact]] = pg_current_xact_id() LOOP
+        PERFORM public.{{ReplayEpoch.FnCheckExecution}}(v_execution);
+    END LOOP;
     RETURN NULL;
 END;
 $$;
-CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitExecution}} AFTER INSERT ON public.[[CompensationPlanExecution.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnCommitExecution}}();
-
-CREATE FUNCTION public.{{ReplayEpoch.FnCommitUse}}() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM public.{{ReplayEpoch.FnCheckExecution}}(NEW.[[ReplayGrantUse.ExecutionId]]);
-    RETURN NULL;
-END;
-$$;
-CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitUse}} AFTER INSERT ON public.[[ReplayGrantUse.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnCommitUse}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitExecution}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CompensationPlanExecution.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitUse}} AFTER INSERT OR UPDATE OR DELETE ON public.[[ReplayGrantUse.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitOperation}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CostOperation.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitMemberRows}} AFTER INSERT OR UPDATE OR DELETE ON public.[[EpochMember.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitEntry}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CostEntry.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitLayer}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CostLayer.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitConsumption}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CostConsumption.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitPosition}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CostPosition.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitLineage}} AFTER INSERT OR UPDATE OR DELETE ON public.[[EpochEntryLineage.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitPlan}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CompensationPlan.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitApproval}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CompensationPlanApproval.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitLine}} AFTER INSERT OR UPDATE OR DELETE ON public.[[CompensationPlanLine.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitIdentity}} AFTER INSERT OR UPDATE OR DELETE ON public.[[Identity.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitKey}} AFTER INSERT OR UPDATE OR DELETE ON public.[[ReplaySignerKey.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
+CREATE CONSTRAINT TRIGGER {{ReplayEpoch.TrCommitGrant}} AFTER INSERT OR UPDATE OR DELETE ON public.[[ReplayExecutionGrant.Table]] DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.{{ReplayEpoch.FnRecheck}}();
 `;
 
 function prefixOf(token) {
@@ -191,11 +204,14 @@ function generate() {
     if (seen.has(name)) throw new Error(`collision inside the migration: ${t} and ${seen.get(name)} -> ${name}`);
     seen.set(name, t); byToken.set(t, name);
   }
-  if (!(physical("ReplayEpoch.TrCommitExecution") > ext("CompensationPlanExecution.TrCommit"))) throw new Error("the execution trigger must sort after the completeness trigger of 0036");
+  for (const [mine, theirs] of [["TrCommitExecution", "CompensationPlanExecution.TrCommit"], ["TrCommitEntry", "EpochGuard.TrEntryCommit"], ["TrCommitMemberRows", "EpochMember.TrCommit"], ["TrCommitPlan", "CompensationPlan.TrCommit"], ["TrCommitApproval", "CompensationPlanApproval.TrCommit"]]) {
+    if (!EXISTING.has(theirs)) throw new Error("unknown 0036 trigger " + theirs);
+    if (!(physical("ReplayEpoch." + mine) > ext(theirs))) throw new Error("the trigger " + mine + " must sort after the 0036 deferred trigger " + theirs + " on the same table");
+  }
   const sql = body.replace(/\{\{([A-Za-z0-9.]+)\}\}/g, (_, t) => byToken.get(t));
   const entities = [...new Set(tokens.map((t) => t.split(".")[0]))];
   let cs = "namespace Hasm.Infrastructure.CompanyDatabase;\n\n// GENERATED by tools/schema/company-" + MIGRATION + "-replay-epoch-commit.cjs for company migration " + MIGRATION + " (Phase 3.8D threat T2, slice A3, the commit-time checks of a replay grant). Do not edit: re-run the generator.\n" +
-    "// Physical names are opaque (D-029), derived deterministically from the logical token, and fixed: changing one requires a new migration.\n// ReplayEpoch names the functions and the two deferred triggers of the migration.\n" + "public static partial class CompanySchema\n{\n";
+    "// Physical names are opaque (D-029), derived deterministically from the logical token, and fixed: changing one requires a new migration.\n// ReplayEpoch names the functions and the deferred triggers of the migration.\n" + "public static partial class CompanySchema\n{\n";
   for (const e of entities) {
     cs += `    public static class ${e}\n    {\n`;
     if (byToken.has(e)) cs += `        public const string Table = "${byToken.get(e)}";\n`;

@@ -4,11 +4,14 @@ using CO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostOperation;
 using CE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostEntry;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostLayer;
 using CC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostConsumption;
+using CPO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
+using EMB = Hasm.Infrastructure.CompanyDatabase.CompanySchema.EpochMember;
+using ELN = Hasm.Infrastructure.CompanyDatabase.CompanySchema.EpochEntryLineage;
 
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// T2 design section 12, test 4c (schema pinning, finding P2): every column of the four cost ledger tables of company migration 0014 is classified either SIGNED (it appears in the epoch text) or EXCLUDED with a
+/// T2 design section 12, test 4c (schema pinning, finding P2): every column of the four cost ledger tables of company migration 0014 AND of the three other tables the epoch text reads (the cost position table: P group; the epoch member table: O lines; the entry lineage table: E lines; review of PR 238, L1) is classified either SIGNED (it appears in the epoch text) or EXCLUDED with a
 /// reason (the table of 4.4). A column added or renamed by a later migration fails this test until it is classified, signed (with a new message version) or excluded with a reason. Not an application flag: a pure comparison
 /// of the live catalog with the classification.
 /// </summary>
@@ -24,6 +27,16 @@ public class EpochTextColumnPinTests : CostingTestBase
         [CL.Table] = ([CL.ItemId, CL.WarehouseId, CL.Seq, CL.EntryId, CL.OriginalQuantity, CL.OriginalAmount, CL.SourceLayerId, CL.RemainingQuantity, CL.RemainingAmount],
             new() { [CL.Id] = "random uuid", [CL.PositionId] = "determined by item and warehouse", [CL.CreatedAtUtc] = "a time" }),
         [CC.Table] = ([CC.EntryId, CC.LayerId, CC.Quantity, CC.Amount, CC.Restores], new() { [CC.Id] = "identity" }),
+        // the P line renders the item, the warehouse, the last sequence, the quantity, the value and (from the layers) the number of open layers
+        [CPO.Table] = ([CPO.ItemId, CPO.WarehouseId, CPO.LastSeq, CPO.Quantity, CPO.Value],
+            new() { [CPO.Id] = "random uuid", [CPO.Method] = "the valuation method of the position, set when the position is created; no replay writes it and the entries follow it",
+                [CPO.LastEffectiveDate] = "derived from the last entry, whose own effective date is an E line", [CPO.CreatedAtUtc] = "a time", [CPO.UpdatedAtUtc] = "a time",
+                [CPO.LastAverageQuantity] = "the last quantity held while the position had stock, written by the 0014 guard from the entries (whose running quantities are E lines)",
+                [CPO.LastAverageValue] = "the last value held while the position had stock, written by the 0014 guard from the entries (whose running values are E lines)" }),
+        // the O line names the member's operation, its role (the order of the epoch) and the original operation it replaces; the execution selects the rows
+        [EMB.Table] = ([EMB.OperationId, EMB.ExecutionId, EMB.Role, EMB.OriginalOperationId], new()),
+        // the E line of a rebook names the original entry; the rebook entry is the line itself; the storno entry is the entry that reverses the original (the E line's own reversal reference)
+        [ELN.Table] = ([ELN.OriginalEntryId, ELN.RebookEntryId, ELN.ExecutionId], new() { [ELN.StornoEntryId] = "the storno entry is the entry that reverses the original: its E line carries that reference" }),
     };
 
     /// <summary>The columns of a table that the classification does not name, and the classified names the table does not have.</summary>
@@ -37,7 +50,7 @@ public class EpochTextColumnPinTests : CostingTestBase
     }
 
     [PostgresFact]
-    public async Task Every_column_of_the_four_cost_ledger_tables_is_signed_or_excluded_with_a_reason()
+    public async Task Every_column_of_the_seven_tables_the_epoch_text_reads_is_signed_or_excluded_with_a_reason()
     {
         await PrepareCosting();
         foreach (var table in Classification.Keys)

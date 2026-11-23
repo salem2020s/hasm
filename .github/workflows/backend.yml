@@ -329,7 +329,7 @@ jobs:
                 # Phase 3.8D threat T2 slice A2 (company migration 0038): insert-time verification of a grant (vectors, a real key and real signatures, every rule of 4.3, inertness)
                 "ReplayGrantVerificationTests": 7,
                 # Phase 3.8D threat T2 slice A3 (company migration 0039): the commit-time checks and the epoch text rebuilt from the rows (SQL against the .NET builder on real epochs, every rule refused)
-                "ReplayEpochCommitTests": 7,
+                "ReplayEpochCommitTests": 9,
                 # Phase 3.8D executor slice E1b: the derived epoch content against the real engine (8 scenarios), the T2 column-pin test 4c (one PostgreSQL test and one pure test)
                 "EpochContentEngineOracleTests": 8, "EpochTextColumnPinTests": 2,
             }
