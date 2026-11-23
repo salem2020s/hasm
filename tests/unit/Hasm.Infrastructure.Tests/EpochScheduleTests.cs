@@ -7,7 +7,7 @@ namespace Hasm.Infrastructure.Tests;
 /// Phase 3.8D executor slice E1: the pure derivation of an epoch's write plan (<see cref="EpochSchedule"/>). The fixture builds a history with the REAL replay arithmetic (<see cref="CostReplay"/>), inserts a
 /// proposal exactly as <c>CostFlowComparison</c> does, and hands the result to the derivation; the assertions are independent of it (signed sums, mirrors, orders, bijections). No database.
 /// </summary>
-public class EpochScheduleTests
+public partial class EpochScheduleTests
 {
     private static readonly DateOnly Day0 = new(2026, 3, 10);
     private static Guid Id(int n) => new(n, 0, 0, new byte[8]);
@@ -61,7 +61,30 @@ public class EpochScheduleTests
                     leg.Step.Amount, leg.Step.QuantityAfter, leg.Step.ValueAfter, plan.Kind, plan.Date, null, null, false, false));
             }
         var positions = baseline.Flow.Positions.Select(p => new CostFlowPosition(p.PositionId, positionGuid[p.PositionId], method, sequence.GetValueOrDefault(p.PositionId), null, p.Quantity, p.Value)).ToImmutableArray();
-        var snapshot = new CostFlowSnapshot(Id(4000), Id(3000), method, "USD", 2, positions, entries.ToImmutable(), [], [], [], blocks.ToImmutable(), "history-fingerprint");
+        // the actual layers and consumptions of the history, as the engine stores them: one layer per receipt and one mirror per consumed layer of a transfer, sequence = arrival on the position
+        var layers = ImmutableArray.CreateBuilder<CostFlowLayer>();
+        var consumptions = ImmutableArray.CreateBuilder<CostFlowConsumption>();
+        if (method == CostMethod.Fifo)
+        {
+            var open = baseline.Flow.Positions.SelectMany(p => p.OpenLayers).ToDictionary(l => l.Id);
+            var arrival = new Dictionary<Guid, long>();
+            foreach (var l in baseline.Flow.CreatedLayers)
+            {
+                arrival[l.PositionId] = arrival.GetValueOrDefault(l.PositionId) + 1;
+                var creator = entryPlan.Single(e => e.EventId == l.EventId && e.Warehouse == l.PositionId);
+                var remaining = open.TryGetValue(l.LayerId, out var o) ? o : null;
+                layers.Add(new CostFlowLayer(l.LayerId, positionGuid[l.PositionId], Id(3000), l.PositionId, creator.Id, arrival[l.PositionId],
+                    CostingMath.FromUnits(l.Quantity, CostingMath.QuantityScale), CostingMath.FromUnits(l.Amount, CostingMath.AmountScale),
+                    remaining is null ? 0m : CostingMath.FromUnits(remaining.RemainingQuantity, CostingMath.QuantityScale), remaining is null ? 0m : CostingMath.FromUnits(remaining.RemainingAmount, CostingMath.AmountScale), l.SourceLayerId));
+            }
+            long consumptionId = 0;
+            foreach (var step in baseline.Flow.Steps)
+                foreach (var leg in step.Legs)
+                    foreach (var take in leg.Step.Consumptions)
+                        consumptions.Add(new CostFlowConsumption(++consumptionId, entryPlan.Single(e => e.EventId == step.EventId && e.Warehouse == leg.PositionId).Id, take.LayerId,
+                            CostingMath.FromUnits(take.Quantity, CostingMath.QuantityScale), CostingMath.FromUnits(take.Amount, CostingMath.AmountScale), false));
+        }
+        var snapshot = new CostFlowSnapshot(Id(4000), Id(3000), method, "USD", 2, positions, entries.ToImmutable(), layers.ToImmutable(), consumptions.ToImmutable(), [], blocks.ToImmutable(), "history-fingerprint");
 
         // the proposal, inserted as CostFlowComparison does
         var counts = new Dictionary<Guid, long>();
@@ -402,8 +425,8 @@ public class EpochScheduleReachabilityTests
     public void No_backend_source_outside_the_derivation_itself_references_it()
     {
         var offenders = Directory.EnumerateFiles(SourceRoot(), "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") && Path.GetFileName(f) != "EpochSchedule.cs")
-            .Where(f => File.ReadAllText(f).Contains("EpochSchedule", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochScheduleResult", StringComparison.Ordinal))
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") && Path.GetFileName(f) is not ("EpochSchedule.cs" or "EpochContent.cs" or "EpochText.cs"))
+            .Where(f => File.ReadAllText(f).Contains("EpochSchedule", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochContent", StringComparison.Ordinal) || File.ReadAllText(f).Contains("EpochText", StringComparison.Ordinal))
             .Select(Path.GetFileName).ToList();
         Assert.Empty(offenders);
     }
@@ -415,9 +438,12 @@ public class EpochScheduleReachabilityTests
         foreach (var type in new[] { typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole) })
             Assert.False(type.IsPublic, type.Name);
         // it names no connection, transaction, command, time provider or random source: only costing types and the framework's collections and hashing
-        var source = File.ReadAllText(Path.Combine(SourceRoot(), "Hasm.Infrastructure", "Costing", "EpochSchedule.cs"));
-        foreach (var forbidden in new[] { "Npgsql", "DbConnection", "TimeProvider", "DateTime.", "Random", "Guid.NewGuid", "File.", "HttpClient" })
-            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        foreach (var file in new[] { "EpochSchedule.cs", "EpochContent.cs", "EpochText.cs" })
+        {
+            var source = File.ReadAllText(Path.Combine(SourceRoot(), "Hasm.Infrastructure", "Costing", file));
+            foreach (var forbidden in new[] { "Npgsql", "DbConnection", "TimeProvider", "DateTime.", "Random", "Guid.NewGuid", "File.", "HttpClient" })
+                Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        }
         Assert.NotNull(assembly);
     }
 }
