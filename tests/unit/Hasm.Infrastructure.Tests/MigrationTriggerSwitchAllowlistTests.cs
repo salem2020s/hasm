@@ -161,9 +161,10 @@ public class MigrationTriggerSwitchAllowlistTests
     public void The_refusal_names_the_migration_its_identity_checksum_and_triggers()
     {
         var message = Refused(() => MigrationScript.Validate([.. System_, Make(System_.Count + 1, $"{System_.Count + 1:0000}_new.sql", PairSql, MigrationSet.System)]));
-        Assert.Contains("0036_new.sql", message);
+        var next = System_.Count + 1;                                   // the number of the next system migration (it follows the merge order: no hard-coded pin)
+        Assert.Contains($"{next:0000}_new.sql", message);
         Assert.Contains("set System", message);
-        Assert.Contains("number 0036", message);
+        Assert.Contains($"number {next:0000}", message);
         Assert.Contains("t_a/r_a", message);
         Assert.Matches("checksum [0-9a-f]{64}", message);
         Assert.Contains("Q1", message);
