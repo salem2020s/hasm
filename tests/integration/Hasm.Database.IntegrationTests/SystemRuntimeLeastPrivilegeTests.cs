@@ -263,7 +263,13 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
     }
 
     [PostgresRoleFact]
-    public async Task A_deletion_pair_forged_by_the_real_runtime_role_is_inserted_but_never_read_as_evidence_by_the_authenticated_read()
+    public Task A_deletion_pair_forged_by_the_real_runtime_role_is_inserted_but_never_read_as_evidence_by_the_authenticated_read() => ForgedPairIsNeverEvidence(unknownKeyId: false);
+
+    [PostgresRoleFact]
+    public Task A_deletion_pair_forged_by_the_real_runtime_role_under_a_key_id_the_server_does_not_know_is_never_read_as_evidence_either() => ForgedPairIsNeverEvidence(unknownKeyId: true);
+
+    /// <summary>The two reasons the authenticated prefix can end at a forged row (review L2 of PR 232): the REAL key id with a wrong MAC, and a key id the server's key ring does not hold.</summary>
+    private async Task ForgedPairIsNeverEvidence(bool unknownKeyId)
     {
         await StartRestricted();
         var hash = new string('a', 64);
@@ -290,8 +296,10 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
             (BackupAuditEvents.Deleted, $"backup deleted operator=os:t run={forgedRun} status={hash} files=1 bytes=1 tombstone=yes resumed=no destination=nas"),
         })
         {
-            var rec = AuditCanonical.Seal(head with { Seq = ++seq, EventId = Guid.NewGuid(), EventType = type, Detail = detail, PrevHash = prev, Hash = [], Mac = [] }, attacker.GetActive());
+            var rec = AuditCanonical.Seal(head with { Seq = ++seq, EventId = Guid.NewGuid(), EventType = type, Detail = detail, PrevHash = prev, Hash = [], Mac = [], KeyId = unknownKeyId ? "k-forged" : head.KeyId }, attacker.GetActive());
             prev = rec.Hash;
+            Assert.Equal(!unknownKeyId, rec.KeyId == head.KeyId);                                                   // the real key id (so only the MAC is wrong), or one the server has no key for
+            Assert.Equal(unknownKeyId, AuditKeys.Find(rec.KeyId) is null);
             await using var rt = await As(RuntimeOptions);
             await using var ins = new NpgsqlCommand($"INSERT INTO {Ev.Table} ({AuditStorage.Columns}) VALUES (@s,@q,@id,@t,@e,@c,@a,@tu,@su,@l,@d,@v,@k,@p,@h,@m)", rt);
             ins.Parameters.AddWithValue("s", rec.StreamKey); ins.Parameters.AddWithValue("q", rec.Seq); ins.Parameters.AddWithValue("id", rec.EventId); ins.Parameters.AddWithValue("t", rec.OccurredAtUtc);

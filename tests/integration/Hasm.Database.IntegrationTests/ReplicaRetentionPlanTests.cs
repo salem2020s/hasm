@@ -168,6 +168,42 @@ public class ReplicaRetentionPlanTests : PostgresTestBase
     }
 
     [PostgresFact]
+    public async Task A_destination_copy_that_shares_storage_with_the_primary_keeps_the_run_replication_pending_in_the_plan_and_in_readiness()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await Init();
+        var r1 = await ProvenRun();
+        Directory.CreateDirectory(Nas);
+        CopyRun(Root, Nas, r1);
+        var service = new RetentionService(Options, Retention);
+        IReadOnlyList<string> PrimaryReadiness() => DeletionReadiness.Locations(Retention, Destinations(), Root, Trust, null, true).Single(l => l.Location == "primary").Reasons;
+
+        var independent = await service.PlanLocationAsync(Root, null, Destinations(), Trust, null);                 // a real, separate copy: not pending
+        Assert.Empty(independent.Pending.RunIds);
+        Assert.DoesNotContain("replication_pending", independent.Plan.Runs.Single(d => d.RunId == r1).Reasons);
+        Assert.DoesNotContain("replication_pending", PrimaryReadiness());
+
+        // one file of the "copy" becomes a hard link to the primary's file: the bytes and every signature are unchanged, but it is the primary's storage (review M1 of PR 232)
+        var ours = Directory.GetFiles(Path.Combine(Root, r1), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First(f => new FileInfo(f).Length > 0 && !f.EndsWith(SignedDocuments.SignatureSuffix, StringComparison.Ordinal));
+        var theirs = Path.Combine(Nas, r1, Path.GetRelativePath(Path.Combine(Root, r1), ours));
+        var primaryBefore = TreeHash(Root); var nasBefore = TreeHash(Nas);
+        File.Delete(theirs);
+        using (var ln = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ln") { ArgumentList = { ours, theirs }, UseShellExecute = false })!)
+        {
+            ln.WaitForExit();
+            Assert.Equal(0, ln.ExitCode);
+        }
+        Assert.Equal(nasBefore, TreeHash(Nas));                                                                     // byte-identical: only the identity differs
+        var shared = await service.PlanLocationAsync(Root, null, Destinations(), Trust, null);
+        Assert.Equal([r1], shared.Pending.RunIds);
+        Assert.Equal(["nas"], shared.Pending.MissingAt[r1]);
+        Assert.Contains("replication_pending", shared.Plan.Runs.Single(d => d.RunId == r1).Reasons);
+        Assert.Empty(shared.Plan.Eligible);
+        Assert.Contains("replication_pending", PrimaryReadiness());
+        Assert.Equal((primaryBefore, nasBefore), (TreeHash(Root), TreeHash(Nas)));                                  // the check reads only
+    }
+
+    [PostgresFact]
     public async Task The_retention_plan_keeps_runs_a_destination_lacks_previews_a_destination_and_the_binary_prints_readiness_and_the_destination_token_while_nothing_changes()
     {
         await Init();

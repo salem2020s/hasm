@@ -252,7 +252,7 @@ public sealed class RetentionService
         var root = target is null ? primary : target.ResolvedPath;
         var inputs = await ReadInputsAsync(root, trust, ct);
         var primaryRuns = target is null ? inputs.Runs : RetentionInventory.Scan(primary, trust).Runs;
-        var pending = ReplicationPending.Evaluate(primaryRuns, live, trust, audit, ReplicaTombstones.PrimaryHashes(primary, trust));
+        var pending = ReplicationPending.Evaluate(primaryRuns, live, trust, audit, ReplicaTombstones.PrimaryHashes(primary, trust), primary);
         var tested = new HashSet<string>(StringComparer.Ordinal);
         foreach (var run in primaryRuns.Concat(inputs.Runs).Concat(live.Where(d => d.Exists && d != target).SelectMany(d => RetentionInventory.Scan(d.ResolvedPath, trust).Runs)))
             if (run is { Complete: true, Verified: true, ProofValid: true, RecoveryKeyId: not null }) tested.Add(run.RecoveryKeyId);
