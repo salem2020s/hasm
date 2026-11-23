@@ -26,23 +26,37 @@ public sealed record ReplicaAuditState(IReadOnlyDictionary<(string Destination, 
 
     private IReadOnlyList<DeletionFact> Facts(string destination, string run) => Deletions.TryGetValue((destination, run), out var f) ? f : [];
 
+    /// <summary>
+    /// Walks the 2015 and 2016 facts of one destination and run in stream order and pairs them: a 2016 that names a status closes the newest still-open 2015 with THAT status; a 2016 without one (the resume and
+    /// recovery path names only the run) closes ONLY the newest still-open 2015, whatever its status (review A2 of PR 232: it never closes older open starts). Returns every start with the sequence of the 2016 that closed it, or null.
+    /// </summary>
+    private IEnumerable<(long StartSeq, string Status, long? ClosedBySeq)> Pairs(string destination, string run)
+    {
+        var starts = new List<(long Seq, string Status, long? Closed)>();
+        foreach (var f in Facts(destination, run))
+        {
+            if (f.Kind == BackupAuditEvents.DeletionStarted) { starts.Add((f.Seq, f.Status!, null)); continue; }
+            for (var i = starts.Count - 1; i >= 0; i--)
+                if (starts[i].Closed is null && (f.Status is null || f.Status == starts[i].Status)) { starts[i] = starts[i] with { Closed = f.Seq }; break; }
+        }
+        return starts;
+    }
+
     /// <summary>The newest completed 2015+2016 pair of this destination and run for the status hash: its 2015 sequence, or null. A 2016 of the recovery path (<c>recovered=audit</c>) counts only together with its 2015.</summary>
     public long? CompletedPairSeq(string destination, string run, string statusSha256)
     {
         long? best = null;
-        var facts = Facts(destination, run);
-        foreach (var start in facts.Where(f => f.Kind == BackupAuditEvents.DeletionStarted && f.Status == statusSha256))
-            if (facts.Any(f => f.Kind == BackupAuditEvents.Deleted && f.Seq > start.Seq && (f.Status is null || f.Status == statusSha256)) && (best is null || start.Seq > best)) best = start.Seq;
+        foreach (var (start, status, closed) in Pairs(destination, run))
+            if (closed is not null && status == statusSha256 && (best is null || start > best)) best = start;
         return best;
     }
 
-    /// <summary>The newest 2015 of this destination and run for the status hash that no later 2016 closes (a deletion started and not finished), or null.</summary>
+    /// <summary>The newest 2015 of this destination and run for the status hash that no 2016 closes (a deletion started and not finished), or null.</summary>
     public long? OpenStartSeq(string destination, string run, string statusSha256)
     {
         long? open = null;
-        var facts = Facts(destination, run);
-        foreach (var start in facts.Where(f => f.Kind == BackupAuditEvents.DeletionStarted && f.Status == statusSha256))
-            if (!facts.Any(f => f.Kind == BackupAuditEvents.Deleted && f.Seq > start.Seq && (f.Status is null || f.Status == statusSha256)) && (open is null || start.Seq > open)) open = start.Seq;
+        foreach (var (start, status, closed) in Pairs(destination, run))
+            if (closed is null && status == statusSha256 && (open is null || start > open)) open = start;
         return open;
     }
 

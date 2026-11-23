@@ -142,6 +142,32 @@ public sealed class ReplicaDeletionEvidenceTests : IDisposable
     }
 
     [Fact]
+    public void A_2016_without_a_status_closes_only_the_newest_open_2015_of_that_destination_and_run()
+    {
+        var h = new string('a', 64); var g = new string('b', 64);
+        var bare = (BackupAuditEvents.Deleted, $"backup deleted operator=os:t run={RunA} resumed=yes destination=nas");              // the resume path names only the run
+        // two open starts, one bare 2016: only the NEWEST start is closed, the older one stays open (review A2 of PR 232)
+        var s = State(true, Start("nas", RunA, h), Start("nas", RunA, h), bare);
+        Assert.Equal(2L, s.CompletedPairSeq("nas", RunA, h));
+        Assert.Equal(1L, s.OpenStartSeq("nas", RunA, h));
+        // a second bare 2016 closes the other one
+        var both = State(true, Start("nas", RunA, h), Start("nas", RunA, h), bare, bare);
+        Assert.Null(both.OpenStartSeq("nas", RunA, h));
+        // with two statuses the bare 2016 closes the newest start whatever its status; the other stays open
+        var mixed = State(true, Start("nas", RunA, h), Start("nas", RunA, g), bare);
+        Assert.Null(mixed.CompletedPairSeq("nas", RunA, h));
+        Assert.Equal(2L, mixed.CompletedPairSeq("nas", RunA, g));
+        Assert.Equal(1L, mixed.OpenStartSeq("nas", RunA, h));
+        // a 2016 that names a status closes the newest open start with THAT status, not a newer one with another
+        var named = State(true, Start("nas", RunA, h), Start("nas", RunA, g), Done("nas", RunA, h));
+        Assert.Equal(1L, named.CompletedPairSeq("nas", RunA, h));
+        Assert.Equal(2L, named.OpenStartSeq("nas", RunA, g));
+        // a 2016 before any 2015, or for another destination, closes nothing
+        Assert.Null(State(true, bare, Start("nas", RunA, h)).CompletedPairSeq("nas", RunA, h));
+        Assert.Null(State(true, Start("nas-1", RunA, h), bare).CompletedPairSeq("nas", RunA, h));
+    }
+
+    [Fact]
     public void Replication_pending_only_keeps_more_and_a_recovery_test_on_any_copy_counts_for_its_key()
     {
         var runs = Enumerable.Range(2, 12).Select(d => Run(new DateTimeOffset(2026, 3, d, 2, 0, 0, TimeSpan.Zero), proof: d == 13)).ToList();

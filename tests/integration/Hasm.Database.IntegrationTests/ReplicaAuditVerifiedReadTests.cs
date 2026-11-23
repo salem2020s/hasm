@@ -79,6 +79,33 @@ public class ReplicaAuditVerifiedReadTests : AuditTestBase
     }
 
     [PostgresFact]
+    public async Task A_pair_sealed_with_the_real_key_but_linked_to_the_wrong_record_is_a_splice_and_is_not_evidence()
+    {
+        await StartAccess();
+        await Write(BackupAuditEvents.DeletionStarted, Started("nas", RunA));
+        await Write(BackupAuditEvents.Deleted, Deleted("nas", RunA));
+        var events = await Events(AuditStream.System);
+        var head = events[^1];
+        var genuineHead = head.Seq;
+        // review A3 of PR 232 (opusSEC's splice): records of a rolled-back history, MAC-valid under the REAL key, re-inserted above the head with a link that is not the head's hash
+        var real = AuditKeys.GetActive();
+        var wrongLink = events[0].Hash;                                                                            // a genuine hash, but not the head's
+        var spliced1 = AuditCanonical.Seal(head with { Seq = head.Seq + 1, EventId = Guid.NewGuid(), EventType = BackupAuditEvents.DeletionStarted, Detail = Started("nas", RunB), PrevHash = wrongLink, Hash = [], Mac = [] }, real);
+        var spliced2 = AuditCanonical.Seal(head with { Seq = head.Seq + 2, EventId = Guid.NewGuid(), EventType = BackupAuditEvents.Deleted, Detail = Deleted("nas", RunB), PrevHash = spliced1.Hash, Hash = [], Mac = [] }, real);
+        Assert.Equal(RecordCheck.Ok, AuditVerifier.CheckRecord(spliced1, AuditKeys));                               // each passes the per-record check ...
+        Assert.Equal(RecordCheck.Ok, AuditVerifier.CheckRecord(spliced2, AuditKeys));
+        await InsertRaw(spliced1);
+        await InsertRaw(spliced2);
+
+        var state = await ReplicaAuditReader.ReadVerifiedAsync(Conn, AuditKeys, AuditCheckpoints);
+        Assert.Equal(genuineHead, state.VerifiedThroughSeq);                                                       // ... yet the prefix ends at the first of them
+        Assert.True(state.UnverifiedRemainder);
+        Assert.False(state.HasStart("nas", RunB, Hash));
+        Assert.Null(state.CompletedPairSeq("nas", RunB, Hash));
+        Assert.NotNull(state.CompletedPairSeq("nas", RunA, Hash));                                                 // the genuine history below still counts
+    }
+
+    [PostgresFact]
     public async Task A_sequence_gap_ends_the_prefix_and_nothing_above_it_is_evidence()
     {
         await StartAccess();
