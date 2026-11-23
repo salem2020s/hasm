@@ -212,6 +212,9 @@ public class ReplaySignerRegistryTests : PlanExecutionTestBase
         await PrepareRuntime();
         var plan = await ProposedPlan(Avg, "2026-03-11");
         Assert.Null(await AsOwner(KeyInsert("k1", Big(Hex(ReplayRsaVectors.Modulus)))));
+        // this test is about the SHELL (structural checks, the database clock, append-only); since slice A2 (company 0038) an insert is also verified by a BEFORE INSERT trigger, whose rules ReplayGrantVerificationTests proves
+        // one by one, so the verification trigger is switched off here (as the owner of the disposable test database) to reach the table's own constraints
+        Assert.Null(await AsOwner($"ALTER TABLE {RG.Table} DISABLE TRIGGER {CompanySchema.ReplayGrant.TrGrantVerify}"));
         string Grant(Guid id, string key = "k1", Guid? planId = null, long nb = 1000, long na = 8200, string digest = "", int sigLength = 384, string attestation = "a", string extra = "") =>
             $"INSERT INTO {RG.Table} ({RG.Id}, {RG.KeyId}, {RG.PlanId}, {RG.ExecutorUserId}, {RG.SignerUserId}, {RG.NotBefore}, {RG.NotAfter}, {RG.EpochDigest}, {RG.Attestation}, {RG.Signature}{(extra == "" ? "" : ", " + extra.Split('=')[0])}) " +
             $"VALUES ('{id}', '{key}', '{planId ?? plan.Id}', gen_random_uuid(), gen_random_uuid(), {nb}, {na}, '{(digest == "" ? new string('a', 64) : digest)}', '{attestation}', decode(repeat('ab', {sigLength}), 'hex'){(extra == "" ? "" : ", " + extra.Split('=')[1])})";

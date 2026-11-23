@@ -238,6 +238,10 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
         var creatorOfDocument = await Sql<Guid>($"SELECT {SD.CreatedBy} FROM {SD.Table} WHERE {SD.Id} = '{bed.Plan.Doc.Id}'");
         await Case("grant_signer_not_independent", () => Make(bed, signer: creatorOfDocument));
         await Case("grant_signer_not_independent", () => Make(bed, executor: bed.Signer));                                      // the executor is the signer
+
+        // the plan's approval must still be sound (0036): a plan whose stored fingerprint no longer matches its approval is refused (the test switches the plan's own guards off as the database owner to forge that state)
+        Assert.Null(await AsOwner($"ALTER TABLE {CP.Table} DISABLE TRIGGER USER", $"UPDATE {CP.Table} SET {CP.PlanFingerprint} = '{new string('f', 64)}' WHERE {CP.Id} = '{bed.Plan.Id}'", $"ALTER TABLE {CP.Table} ENABLE TRIGGER USER"));
+        await Case("grant_plan_approval_unsound", () => Make(bed));
     }
 
     [PostgresRoleFact]
@@ -290,6 +294,11 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
         Refused("grant_use_wrong_executor", await WithUse(bed.Plan, Guid.NewGuid(), g.Id));
         // an unknown grant (a grant that does not exist)
         Refused("grant_use_grant_not_found", await WithUse(bed.Plan, Executor, Guid.NewGuid()));
+        // a window that ended before the use: a grant valid for a few seconds is accepted at insert and refused when it is used afterwards
+        var shortLived = await Make(bed, notBefore: Now() - 300, notAfter: Now() + 3);
+        Assert.Null(await AsOwner(Insert(shortLived)));
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        Refused("grant_use_outside_its_window", await WithUse(bed.Plan, Executor, shortLived.Id));
         // the right plan and executor pass the use rule: the execution is then refused LATER by the 0036 guards of an incomplete epoch, never by this rule
         var outcome = await WithUse(bed.Plan, Executor, g.Id);
         Assert.NotNull(outcome);
