@@ -85,6 +85,7 @@ internal sealed record UserRow(
         set.Parameters.AddWithValue("id", userId);
         set.Parameters.AddWithValue("old", before.Tag!);
         if (await set.ExecuteNonQueryAsync(ct) != 1) throw new InvalidOperationException("user_changed_concurrently");
+        if (bump) await IdentityAnchors.WriteAsync(conn, tx, keys, IdentityAnchors.KindUser, userId, after.Revision, ct);   // one anchor per security change (OD-4)
         return true;
     }
 }

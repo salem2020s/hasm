@@ -225,6 +225,34 @@ public class AuditAdminToolTests : FileEvidenceTestBase
     }
 
     [PostgresFact]
+    public async Task The_identity_audit_report_command_reconciles_the_users_with_the_verified_chain_and_prints_codes_and_a_hash_only()
+    {
+        // identity integrity S-2c: read-only, prints counts, ids and the report hash; refuses when the stream does not verify
+        await StartAccess();
+        FileAuditKeyRing.Generate(KeyDir, "k1");
+        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock), keys: TestIdentityKeys.Instance);
+        var auth = new AuthService(store, Passwords, AuthSettings);
+        Assert.Equal(CreateUserStatus.Created, (await auth.CreateUserAsync("reported", "Reported", Pw, true)).Status);
+        var encryption = new Dictionary<string, string?>
+        {
+            ["Hasm__Encryption__KeyDirectory"] = Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory"), ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+        };
+        var run = await Tool(encryption, "identity-audit-report");
+        Assert.True(run.Exit == 0, run.All);
+        Assert.Contains("MATCHED: 1", run.Out);
+        Assert.Contains("administrator ", run.Out);
+        Assert.Matches("Report hash: [0-9a-f]{64}", run.Out);
+        Assert.DoesNotContain(Pw, run.All);
+        var again = await Tool(encryption, "identity-audit-report");
+        Assert.Equal(run.Out, again.Out);                                                                                  // the same state, the same report, the same hash
+        await Tamper($"UPDATE {Ev.Table} SET {Ev.Detail} = 'tampered' WHERE {Ev.StreamKey} = 'system' AND {Ev.Seq} = 1");
+        var refused = await Tool(encryption, "identity-audit-report");
+        Assert.NotEqual(0, refused.Exit);
+        Assert.Contains("REFUSED", refused.Out + refused.Err);
+        Assert.DoesNotContain("Report hash", refused.Out);
+    }
+
+    [PostgresFact]
     public async Task Verification_of_an_intact_stream_exits_zero_and_prints_the_verified_range_without_secrets()
     {
         var (company, admin, stream, service) = await Written();

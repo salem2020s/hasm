@@ -126,6 +126,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         {
             throw new DuplicateLoginException();
         }
+        if (tx is not null) await IdentityAnchors.WriteAsync(conn, tx, RequireKeys(), IdentityAnchors.KindUser, id, 0, ct);   // the first anchor of the user (revision 0)
         return new UserRecord(id, login, displayName, hash, UserState.Active, admin, now, null);
     }
 
@@ -142,18 +143,22 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     private async Task<UserRecord?> FindUserAsync(string where, object value, CancellationToken ct)
     {
         var k = RequireKeys();
-        UserRecord user; UserRow row;
+        UserRecord user; UserRow row; IdentityAnchors.Bound bound = default;
         await using (var conn = await dataSource.Value.OpenConnectionAsync(ct))
         {
-            await using var cmd = new NpgsqlCommand($"SELECT {UserColumns}, {UserRow.Columns("u")} FROM {U.Table} u WHERE {where}", conn);
-            cmd.Parameters.AddWithValue("v", value);
-            await using var r = await cmd.ExecuteReaderAsync(ct);
-            if (!await r.ReadAsync(ct)) return null;
-            user = ReadUser(r); row = UserRow.Read(r, 8);
+            await using (var cmd = new NpgsqlCommand($"SELECT {UserColumns}, {UserRow.Columns("u")} FROM {U.Table} u WHERE {where}", conn))
+            {
+                cmd.Parameters.AddWithValue("v", value);
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                if (!await r.ReadAsync(ct)) return null;
+                user = ReadUser(r); row = UserRow.Read(r, 8);
+            }
+            if (row.IsValid(k)) bound = await IdentityAnchors.ReadBoundAsync(conn, null, k, IdentityAnchors.KindUser, row.Id, ct);
         }
-        if (row.IsValid(k)) return user;
-        await RejectUserAsync(row.Id, ct);
-        return null;
+        if (!row.IsValid(k)) { await RejectUserAsync(row.Id, ct); return null; }
+        if (bound.Ignored > 0) await AlertAnchorsAsync(row.Id, bound, ct);                                         // junk anchors: ignored for the bound, reported, never a lockout
+        if (bound.MaxValidRevision is { } floor && row.Revision < floor) { await RejectRecordAsync(row.Id, "user", ct, "anchor"); return null; }   // an older, once-valid row written back
+        return user;
     }
 
     /// <summary>Audits a challenge that failed its tag (no cause detail in the answer; the operator sees it here), at most once a minute per challenge.</summary>
@@ -161,7 +166,22 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
 
     private Task RejectUserAsync(Guid userId, CancellationToken ct) => RejectRecordAsync(userId, "user", ct);
 
-    private async Task RejectRecordAsync(Guid userId, string kind, CancellationToken ct)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> lastAnchorAlert = new();
+
+    /// <summary>Reports anchors that were ignored (bad tag or unknown key id), at most once a minute per subject: the audit stream shows an operator what the junk is, it never changes an answer.</summary>
+    private async Task AlertAnchorsAsync(Guid subject, IdentityAnchors.Bound bound, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lastAnchorAlert.TryGetValue(subject, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
+        lastAnchorAlert[subject] = now;
+        if (lastAnchorAlert.Count > 10_000) lastAnchorAlert.Clear();
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, subject, $"user {subject:N} anchors ignored: {bound.Ignored} invalid{(bound.ScanLimitReached ? ", scan limit reached" : "")}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
+    }
+
+    private async Task RejectRecordAsync(Guid userId, string kind, CancellationToken ct, string cause = "tag")
     {
         var now = clock.GetUtcNow();
         if (lastRejectionAudit.TryGetValue(userId, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
@@ -169,7 +189,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         if (lastRejectionAudit.Count > 10_000) lastRejectionAudit.Clear();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, kind == "user" ? userId : null, $"{kind} {userId:N} rejected: tag", ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, kind == "user" ? userId : null, $"{kind} {userId:N} rejected: {cause}", ct);
         await audit.CommitAsync(tx, receipt, ct);
     }
 
