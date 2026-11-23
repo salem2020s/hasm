@@ -32,6 +32,9 @@ internal static class TestAssemblyDefaults
 /// <summary>The identity keys of the assembly's disposable ring (the same ring the API under test reads from the environment), for tests that construct the stores directly.</summary>
 internal static class TestIdentityKeys
 {
+    /// <summary>The master key bytes of the assembly's disposable ring (key id k1). API suites that register an in-memory ring of their own use THESE bytes, so users and sessions the suite creates directly (tagged under the assembly ring) verify under the API's ring.</summary>
+    public static byte[] Master => Convert.FromBase64String(File.ReadAllText(Path.Combine(Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory")!, "k1" + FileKekRing.Extension)).Trim());
+
     public static readonly IdentityKeys Instance = new(new FileKekRing(new EncryptionOptions
     {
         KeyDirectory = Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory"),

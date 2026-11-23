@@ -19,7 +19,7 @@ public class MfaStepUpApiTests : IdentityTestBase
 {
     private WebApplicationFactory<Program>? factory;
     private HttpClient client = null!;
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
 
     private async Task StartApi()
     {

@@ -98,7 +98,7 @@ public class CrossModuleIsolationScenarioTests : StockReversalTestBase
             b.UseSetting("Hasm:Attachments:StorageDirectory", dir);
             b.ConfigureServices(s =>
             {
-                s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+                s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
                 s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
                 s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));
             });

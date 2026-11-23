@@ -94,6 +94,7 @@ var validUsage = command switch
 {
     "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
+    "identity-tag" => args.Length == 2 && args[1] == "--confirm-reviewed",
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "migrate-companies" => args.Length == 1
         || (args.Length == 3 && args[1] == "--company" && Guid.TryParse(args[2], out var only) && only != Guid.Empty && (onlyCompany = only) is not null),
@@ -133,7 +134,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | identity-tag --confirm-reviewed | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -341,9 +342,11 @@ try
 
             // Administrative tool: the privileged account is acceptable here (never in the API runtime).
             var trail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
-            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail);
+            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail, new IdentityKeys(new FileKekRing(EncryptionOptions.FromConfiguration(configuration))));   // the first administrator is created TAGGED: no key ring, no administrator (fails closed)
             var auth = new AuthService(store, new PasswordService(authOptions.Pbkdf2Iterations), authOptions);
-            var result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password);
+            CreateUserResult? result;
+            try { result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password); }
+            catch (EncryptionUnavailableException) { Console.Error.WriteLine("The encryption key ring is not available (Hasm__Encryption__KeyDirectory and Hasm__Encryption__ActiveKeyId): the administrator is created with an integrity tag and cannot be created without it. Nothing was changed."); return BadConfig; }
             if (result is null)
             {
                 Console.Error.WriteLine("An identity administrator already exists; nothing was changed.");
@@ -361,6 +364,18 @@ try
                     Console.Error.WriteLine($"Not created: {result.Status}.");
                     return Usage;
             }
+        }
+        case "identity-tag":
+        {
+            // One-time owner tagging of untagged users (identity integrity S-2a). Offline, administrative account, key ring required. Tags only rows without a tag; review the users first.
+            var tagTrail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
+            try
+            {
+                var tagged = await IdentityTagging.TagUntaggedUsersAsync(options.BuildSystemConnectionString(admin: true), new IdentityKeys(new FileKekRing(EncryptionOptions.FromConfiguration(configuration))), TimeProvider.System, tagTrail);
+                Console.WriteLine($"identity-tag: {tagged.Tagged} untagged user(s) tagged; {tagged.AlreadyTagged} already tagged.");
+                return Ok;
+            }
+            catch (EncryptionUnavailableException) { Console.Error.WriteLine("The encryption key ring is not available: nothing was tagged."); return BadConfig; }
         }
         case "grant-company-admin":
         {

@@ -78,7 +78,7 @@ public class EndpointConstraintMatrixPart2ImportTests : ImportTestBase
             b.UseSetting("Hasm:Imports:StorageDirectory", StorageDir);
             b.ConfigureServices(s =>
             {
-                s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+                s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
                 s.AddSingleton(TestEncryption);
                 s.AddSingleton<IImportAdapter>(new CostCenterTestAdapter());
                 s.AddSingleton<IImportAdapter>(items);

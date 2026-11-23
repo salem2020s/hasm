@@ -30,7 +30,7 @@ public class AttachmentTests : InventoryTestBase
     {
         await PrepareInventory();
         dir = Path.Combine(Path.GetTempPath(), "hasm-att-" + Guid.NewGuid().ToString("N"));
-        ring = new InMemoryKekRing("k1");
+        ring = new InMemoryKekRing("k1", TestIdentityKeys.Master);
         var options = opts ?? new AttachmentOptions { StorageDirectory = dir, MaxFileBytes = 1024 * 1024 };
         Store = new AttachmentFileStore(options, new EncryptionOptions { AllowInsecureFilePermissions = true });
         Svc = new AttachmentService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), Store, new EnvelopeEncryptor(ring), options, Clock);

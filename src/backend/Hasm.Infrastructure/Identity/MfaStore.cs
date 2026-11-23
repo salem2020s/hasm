@@ -7,6 +7,7 @@ using TO = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTotp;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
+using UT = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -20,6 +21,8 @@ public static class MfaAuditEvents
     public const short PolicyChanged = 1338;
     /// <summary>Identity integrity S-1 (PROVISIONAL code, allocated by the lead): a session row failed its integrity check (tag or security revision) and was revoked. Detail: the session id and the cause (tag or revision); never a key or a tag.</summary>
     public const short IdentityRecordRejected = 1339;
+    /// <summary>Identity integrity S-2a (PROVISIONAL code, to be allocated by the lead): the one-time owner tagging of untagged users ran (detail: the counts and the key id).</summary>
+    public const short IdentityRecordsTagged = 1340;
 }
 
 public sealed record RewrapResult(int Rewrapped, int Remaining);
@@ -51,6 +54,12 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
 
     public ValueTask DisposeAsync() => dataSource.IsValueCreated ? dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
 
+    private IdentityKeys RequireKeys() => keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
+
+    /// <summary>A change of a covered field of the user row through the tagged primitive (identity integrity S-2a): verified row, the statement, revision +1, re-tag under CAS.</summary>
+    private Task<bool> ChangeUserAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, Func<Task<bool>> writer, CancellationToken ct, bool requireValid = true) =>
+        UserRow.ChangeAsync(conn, tx, RequireKeys(), userId, writer, bump: true, requireValid, ct);
+
     private Task<AuditReceipt> AuditAsync(NpgsqlConnection conn, NpgsqlTransaction tx, short type, Guid? actor, Guid? target, string detail, CancellationToken ct) =>
         audit.AppendAsync(conn, tx, AuditStream.System, AuditCanonical.FromMicros(AuditCanonical.ToMicros(clock.GetUtcNow())), new AuditEventData(type, actor, target, null, detail), ct);
 
@@ -79,15 +88,16 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         return true;
     }
 
-    private async Task<bool> SetStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, MfaState from, MfaState to, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {M.State} = @to, {M.StateChangedAtUtc} = @n WHERE {U.Id} = @u AND {M.State} = @from", conn, tx);
-        cmd.Parameters.AddWithValue("to", (short)to);
-        cmd.Parameters.AddWithValue("from", (short)from);
-        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
-    }
+    private async Task<bool> SetStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, MfaState from, MfaState to, CancellationToken ct) =>
+        await ChangeUserAsync(conn, tx, userId, async () =>
+        {
+            await using var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {M.State} = @to, {M.StateChangedAtUtc} = @n WHERE {U.Id} = @u AND {M.State} = @from", conn, tx);
+            cmd.Parameters.AddWithValue("to", (short)to);
+            cmd.Parameters.AddWithValue("from", (short)from);
+            cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
+            cmd.Parameters.AddWithValue("u", userId);
+            return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        }, ct);
 
     // ---- The verifier's seam (IMfaSecretStore) ----
 
@@ -167,20 +177,20 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        MfaState current;
-        await using (var lockRow = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u FOR UPDATE", conn, tx))
-        {
-            lockRow.Parameters.AddWithValue("u", userId);
-            if (await lockRow.ExecuteScalarAsync(ct) is not short s) return false;
-            current = (MfaState)s;
-        }
+        // the row is verified under its lock before anything is decided from it (a user row that does not verify never activates a secret)
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: true, ct) is not { } locked || !locked.IsValid(RequireKeys())) return false;
+        var current = (MfaState)locked.MfaState;
         if (current == MfaState.RecoveryRequired) return false;
         if (consumeEnrolmentCode)                                                                                // the one-time code of the user row is spent by the confirmation, atomically with it
         {
-            await using var spend = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeConsumedAtUtc} = @n WHERE {U.Id} = @u AND {M.EnrolmentCodeHash} IS NOT NULL AND {M.EnrolmentCodeConsumedAtUtc} IS NULL AND {M.EnrolmentCodeExpiresAtUtc} > @n", conn, tx);
-            spend.Parameters.AddWithValue("n", clock.GetUtcNow());
-            spend.Parameters.AddWithValue("u", userId);
-            if (await spend.ExecuteNonQueryAsync(ct) != 1) return false;
+            var spent = await ChangeUserAsync(conn, tx, userId, async () =>
+            {
+                await using var spend = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeConsumedAtUtc} = @n WHERE {U.Id} = @u AND {M.EnrolmentCodeHash} IS NOT NULL AND {M.EnrolmentCodeConsumedAtUtc} IS NULL AND {M.EnrolmentCodeExpiresAtUtc} > @n", conn, tx);
+                spend.Parameters.AddWithValue("n", clock.GetUtcNow());
+                spend.Parameters.AddWithValue("u", userId);
+                return await spend.ExecuteNonQueryAsync(ct) == 1;
+            }, ct);
+            if (!spent) return false;
         }
         await using (var revoke = new NpgsqlCommand($"UPDATE {TO.Table} SET {TO.State} = 2 WHERE {TO.UserId} = @u AND {TO.State} = 1", conn, tx))
         {
@@ -207,7 +217,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         if (reissue is not null)
         {
             // D-142 (d), review M2/M3: the new factor invalidates EVERY session of the user (the confirming one too) and a NEW session, verified now, replaces them, all in this ONE transaction with the activation
-            await IdentityStore.RevokeUserSessionsAsync(conn, tx, keys, userId, SessionRevocation.Administrative, null, clock.GetUtcNow(), ct);
+            await IdentityStore.RevokeUserSessionsAsync(conn, tx, RequireKeys(), userId, SessionRevocation.Administrative, null, clock.GetUtcNow(), ct);
             if (FaultProbe is { } afterRevoke) await afterRevoke("after_revoke");
             await IdentityStore.InsertSessionAsync(conn, tx, keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured."), reissue, userId, clock.GetUtcNow(), ct);
         }
@@ -258,13 +268,15 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         var code = Totp.ToBase32(System.Security.Cryptography.RandomNumberGenerator.GetBytes(10));              // 16 characters
         await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        await using (var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = @h, {M.EnrolmentCodeExpiresAtUtc} = @e, {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {U.Id} = @u", conn, tx))
+        var issued = await ChangeUserAsync(conn, tx, userId, async () =>
         {
+            await using var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = @h, {M.EnrolmentCodeExpiresAtUtc} = @e, {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {U.Id} = @u", conn, tx);
             cmd.Parameters.AddWithValue("h", EnrolmentCodeHash(code));
             cmd.Parameters.AddWithValue("e", clock.GetUtcNow().Add(validFor));
             cmd.Parameters.AddWithValue("u", userId);
-            if (await cmd.ExecuteNonQueryAsync(ct) != 1) throw new InvalidOperationException("user_not_found");
-        }
+            return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        }, ct);
+        if (!issued) throw new InvalidOperationException("user_not_found");
         var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StateChanged, actor, userId, "one-time enrolment code issued", ct);
         await audit.CommitAsync(tx, receipt, ct);
         return code;
@@ -275,11 +287,10 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         if (string.IsNullOrWhiteSpace(code) || code.Length > 64) return false;
         await using var conn = await OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand($"SELECT 1 FROM {U.Table} WHERE {U.Id} = @u AND {M.EnrolmentCodeHash} = @h AND {M.EnrolmentCodeConsumedAtUtc} IS NULL AND {M.EnrolmentCodeExpiresAtUtc} > @n", conn);
-        cmd.Parameters.AddWithValue("u", userId);
-        cmd.Parameters.AddWithValue("h", EnrolmentCodeHash(code));
-        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
-        return await cmd.ExecuteScalarAsync(ct) is not null;
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        // the code columns are covered by the user tag (plan review H1): a row that does not verify opens no enrolment, whatever its code columns say
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row || !row.IsValid(RequireKeys())) return false;
+        return row.CodeHash is { } stored && IdentityKeys.Equal(stored, EnrolmentCodeHash(code)) && row.CodeConsumedAt is null && row.CodeExpiresAt > clock.GetUtcNow();
     }
 
     /// <summary>Revokes every Pending and Active secret of the user (recovery, DR reset). The user's state is NOT touched here: the caller moves it through <see cref="TryChangeStateAsync"/> in the same procedure. Returns the number revoked. Audited.</summary>
@@ -368,17 +379,31 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     {
         await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        int marked, codes;
-        await using (var mark = new NpgsqlCommand(
-            $"UPDATE {U.Table} u SET {M.State} = 3, {M.StateChangedAtUtc} = @n WHERE u.{M.State} = 2 AND (@all OR NOT EXISTS (SELECT 1 FROM {TO.Table} t WHERE t.{TO.UserId} = u.{U.Id} AND t.{TO.State} = 1))", conn, tx))
+        // per row through the tagged primitive (security-reducing, so allowed on a row that does not verify: after a restore under another ring every tag is invalid and the fix-up must still run)
+        var toMark = new List<Guid>(); var withCode = new List<Guid>();
+        await using (var sel = new NpgsqlCommand(
+            $"SELECT u.{U.Id}, (u.{M.State} = 2 AND (@all OR NOT EXISTS (SELECT 1 FROM {TO.Table} t WHERE t.{TO.UserId} = u.{U.Id} AND t.{TO.State} = 1))), (u.{M.EnrolmentCodeHash} IS NOT NULL AND u.{M.EnrolmentCodeConsumedAtUtc} IS NULL) FROM {U.Table} u", conn, tx))
         {
-            mark.Parameters.AddWithValue("n", clock.GetUtcNow());
-            mark.Parameters.AddWithValue("all", differentInstallation);
-            marked = await mark.ExecuteNonQueryAsync(ct);
+            sel.Parameters.AddWithValue("all", differentInstallation);
+            await using var r = await sel.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) { if (r.GetBoolean(1)) toMark.Add(r.GetGuid(0)); if (r.GetBoolean(2)) withCode.Add(r.GetGuid(0)); }
         }
-        await using (var inv = new NpgsqlCommand(
-            $"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = NULL, {M.EnrolmentCodeExpiresAtUtc} = NULL, {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {M.EnrolmentCodeHash} IS NOT NULL AND {M.EnrolmentCodeConsumedAtUtc} IS NULL", conn, tx))
-            codes = await inv.ExecuteNonQueryAsync(ct);
+        int marked = 0, codes = 0;
+        foreach (var id in toMark)
+            if (await ChangeUserAsync(conn, tx, id, async () =>
+            {
+                await using var mark = new NpgsqlCommand($"UPDATE {U.Table} SET {M.State} = 3, {M.StateChangedAtUtc} = @n WHERE {U.Id} = @id AND {M.State} = 2", conn, tx);
+                mark.Parameters.AddWithValue("n", clock.GetUtcNow());
+                mark.Parameters.AddWithValue("id", id);
+                return await mark.ExecuteNonQueryAsync(ct) == 1;
+            }, ct, requireValid: false)) marked++;
+        foreach (var id in withCode)
+            if (await ChangeUserAsync(conn, tx, id, async () =>
+            {
+                await using var inv = new NpgsqlCommand($"UPDATE {U.Table} SET {M.EnrolmentCodeHash} = NULL, {M.EnrolmentCodeExpiresAtUtc} = NULL, {M.EnrolmentCodeConsumedAtUtc} = NULL WHERE {U.Id} = @id AND {M.EnrolmentCodeHash} IS NOT NULL AND {M.EnrolmentCodeConsumedAtUtc} IS NULL", conn, tx);
+                inv.Parameters.AddWithValue("id", id);
+                return await inv.ExecuteNonQueryAsync(ct) == 1;
+            }, ct, requireValid: false)) codes++;
         var receipt = await AuditAsync(conn, tx, MfaAuditEvents.RestoreApplied, actor, null, $"restore applied: {marked} user(s) set to RecoveryRequired{(differentInstallation ? " (different installation)" : "")}; {codes} enrolment code(s) invalidated", ct);
         await audit.CommitAsync(tx, receipt, ct);
         return new RestoreMfaResult(marked, codes);

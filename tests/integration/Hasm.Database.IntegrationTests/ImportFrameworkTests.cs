@@ -50,7 +50,7 @@ public abstract class ImportTestBase : HttpApiTestBase
     protected void BuildImportFacade(ImportOptions? options = null, IEnumerable<IImportAdapter>? adapters = null)
     {
         Tx = new CompanyAuditedTransactions(Resolver, Audit, Clock);
-        Ring = new InMemoryKekRing("k1");
+        Ring = new InMemoryKekRing("k1", TestIdentityKeys.Master);
         Enc = new EnvelopeEncryptor(Ring);
         var o = options ?? new ImportOptions();
         ImportOpts = new ImportOptions
@@ -780,7 +780,7 @@ public class ImportApiTests : ImportTestBase
             b.UseSetting("Hasm:Imports:MaxFileBytes", "4000");
             b.ConfigureServices(s =>
             {
-                var ring = new InMemoryKekRing("k1") { Unavailable = keyUnavailable };
+                var ring = new InMemoryKekRing("k1", TestIdentityKeys.Master) { Unavailable = keyUnavailable };
                 apiRing = ring;
                 s.AddSingleton<KekRing>(ring);
                 s.AddSingleton(TestEncryption);

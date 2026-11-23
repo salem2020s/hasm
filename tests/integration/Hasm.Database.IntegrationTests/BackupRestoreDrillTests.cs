@@ -95,7 +95,7 @@ public class BackupRestoreDrillTests : PostgresTestBase
 
         var company = Guid.NewGuid();
         var att = Path.Combine(work, "att", company.ToString("N")); Directory.CreateDirectory(att);
-        var ring = new InMemoryKekRing("k1");
+        var ring = new InMemoryKekRing("k1", TestIdentityKeys.Master);
         File.WriteAllBytes(Path.Combine(att, Guid.NewGuid().ToString("N") + ".att"), "%PDF-1.4 normal"u8.ToArray());
         File.WriteAllBytes(Path.Combine(att, Guid.NewGuid().ToString("N") + ".att"), new EnvelopeEncryptor(ring).Encrypt("secret"u8.ToArray(), "ctx"));
 

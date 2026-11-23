@@ -34,7 +34,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
         b.UseSetting("Hasm:Imports:StorageDirectory", Path.Combine(storage, "imports"));
         b.ConfigureServices(s =>
         {
-            s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+            s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
             s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
             s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));
         });
