@@ -53,6 +53,7 @@ public static class SystemRuntimePrivileges
         // DO NOTHING and changes it with UPDATE of exactly the four columns below (the company id is the key and never changes); no DELETE. The role list of a RequiredForRoles policy is replaced as a whole (DELETE then INSERT).
         new("MfaPolicy", SystemSchema.MfaPolicy.Table, Append, [SystemSchema.MfaPolicy.Policy, SystemSchema.MfaPolicy.Revision, SystemSchema.MfaPolicy.UpdatedAtUtc, SystemSchema.MfaPolicy.UpdatedBy]),
         new("MfaPolicyRole", SystemSchema.MfaPolicyRole.Table, ["SELECT", "INSERT", "DELETE"]),
+        new("IdentityAnchor", SystemSchema.IdentityAnchor.Table, Append),                      // append-only identity history (S-2c): SELECT and INSERT, never UPDATE or DELETE
         new("BackupLegalHold", SystemSchema.BackupLegalHold.Table, None),                      // administrative tool only (owner account)
         new("BackupRetentionPin", SystemSchema.BackupRetentionPin.Table, None),                // administrative tool only
         new("MigrationJournal", SystemSchema.MigrationJournalTable, None),                     // the API never reads the system journal
