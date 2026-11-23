@@ -597,7 +597,7 @@
     "phase": "Refresh after the merges of #212, #210, #213 and #48 (2026-11-22); Phase 3.8D part 1 merged with execution disabled (owner Option D); team running",
     "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh. D-237: #183 merged on the owner's condition; FH's record states the single exception (hbe_not_authenticated accepted under the test helper's digest for the SPKI-length bytes 53/54, the false flaky assertion, replaced by a stricter check under the parser-framed digest).",
     "knownIssues": [
-      "Decisions: next free ID D-267. D-261..D-266 the owner decisions of 2026-11-23 (audit-head recovery D1-D3, off-machine backup protection, container/VM confirmation, identity tagging); D-240..D-260 the owner's consolidated message of 2026-11-22 (on main via #225). D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
+      "Decisions: next free ID D-268. D-267 the team readings of D-201 for the short close (TEAM decision under D-048, PR 244, not on main until it merges). D-261..D-266 the owner decisions of 2026-11-23 (audit-head recovery D1-D3, off-machine backup protection, container/VM confirmation, identity tagging); D-240..D-260 the owner's consolidated message of 2026-11-22 (on main via #225). D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
       "Audit: 1336/1337 on main; 1338 allocated to S3b-1b (#181); blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
       "4.1 S3 is NOT complete: S3a (#166), S3b-1a (#172) and the S3b-2a UI (#178) merged; S3b-1b is #181 and S3b-2b is #185 (stacked on #181), both open.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
@@ -803,7 +803,7 @@
     "system": {
       "0034": "#181 (on main)",
       "0035": "#210 owner-only trigger on the TOTP secret material (on main, final)",
-      "next": "the short-close permission preset needs a NEW system number if it resumes (was 0036 provisional; on hold for the owner); the cash preset grant stays on hold"
+      "next": "CORRECTED 2026-11-23 (PR 244): X4-PRESET-ROLE was decided by D-254, so the short-close preset is no longer on hold; main holds system 0001-0040; system 0041 = the preset Commercial Document Closer and company 0039 = the short close, both PR 244 (final when it merges); Draft PRs 238 (company 0039 provisional) and 234 (provisional numbers) renumber to the next free numbers when they resume"
     },
     "company": {
       "0033": "#200 (D-209, on main)",
@@ -883,7 +883,7 @@
       "CONTAINER-VM-CONFIRMATION (D-265; docs/PHASE-4.3-S8D-PLAN.md)",
       "IDENTITY-TAGGING-DISPOSITION (D-266; docs/IDENTITY-INTEGRITY-PLAN.md; applies OD-3, D-242)"
     ],
-    "nextFreeDecisionId": "D-267",
+    "nextFreeDecisionId": "D-268",
     "activation": "nothing is activated: audit-head recovery production activation stays disabled until named administrator, fresh MFA and second-person approval exist; the backup deletion gate and 4.3-ACT stay closed",
     "reviewPolicy": "Model change 2026-11-23: critical security reviews (identity, replay authorization, audit recovery) are deferred and their PRs stay Draft until a suitable independent reviewer is available."
   }
