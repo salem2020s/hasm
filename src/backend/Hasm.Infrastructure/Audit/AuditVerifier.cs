@@ -51,7 +51,14 @@ public sealed class AuditVerifier(string connectionString, AuditKeyRing keys, IC
         return key.VerifyEventMac(canonical, r.Mac) ? RecordCheck.Ok : RecordCheck.MacInvalid;
     }
 
-    public async Task<AuditVerificationReport> VerifyAsync(AuditStream stream, CancellationToken ct = default)
+    public Task<AuditVerificationReport> VerifyAsync(AuditStream stream, CancellationToken ct = default) => VerifyAsync(stream, null, ct);
+
+    /// <summary>
+    /// As <see cref="VerifyAsync(AuditStream, CancellationToken)"/>, and when <paramref name="readEvidence"/> is given it is called ONCE, inside the verifier's own READ ONLY snapshot transaction and after
+    /// the chain was walked, with <c>VerifiedThroughSeq</c>: the evidence it reads is therefore read in the SAME snapshot as the verification, so no row can appear between the two (S8d section 4B).
+    /// The callback must only read, and must use only rows at or below the sequence it is given.
+    /// </summary>
+    public async Task<AuditVerificationReport> VerifyAsync(AuditStream stream, Func<NpgsqlConnection, NpgsqlTransaction, long, CancellationToken, Task>? readEvidence, CancellationToken ct = default)
     {
         var findings = new List<AuditFinding>();
         void Add(string code, FindingSeverity sev, long? seq, string message) => findings.Add(new AuditFinding(code, sev, seq, message));
@@ -137,6 +144,8 @@ public sealed class AuditVerifier(string connectionString, AuditKeyRing keys, IC
                 expectedSeq = rec.Seq + 1;
             }
         }
+
+        if (readEvidence is not null) await readEvidence(conn, tx, verifiedThrough, ct);
 
         // Checkpoints that no stored record answers: the tail (or a middle record) was removed after it was anchored.
         foreach (var cp in cpBySeq.Values.Where(c => !matchedCps.Contains(c.Seq)).OrderBy(c => c.Seq))

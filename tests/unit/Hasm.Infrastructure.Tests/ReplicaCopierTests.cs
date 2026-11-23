@@ -645,6 +645,31 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_copy_that_shares_storage_with_the_primary_or_whose_identity_cannot_be_read_leaves_the_run_replication_pending()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var run = await MakeRunAsync(RunA);
+        await Copier().ReplicateAsync(Destination(), Primary, run, default);
+        var primaryRuns = RetentionInventory.Scan(Primary, trust).Runs;
+        IReadOnlySet<string> Pending(string? primaryRoot, Func<string, FileIdentityInfo?>? probe = null) =>
+            ReplicationPending.Evaluate(primaryRuns, [Destination()], trust, null, null, primaryRoot, probe).RunIds;
+        Assert.Empty(Pending(Primary));                                                         // an independent copy: not pending
+        Assert.Equal([RunA], Pending(Primary, _ => null));                                      // identity unreadable: not counted as a copy (review M1 of PR 232)
+        var ours = Path.Combine(Dest, RunA, "system", EncryptedSets.DumpName);
+        var kept = File.ReadAllBytes(ours);
+        HardLink(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName), ours);
+        Assert.Equal([RunA], Pending(Primary));                                                 // one hard-linked file: the status calls it replica_not_independent, the plan keeps the run pending
+        Assert.Equal([RunA], ReplicaStatus.Inspect(Destination(), primaryRuns, trust, DateTimeOffset.UtcNow, null, Primary).NotIndependentRunIds);
+        Assert.Empty(Pending(null));                                                            // without the primary root the check cannot be made (as in the status function)
+        File.Delete(ours);
+        File.WriteAllBytes(ours, kept);
+        Assert.Empty(Pending(Primary));                                                         // a separate file again: a copy again
+        // the "copy" IS the primary's folder (a destination that resolves to the primary's storage)
+        Assert.Equal([RunA], ReplicationPending.Evaluate(primaryRuns, [Destination(Primary)], trust, null, null, Primary).RunIds);
+        Assert.Empty(ReplicationPending.Evaluate(primaryRuns, [Destination(Primary)], trust, null).RunIds);      // the same folder passes the light check when the primary is not given: only the independence rule catches it
+    }
+
+    [Fact]
     public async Task A_link_count_that_cannot_be_read_is_reported_not_silently_skipped()
     {
         var copy = await PublishedCopyAsync();

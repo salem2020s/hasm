@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Access;
+using Hasm.Infrastructure.Audit;
+using Hasm.Infrastructure.Backup;
 using Hasm.Infrastructure.Configuration;
 using Hasm.Infrastructure.Identity;
 using Hasm.Infrastructure.Security;
@@ -258,6 +260,63 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         await Exec($"REVOKE ALL ON TABLE {TO.Table} FROM {Q(reporting)}");
         Assert.Empty((await SystemRuntimeAdministration.GrantAsync(RuntimeOptions)).Findings.Violations);
         await using (var conn = await As(reportingOptions)) await Denied(conn, $"SELECT count(*) FROM {TO.Table}");
+    }
+
+    [PostgresRoleFact]
+    public Task A_deletion_pair_forged_by_the_real_runtime_role_is_inserted_but_never_read_as_evidence_by_the_authenticated_read() => ForgedPairIsNeverEvidence(unknownKeyId: false);
+
+    [PostgresRoleFact]
+    public Task A_deletion_pair_forged_by_the_real_runtime_role_under_a_key_id_the_server_does_not_know_is_never_read_as_evidence_either() => ForgedPairIsNeverEvidence(unknownKeyId: true);
+
+    /// <summary>The two reasons the authenticated prefix can end at a forged row (review L2 of PR 232): the REAL key id with a wrong MAC, and a key id the server's key ring does not hold.</summary>
+    private async Task ForgedPairIsNeverEvidence(bool unknownKeyId)
+    {
+        await StartRestricted();
+        var hash = new string('a', 64);
+        const string run = "20260301T020000Z-0a0b0c0d", forgedRun = "20260302T020000Z-0a0b0c0d";
+        var admin = Options.BuildSystemConnectionString(admin: true);
+        await BackupAudit.WriteAsync(admin, Audit, BackupAuditEvents.DeletionStarted, $"backup deletion started operator=os:t run={run} status={hash} reasons=none destination=nas");
+        await BackupAudit.WriteAsync(admin, Audit, BackupAuditEvents.Deleted, $"backup deleted operator=os:t run={run} status={hash} files=1 bytes=1 tombstone=yes resumed=no destination=nas");
+        AuditRecord head;
+        await using (var conn = new NpgsqlConnection(admin))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand($"SELECT {AuditStorage.Columns} FROM {Ev.Table} WHERE {Ev.StreamKey} = @s ORDER BY {Ev.Seq} DESC LIMIT 1", conn);
+            cmd.Parameters.AddWithValue("s", AuditStream.SystemKey);
+            await using var r = await cmd.ExecuteReaderAsync();
+            Assert.True(await r.ReadAsync());
+            head = AuditStorage.Read(r);
+        }
+        // the forgery is made by the RUNTIME role itself (INSERT is its legitimate right), not through the owner connection, with a key it does not hold (review A1 of PR 232)
+        var attacker = new InMemoryAuditKeyRing("k1");
+        long seq = head.Seq; var prev = head.Hash;
+        foreach (var (type, detail) in new[]
+        {
+            (BackupAuditEvents.DeletionStarted, $"backup deletion started operator=os:t run={forgedRun} status={hash} reasons=none destination=nas"),
+            (BackupAuditEvents.Deleted, $"backup deleted operator=os:t run={forgedRun} status={hash} files=1 bytes=1 tombstone=yes resumed=no destination=nas"),
+        })
+        {
+            var rec = AuditCanonical.Seal(head with { Seq = ++seq, EventId = Guid.NewGuid(), EventType = type, Detail = detail, PrevHash = prev, Hash = [], Mac = [], KeyId = unknownKeyId ? "k-forged" : head.KeyId }, attacker.GetActive());
+            prev = rec.Hash;
+            Assert.Equal(!unknownKeyId, rec.KeyId == head.KeyId);                                                   // the real key id (so only the MAC is wrong), or one the server has no key for
+            Assert.Equal(unknownKeyId, AuditKeys.Find(rec.KeyId) is null);
+            await using var rt = await As(RuntimeOptions);
+            await using var ins = new NpgsqlCommand($"INSERT INTO {Ev.Table} ({AuditStorage.Columns}) VALUES (@s,@q,@id,@t,@e,@c,@a,@tu,@su,@l,@d,@v,@k,@p,@h,@m)", rt);
+            ins.Parameters.AddWithValue("s", rec.StreamKey); ins.Parameters.AddWithValue("q", rec.Seq); ins.Parameters.AddWithValue("id", rec.EventId); ins.Parameters.AddWithValue("t", rec.OccurredAtUtc);
+            ins.Parameters.AddWithValue("e", rec.EventType); ins.Parameters.AddWithValue("c", (object?)rec.CompanyId ?? DBNull.Value); ins.Parameters.AddWithValue("a", (object?)rec.ActorUserId ?? DBNull.Value);
+            ins.Parameters.AddWithValue("tu", (object?)rec.TargetUserId ?? DBNull.Value); ins.Parameters.AddWithValue("su", (object?)rec.SubjectId ?? DBNull.Value); ins.Parameters.AddWithValue("l", (object?)rec.LegacyRef ?? DBNull.Value);
+            ins.Parameters.AddWithValue("d", (object?)rec.Detail ?? DBNull.Value); ins.Parameters.AddWithValue("v", rec.FormatVersion); ins.Parameters.AddWithValue("k", rec.KeyId);
+            ins.Parameters.AddWithValue("p", rec.PrevHash); ins.Parameters.AddWithValue("h", rec.Hash); ins.Parameters.AddWithValue("m", rec.Mac);
+            Assert.Equal(1, await ins.ExecuteNonQueryAsync());                                                      // accepted: the runtime role may insert
+        }
+
+        var raw = await ReplicaAuditReader.ReadAsync(admin);
+        Assert.NotNull(raw.CompletedPairSeq("nas", forgedRun, hash));                                               // the informational read shows the forgery
+        var state = await ReplicaAuditReader.ReadVerifiedAsync(admin, AuditKeys, AuditCheckpoints);
+        Assert.Equal(head.Seq, state.VerifiedThroughSeq);
+        Assert.True(state.UnverifiedRemainder);
+        Assert.Null(state.CompletedPairSeq("nas", forgedRun, hash));                                                // the authenticated read does not
+        Assert.NotNull(state.CompletedPairSeq("nas", run, hash));
     }
 
     [PostgresRoleFact]

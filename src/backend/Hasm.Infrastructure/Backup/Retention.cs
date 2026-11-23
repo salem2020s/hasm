@@ -154,8 +154,10 @@ public static class RetentionClassifier
 {
     public const string SystemPart = "system";
 
+    /// <param name="pendingRunIds">S8d (D-187): run ids that some configured destination has no verified copy of (see <see cref="ReplicationPending"/>); each gets the keep reason <c>replication_pending</c>. This can only keep MORE.</param>
+    /// <param name="testedKeysElsewhere">S8d: recovery key ids with a passed recovery test on ANY copy of ANY run (primary or destination); a destination's runs count as recoverable for such a key. Adds to, never replaces, the runs' own proofs.</param>
     public static RetentionPlan Plan(IReadOnlyList<RetentionRun> runs, IReadOnlyList<RetentionCompany> companies, IReadOnlyList<BackupLegalHoldRow> holds, IReadOnlyList<RetentionPinRow> pins,
-        RetentionOptions options, DateTimeOffset now)
+        RetentionOptions options, DateTimeOffset now, IReadOnlySet<string>? pendingRunIds = null, IReadOnlySet<string>? testedKeysElsewhere = null)
     {
         var installation = options.InstallationZone();
         var reasons = runs.ToDictionary(r => r.RunId, _ => new SortedSet<string>(StringComparer.Ordinal), StringComparer.Ordinal);
@@ -170,6 +172,7 @@ public static class RetentionClassifier
 
         // D-133: run-level states that are never deleted automatically (and never count)
         var testedKeys = runs.Where(r => r.Complete && r.Verified && r.ProofValid && r.RecoveryKeyId is not null).Select(r => r.RecoveryKeyId!).ToHashSet(StringComparer.Ordinal);
+        if (testedKeysElsewhere is not null) testedKeys.UnionWith(testedKeysElsewhere);
         foreach (var r in runs)
         {
             if (!r.Complete) Keep(r, "incomplete");
@@ -178,6 +181,7 @@ public static class RetentionClassifier
             else if (r.RecoveryKeyId is null || !testedKeys.Contains(r.RecoveryKeyId)) Keep(r, "recovery_key_untested");
             if (!r.Clean) Keep(r, "run_not_clean");
             if (r.KeptTrial) Keep(r, "recovery_chain");
+            if (pendingRunIds is not null && pendingRunIds.Contains(r.RunId)) Keep(r, "replication_pending");
         }
         bool Usable(RetentionRun r) => r.Complete && r.Verified && r.Encrypted && r.RecoveryKeyId is not null && testedKeys.Contains(r.RecoveryKeyId);
         var usable = runs.Where(Usable).ToList();

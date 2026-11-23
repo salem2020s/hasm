@@ -270,7 +270,7 @@ public sealed class RetentionExecutorTests : IDisposable
         audit.Clear();
         var recovered = await RetentionExecutor.ExecuteAsync(Ctx(runs), RetentionGateOverride.ForTests(), default);
         Assert.Equal(1, recovered.Resumed);
-        Assert.Single(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} ") && a.Detail.EndsWith("recovered=audit folder=absent", StringComparison.Ordinal));
+        Assert.Single(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={lost} ") && a.Detail.EndsWith("recovered=audit folder=absent destination=primary", StringComparison.Ordinal));
         Assert.DoesNotContain(audit, a => a.Code == BackupAuditEvents.Deleted && a.Detail.Contains($"run={notYet} "));
         Assert.True(File.Exists(Path.Combine(tombs, lost, RetentionInventory.CompletedMarker)));
         Assert.Equal([notYet], RetentionExecutor.IncompleteTombstones(root));
