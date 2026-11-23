@@ -8,22 +8,22 @@
 -- what needs no key it enforces: the shape of the three columns, and that a user's security revision never decreases.
 
 ALTER TABLE t_5a3ce63e
-    ADD COLUMN c_2274493a varchar(32) NULL,
-    ADD COLUMN c_628a0419 bytea NULL,
-    ADD COLUMN c_bfc5b324 bigint NULL,
-    ADD CONSTRAINT k_bef926af CHECK ((c_2274493a IS NULL AND c_628a0419 IS NULL AND c_bfc5b324 IS NULL)
-        OR (c_2274493a ~ '^[a-z0-9][a-z0-9-]{0,31}$' AND octet_length(c_628a0419) = 32 AND c_bfc5b324 >= 0));
+    ADD COLUMN c_967a9b44 varchar(32) NULL,
+    ADD COLUMN c_51954463 bytea NULL,
+    ADD COLUMN c_82fd751e bigint NULL,
+    ADD CONSTRAINT k_cbdd8d0b CHECK ((c_967a9b44 IS NULL AND c_51954463 IS NULL AND c_82fd751e IS NULL)
+        OR (c_967a9b44 ~ '^[a-z0-9][a-z0-9-]{0,31}$' AND octet_length(c_51954463) = 32 AND c_82fd751e >= 0));
 
 ALTER TABLE t_fc83d26e
-    ADD COLUMN c_8e17c826 bigint NOT NULL DEFAULT 0,
-    ADD CONSTRAINT k_9c85e90e CHECK (c_8e17c826 >= 0);
+    ADD COLUMN c_320fa296 bigint NOT NULL DEFAULT 0,
+    ADD CONSTRAINT k_aede901c CHECK (c_320fa296 >= 0);
 
-CREATE FUNCTION f_feb39a17() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION f_4fb9f223() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.c_8e17c826 < OLD.c_8e17c826 THEN
+    IF NEW.c_320fa296 < OLD.c_320fa296 THEN
         RAISE EXCEPTION 'the security revision of a user never decreases';
     END IF;
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER r_5066b72b BEFORE UPDATE ON t_fc83d26e FOR EACH ROW EXECUTE FUNCTION f_feb39a17();
+CREATE TRIGGER r_ad5336a5 BEFORE UPDATE ON t_fc83d26e FOR EACH ROW EXECUTE FUNCTION f_4fb9f223();
