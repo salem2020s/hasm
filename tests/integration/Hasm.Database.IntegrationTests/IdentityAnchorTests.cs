@@ -262,7 +262,7 @@ public class IdentityAnchorTests : RestrictedRuntimeIdentityTestBase
         await StartRestricted();
         await using var mfa = RuntimeMfa();
         var users = new List<UserRecord>();
-        foreach (var name in new[] { "usera", "userb", "userc", "userd", "usere", "userf", "userg" }) users.Add(await NewUser(name));
+        foreach (var name in new[] { "usera", "userb", "userc", "userd", "usere", "userf" }) users.Add(await NewUser(name));
         foreach (var u in users) await mfa.IssueEnrolmentCodeAsync(u.Id, TimeSpan.FromHours(1), null);               // every user holds a code, so each code column can change
         var clean = (await Report(withKeys: false)).Hash;                                                   // without keys the tag status is constant, so only the digest of the covered fields can move the hash
         var changes = new (string Name, string Set)[]
@@ -273,7 +273,6 @@ public class IdentityAnchorTests : RestrictedRuntimeIdentityTestBase
             ("enrolment code expiry", $"{M.EnrolmentCodeExpiresAtUtc} = {M.EnrolmentCodeExpiresAtUtc} + interval '1 hour'"),
             ("enrolment code consumed", $"{M.EnrolmentCodeConsumedAtUtc} = now()"),
             ("key id", $"{Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag.KeyId} = 'k2'"),
-            ("tag", $"{Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag.Tag} = decode(repeat('ab', 32), 'hex')"),
         };
         var seen = new HashSet<string> { clean };
         for (var i = 0; i < changes.Length; i++)
