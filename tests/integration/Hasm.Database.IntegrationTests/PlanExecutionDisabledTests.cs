@@ -69,7 +69,8 @@ public class PlanExecutionDisabledTests : JournalTestBase
     private static readonly Regex PlanTypeName = new(@"Execut(or|ion)|CompensationPlan|Epoch|Replay(Executor|Writer)", RegexOptions.CultureInvariant);
 
     // the ONLY types named like a plan, epoch or execution that may exist besides the services above: values and one static function (slice E1), allowed by identity
-    private static readonly Type[] PureEpochTypes = [typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole)];
+    private static readonly Type[] PureEpochTypes = [typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole),
+        typeof(EpochContent), typeof(EpochContentResult), typeof(EpochEntryContent), typeof(EpochConsumption), typeof(EpochLayerCreation), typeof(EpochLayerKey), typeof(EpochLayerRemaining), typeof(EpochPositionTotal)];
 
     /// <summary>
     /// Pins the exact shape of the allowed types so the exception cannot hide an executor: EpochSchedule is a static class whose only own methods are Derive (exact signature) and the private Inconsistent; the
@@ -80,20 +81,29 @@ public class PlanExecutionDisabledTests : JournalTestBase
     {
         const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         bool Generated(MemberInfo m) => m.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null || m.Name.StartsWith('<');
+        // the static functions: exactly these own methods, Derive with its exact signature
+        var functions = new (Type Type, string[] Methods, Type[] Parameters, Type Result)[]
+        {
+            (typeof(EpochSchedule), ["Derive", "Inconsistent"], [typeof(CostFlowSnapshot), typeof(CostFlowComparisonResult), typeof(CancellationToken)], typeof(EpochScheduleResult)),
+            (typeof(EpochContent), ["A", "CheckSums", "Derive", "Disagree", "Inconsistent", "Q"], [typeof(CostFlowSnapshot), typeof(EpochScheduleResult), typeof(CancellationToken)], typeof(EpochContentResult)),
+        };
         var schedule = typeof(EpochSchedule);
-        Assert.True(schedule.IsAbstract && schedule.IsSealed, "EpochSchedule must be a static class");
-        var own = schedule.GetMethods(all).Where(m => !Generated(m)).ToList();
-        Assert.Equal(["Derive", "Inconsistent"], own.Select(m => m.Name).OrderBy(n => n, StringComparer.Ordinal));
-        var derive = own.Single(m => m.Name == "Derive");
-        Assert.True(derive.IsStatic && derive.IsAssembly, "Derive is internal static");
-        Assert.Equal([typeof(CostFlowSnapshot), typeof(CostFlowComparisonResult), typeof(CancellationToken)], derive.GetParameters().Select(p => p.ParameterType));
-        Assert.Equal(typeof(EpochScheduleResult), derive.ReturnType);
-        Assert.Empty(schedule.GetConstructors(all)); Assert.Empty(schedule.GetProperties(all)); Assert.Empty(schedule.GetEvents(all));
-        Assert.All(schedule.GetFields(all), f => Assert.True(f.IsLiteral, "EpochSchedule holds constants only: " + f.Name));
+        foreach (var (type, methods, parameters, result) in functions)
+        {
+            Assert.True(type.IsAbstract && type.IsSealed, type.Name + " must be a static class");
+            var own = type.GetMethods(all).Where(m => !Generated(m)).ToList();
+            Assert.Equal(methods.Order(StringComparer.Ordinal), own.Select(m => m.Name).Distinct().OrderBy(n => n, StringComparer.Ordinal));
+            var derive = own.Single(m => m.Name == "Derive");
+            Assert.True(derive.IsStatic && derive.IsAssembly, "Derive is internal static");
+            Assert.Equal(parameters, derive.GetParameters().Select(p => p.ParameterType));
+            Assert.Equal(result, derive.ReturnType);
+            Assert.Empty(type.GetConstructors(all)); Assert.Empty(type.GetProperties(all)); Assert.Empty(type.GetEvents(all));
+            Assert.All(type.GetFields(all), f => Assert.True(f.IsLiteral, type.Name + " holds constants only: " + f.Name));
+        }
         foreach (var type in PureEpochTypes)
         {
             Assert.False(type.IsPublic, type.FullName);
-            if (type != schedule)
+            if (functions.All(f => f.Type != type))
             {
                 Assert.Empty(type.GetMethods(all).Where(m => !Generated(m)));            // records and the enum: compiler-generated members only
                 Assert.Empty(type.GetEvents(all));
@@ -122,7 +132,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
         if (ns.StartsWith("Hasm.", StringComparison.Ordinal))
         {
             // a backend type may appear only as plain data (an enum or a record) or as the static function itself: a service, store, resolver or transaction never does
-            var data = type.IsEnum || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null || type == typeof(EpochSchedule) || type == typeof(CostingException);   // the refusal the derivation throws is a plain exception with a code
+            var data = (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer) && type.IsNestedPrivate) || type.IsEnum || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null || type == typeof(EpochSchedule) || type == typeof(EpochContent) || type == typeof(CostingException);   // the refusal the derivation throws is a plain exception with a code
             Assert.True(data, where + ": " + type + " is not plain data");
         }
     }
