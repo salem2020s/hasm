@@ -17,6 +17,7 @@ using SI = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionIntegrity;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using UI = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserIntegrity;
+using UT = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -27,108 +28,8 @@ namespace Hasm.Database.IntegrationTests;
 /// legitimate flows still work under the restricted role. The known single-logout residual (owner decision OD-5) is documented AND tested here: the test passes only while the residual exists as documented.
 /// Role-capable disposable cluster only.
 /// </summary>
-public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
+public class IdentitySessionIntegrityTests : RestrictedRuntimeIdentityTestBase
 {
-    private const string RolePrefix = "hasm_sit_";
-    private readonly InMemoryKekRing ring = new("k1");
-    private readonly List<string> testRoles = [];
-    private string runtimeRole = null!, runtimePassword = null!;
-    private HasmDatabaseOptions RuntimeOptions = null!;
-    private IdentityKeys Keys => new(ring);
-
-    private static string Q(string identifier) => new NpgsqlCommandBuilder().QuoteIdentifier(identifier);
-    private static string RoleAdminConnection => Environment.GetEnvironmentVariable(PostgresRoleTestEnvironment.RoleAdminConnectionVar)!;
-
-    private async Task RoleAdmin(string sql)
-    {
-        await using var conn = new NpgsqlConnection(RoleAdminConnection);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    private HasmDatabaseOptions OptionsFor(string username, string password) => new()
-    {
-        Host = Options.Host, Port = Options.Port, SystemDatabaseName = Options.SystemDatabaseName, Username = username, Password = password,
-        AdminUsername = Options.AdminUsername, AdminPassword = Options.AdminPassword, MaintenanceDatabase = Options.MaintenanceDatabase, SslMode = Options.SslMode, AllowInsecureTransport = true,
-    };
-
-    private string RuntimeConnection => new NpgsqlConnectionStringBuilder(RuntimeOptions.BuildSystemConnectionString(admin: false)) { Pooling = false }.ConnectionString;
-
-    /// <summary>A migrated system database, a real restricted runtime role and the real grant routine.</summary>
-    private async Task StartRestricted()
-    {
-        var reason = PostgresRoleTestEnvironment.Evaluate();
-        if (reason is not null) throw new InvalidOperationException($"Role-isolation gate is closed: {reason}");
-        await StartCompanies();
-        runtimeRole = RolePrefix + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
-        runtimePassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
-        lock (testRoles) testRoles.Add(runtimeRole);
-        await RoleAdmin($"CREATE ROLE {Q(runtimeRole)} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{runtimePassword}'");
-        RuntimeOptions = OptionsFor(runtimeRole, runtimePassword);
-        var granted = await SystemRuntimeAdministration.GrantAsync(RuntimeOptions);
-        Assert.Empty(granted.Findings.Violations);
-    }
-
-    private IdentityStore RuntimeStore(IdentityKeys? keys = null) => new(() => RuntimeConnection, Clock, Audit, keys ?? Keys);
-    private AuthService RuntimeAuth(IdentityStore store) => new(store, Passwords, AuthSettings);
-    private MfaStore RuntimeMfa(IdentityKeys? keys = null) => new(() => RuntimeConnection, Clock, Audit, new TotpSecretProtector(ring), new SystemRuntimeGate(false, Clock) { CheckLifetime = TimeSpan.Zero }, keys ?? Keys);
-
-    /// <summary>Runs one statement AS THE RESTRICTED RUNTIME ROLE: the attacker of vector A (the role holds INSERT and UPDATE on the session table).</summary>
-    private async Task<int> Attack(string sql, params (string Name, object? Value)[] parameters)
-    {
-        await using var conn = new NpgsqlConnection(RuntimeConnection);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        foreach (var (name, value) in parameters) cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
-        return await cmd.ExecuteNonQueryAsync();
-    }
-
-    private WebApplicationFactory<Program> Api(IEnumerable<string>? previousKeyIds = null) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
-    {
-        b.UseEnvironment("Production");
-        b.UseSetting("Hasm:Database:Host", RuntimeOptions.Host);
-        b.UseSetting("Hasm:Database:Port", RuntimeOptions.Port.ToString());
-        b.UseSetting("Hasm:Database:SystemDatabaseName", RuntimeOptions.SystemDatabaseName);
-        b.UseSetting("Hasm:Database:Username", RuntimeOptions.Username);
-        b.UseSetting("Hasm:Database:Password", RuntimeOptions.Password);
-        b.UseSetting("Hasm:Database:SslMode", RuntimeOptions.SslMode.ToString());
-        b.UseSetting("Hasm:Database:AllowInsecureTransport", "true");                                            // disposable loopback test server only
-        b.UseSetting("Hasm:Database:AllowOverprivilegedSystemRuntime", "false");                                // the real restricted role, the gate on
-        b.UseSetting("Hasm:Auth:Pbkdf2Iterations", "100000");
-        if (previousKeyIds is not null) b.UseSetting("Hasm:Encryption:IdentityPreviousKeyIds", string.Join(",", previousKeyIds));
-        b.ConfigureServices(s =>
-        {
-            s.AddSingleton<TimeProvider>(Clock);
-            s.AddSingleton(_ => Audit);
-            s.AddSingleton<KekRing>(ring);
-        });
-    });
-
-    private static HttpClient NewClient(WebApplicationFactory<Program> api) => api.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), HandleCookies = false, AllowAutoRedirect = false });
-
-    private static async Task<(HttpStatusCode Status, string Body)> Send(HttpClient client, HttpMethod method, string path, string? bearer, object? body = null)
-    {
-        using var request = new HttpRequestMessage(method, path);
-        request.Headers.Add("X-Hasm-Request", "1");
-        if (bearer is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-        if (body is not null) request.Content = System.Net.Http.Json.JsonContent.Create(body);
-        using var response = await client.SendAsync(request);
-        return (response.StatusCode, await response.Content.ReadAsStringAsync());
-    }
-
-    private static async Task<bool> IsAuthenticated(HttpClient client, string token)
-    {
-        var (status, body) = await Send(client, HttpMethod.Get, "/api/v1/auth/status", token);
-        Assert.Equal(HttpStatusCode.OK, status);
-        return JsonDocument.Parse(body).RootElement.GetProperty("authenticated").GetBoolean();
-    }
-
-    private async Task<long> Rejections() => await Scalar<long>($"SELECT count(*) FROM {Ev.Table} WHERE {Ev.EventType} = {MfaAuditEvents.IdentityRecordRejected}");
-    private async Task<bool> IsRevoked(Guid sessionId) => await Scalar<bool>($"SELECT {S.RevokedAtUtc} IS NOT NULL FROM {S.Table} WHERE {S.Id} = @i", ("i", sessionId));
-
-    // ---------------------------------------------------------------- vector A: minted sessions
-
     [PostgresRoleFact]
     public async Task A_session_row_minted_by_the_runtime_role_is_refused_by_the_real_api()
     {
@@ -233,7 +134,7 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
 
         var session = (await auth.AuthenticateAsync(changer.Token))!;
         Assert.Equal(ChangePasswordStatus.Changed, (await auth.ChangePasswordAsync(session, Pw, "Replacement-Passphrase-3")).Status);
-        Assert.Equal(1L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
+        Assert.Equal(2L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));   // two bumps: the password hash (a covered field of the user) and the revoke-all of the other sessions
         Assert.True(await IsAuthenticated(client, changer.Token));                                               // the session that changed the password stays (re-tagged under the new revision)
         Assert.False(await IsAuthenticated(client, victim.Token));
 
@@ -249,14 +150,14 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
         var again = (await auth.LoginAsync("victim", "Replacement-Passphrase-3", SessionClient.Web, "10.0.0.2")) as LoginOutcome.Success ?? throw new InvalidOperationException();
         Assert.True(await IsAuthenticated(client, again.Token));
         await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
-        Assert.Equal(2L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
+        Assert.Equal(3L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
         Assert.Equal(1, await Attack($"UPDATE {S.Table} SET {S.RevokedAtUtc} = NULL, {S.RevokedReason} = NULL WHERE {S.Id} = @i", ("i", again.SessionId)));
         Assert.False(await IsAuthenticated(client, again.Token));
 
         // the database refuses to lower a revision (the way back to an old row's revision)
         var ex = await Assert.ThrowsAsync<PostgresException>(() => Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = 0 WHERE {U.Id} = @u", ("u", user.Id)));
         Assert.Contains("exactly one", ex.MessageText);
-        Assert.Equal(2L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
+        Assert.Equal(3L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
     }
 
     [PostgresRoleFact]
@@ -280,15 +181,14 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
         await Set($"{UI.SecurityRevision}");                                                                         // unchanged is allowed too
         Assert.Equal(3L, await Rev());
 
-        var session = await Login(auth, "victim");                                                                   // issued under revision 3: the changer, re-tagged under 4
-        var authenticated = (await auth.AuthenticateAsync(session.Token))!;
-        Assert.Equal(ChangePasswordStatus.Changed, (await auth.ChangePasswordAsync(authenticated, Pw, "Replacement-Passphrase-3")).Status);
-        Assert.Equal(4L, await Rev());
+        // raising the revision changed a covered field without a tag: the user no longer verifies, so it cannot sign in (a nuisance for the person, never a way in) ...
+        Assert.IsType<LoginOutcome.InvalidCredentials>(await auth.LoginAsync("victim", Pw, SessionClient.Web, "10.0.0.1"));
+        // ... and revoke-all and deactivation still work on such a row (security-reducing writers do not need it to verify), each bump exactly +1, the row keeps its invalid tag
         await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
+        Assert.Equal(4L, await Rev());
+        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));
         Assert.Equal(5L, await Rev());
-        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));       // deactivation: bump and revoke still work
-        Assert.Equal(6L, await Rev());
-        Assert.Equal(UserState.Disabled, (await store.FindUserByIdAsync(user.Id))!.State);
+        Assert.Equal((short)UserState.Disabled, await Scalar<short>($"SELECT {U.State} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
     }
 
     [PostgresRoleFact]
@@ -306,19 +206,15 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
             Assert.True(ex.SqlState is PostgresErrorCodes.CheckViolation or PostgresErrorCodes.RaiseException, bad);       // a start other than zero is refused (the trigger; the 2^62 CHECK is the second line)
         }
         Assert.Equal(1, await Insert("zero", "0"));
-        // a runtime-inserted user at zero can be signed in, have its password changed, all sessions revoked and be deactivated: no bump ever fails
-        var user = (await Store_FindAsync("zero"))!;
+        // a runtime-inserted user at zero carries no tag (the runtime role cannot make one): it cannot sign in, and revoke-all and deactivation still work, no bump ever fails
+        var id = await Scalar<Guid>($"SELECT {U.Id} FROM {U.Table} WHERE {U.Login} = 'zero'");
         await using var store = RuntimeStore();
-        var auth = RuntimeAuth(store);
-        var login = Assert.IsType<LoginOutcome.Success>(await auth.LoginAsync("zero", Pw, SessionClient.Web, "10.0.0.9"));
-        Assert.Equal(ChangePasswordStatus.Changed, (await auth.ChangePasswordAsync((await auth.AuthenticateAsync(login.Token))!, Pw, "Replacement-Passphrase-3")).Status);
-        await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
-        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));
-        Assert.Equal(UserState.Disabled, (await Store_FindAsync("zero"))!.State);
-        Assert.Equal(3L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));   // one bump each: password change, revoke-all, deactivation
+        Assert.IsType<LoginOutcome.InvalidCredentials>(await RuntimeAuth(store).LoginAsync("zero", Pw, SessionClient.Web, "10.0.0.9"));
+        await store.RevokeUserSessionsAsync(id, SessionRevocation.Administrative);
+        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, id, UserState.Disabled));
+        Assert.Equal(2L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", id)));        // revoke-all, deactivation: one bump each
+        Assert.Equal((short)UserState.Disabled, await Scalar<short>($"SELECT {U.State} FROM {U.Table} WHERE {U.Id} = @u", ("u", id)));
     }
-
-    private Task<UserRecord?> Store_FindAsync(string login) => Store.FindUserByLoginAsync(login);
 
     [PostgresRoleFact]
     public async Task A_stale_row_whose_revocation_was_cleared_is_not_re_tagged_by_step_up_or_company_selection()
@@ -424,6 +320,9 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
         Assert.Equal("k2", await Scalar<string>($"SELECT {SI.KeyId} FROM {S.Table} WHERE {S.Id} = @i", ("i", session1.SessionId)));
         Assert.NotNull(await rotating.FindActiveSessionAsync(session1.Token));                                    // and still verifies, now under k2 (token hash: still under k1, so the lookup needs k1 listed)
 
+        var current = (await rotating.FindUserByIdAsync(user.Id))!;
+        await rotating.UpdatePasswordHashAsync(user.Id, current.PasswordHash, passwordChanged: false);              // a write to the user row re-tags it under the active key (the retag tool of the rotation slice does it for every row)
+        Assert.Equal("k2", await Scalar<string>($"SELECT {UT.KeyId} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
         await using var strict = RuntimeStore(new IdentityKeys(ring));                                            // the grace period ended: k1 is no longer listed
         Assert.Null(await strict.FindActiveSessionAsync(session2.Token));                                         // a k1 session is not honoured ...
         Assert.NotNull(await strict.FindActiveSessionAsync(fresh.Token));                                         // ... a k2 session is

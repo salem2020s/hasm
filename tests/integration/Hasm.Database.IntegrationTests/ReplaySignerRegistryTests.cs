@@ -316,7 +316,7 @@ public class ReplaySignerRegistryTests : PlanExecutionTestBase
     {
         await PrepareRuntime();
         // slice A2 (company 0038) calls the verifier from exactly one function: the insert-time check of a grant; nothing else in the database mentions it
-        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM pg_proc p WHERE p.prosrc LIKE '%{RA.FnRsaVerify}%' AND p.proname <> '{RA.FnRsaVerify}'"));
+        Assert.Equal(CompanySchema.ReplayGrant.FnGrantInsert, await Sql<string>($"SELECT string_agg(p.proname, ',' ORDER BY p.proname) FROM pg_proc p WHERE p.prosrc LIKE '%{RA.FnRsaVerify}%' AND p.proname <> '{RA.FnRsaVerify}'"));
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {RG.Table}"));
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {RU.Table}"));
         // an execution is still refused for the runtime role (no INSERT on the four execution tables), grant tables or not

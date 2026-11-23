@@ -11,7 +11,7 @@ namespace Hasm.Database.IntegrationTests;
 /// <summary>Phase 4.1 slice S2 against real PostgreSQL: the two-step login. The password step alone never yields a session for a user who needs the second factor. Disposable cluster only.</summary>
 public class MfaLoginTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
     private AuthService MfaAuth = null!;
 

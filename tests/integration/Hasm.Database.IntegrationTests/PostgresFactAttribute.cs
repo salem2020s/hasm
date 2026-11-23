@@ -164,10 +164,18 @@ public abstract class PostgresTestBase : IAsyncLifetime
 
     protected async Task Exec(string sql, params (string, object)[] ps)
     {
+        await BeforeExecAsync(sql);
         await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(sql, conn);
         foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v);
         await cmd.ExecuteNonQueryAsync();
+        await AfterExecAsync(sql);
     }
+
+    /// <summary>Hook after a successful <see cref="Exec"/> (default: nothing). The identity suites re-tag users after a direct write to the user table, which stands for "the row was set by a legitimate writer".</summary>
+    protected virtual Task AfterExecAsync(string sql) => Task.CompletedTask;
+
+    /// <summary>Hook before <see cref="Exec"/> (default: nothing).</summary>
+    protected virtual Task BeforeExecAsync(string sql) => Task.CompletedTask;
 }

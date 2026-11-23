@@ -73,8 +73,8 @@ BEGIN
     IF p_attestation IS NULL THEN RETURN 'attestation_malformed'; END IF;
     l := string_to_array(p_attestation, chr(10));
     IF array_length(l, 1) IS DISTINCT FROM 6 OR l[1] <> 'hasm-replay-attestation-v1' THEN RETURN 'attestation_malformed'; END IF;
-    IF l[2] !~ '^creator=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[|](in-person|phone|video)[|][0-9]{1,12}$' THEN RETURN 'attestation_creator_line'; END IF;
-    IF l[3] !~ '^approver=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[|](in-person|phone|video)[|][0-9]{1,12}$' THEN RETURN 'attestation_approver_line'; END IF;
+    IF l[2] !~ '^creator=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[|](in-person|phone|video)[|](0|[1-9][0-9]{0,11})$' THEN RETURN 'attestation_creator_line'; END IF;
+    IF l[3] !~ '^approver=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[|](in-person|phone|video)[|](0|[1-9][0-9]{0,11})$' THEN RETURN 'attestation_approver_line'; END IF;
     IF l[4] !~ '^request=[0-9a-f]{16}$' THEN RETURN 'attestation_request_line'; END IF;
     IF l[5] !~ '^participants=(0|[1-9][0-9]{0,8})$' THEN RETURN 'attestation_participants_line'; END IF;
     IF left(l[6], 5) <> 'note=' OR char_length(substr(l[6], 6)) > 500 THEN RETURN 'attestation_note'; END IF;
@@ -114,7 +114,9 @@ BEGIN
     SELECT * INTO k FROM public.t_23985c22 WHERE c_f57af9ad = NEW.c_e660f536;
     IF NOT FOUND THEN RAISE EXCEPTION 'grant_key_unknown'; END IF;
     IF k.c_d7d63a67 IS NOT NULL AND clock_timestamp() >= k.c_d7d63a67 THEN RAISE EXCEPTION 'grant_key_revoked'; END IF;
-    IF k.c_83f7d43c IS NOT NULL AND k.c_83f7d43c <> NEW.c_2394a822 THEN RAISE EXCEPTION 'grant_signer_is_not_the_key_owner'; END IF;
+    -- a key with no signer is the installation key of resolution (ii), which is not built: until it is, every key must name the person it belongs to, and the grant's signer must be that person (decision D1: a separately registered signer)
+    IF k.c_83f7d43c IS NULL THEN RAISE EXCEPTION 'grant_key_has_no_signer'; END IF;
+    IF k.c_83f7d43c <> NEW.c_2394a822 THEN RAISE EXCEPTION 'grant_signer_is_not_the_key_owner'; END IF;
     IF NEW.c_ff742bad - NEW.c_31ac9d98 > 7200 THEN RAISE EXCEPTION 'grant_window_longer_than_2_hours'; END IF;
     v_now := extract(epoch from clock_timestamp());
     IF v_now < NEW.c_31ac9d98 OR v_now > NEW.c_ff742bad THEN RAISE EXCEPTION 'grant_outside_its_window'; END IF;

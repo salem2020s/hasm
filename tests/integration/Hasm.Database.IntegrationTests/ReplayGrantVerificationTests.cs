@@ -114,8 +114,9 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
 
     private static BigInteger Modulus(RSA rsa) => new(rsa.ExportParameters(false).Modulus!, isUnsigned: true, isBigEndian: true);
 
-    private Task<string?> RegisterKey(Bed bed, string id, Guid? owner = null) =>
-        AsOwner($"INSERT INTO {RK.Table} ({RK.KeyId}, {RK.Modulus}, {RK.SignerUserId}) VALUES ('{id}', '{Modulus(bed.Rsa)}'::numeric, {(owner is null ? "NULL" : $"'{owner}'")})");
+    /// <summary>Registers the bed's key. Every key names the person it belongs to (M1 of the review of PR 236): by default the bed's signer; <paramref name="unbound"/> registers a key with no signer.</summary>
+    private Task<string?> RegisterKey(Bed bed, string id, Guid? owner = null, bool unbound = false) =>
+        AsOwner($"INSERT INTO {RK.Table} ({RK.KeyId}, {RK.Modulus}, {RK.SignerUserId}) VALUES ('{id}', '{Modulus(bed.Rsa)}'::numeric, {(unbound ? "NULL" : $"'{owner ?? bed.Signer}'")})");
 
     /// <summary>The 17 lines of the grant message, rebuilt by the .NET twin from the rows of the plan (never from SQL builders).</summary>
     private async Task<string> HeadFromRows(Bed bed, Guid plan, string epoch, Guid executor)
@@ -217,6 +218,8 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
         await Case("grant_key_unknown", () => Make(bed, keyId: "unregistered"));
         Assert.Null(await RegisterKey(bed, "k-owned", Guid.NewGuid()));
         await Case("grant_signer_is_not_the_key_owner", () => Make(bed, keyId: "k-owned"));
+        Assert.Null(await RegisterKey(bed, "k-unbound", unbound: true));
+        await Case("grant_key_has_no_signer", () => Make(bed, keyId: "k-unbound"));                                             // a key that names no person is refused until resolution (ii) exists
         Assert.Null(await RegisterKey(bed, "k-revoked"));
         Assert.Null(await AsOwner($"UPDATE {RK.Table} SET {RK.RevokeFrom} = clock_timestamp() - interval '1 second' WHERE {RK.KeyId} = 'k-revoked'"));
         await Case("grant_key_revoked", () => Make(bed, keyId: "k-revoked"));
@@ -257,6 +260,8 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
         await Case("attestation_creator_time", () => Make(bed, creatorAt: Now() - 300 - 86401));                                // earlier than not-before - 86400
         await Case("attestation_approver_time", () => Make(bed, attestationEdit: a => a.Replace("|in-person|", "|in-person|9")));
         await Case("attestation_request_mismatch", () => Make(bed, requestOverride: "0123456789abcdef"));
+        await Case("attestation_creator_line", () => Make(bed, attestationEdit: a => System.Text.RegularExpressions.Regex.Replace(a, @"(creator=[^|]+\|phone\|)", "${1}0")));                  // no leading zero in an integer (4.4)
+        await Case("attestation_approver_line", () => Make(bed, attestationEdit: a => System.Text.RegularExpressions.Regex.Replace(a, @"(approver=[^|]+\|in-person\|)", "${1}0")));
         await Case("attestation_request_line", () => Make(bed, attestationEdit: a => a.Replace("request=", "request=X")));
         await Case("attestation_participants_line", () => Make(bed, attestationEdit: a => a.Replace("participants=3", "participants=03")));
         await Case("attestation_note", () => Make(bed, attestationEdit: a => a[..a.IndexOf("note=", StringComparison.Ordinal)] + "note=" + new string('x', 501)));

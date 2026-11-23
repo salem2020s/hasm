@@ -213,7 +213,7 @@ One additive company migration; the lead allocates its number.
 * the key exists, its modulus has 3072 bits, and `accepted_at < coalesce(revoke_from, 'infinity')`;
 * `rsa_verify` holds over the message of section 4.4, built from the rows. The epoch digest and the attestation are stored columns, so the message covers them;
 * `not_before <= clock_timestamp() <= not_after`, in epoch seconds;
-* signer independence: the signer is not the plan's creator, not the approval's approver (except in (ii)'s approval signature, where the signer must BE the approver), not the executor, and not the event document's creator, editor or submitter. This is the rule of `f_17b9c93f`, applied to the signer id;
+* signer independence: the signer is not the plan's creator, not the approval's approver (except in (ii)'s approval signature, where the signer must BE the approver), not the executor, and not the event document's creator, editor or submitter. This is the rule of `f_e08495de`, applied to the signer id;
 * for a key with a non-NULL signer user id, the message's signer equals it;
 * **the attestation is well formed (4.4):**
   * its creator and approver lines name exactly the plan's creator and the approval's approver;
@@ -294,7 +294,7 @@ not-after=<integer>
 * `approval`, `approver`, `creator`, `document`, `item`, `warehouse`: the plan and approval rows of 0036.
 * `payload`: the hash of `convert_to(payload, 'UTF8')`; the server encoding is UTF-8.
 * `fingerprints`: the plan's seven `char(64)` fingerprint columns in their 0036 declaration order (plan, comparison, evidence, periods, position, policy, accounting), joined by `,` (0x2C).
-* `closure`: the plan's stored closure hash, after the database has recomputed it with `f_3cdca6ba` and compared.
+* `closure`: the plan's stored closure hash, after the database has recomputed it with `f_724b73d6` and compared.
 * `epoch`: the grant's stored epoch digest. At commit it must equal the digest of the epoch text rebuilt from the rows (4.3).
 * `attestation`: the hash of the grant's stored attestation bytes.
 
@@ -551,7 +551,7 @@ note=<free text, UTF-8, no LF, at most 500 characters>
    * display data: codes and names of items, warehouses, accounts, periods and branches.
 3. The file is carried to the signer's machine. The offline tool:
    * **recomputes from the displayed data alone, and refuses on any mismatch:**
-     * the closure hash, from the listed positions, with the 0036 algorithm of `f_3cdca6ba`;
+     * the closure hash, from the listed positions, with the 0036 algorithm of `f_724b73d6`;
      * the lines hash, from the listed lines;
      * the epoch hash, from the listed epoch rows;
      * the request digest;
@@ -656,7 +656,7 @@ In both tables, "runtime credentials" means the system runtime account AND the c
 
 * **Least privilege.** No new database role and no definer function. R's INSERT on the execution tables is conditional on a grant that R cannot produce. Keys and registrations are written by the owner.
 * **External audit HMAC chain.** Unchanged; business audit events 1154 to 1159 are still required as today. Grants, attestations and signatures add publicly verifiable evidence. The audit detail carries the grant id and the attestation, and the signature is unique because its length is exact.
-* **Segregation of duties.** Unchanged in the database (`f_17b9c93f`; the executor is not the creator) and extended to the signer (4.3). Resolution (ii) requires two different registered signers.
+* **Segregation of duties.** Unchanged in the database (`f_e08495de`; the executor is not the creator) and extended to the signer (4.3). Resolution (ii) requires two different registered signers.
 * **Fiscal periods.** Unchanged: the 0036 entry guard with `FOR SHARE` on the period, and the stock-period guard of 0034.
 * **The owner's Q1 safeguards** (quoted verbatim, each followed by where this design keeps it):
 

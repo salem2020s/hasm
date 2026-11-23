@@ -7,6 +7,7 @@ using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using SI = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionIntegrity;
 using UI = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserIntegrity;
+using UT = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using A = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserCompanyAccess;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
@@ -47,8 +48,66 @@ public abstract class IdentityTestBase : PostgresTestBase
         Auth = new AuthService(Store, Passwords, AuthSettings);
     }
 
+    /// <summary>
+    /// A direct SQL write to the user table by a test stands for "a legitimate writer set the row" (a restore, an offline step): the users are re-tagged afterwards under the suite's keys, so the identity checks
+    /// of the product see authentic rows. The tamper tests of the product use their own writers that do NOT re-tag (IdentitySessionIntegrityTests, UserIntegrityTests).
+    /// </summary>
+    private HashSet<Guid> tamperedBeforeExec = [];
+
+    private static bool WritesUsers(string sql)
+    {
+        var text = sql.TrimStart();
+        return sql.Contains(U.Table, StringComparison.Ordinal) && (text.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase) || text.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    protected override async Task BeforeExecAsync(string sql)
+    {
+        tamperedBeforeExec = [];
+        if (!WritesUsers(sql)) return;
+        tamperedBeforeExec = await TaggedButInvalidAsync();                                                       // rows an earlier tamper left behind: the re-tag after this statement must never bless them (review L2 of PR 235)
+    }
+
+    protected override async Task AfterExecAsync(string sql)
+    {
+        if (WritesUsers(sql)) await RetagAllUsersAsync(except: tamperedBeforeExec);
+    }
+
+    private async Task<HashSet<Guid>> TaggedButInvalidAsync()
+    {
+        var keys = SessionKeys; var invalid = new HashSet<Guid>();
+        await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        var ids = new List<Guid>();
+        await using (var sel = new NpgsqlCommand($"SELECT {U.Id} FROM {U.Table} WHERE {UT.Tag} IS NOT NULL", conn, tx))
+        await using (var r = await sel.ExecuteReaderAsync()) while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
+        foreach (var id in ids) if (!(await UserRow.LoadAsync(conn, tx, id, false, default))!.IsValid(keys)) invalid.Add(id);
+        return invalid;
+    }
+
+    protected async Task RetagAllUsersAsync(HashSet<Guid>? except = null)
+    {
+        var keys = SessionKeys; var key = keys.Active();
+        await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        var ids = new List<Guid>();
+        await using (var sel = new NpgsqlCommand($"SELECT {U.Id} FROM {U.Table}", conn, tx))
+        await using (var r = await sel.ExecuteReaderAsync()) while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
+        foreach (var id in ids)
+        {
+            if (except?.Contains(id) == true) continue;
+            var row = (await UserRow.LoadAsync(conn, tx, id, false, default))!;
+            row = row with { KeyId = key.Id, Tag = null };
+            await using var set = new NpgsqlCommand($"UPDATE {U.Table} SET {UT.KeyId} = @k, {UT.Tag} = @t WHERE {U.Id} = @i", conn, tx);
+            set.Parameters.AddWithValue("k", key.Id); set.Parameters.AddWithValue("t", row.ComputeTag(keys, key)); set.Parameters.AddWithValue("i", id);
+            await set.ExecuteNonQueryAsync();
+        }
+        await tx.CommitAsync();
+    }
+
     /// <summary>Sets (or clears) the selected company of every live session of the user through the TAGGED primitive (what a company selection made earlier left behind): a direct column write would be a tampered row, which is no session.</summary>
-    protected async Task SelectCompanyForSessions(Guid userId, Guid? companyId)
+    protected async Task SelectCompanyForSessions(Guid userId, Guid? companyId, bool mustApply = true)
     {
         await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
         await conn.OpenAsync();
@@ -60,7 +119,7 @@ public abstract class IdentityTestBase : PostgresTestBase
             await using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
         }
-        foreach (var id in ids) Assert.True(await SessionRow.SelectCompanyAsync(conn, tx, SessionKeys, id, userId, companyId, default));
+        foreach (var id in ids) { var applied = await SessionRow.SelectCompanyAsync(conn, tx, SessionKeys, id, userId, companyId, default); if (mustApply) Assert.True(applied); }   // a session whose revision is stale (the user changed since) takes no selection: that is the point of the revision
         await tx.CommitAsync();
     }
 
@@ -118,7 +177,7 @@ public class IdentityMigrationTests : IdentityTestBase
         await Start();
         var expected = new Dictionary<string, string[]>
         {
-            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc, M.State, M.StateChangedAtUtc, M.EnrolmentCodeHash, M.EnrolmentCodeExpiresAtUtc, M.EnrolmentCodeConsumedAtUtc, UI.SecurityRevision],
+            [U.Table] = [U.Id, U.Login, U.DisplayName, U.PasswordHash, U.State, U.IsIdentityAdministrator, U.CreatedAtUtc, U.StateChangedAtUtc, U.PasswordChangedAtUtc, U.LastLoginAtUtc, M.State, M.StateChangedAtUtc, M.EnrolmentCodeHash, M.EnrolmentCodeExpiresAtUtc, M.EnrolmentCodeConsumedAtUtc, UI.SecurityRevision, UT.KeyId, UT.Tag],
             [S.Table] = [S.Id, S.UserId, S.TokenHash, S.CreatedAtUtc, S.LastSeenAtUtc, S.IdleExpiresAtUtc, S.AbsoluteExpiresAtUtc, S.RevokedAtUtc, S.RevokedReason, S.ClientKind, S.SelectedCompanyId, SM.VerifiedAtUtc, SM.AuthMethods, SM.Emergency, SI.KeyId, SI.Tag, SI.UserRevisionAtIssue],
             [T.Table] = [T.Scope, T.KeyHash, T.Failures, T.WindowStartedAtUtc, T.BlockedUntilUtc],
             [A.Table] = [A.UserId, A.CompanyId, A.GrantedAtUtc, A.GrantedBy, A.RevokedAtUtc, A.RevokedBy],
