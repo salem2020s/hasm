@@ -68,6 +68,23 @@ public static class SystemRuntimePrivileges
     /// Statements run inside the SYSTEM database by the object owner. They strip everything the runtime account and PUBLIC hold on the tables and sequences of the schema (a table REVOKE also removes
     /// the column privileges) and then grant exactly the catalog, so re-running converges whatever was granted before. Nothing here names the owner: its privileges are never touched.
     /// </summary>
+    /// <summary>
+    /// Database-level statements, run on the maintenance connection (they cannot run inside the system database): PUBLIC and the runtime account lose every database privilege (CREATE and TEMPORARY
+    /// above all: a temporary table or <c>pg_temp</c> object could shadow an unqualified table name of the SYSTEM schema, for instance the audit table), and the runtime account keeps CONNECT only.
+    /// The owner's own privileges are never touched. The company twin is <c>CompanyRuntimePrivileges.DatabaseStatements</c>.
+    /// </summary>
+    public static IReadOnlyList<string> DatabaseStatements(string physicalDatabaseName, string roleName)
+    {
+        var db = Q(physicalDatabaseName);
+        var role = Q(roleName);
+        return
+        [
+            $"REVOKE ALL ON DATABASE {db} FROM PUBLIC",
+            $"REVOKE ALL ON DATABASE {db} FROM {role}",
+            $"GRANT CONNECT ON DATABASE {db} TO {role}",
+        ];
+    }
+
     public static IReadOnlyList<string> SchemaStatements(string roleName)
     {
         var role = Q(roleName);
@@ -104,6 +121,7 @@ public static class SystemRuntimePrivileges
           UNION ALL SELECT 'runtime_owns_objects' FROM rt WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relowner = rt.oid)
           UNION ALL SELECT 'runtime_owns_database' FROM rt WHERE EXISTS (SELECT 1 FROM pg_database d WHERE d.datname = current_database() AND d.datdba = rt.oid)
           UNION ALL SELECT 'runtime_schema_create' FROM rt WHERE has_schema_privilege(rt.oid, 'public', 'CREATE')
+          UNION ALL SELECT 'database_create_or_temp' FROM rt WHERE has_database_privilege(rt.oid, current_database(), 'CREATE') OR has_database_privilege(rt.oid, current_database(), 'TEMPORARY')   -- as the company twin: no temporary object can shadow a system table name
           UNION ALL SELECT 'totp_owned_by_runtime' FROM t, rt WHERE pg_has_role(rt.oid, t.relowner, 'MEMBER')
           UNION ALL SELECT 'totp_runtime_overgrant' FROM t, rt WHERE EXISTS (SELECT 1 FROM unnest(@forbidden::text[]) p WHERE has_table_privilege(rt.oid, t.oid, p))
               OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> ALL (@update_columns::name[]) AND has_column_privilege(rt.oid, t.oid, a.attnum, 'UPDATE'))
@@ -256,6 +274,16 @@ public static class SystemRuntimeAdministration
         {
             await using var cmd = new NpgsqlCommand(sql, conn, tx);
             await cmd.ExecuteNonQueryAsync(ct);
+        }
+        // Database-level privileges (only ever narrowed here) cannot change inside the system database's transaction: a maintenance connection under the same owner account does it.
+        await using (var maintenance = new NpgsqlConnection(options.BuildMaintenanceConnectionString()))
+        {
+            await maintenance.OpenAsync(ct);
+            foreach (var sql in SystemRuntimePrivileges.DatabaseStatements(options.SystemDatabaseName!, role))
+            {
+                await using var cmd = new NpgsqlCommand(sql, maintenance);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
         }
         if (!await SystemRuntimePrivileges.HasRequiredAccessAsync(conn, role, ct))
             throw new SystemRuntimeGrantException("grants_not_effective", "The runtime grants did not take effect; nothing was changed.");

@@ -21,7 +21,7 @@ public class MfaEnrolmentTests : IdentityTestBase
     {
         await Start();
         var connection = Options.BuildSystemConnectionString(admin: true);
-        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring));
+        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
         var challenges = new MfaChallengeStore(connection, Clock);
         var limiter = new MfaAttemptLimiter(Store, Clock);
         MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(challenges, new MfaVerifier(Mfa, limiter, Clock), Mfa, limiter));

@@ -19,7 +19,7 @@ public class MfaLoginTests : IdentityTestBase
     {
         await Start();
         var connection = Options.BuildSystemConnectionString(admin: true);
-        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring));
+        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
         var challenges = new MfaChallengeStore(connection, Clock);
         var limiter = new MfaAttemptLimiter(Store, Clock);
         var verifier = new MfaVerifier(Mfa, limiter, Clock);
