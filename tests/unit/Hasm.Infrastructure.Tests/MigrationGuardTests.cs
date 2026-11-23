@@ -360,9 +360,9 @@ public class MigrationGuardTests
     {
         // Extending the list is a change of the guard (docs/MIGRATION-GUARD.md, "System names"); no catalog relation is ever on it.
         Assert.Equal(new[] { "pg_current_xact_id", "pg_has_role" }, MigrationGuard.AllowedSystemFunctions.Order(StringComparer.Ordinal));
-        // dblink and set_config are mentioned by no migration of either set. A "pg_" name is mentioned by exactly TWO migrations, each only by the plain call of ONE allowlisted
+        // dblink and set_config are mentioned by no migration of either set. A "pg_" name is mentioned by exactly THREE migrations, each only by the plain call of ONE allowlisted
         // function: pg_has_role in system migration 0035 (the owner-only trigger of the TOTP secret material, PR 210) and pg_current_xact_id in company migration 0036 (the plan-execution
-        // layer, PR 48). No other migration, in either set, may mention one, and neither may mention the other function: the rule stays exact.
+        // layer, PR 48) and in company migration 0039 (the per-table rechecks of the execution epoch, T2 A3 H1: the same plain call, to find the executions written by the current transaction). No other migration, in either set, may mention one, and neither may mention the other function: the rule stays exact.
         var mentioning = new List<string>();
         foreach (var script in MigrationScript.LoadEmbedded().Concat(MigrationScript.LoadEmbeddedCompany()))
         {
@@ -371,7 +371,7 @@ public class MigrationGuardTests
             var names = System.Text.RegularExpressions.Regex.Matches(code, @"(?i)\bpg_\w+").Select(m => m.Value.ToLowerInvariant()).Distinct().Order(StringComparer.Ordinal).ToList();
             if (names.Count > 0) mentioning.Add($"{script.Set}:{script.Name}:{string.Join(",", names)}");
         }
-        Assert.Equal(["System:0035_totp_owner_only_trigger.sql:pg_has_role", "Company:0036_company_plan_execution.sql:pg_current_xact_id"], mentioning);
+        Assert.Equal(["System:0035_totp_owner_only_trigger.sql:pg_has_role", "Company:0036_company_plan_execution.sql:pg_current_xact_id", "Company:0039_company_replay_epoch_commit.sql:pg_current_xact_id"], mentioning);
     }
 
     [Theory]

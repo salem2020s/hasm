@@ -141,7 +141,7 @@ public class SystemRuntimeLeastPrivilegeTests : CompanyRuntimeTestBase
         Assert.True(await Scalar<long>($"SELECT count(*) FROM {Ev.Table} WHERE {Ev.EventType} BETWEEN 1330 AND 1337") >= 3);   // the audit rows were written by the restricted role, in the same transactions
 
         // the login challenges under the restricted role: issue, count an attempt, consume (the two UPDATE columns), and the housekeeping purge of an expired one (the DELETE of the catalog)
-        await using var challenges = new MfaChallengeStore(() => RuntimeConnection, Clock);
+        await using var challenges = new MfaChallengeStore(() => RuntimeConnection, Clock, keys: TestIdentityKeys.Instance);
         var issued = await challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
         var info = await challenges.TryBeginAttemptAsync(issued.Token, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
         Assert.NotNull(info);
