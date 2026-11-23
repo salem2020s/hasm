@@ -767,7 +767,13 @@ export interface DocumentLink { id: string; fromDocumentId: string; fromLineNo: 
 /** A registered link pair: documents of `source` may be linked into documents of `target` with `kind`. Static registry data; empty in production until the concrete types are activated. */
 export interface CommercialLinkPair { source: string; target: string; kind: DocumentLinkKind }
 export interface DocumentLinkInput { fromDocumentId: string; fromLineNo: number; toDocumentId: string; toLineNo: number; kind: DocumentLinkKind; quantity: number; idempotencyKey: string }
-export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number }
+/** `shortClosed` is what was closed short on the line (D-201); `open` is what is still open: ordered minus the larger of fulfilled and invoiced minus what was closed short. Both are derived by the server. */
+export interface LineQuantity { lineNo: number; ordered: number; fulfilled: number; invoiced: number; returned: number; remainingToFulfil: number; remainingToInvoice: number; remainingToReturn: number; shortClosed?: number; open?: number }
+// ---- Short close (Phase 3.13, owner decision D-201): an explicitly authorised action (permission company.commercialdocs.close on the document's branch) closes the remaining quantity of an approved, partially fulfilled
+// document with a mandatory reason. It is append-only and audited, and it creates no delivery, invoice, stock movement or journal entry. Without `lines` the whole open remainder of every line is closed.
+export interface ShortCloseLine { lineNo: number; quantity: number }
+export interface ShortClose { operationId: string; documentId: string; reason: string; createdBy: string; createdAtUtc: string; lines: ShortCloseLine[]; replayed: boolean }
+export interface ShortCloseInput { reason: string; idempotencyKey: string; lines?: ShortCloseLine[] }
 
 // ---- Stocktake (Phase 3.8B-1): count sheet of one warehouse with the book snapshot and the variance, up to approval. Creates no stock movement and no accounting entry.
 /** 1 draft, 2 submitted, 3 approved, 4 rejected, 5 cancelled. */
@@ -1198,6 +1204,11 @@ export function createApiClient(baseUrl: string, fetchImpl: typeof fetch = (...a
     listCommercialLinkPairs: () => get<{ types: string[]; linkPairs: CommercialLinkPair[] }>("/api/v1/company/commercial-documents/types").then((r) => r.linkPairs ?? []),
     createDocumentLink: (link: DocumentLinkInput) => request<DocumentLink>("POST", "/api/v1/company/commercial-documents/links", { body: link }),
     listDocumentLinks: (documentId: string) => get<{ links: DocumentLink[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/links`).then((r) => r.links),
+    /** The registered document types that may be closed short (static registry data). Empty in production until the concrete order types are activated: the screen then offers no short close. */
+    listShortCloseTypes: () => get<{ types: string[]; shortCloseTypes?: string[] }>("/api/v1/company/commercial-documents/types").then((r) => r.shortCloseTypes ?? []),
+    /** Closes the open remainder of an approved, partially fulfilled document short (D-201). The revision is the If-Match precondition; the document itself is not changed by the close. */
+    shortCloseDocument: (documentId: string, input: ShortCloseInput, revision: number) => request<ShortClose>("POST", `/api/v1/company/commercial-documents/${enc(documentId)}/short-close`, { body: input, ifMatch: revision }),
+    listShortCloses: (documentId: string) => get<{ shortCloses: ShortClose[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/short-closes`).then((r) => r.shortCloses),
     getLineQuantities: (documentId: string) => get<{ lines: LineQuantity[] }>(`/api/v1/company/commercial-documents/${enc(documentId)}/line-quantities`).then((r) => r.lines),
     createStockDocument: (doc: StockDocumentInput) => request<StockDocument>("POST", "/api/v1/company/stock-documents", { body: doc }),
     updateStockDocument: (id: string, doc: StockDocumentInput, revision: number) => request<StockDocument>("PUT", `/api/v1/company/stock-documents/${enc(id)}`, { body: doc, ifMatch: revision }),

@@ -47,6 +47,7 @@ function setup(over: Record<string, unknown> = {}, perms = PERMS, types = ["comm
     getCommercialApprovals: vi.fn().mockResolvedValue({ plan: [], decisions: [] }),
     listDocumentLinks: vi.fn().mockResolvedValue([]), getLineQuantities: vi.fn().mockResolvedValue([]), createDocumentLink: vi.fn(),
     listCommercialLinkPairs: vi.fn().mockResolvedValue([1, 2, 3, 4].map((kind) => ({ source: "commercial_test", target: "commercial_test", kind }))),
+    listShortCloses: vi.fn().mockResolvedValue([]), listShortCloseTypes: vi.fn().mockResolvedValue(["commercial_test"]), shortCloseDocument: vi.fn(),
     createCommercialDocument: vi.fn(), updateCommercialDocument: vi.fn(),
     ...over,
   }, perms);
@@ -697,5 +698,136 @@ describe("commercial document links (S2 API on the screen)", () => {
     expect(within(screen.getByTestId("link-l1")).getByText("Into this document")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Link to another document" })).toBeInTheDocument();
     expect(document.documentElement.dir).toBe("ltr");
+  });
+});
+
+const CLOSE = "company.commercialdocs.close";
+const CLOSER = [...PERMS, CLOSE];
+const shortClose = (over: Record<string, unknown> = {}) => ({ operationId: "op1", documentId: "d1", reason: "أوقف المورّد الصنف", createdBy: "closer-user-id", createdAtUtc: "2026-03-05T08:15:00Z", lines: [{ lineNo: 1, quantity: 2 }], replayed: false, ...over });
+/** A partially fulfilled line: 10 ordered, 4 fulfilled, 6 still open (the server derives every figure). */
+const openQty = (over: Record<string, unknown> = {}) => qty({ shortClosed: 0, open: 6, ...over });
+
+describe("short close of a commercial document (D-201) on the shared screen", () => {
+  it("shows what was closed short and what is open per line and the operations with their reasons, and offers no action without the close permission", async () => {
+    const client = await openLinks({ getLineQuantities: vi.fn().mockResolvedValue([openQty({ shortClosed: 2, open: 4, remainingToFulfil: 4 })]), listShortCloses: vi.fn().mockResolvedValue([shortClose()]) });
+    const panel = await screen.findByTestId("short-close-panel");
+    expect(within(await within(panel).findByTestId("open-1")).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1", "2", "4"]);
+    const row = await within(panel).findByTestId("short-close-op1");
+    expect(within(row).getByText("أوقف المورّد الصنف")).toBeInTheDocument();
+    expect(within(row).getByText("2026-03-05 08:15:00")).toBeInTheDocument();
+    expect(within(row).getByText("#1: 2")).toBeInTheDocument();
+    expect(screen.queryByTestId("short-close")).toBeNull();                                               // the permission is separate: update, approve and cancel do not imply it
+    expect(client.listShortCloseTypes).not.toHaveBeenCalled();
+    expect(within(panel).queryByRole("button")).toBeNull();                                               // append-only: no edit, no remove
+    expect(client.listShortCloses).toHaveBeenCalledWith("d1");
+  });
+
+  it("closes the remaining quantity with a mandatory reason, the revision as If-Match and one idempotency key, and sends no creator or quantity", async () => {
+    const close = vi.fn().mockResolvedValue(shortClose({ lines: [{ lineNo: 1, quantity: 6 }] }));
+    const quantities = vi.fn().mockResolvedValueOnce([openQty()]).mockResolvedValue([openQty({ shortClosed: 6, open: 0, remainingToFulfil: 0 })]);
+    const closes = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([shortClose({ lines: [{ lineNo: 1, quantity: 6 }] })]);
+    const client = await openLinks({ shortCloseDocument: close, getLineQuantities: quantities, listShortCloses: closes }, CLOSER);
+    expect(await screen.findByTestId("short-closes-empty")).toHaveTextContent("لم تُقفَل أي كمية من هذا المستند.");
+    await userEvent.click(await screen.findByTestId("short-close"));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/لن يمكن تنفيذها أو فوترتها/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "تأكيد" }));
+    expect(await within(dialog).findByText("السبب مطلوب.")).toBeInTheDocument();                           // refused before anything is sent
+    expect(close).not.toHaveBeenCalled();
+    await userEvent.type(within(dialog).getByLabelText(/^السبب/), "  ألغى العميل الباقي  ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "تأكيد" }));
+    expect(await screen.findByTestId("short-close-done")).toHaveTextContent("أُقفلت الكمية المتبقية.");
+    expect(close).toHaveBeenCalledTimes(1);
+    const [id, body, revision] = close.mock.calls[0] as [string, Record<string, unknown>, number];
+    expect([id, revision]).toEqual(["d1", 5]);
+    expect(Object.keys(body).sort()).toEqual(["idempotencyKey", "reason"]);                                // no creator, no document id, no quantity, no lines: the server closes what is open
+    expect(body.reason).toBe("ألغى العميل الباقي");
+    expect(String(body.idempotencyKey).length).toBeGreaterThanOrEqual(8);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // the derived figures and the operations are read again from the server; nothing is left open, so the action is gone
+    await waitFor(() => expect(within(screen.getByTestId("open-1")).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1", "6", "0"]));
+    expect(await screen.findByTestId("short-close-op1")).toBeInTheDocument();
+    expect(await screen.findByTestId("short-close-nothing")).toHaveTextContent("لا توجد كمية مفتوحة للإقفال.");
+    expect(screen.queryByTestId("short-close")).toBeNull();
+    expect(client.listShortCloseTypes).toHaveBeenCalled();
+  });
+
+  it("offers the action only for a closable type, a partially fulfilled document and an open quantity, and says why otherwise", async () => {
+    await openLinks({ getLineQuantities: vi.fn().mockResolvedValue([openQty()]), listShortCloseTypes: vi.fn().mockResolvedValue([]) }, CLOSER);   // production: no closable type is registered
+    expect(await screen.findByTestId("short-close-no-type")).toHaveTextContent("هذا النوع من المستندات لا يقبل الإقفال الناقص.");
+    expect(screen.queryByTestId("short-close")).toBeNull();
+  });
+
+  it("does not offer the action for a document nothing was fulfilled or invoiced from (it is cancelled, not closed short)", async () => {
+    await openLinks({ getLineQuantities: vi.fn().mockResolvedValue([openQty({ fulfilled: 0, invoiced: 0, open: 10, remainingToFulfil: 10 })]) }, CLOSER);
+    expect(await screen.findByTestId("short-close-not-partial")).toHaveTextContent("المستند غير المنفَّذ يُلغى ولا يُقفَل ناقصاً");
+    expect(screen.queryByTestId("short-close")).toBeNull();
+  });
+
+  it("offers the action for a document that was only invoiced in part", async () => {
+    await openLinks({ getLineQuantities: vi.fn().mockResolvedValue([openQty({ fulfilled: 0, invoiced: 7, open: 3 })]) }, CLOSER);
+    expect(await screen.findByTestId("short-close")).toHaveTextContent("إقفال الكمية المتبقية");
+  });
+
+  it("shows no short-close panel for a document that is not approved and asks the server for nothing", async () => {
+    const client = setup({}, CLOSER, ["commercial_test"], [doc()], doc());
+    await openDoc();
+    await userEvent.click(tab("الروابط"));
+    expect(await screen.findByTestId("links-not-approved")).toBeInTheDocument();
+    expect(screen.queryByTestId("short-close-panel")).toBeNull();
+    expect(client.listShortCloses).not.toHaveBeenCalled();
+    expect(client.listShortCloseTypes).not.toHaveBeenCalled();
+  });
+
+  it("translates the server's refusals, keeps the idempotency key for a retry of the same reason and rotates it for another reason", async () => {
+    const close = vi.fn()
+      .mockRejectedValueOnce(apiError(409, "concurrent_change")).mockRejectedValueOnce(apiError(412, "revision_conflict")).mockRejectedValueOnce(apiError(403, "forbidden"))
+      .mockRejectedValueOnce(apiError(409, "document_not_partially_fulfilled")).mockRejectedValueOnce(apiError(409, "short_close_not_allowed_for_type")).mockRejectedValueOnce(apiError(409, "nothing_to_close"))
+      .mockRejectedValueOnce(apiError(409, "idempotency_key_reused"));
+    await openLinks({ shortCloseDocument: close, getLineQuantities: vi.fn().mockResolvedValue([openQty()]) }, CLOSER);
+    const attempt = async (reason: string) => {
+      await userEvent.click(await screen.findByTestId("short-close"));
+      await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(/^السبب/), reason);
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "تأكيد" }));
+    };
+    const texts = ["تغيّر شيء أثناء العملية؛ أعد التحميل وحاول مجدداً.", "تغيّر المستند؛ أعد التحميل وحاول مجدداً.", "لا تملك صلاحية الإقفال الناقص لهذا المستند.",
+      "لم يُنفَّذ أو يُفوتَر شيء من هذا المستند بعد؛ يُلغى ولا يُقفَل ناقصاً.", "هذا النوع من المستندات لا يقبل الإقفال الناقص.", "لا توجد كمية مفتوحة للإقفال.", "مفتاح الإرسال مستعمل لعملية إقفال أخرى."];
+    for (const text of texts) {
+      await attempt("السبب نفسه");
+      expect(await within(await screen.findByTestId("short-close-error")).findByText(text)).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+    const keys = close.mock.calls.map((c) => (c[1] as { idempotencyKey: string }).idempotencyKey);
+    expect(new Set(keys).size).toBe(1);                                                                    // the same reason is the same request: a retry replays, never duplicates
+    close.mockResolvedValueOnce(shortClose());
+    await attempt("السبب نفسه");
+    await screen.findByTestId("short-close-done");
+    expect((close.mock.calls[7][1] as { idempotencyKey: string }).idempotencyKey).not.toBe(keys[0]);       // after a reuse refusal the key is rotated
+    close.mockRejectedValueOnce(apiError(409, "concurrent_change"));
+    await attempt("سبب آخر");
+    await screen.findByTestId("short-close-error");
+    expect((close.mock.calls[8][1] as { idempotencyKey: string }).idempotencyKey).not.toBe((close.mock.calls[7][1] as { idempotencyKey: string }).idempotencyKey);
+  });
+
+  it("works in English (LTR) and inside the Tauri shell with the same action", async () => {
+    localStorage.setItem("hasm.locale", "en");
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      const close = vi.fn().mockResolvedValue(shortClose());
+      setup({ getLineQuantities: vi.fn().mockResolvedValue([openQty()]), listShortCloses: vi.fn().mockResolvedValue([shortClose({ reason: "discontinued" })]), shortCloseDocument: close }, CLOSER, ["commercial_test"], [approved()], approved());
+      await go("#/commercial/documents");
+      await userEvent.click(await screen.findByRole("button", { name: "View" }));
+      await userEvent.click(await screen.findByRole("tab", { name: /^Links/ }));
+      expect(await screen.findByRole("heading", { name: "Short close" })).toBeInTheDocument();
+      expect(within(await screen.findByTestId("short-close-op1")).getByText("discontinued")).toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("button", { name: "Close the remaining quantity" }));
+      const dialog = screen.getByRole("dialog");
+      await userEvent.keyboard("{Tab}");                                                                   // keyboard reachable: the dialog holds the focus
+      await userEvent.type(within(dialog).getByLabelText(/^Reason/), "no longer needed");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
+      expect(await screen.findByTestId("short-close-done")).toHaveTextContent("The remaining quantity was closed.");
+      expect(close).toHaveBeenCalledWith("d1", expect.objectContaining({ reason: "no longer needed" }), 5);
+      expect(document.documentElement.dir).toBe("ltr");
+    } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
   });
 });

@@ -1,4 +1,4 @@
-import { ApiError, type Branch, type CommercialDocument, type CommercialApprovals, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole } from "@hasm/api-client";
+import { ApiError, type Branch, type CommercialDocument, type CommercialApprovals, type CommercialDocumentInput, type CommercialLinkPair, type CommercialStatus, type DocumentLink, type DocumentLinkKind, type InventoryItem, type LineQuantity, type PartyRole, type ShortClose } from "@hasm/api-client";
 import { SearchPicker, Tabs, useI18n, type PickerPage, type TabItem } from "@hasm/ui";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../auth";
@@ -345,7 +345,7 @@ function DocumentEditor({ editor, types, branches, onClose, onChanged, onSwitch 
     },
     ...(doc ? [{
       id: "links", label: t("commdoc.tab.links"),
-      content: <LinksPanel doc={doc} canLink={can("company.commercialdocs.update")} />,
+      content: <LinksPanel doc={doc} canLink={can("company.commercialdocs.update")} canClose={can("company.commercialdocs.close")} />,
     } as TabItem] : []),
     ...(doc ? [{
       id: "history", label: t("commdoc.tab.history"),
@@ -531,7 +531,7 @@ const LINK_FIELD: Record<string, string> = { fromDocumentId: "fromDocumentId", t
  * creator, a total or a price. One idempotency key belongs to one form attempt: a retry of the same submit replays the same link, and a new key starts after a success. Every refusal is translated; in production no
  * type pair is registered yet, so the server refuses with `link_not_allowed` and the empty state explains that links appear when linkable types are activated. Links are append-only: there is no remove button.
  */
-function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolean }) {
+function LinksPanel({ doc, canLink, canClose }: { doc: CommercialDocument; canLink: boolean; canClose: boolean }) {
   const { t } = useI18n();
   const auth = useAuth();
   const approved = doc.status === 3;
@@ -641,6 +641,7 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
           </div>
         </Card>
       )}
+      {approved && <ShortClosePanel doc={doc} quantities={quantities} canClose={canClose} onClosed={reload} />}
       <Card title={t("commdoc.links.list")}>
         <div className="table-wrap">
           <table className="data-table" data-testid="links-table">
@@ -692,5 +693,97 @@ function LinksPanel({ doc, canLink }: { doc: CommercialDocument; canLink: boolea
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * The short close (Phase 3.13, owner decision D-201), inside the Links tab of an APPROVED document: what was closed short and what is still open on every line (derived by the server), the short-close operations with
+ * their reasons (append-only: no edit, no remove), and, for a user who holds `company.commercialdocs.close`, ONE action that closes the whole open remainder with a mandatory reason. The action is offered only when the
+ * server's registry names this document type closable (production names none yet), something was already fulfilled or invoiced, and something is still open; the server and PostgreSQL enforce all of it again. It sends
+ * no creator, no quantity and no document id in the body, the revision as If-Match and one idempotency key per reason (a retry of the same request replays the same operation). Nothing is delivered, invoiced, moved in
+ * stock or posted by a close.
+ */
+function ShortClosePanel({ doc, quantities, canClose, onClosed }: { doc: CommercialDocument; quantities: LineQuantity[]; canClose: boolean; onClosed: () => Promise<void> }) {
+  const { t } = useI18n();
+  const auth = useAuth();
+  const [closes, setCloses] = useState<ShortClose[] | null>(null);
+  const [types, setTypes] = useState<string[] | null>(null);
+  const [dialog, setDialog] = useState(false);
+  const [reason, setReason] = useState("");
+  const [reasonError, setReasonError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const attempt = useRef({ sig: "", key: newKey() });
+
+  const reload = useCallback(async () => {
+    try { setCloses(await auth.api.listShortCloses(doc.id)); } catch (e) { if (!auth.handleError(e)) setError(errorText(t, e, "commdoc.close.error.")); setCloses([]); }
+  }, [auth.api, auth.handleError, doc.id, t]);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!canClose) return;
+    void auth.api.listShortCloseTypes().then(setTypes).catch((e) => { if (!auth.handleError(e)) setTypes([]); });
+  }, [auth.api, auth.handleError, canClose]);
+
+  const closable = (types ?? []).includes(doc.docType);
+  const partlyFulfilled = quantities.some((q) => q.fulfilled > 0 || q.invoiced > 0);
+  const open = quantities.reduce((n, q) => n + (q.open ?? 0), 0);
+  const offered = canClose && closable && partlyFulfilled && open > 0;
+
+  async function close() {
+    const text = reason.trim();
+    if (!text) { setReasonError(t("commdoc.reason_required")); return; }
+    setReasonError(null); setBusy(true); setError(null); setNotice(null);
+    if (attempt.current.sig !== text) attempt.current = { sig: text, key: newKey() };   // another reason is another request: never reuse a key for it
+    try {
+      await auth.api.shortCloseDocument(doc.id, { reason: text, idempotencyKey: attempt.current.key }, doc.revision);
+      attempt.current = { sig: "", key: newKey() }; setDialog(false); setReason(""); setNotice(t("commdoc.close.done"));
+      await Promise.all([reload(), onClosed()]);
+    } catch (err) {
+      if (auth.handleError(err)) return;
+      if (err instanceof ApiError && err.code === "idempotency_key_reused") attempt.current = { sig: "", key: newKey() };
+      setDialog(false); setError(errorText(t, err, "commdoc.close.error."));
+      await Promise.all([reload(), onClosed()]);   // show what is there now (another user may have closed or linked meanwhile)
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Card title={t("commdoc.close.title")} hint={t("commdoc.close.intro")}>
+      <div data-testid="short-close-panel">
+        {notice && <Banner kind="success" testId="short-close-done">{notice}</Banner>}
+        {error && <Banner kind="error" testId="short-close-error">{error}</Banner>}
+        <div className="table-wrap">
+          <table className="data-table" data-testid="short-close-quantities">
+            <caption className="visually-hidden">{t("commdoc.close.title")}</caption>
+            <thead><tr><th scope="col">#</th><th scope="col">{t("commdoc.close.closed")}</th><th scope="col">{t("commdoc.close.open")}</th></tr></thead>
+            <tbody>{quantities.map((q) => <tr key={q.lineNo} data-testid={`open-${q.lineNo}`}><td>{q.lineNo}</td><td className="num"><bdi dir="ltr">{q.shortClosed ?? 0}</bdi></td><td className="num"><bdi dir="ltr">{q.open ?? 0}</bdi></td></tr>)}</tbody>
+          </table>
+        </div>
+        <div className="table-wrap">
+          <table className="data-table" data-testid="short-closes">
+            <caption className="visually-hidden">{t("commdoc.close.list")}</caption>
+            <thead><tr><th scope="col">{t("commdoc.close.at")}</th><th scope="col">{t("commdoc.close.by")}</th><th scope="col">{t("commdoc.reason")}</th><th scope="col">{t("commdoc.close.lines")}</th></tr></thead>
+            <tbody>
+              {closes !== null && closes.length === 0 && <tr><td colSpan={4} data-testid="short-closes-empty">{t("commdoc.close.none")}</td></tr>}
+              {(closes ?? []).map((c) => (
+                <tr key={c.operationId} data-testid={`short-close-${c.operationId}`}>
+                  <td><bdi dir="ltr">{c.createdAtUtc.slice(0, 19).replace("T", " ")}</bdi></td><td><bdi dir="ltr">{shortId(c.createdBy)}</bdi></td><td><bdi>{c.reason}</bdi></td>
+                  <td><bdi dir="ltr">{c.lines.map((l) => `#${l.lineNo}: ${l.quantity}`).join(", ")}</bdi></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {canClose && types !== null && !closable && <Banner kind="info" testId="short-close-no-type">{t("commdoc.close.no_type")}</Banner>}
+        {canClose && closable && !partlyFulfilled && <Banner kind="info" testId="short-close-not-partial">{t("commdoc.close.not_partial")}</Banner>}
+        {canClose && closable && partlyFulfilled && open <= 0 && <Banner kind="info" testId="short-close-nothing">{t("commdoc.close.nothing")}</Banner>}
+        {offered && <div className="actions"><button type="button" className="danger" data-testid="short-close" disabled={busy} onClick={() => { setReason(""); setReasonError(null); setDialog(true); }}>{t("commdoc.close.action")}</button></div>}
+        {dialog && (
+          <ConfirmDialog idPrefix="sc-" title={t("commdoc.close.action")} message={t("commdoc.close.message")} confirmLabel={t("form.confirm")} confirmDisabled={busy} onCancel={() => setDialog(false)} onConfirm={() => void close()}>
+            <Field id="sc-reason" label={t("commdoc.reason")} error={reasonError ?? undefined} required>{(aria) => <textarea {...aria} value={reason} rows={3} maxLength={500} onChange={(e) => { setReason(e.target.value); setReasonError(null); }} />}</Field>
+          </ConfirmDialog>
+        )}
+      </div>
+    </Card>
   );
 }
