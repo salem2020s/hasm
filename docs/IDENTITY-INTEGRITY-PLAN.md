@@ -2,6 +2,49 @@
 
 **Status: slice S-1 BUILT in its own PR (section 13 records exactly what was built and what was left for later slices); every other slice is still a plan. The rest of this text is the plan as approved; where section 13 differs, section 13 is what the code does.** Originally: PLAN ONLY (a proposal; nothing is built; no decision ID, audit code or migration number is allocated). It answers the finding recorded by Agent OSEC during the review of PR 218 (T2), 2026-11-22, severity **High**, and it is **blocking** for T2 and for any control that relies on the application authenticating a person against someone who holds the database credentials. Implementation starts only after an independent review of this plan and the owner decisions of section 12. Everything here that is not a quoted owner decision is a proposal.
 
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-240..D-247) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (SEC-RT-SESSION-OD). The owner text follows verbatim; the decision IDs, which the status line below says were not yet allocated, are D-240 to D-247 for OD-1 to OD-8. Nothing else of this document changes.
+>
+> A. Identity Integrity — OD-1 to OD-8
+> OD-1 — Key custody: APPROVED
+> Reuse the existing protected key ring with the four separately derived, purpose-bound identity keys: `identity-token`, `identity-session`, `identity-user` and `identity-access`.
+> Preserve D-080, D-087 and D-093, encrypted offline recovery, rotation, access restrictions and independent approval for key retirement. Never store the raw keys in PostgreSQL.
+
+> OD-2 — Rollout: APPROVED
+> Use one controlled maintenance window. Force all Web and Desktop users to sign in again, including MFA where applicable.
+> Never offer a compatibility mode that trusts unsigned identity records. Deployment and activation require a successful backup, verified recovery readiness and a rollback procedure that does not reopen the vulnerability.
+
+> OD-3 — Existing identities and permissions: POLICY APPROVED
+> For each installation, the installation owner must designate a named, authorized security operator before rollout.
+> That person reviews the complete identity and permission reconciliation report against the authenticated audit history.
+> Previously revoked permissions reintroduced into the database must not be automatically trusted. Suspicious or unsupported records require explicit documented disposition.
+> The authorized owner-account operation may tag only verified and approved records.
+> This installation-specific appointment does not block development or testing. Until completed for a real installation, production rollout remains blocked.
+
+> OD-4 — IdentityAnchor: APPROVED
+> Implement the append-only, cryptographically authenticated revision history.
+> Only valid key-backed anchors count. Invalid or unknown-key anchors must never be able to lock legitimate users out; alert and ignore those entries for the revision bound.
+> Prove that previously valid but revoked identity or access records cannot be restored by database-only manipulation.
+
+> OD-5 — Residual threat boundaries: CONDITIONALLY ACCEPTED
+> Accept the documented limits concerning availability attacks, bounded session lifetime, full application-process compromise and database-superuser compromise as explicit threat-model boundaries, not as permission to weaken security.
+> Preserve the absolute session expiration, signed revocation/version checks, MFA attempt protections, alerts and audit evidence.
+> The known single-logout resurrection scenario must be documented and tested. Prefer a narrowly scoped, independently reviewed protection if feasible without unexpectedly signing users out from every device. Do not block the primary security fix on a speculative redesign; do not silently claim that the residual is eliminated.
+
+> OD-6 — Rotation: APPROVED
+> Existing sessions may use the previous key for no longer than their configured maximum lifetime, initially 12 hours.
+> Existing user and access records may use the previous key only during the controlled re-tagging operation. Retagging must have observable completion and failure states, not indefinite grace.
+> Retire a key only after zero references are verified and independent approval is obtained.
+
+> OD-7 — Scope: APPROVED
+> Protect cost-center assignments alongside users, sessions, roles, role assignments and company access.
+> Narrowing the application database role's remaining permissions is a separate least-privilege workstream. Track it explicitly; do not mistake cryptographic integrity checks for a complete replacement for least privilege.
+
+> OD-8 — Refusal responses: APPROVED
+> Missing required keys produce a fail-closed service-unavailable response.
+> Invalid identity or access records receive neutral authentication or authorization failures, without revealing cryptographic validation details. Record safe, actionable diagnostic information in the protected audit/administrator channel.
+> Proceed with the identity-integrity implementation and independent adversarial security tests.
+
+
 ## 1. The problem, restated
 
 The API authenticates a person from rows of the SYSTEM database, and every row that decides "who is this, is the second factor done, what may they do" is writable by the system runtime role (`grant-system-runtime`, `SystemRuntimePrivileges`). Nothing in those rows is bound to a secret that lives outside the database. Whoever holds the runtime credentials (leaked configuration or connection string, a database-side leak of the role's password) can, without any password, TOTP secret or key of the API host:
@@ -170,6 +213,8 @@ One additive SYSTEM migration (generated like the other system migrations, `tool
 Also unit: golden values per MAC (so a silent change of the covered field set fails), field-order and length-prefix ambiguity tests, a key-id test, a constant-time comparison test.
 
 ## 13. Owner decisions (final wording, as put to the owner; none is implied by this plan)
+
+**Decided 2026-11-22: see the owner decision at the top of this document (D-240..D-247; register item SEC-RT-SESSION-OD). The questions below are kept as put to the owner.**
 
 **OD-1 - Key custody.** "The existing protected key ring, which already protects authenticator secrets (D-080(2)), will also be used, through four separate derived keys, to authenticate login sessions, short-lived login challenges, user records and permission records. It is backed up and recovered as today (D-087), and a key is retired only with independent approval (D-080(6)). Do you approve? (Alternative, not recommended: a separate owner-only key folder, with its own backup and recovery procedure.)" [Technical reference: section 3; the four subkeys are `identity-token`, `identity-session`, `identity-user`, `identity-access`.]
 

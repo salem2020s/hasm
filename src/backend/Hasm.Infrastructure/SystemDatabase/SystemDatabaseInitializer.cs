@@ -14,13 +14,21 @@ public sealed class SystemDatabaseInitializer(HasmDatabaseOptions options)
 {
     private const string DuplicateDatabase = "42P04";
 
+    /// <summary>TEST SEAM (can only add a refusal, see <see cref="MigrationAccountPolicy"/>): an additional "is a superuser" reading, so the order "refuse before anything is created" is testable without a superuser login.</summary>
+    internal Func<bool>? AdditionalSuperuserReading { get; init; }
+
     public async Task<InitializationResult> InitializeAsync(CancellationToken ct = default)
     {
         options.EnsureValid(requireAdmin: true);
         var scripts = MigrationScript.LoadEmbedded();
 
+        await using (var gate = new Npgsql.NpgsqlConnection(options.BuildMaintenanceConnectionString()))
+        {
+            await gate.OpenAsync(ct);
+            await MigrationAccountPolicy.EnsureAsync(gate, options.AllowSuperuserMigrationAccount, null, AdditionalSuperuserReading, ct);   // before anything is created
+        }
         var created = await EnsureDatabaseAsync(ct);
-        var result = await new MigrationRunner(options.BuildSystemConnectionString(admin: true)).ApplyAsync(scripts, ct);
+        var result = await new MigrationRunner(options.BuildSystemConnectionString(admin: true)) { AllowSuperuser = options.AllowSuperuserMigrationAccount, AdditionalSuperuserReading = AdditionalSuperuserReading }.ApplyAsync(scripts, ct);
         return new InitializationResult(created, result.Applied, result.AlreadyApplied);
     }
 

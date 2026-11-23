@@ -2,6 +2,21 @@
 
 **Status: PROPOSAL for independent accounting review and explicit owner approval. Nothing here is built, no migration is written, and REVALUATION EXECUTION STAYS CLOSED.** The owner's decisions D-192 and D-198 require this contract, its independent review and the required tests before revaluation is activated ("Do not activate revaluation until the contract and required tests are approved", D-198). Until then the engine keeps refusing a method or value change (`valuation_method_changed`), and no revaluation document, account mapping or permission exists.
 
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-255) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (REVALUATION-CONTRACT). The owner text follows verbatim; approved as policy direction only; revaluation execution stays disabled until its accounting contract, database representation, tests and independent review have been accepted. Nothing else of this document changes.
+>
+> D. Inventory Revaluation — RQ-1 to RQ-16
+> Approve the conservative contract directions in `docs/PHASE-3.8D-REVALUATION-CONTRACT.md` as follows:
+> * RQ-1 to RQ-4: Accept the proposed defaults: versioned account mappings, direct inventory credit, atomic journal/cost posting, and documented company-declared valuation evidence.
+> * RQ-5: Choose option (b), per item/warehouse position, following the accounting reviewer's final recommendation. Use its reviewed deterministic proportional allocation and largest-remainder rounding. Do not compare or net across unrelated warehouses or groups.
+> * RQ-6: First implementation supports write-down only, together with RQ-8's correction method. Keep write-up/reversal unavailable until the independently approved reversal contract is implemented. Clearly identify jurisdictions or accounting policies requiring reversals as unsupported until then.
+> * RQ-7 and RQ-8: Accept the proposed evidence requirements and narrowly approved cancellation while positions remain unchanged and the period is Open.
+> * RQ-9: Use the proposed lineage-preserving outflow/inflow approach as the design direction, but require the outstanding independent database-safety review and complete reader-regression evidence before implementation approval. Do not enable it if it changes existing historical accounting invariants.
+> * RQ-10 to RQ-13: Accept the proposed conservative defaults, including independent Inventory Cost Approver authorization, restricted reversal across transfers, conservative provisional costing, and no replay across revaluation epochs.
+> * RQ-14 and RQ-15: Accept the strict period cut-off, reversal, return and accounting-pending defaults. Never backdate across later posted movements to force a period-end value.
+> * RQ-16: One executed business revaluation document consumes one Trial transaction, with no double counting of its internal operations and journal.
+> Revaluation execution remains disabled until its accounting contract, database representation, tests and independent review have been accepted.
+
+
 **Revision 3.** The confirmation review of revision 2 (Agent FAC, at `0ae5f70`: every first-round finding closed; 2 Medium and 2 Low remaining) is worked in: the scope of the engine's `duplicate_item_line` check corrected (section 3 and option (i) of section 7), a precondition for positions with pending or failed postings (section 15.2 rule 7), the per-position allocation rule repaired (section 9.2), and the lapse of the pre-revaluation refusals after a cancellation (section 15.1). **Revision 2.** The first independent accounting review (Agent FAC, at `6fc1810`: request changes, 1 High, 8 Medium, 5 Low) is worked in. Where the reviewer recommends another default than revision 1, the recommendation is now the proposal and both are shown. Section 18 lists the reviewer's recommendation per owner question.
 
 How to read it. Every section separates three kinds of statement:

@@ -119,4 +119,12 @@ public sealed class ReplicaStatusTests
         }
         finally { Directory.Delete(work, true); }
     }
+
+    [Fact]
+    public void A_copy_the_last_re_verification_reported_corrupt_is_a_failure_and_the_reverified_age_is_carried()
+    {
+        Assert.Equal(["replica_corrupt:1"], Codes(Good() with { ReportedCorruptRunIds = ["20260309T020000Z-0a0b0c0d"] }));
+        Assert.Equal(new DateTimeOffset(2026, 3, 9, 0, 0, 0, TimeSpan.Zero), (Good() with { LastReverifiedUtc = new DateTimeOffset(2026, 3, 9, 0, 0, 0, TimeSpan.Zero) }).LastReverifiedUtc);
+        Assert.Empty(Codes(Good()));                                                                // without a report nothing changes
+    }
 }
