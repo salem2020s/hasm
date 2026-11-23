@@ -37,7 +37,7 @@ using Npgsql;
 //   Hasm.Admin backup-run <root>  (Phase 4.3 slice 4: system database + every Ready company into <root>/<run id>/, run.json last; exit 0 ok, 8 partial, 1 failed, 4 another run in progress)
 //   Hasm.Admin backup-signing-keygen  (Phase 4.3 slice 5: a new ECDSA P-256 backup signing key in Hasm__Backup__SigningKeyDirectory, owner-only, never overwrites; audited 2013)
 //   Hasm.Admin backup-keys <destination-dir>  (Phase 4.3 slice 5: every key directory as ONE encrypted, signed export; signing PUBLIC keys only; audited 2012)
-//   Hasm.Admin backup-retention-plan <root> [--json <file>]  (Phase 4.3 slice 6: the D-086 retention preview with every run's keep reasons; reads the databases; deletes nothing; audited 2014)
+//   Hasm.Admin backup-retention-plan <root> [--destination <id>] [--json <file>]  (Phase 4.3 slice 6: the D-086 retention preview with every run's keep reasons; reads the databases; deletes nothing; audited 2014)
 //   Hasm.Admin backup-retention-apply <root>  (Phase 4.3 slice 6: automatic deletion, INACTIVE (D-137): refuses with retention_deletion_inactive, audited 2017)
 //   Hasm.Admin backup-hold-place (--run <run-id> | --company <id> [--from <date>] [--to <date>]) --reason <text>  (a backup legal hold; never released by this tool; audited 2018)
 //   Hasm.Admin backup-hold-list
@@ -77,7 +77,7 @@ var retirementScopeAttested = false;
 Guid? holdCompany = null;
 DateOnly? holdFrom = null, holdTo = null;
 var passphraseStdin = false;
-string? replicateRun = null, replicateDestination = null;
+string? replicateRun = null, replicateDestination = null, retentionDestination = null;
 var replicateNewestFirst = false;
 var verifyAll = false;
 var keepLast = 0;
@@ -120,8 +120,7 @@ var validUsage = command switch
     "backup-replica-verify" => ParseVerifyArgs(),
     "backup-signing-keygen" => args.Length == 1,
     "backup-keys" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
-    "backup-retention-plan" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "")
-        && (args.Length == 2 || (args.Length == 4 && args[2] == "--json" && Path.IsPathFullyQualified(planJson = args[3]))),
+    "backup-retention-plan" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && ParseRetentionPlanFlags(),
     "backup-retention-apply" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-hold-place" => ParseHoldFlags(),
     "backup-hold-list" => args.Length == 1,
@@ -194,7 +193,14 @@ if (command is "backup-status" or "backup-retention-preview")
         Console.WriteLine("This folder is a configured backup destination: its ROOT status only (no view of the primary or of the other destinations).");
         return rootExit;
     }
-    if (destinations.Count == 0) { Console.WriteLine("Replicas: none (no backup destination configured)."); return rootExit; }
+    var readinessTrust = BackupMaterialLoader.ServerTrust(statusOptions);
+    var readinessOptions = RetentionOptions.FromConfiguration(configuration);
+    if (destinations.Count == 0)
+    {
+        Console.WriteLine("Replicas: none (no backup destination configured).");
+        foreach (var line in DeletionReadiness.Lines(DeletionReadiness.Locations(readinessOptions, destinations, args[1], readinessTrust, null, auditReadable: true))) Console.WriteLine(line);
+        return rootExit;
+    }
     // slice 8 (S8c): with destinations configured the system audit stream is read, read-only, for the last re-verification of each copy (2040 reverified, 2042 corrupt); an unreadable stream is a failure
     ReplicaAuditState? auditState = null;
     var auditReadable = true;
@@ -203,6 +209,8 @@ if (command is "backup-status" or "backup-retention-preview")
     var reports = ReplicaStatusReport.Evaluate(destinations, args[1], BackupMaterialLoader.ServerTrust(statusOptions), now, TimeSpan.FromHours(maxAgeHours), auditState);
     foreach (var line in reports.SelectMany(r => r.Lines)) Console.WriteLine(line);
     if (!auditReadable) Console.WriteLine("  [FAILURE] audit_unreadable (the system audit stream could not be read, so re-verification results are unknown)");
+    // S8d (5.9): the readiness of deletion at the primary and each destination, reason codes only. This status read is informational (the audit rows are read as stored), so it never makes a run count as accounted for.
+    foreach (var line in DeletionReadiness.Lines(DeletionReadiness.Locations(readinessOptions, destinations, args[1], readinessTrust, auditState, auditReadable))) Console.WriteLine(line);
     var contributions = reports.Select(r => r.Findings).ToList();
     if (!auditReadable) contributions.Add([new ReplicaFinding("audit_unreadable", 1)]);
     var overall = ReplicaStatus.Overall(rootExit, contributions);
@@ -494,7 +502,7 @@ try
         case "backup-retention-apply":
         case "backup-hold-place":
         case "backup-hold-list":
-            return await RetentionCommandAsync(command!, args, options, configuration, auditOptions, planJson, new BackupHoldRequest(holdRun, holdCompany, holdFrom, holdTo, holdReason));
+            return await RetentionCommandAsync(command!, args, options, configuration, auditOptions, planJson, new BackupHoldRequest(holdRun, holdCompany, holdFrom, holdTo, holdReason), retentionDestination);
         case "migrate-companies":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
@@ -911,6 +919,22 @@ bool ParseRetirementArgs()
 }
 
 // backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] (slice 8, S8b); each option at most once.
+bool ParseRetentionPlanFlags()
+{
+    // backup-retention-plan <root> [--destination <id>] [--json <absolute file>] (each at most once)
+    for (var i = 2; i < args.Length; i += 2)
+    {
+        if (i + 1 >= args.Length) return false;
+        switch (args[i])
+        {
+            case "--json" when planJson is null && Path.IsPathFullyQualified(args[i + 1]): planJson = args[i + 1]; break;
+            case "--destination" when retentionDestination is null && args[i + 1].Length is >= 1 and <= 64 && args[i + 1].All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-' or '_'): retentionDestination = args[i + 1]; break;
+            default: return false;
+        }
+    }
+    return true;
+}
+
 bool ParseReplicateArgs()
 {
     if (args.Length < 2 || !Path.IsPathFullyQualified(args[1])) return false;
@@ -1002,7 +1026,7 @@ static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bo
 }
 
 // Phase 4.3 slice 6 retention commands (D-130..D-139). Interim mode: operating-system access (dated limitation); every command writes its audit event and fails closed when it cannot.
-static async Task<int> RetentionCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions, string? planJson, BackupHoldRequest hold)
+static async Task<int> RetentionCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions, string? planJson, BackupHoldRequest hold, string? destinationId = null)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4;
     var backupOptions = BackupOptions.FromConfiguration(configuration);
@@ -1033,15 +1057,53 @@ static async Task<int> RetentionCommandAsync(string command, string[] args, Hasm
             }
             case "backup-retention-plan":
             {
-                var (plan, inputs) = await service.PlanAsync(args[1], BackupMaterialLoader.ServerTrust(backupOptions));
+                var trust = BackupMaterialLoader.ServerTrust(backupOptions);
+                // S8d-1: the destinations (checked like every command) and the AUTHENTICATED audit facts (one full verification pass; nothing is used above the verified prefix)
+                IReadOnlyList<CheckedDestination> destinations;
+                try
+                {
+                    var configured = BackupDestinations.FromConfiguration(configuration);
+                    if (BackupDestinations.IsDestinationPath(args[1], configured)) { Console.Error.WriteLine("backup-retention-plan: give the PRIMARY root; use --destination <id> for a destination."); return BadConfig; }
+                    destinations = BackupDestinations.Check(configured, args[1],
+                        [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory]);
+                }
+                catch (BackupException ex)
+                {
+                    Console.Error.WriteLine($"backup-retention-plan refused ({ex.Code}{(ex.Cause is null ? "" : $": {ex.Cause}")}). Fix Hasm__Backup__Destinations; no destination is ever skipped.");
+                    return BadConfig;
+                }
+                ReplicaAuditState? audit = null; var auditReadable = true;
+                if (destinations.Count > 0)
+                {
+                    try
+                    {
+                        var evidence = BuildAuditEvidence(auditOptions, null, requireActiveKey: false);
+                        audit = await ReplicaAuditReader.ReadVerifiedAsync(systemConnection, evidence.Keys, evidence.Store);
+                    }
+                    catch (Exception ex) when (ex is BackupException or AuditConfigurationException) { auditReadable = false; }
+                }
+                var located = await service.PlanLocationAsync(args[1], destinationId, destinations, trust, audit);
+                var (plan, inputs) = (located.Plan, located.Inputs);
+                Console.WriteLine($"Retention plan for {(destinationId is null ? "the primary root" : $"destination {destinationId}")} (a PREVIEW: nothing is deleted, nothing is written except audit 2014):");
                 foreach (var d in plan.Runs)
                     Console.WriteLine(d.Eligible ? $"  {d.RunId} ELIGIBLE (automatic deletion is INACTIVE: nothing is deleted)" : $"  {d.RunId} keep: {string.Join(", ", d.Reasons)}");
                 var byReason = plan.Runs.SelectMany(d => d.Reasons).GroupBy(r => r).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}={g.Count()}").ToList();
                 Console.WriteLine($"Retention plan (D-086): {plan.Runs.Count} run(s), {plan.Eligible.Count()} eligible, plan {plan.PlanHash}; keep reasons: {string.Join(", ", byReason)}.");
                 Console.WriteLine($"Key inventory of the retained runs: {(plan.KeyInventoryComplete ? "complete" : "INCOMPLETE (backup_inventory_incomplete): no key may be retired")}; recovery key(s) still needed: {string.Join(", ", plan.RecoveryKeysNeeded)}.");
                 if (inputs.DeletingFolders.Count > 0) Console.WriteLine($"  [WARNING] retention_deletion_incomplete count={inputs.DeletingFolders.Count}");
+                if (destinations.Count > 0)
+                {
+                    Console.WriteLine("Replication check: the PREVIEW uses the light check (folder, signed status equal to the primary's, signed inventory bound to it); an apply would re-verify every byte first.");
+                    if (audit is { UnverifiedRemainder: true }) Console.WriteLine($"  [FAILURE] audit_unverified (the system audit chain verifies only through sequence {audit.VerifiedThroughSeq}; later records were not used)");
+                    if (destinationId is null)                                                   // a destination's own plan does not classify the primary's runs
+                    foreach (var (run, ids) in located.Pending.MissingAt.Where(kv => kv.Value.Count > 0).OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                        Console.WriteLine($"  {run} replication_pending at {string.Join(", ", ids)}");
+                }
+                var locations = DeletionReadiness.Locations(retention, destinations, args[1], trust, audit, auditReadable);
+                foreach (var line in DeletionReadiness.Lines(locations)) Console.WriteLine(line);
+                foreach (var line in DeletionReadiness.Notice(locations)) Console.WriteLine(line);
                 if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RetentionEvaluated,
-                    $"backup retention evaluated operator={BackupAudit.Operator()} runs={plan.Runs.Count} eligible={plan.Eligible.Count()} plan={plan.PlanHash} inventory={(plan.KeyInventoryComplete ? "complete" : "incomplete")} reasons={string.Join(',', byReason)}"))
+                    $"backup retention evaluated operator={BackupAudit.Operator()} runs={plan.Runs.Count} eligible={plan.Eligible.Count()} plan={plan.PlanHash} inventory={(plan.KeyInventoryComplete ? "complete" : "incomplete")} reasons={string.Join(',', byReason)} destination={located.Location}"))
                     return Failed;
                 if (planJson is not null)
                 {
