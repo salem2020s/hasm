@@ -21,8 +21,11 @@ internal sealed record EpochTextConsumption(Guid EntryItem, Guid EntryWarehouse,
 /// <summary>The remaining figures of a layer after the whole epoch (R line).</summary>
 internal sealed record EpochTextRemaining(Guid Item, Guid Warehouse, long LayerSequence, decimal Quantity, decimal Amount);
 
+/// <summary>The totals of one position the epoch touched (P line, design 4.4 version 5): the last sequence before the epoch, the last sequence after it, the final quantity and value and the number of open layers.</summary>
+internal sealed record EpochTextPosition(Guid Item, Guid Warehouse, long BaselineLastSequence, long FinalLastSequence, decimal FinalQuantity, decimal FinalValue, int OpenLayers);
+
 internal sealed record EpochTextInput(ImmutableArray<EpochTextOperation> Operations, ImmutableArray<EpochTextEntry> Entries, ImmutableArray<EpochTextLayer> Layers,
-    ImmutableArray<EpochTextConsumption> Consumptions, ImmutableArray<EpochTextRemaining> Remaining);
+    ImmutableArray<EpochTextConsumption> Consumptions, ImmutableArray<EpochTextRemaining> Remaining, ImmutableArray<EpochTextPosition> Positions);
 
 /// <summary>The epoch text and its digest. <see cref="Digest"/> is the lowercase hex SHA-256 of the UTF-8 bytes of <see cref="Text"/>; an epoch with no rows hashes as the empty string.</summary>
 internal sealed record EpochTextResult(string Text, string Digest);
@@ -30,7 +33,7 @@ internal sealed record EpochTextResult(string Text, string Digest);
 /// <summary>
 /// Phase 3.8D executor slice E1b: the BYTE-EXACT epoch text of the T2 design (section 4.4, message version <c>hasm-replay-v4</c>): five groups O, E, L, C, R, LF-joined with no trailing LF, ordered as the design
 /// orders them, numerics at their column scale (quantity 10, amount 6) in the invariant culture, uuids lower case, booleans t or f, dates yyyy-MM-dd, source type and key as the hex SHA-256 of their UTF-8 bytes. Pure: no database,
-/// clock or randomness. P lines are NOT part of it (they need a T2 amendment, R3). The builder sorts its input itself, so the text never depends on the order the rows were produced in.
+/// clock or randomness. Version 5 of the design (the P group) is built; the builder sorts its input itself, so the text never depends on the order the rows were produced in.
 /// </summary>
 internal static class EpochText
 {
@@ -46,7 +49,7 @@ internal static class EpochText
 
     internal static EpochTextResult Build(EpochTextInput input)
     {
-        if (input is null || input.Operations.IsDefault || input.Entries.IsDefault || input.Layers.IsDefault || input.Consumptions.IsDefault || input.Remaining.IsDefault)
+        if (input is null || input.Operations.IsDefault || input.Entries.IsDefault || input.Layers.IsDefault || input.Consumptions.IsDefault || input.Remaining.IsDefault || input.Positions.IsDefault)
             throw new CostingException("invalid_impact_snapshot");
         var lines = new List<string>();
         foreach (var o in input.Operations.OrderBy(o => o.Role).ThenBy(o => o.OriginalOperation is { } g ? Id(g) : "", StringComparer.Ordinal))
@@ -63,6 +66,8 @@ internal static class EpochText
             lines.Add(string.Join('|', "C", Id(c.EntryItem), Id(c.EntryWarehouse), Num(c.EntrySequence), Id(c.LayerItem), Id(c.LayerWarehouse), Num(c.LayerSequence), Q(c.Quantity), A(c.Amount), Flag(c.Restores)));
         foreach (var r in input.Remaining.OrderBy(r => Id(r.Item), StringComparer.Ordinal).ThenBy(r => Id(r.Warehouse), StringComparer.Ordinal).ThenBy(r => r.LayerSequence))
             lines.Add(string.Join('|', "R", Id(r.Item), Id(r.Warehouse), Num(r.LayerSequence), Q(r.Quantity), A(r.Amount)));
+        foreach (var p in input.Positions.OrderBy(p => Id(p.Item), StringComparer.Ordinal).ThenBy(p => Id(p.Warehouse), StringComparer.Ordinal))
+            lines.Add(string.Join('|', "P", Id(p.Item), Id(p.Warehouse), Num(p.BaselineLastSequence), Num(p.FinalLastSequence), Q(p.FinalQuantity), A(p.FinalValue), Num(p.OpenLayers)));
         var text = string.Join('\n', lines);
         return new EpochTextResult(text, Hex(text));
     }
@@ -108,6 +113,9 @@ internal static class EpochText
             }
         }
         var remaining = content.Layers.Select(r => new EpochTextRemaining(item, r.Key.WarehouseId, r.ArrivalRank, r.AfterQuantity, r.AfterAmount)).ToImmutableArray();
-        return new EpochTextInput(operations.ToImmutable(), entries.ToImmutable(), layers.ToImmutable(), consumptions.ToImmutable(), remaining);
+        // one P line per position the epoch wrote an entry on (its last sequence moved)
+        var positions = content.Positions.Where(p => p.LastSequence > p.BaselineLastSequence)
+            .Select(p => new EpochTextPosition(item, p.WarehouseId, p.BaselineLastSequence, p.LastSequence, p.Quantity, p.Value, p.OpenLayers)).ToImmutableArray();
+        return new EpochTextInput(operations.ToImmutable(), entries.ToImmutable(), layers.ToImmutable(), consumptions.ToImmutable(), remaining, positions);
     }
 }

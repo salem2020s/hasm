@@ -59,7 +59,7 @@ public class PlanExecutionRuntimeRoleDisabledTests : PlanExecutionTestBase
         Assert.Equal(before, (await Rows(CX.Table), await Rows(EM.Table), await Rows(EL.Table), await Digest(CompanySchema.CostEntry.Table), await Digest(CompanySchema.CostOperation.Table), await Digest(CompanySchema.StockPosting.Table)));
         Assert.Equal((short)2, await Sql<short>($"SELECT {CP.Status} FROM {CP.Table} WHERE {CP.Id} = '{s.Plan.Id}'"));   // the plan is still approved, never executed
         // the same script commits for a writer that holds the executor grant (the owner here), so the refusal above is the grant and nothing else
-        await Sql($"GRANT INSERT ON {string.Join(", ", ExecutionTables)} TO \"{CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName)}\"");
+        await Sql($"GRANT INSERT ON {string.Join(", ", ExecutionTables)}, {CompanySchema.ReplayExecutionGrant.Table}, {CompanySchema.ReplayGrantUse.Table} TO \"{CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName)}\"");      // the executor grant (the grant tables are part of what an executor writes since T2 slice A3)
         Assert.Null(await Run(s.Script));
         Assert.Equal(1L, await Rows(CX.Table));
     }

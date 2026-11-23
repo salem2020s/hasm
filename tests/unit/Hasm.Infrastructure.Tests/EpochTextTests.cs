@@ -24,16 +24,17 @@ public partial class EpochScheduleTests
             [new(I, W, 41, 1, 17, 2, 1, date, 5m, 62.5m, 105m, 1312.5m), new(I, W, 42, 2, null, 1, 1, date, 20m, 240m, 125m, 1552.5m), new(I, W, 43, 3, 17, 2, 2, date, 5m, 60m, 120m, 1492.5m)],
             [new(I, W, 9, 42, 20m, 240m, null, null, null)],
             [new(I, W, 41, I, W, 3, 5m, 62.5m, true), new(I, W, 43, I, W, 3, 5m, 60m, false)],
-            [new(I, W, 3, 10m, 120m), new(I, W, 9, 20m, 240m)]);
+            [new(I, W, 3, 10m, 120m), new(I, W, 9, 20m, 240m)],
+            [new(I, W, 40, 43, 120m, 1492.5m, 2)]);
     }
 
     [Fact]
     public void The_text_of_the_T2_known_answer_vector_has_the_designs_length_and_digest()
     {
         var result = EpochText.Build(VectorInput());
-        Assert.Equal(1777, Encoding.UTF8.GetByteCount(result.Text));
-        Assert.Equal("719a4407b03e42328b6ff19850e5be69ff57dffb4a0e9a65919e72054a21fc0a", result.Digest);
-        Assert.Equal(11, result.Text.Split('\n').Length);
+        Assert.Equal(1888, Encoding.UTF8.GetByteCount(result.Text));
+        Assert.Equal("4329df10c3039a9f9e66941607a58ebd1474826d1c4ac2cc7a82a11284b7aa42", result.Digest);
+        Assert.Equal(12, result.Text.Split('\n').Length);
         Assert.DoesNotContain('\r', result.Text); Assert.False(result.Text.EndsWith('\n'));
         // the three source types of the design
         Assert.Contains("ccafea491d240486f275df9056349c5d84f517dafe92fec1cc99defaea3b2a10", result.Text);
@@ -41,14 +42,15 @@ public partial class EpochScheduleTests
         Assert.Contains("0397383eedde7014d68ceb3b5cf095472a3d1ad576436b60388de7ce5a22e6bc", result.Text);
         Assert.StartsWith("O|1|eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee|2|2026-03-11|-|ccafea49", result.Text);
         Assert.Contains("\nE|77777777-7777-4777-8777-777777777777|88888888-8888-4888-8888-888888888888|41|1|17|2|1|2026-03-11|5.0000000000|62.500000|105.0000000000|1312.500000\n", result.Text);
-        Assert.EndsWith("\nR|77777777-7777-4777-8777-777777777777|88888888-8888-4888-8888-888888888888|9|20.0000000000|240.000000", result.Text);
+        Assert.Contains("\nR|77777777-7777-4777-8777-777777777777|88888888-8888-4888-8888-888888888888|9|20.0000000000|240.000000\n", result.Text);
+        Assert.EndsWith("\nP|77777777-7777-4777-8777-777777777777|88888888-8888-4888-8888-888888888888|40|43|120.0000000000|1492.500000|2", result.Text);
     }
 
     [Fact]
     public void The_text_does_not_depend_on_the_culture_or_on_the_order_the_rows_arrive_in()
     {
         var input = VectorInput(); var expected = EpochText.Build(input).Digest;
-        var shuffled = new EpochTextInput([.. input.Operations.Reverse()], [.. input.Entries.Reverse()], [.. input.Layers.Reverse()], [.. input.Consumptions.Reverse()], [.. input.Remaining.Reverse()]);
+        var shuffled = new EpochTextInput([.. input.Operations.Reverse()], [.. input.Entries.Reverse()], [.. input.Layers.Reverse()], [.. input.Consumptions.Reverse()], [.. input.Remaining.Reverse()], [.. input.Positions.Reverse()]);
         var saved = (CultureInfo.CurrentCulture, CultureInfo.CurrentUICulture);
         try
         {
@@ -65,7 +67,7 @@ public partial class EpochScheduleTests
     [Fact]
     public void An_empty_epoch_hashes_as_the_empty_string_and_every_field_the_design_signs_changes_the_digest()
     {
-        var empty = EpochText.Build(new EpochTextInput([], [], [], [], []));
+        var empty = EpochText.Build(new EpochTextInput([], [], [], [], [], []));
         Assert.Equal(("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), (empty.Text, empty.Digest));
         var v = VectorInput(); var d = EpochText.Build(v).Digest;
         var changes = new Dictionary<string, EpochTextInput>
@@ -79,6 +81,11 @@ public partial class EpochScheduleTests
             ["layer source"] = v with { Layers = [.. v.Layers.Select(l => l with { SourceItem = U('7'), SourceWarehouse = U('8'), SourceLayerSequence = 3 })] },
             ["consumption restores"] = v with { Consumptions = [.. v.Consumptions.Select(c => c.EntrySequence == 43 ? c with { Restores = true } : c)] },
             ["remaining"] = v with { Remaining = [.. v.Remaining.Select(r => r.LayerSequence == 3 ? r with { Amount = 120.01m } : r)] },
+            ["position final sequence"] = v with { Positions = [.. v.Positions.Select(p => p with { FinalLastSequence = 44 })] },
+            ["position baseline"] = v with { Positions = [.. v.Positions.Select(p => p with { BaselineLastSequence = 39 })] },
+            ["position open layers"] = v with { Positions = [.. v.Positions.Select(p => p with { OpenLayers = 3 })] },
+            ["position value"] = v with { Positions = [.. v.Positions.Select(p => p with { FinalValue = 1492.51m })] },
+            ["a position less"] = v with { Positions = [] },
             ["a row less"] = v with { Remaining = [.. v.Remaining.Skip(1)] },
         };
         foreach (var (name, input) in changes) Assert.NotEqual(d, EpochText.Build(input).Digest);
@@ -96,6 +103,7 @@ public partial class EpochScheduleTests
         var item = f.Snapshot.ItemId.ToString("D"); var w1 = W1.ToString("D");
         Assert.Equal(3, text.Count(l => l.StartsWith("O|"))); Assert.Equal(3, text.Count(l => l.StartsWith("E|")));
         Assert.Equal(1, text.Count(l => l.StartsWith("L|"))); Assert.Equal(2, text.Count(l => l.StartsWith("C|"))); Assert.Equal(2, text.Count(l => l.StartsWith("R|")));
+        Assert.Single(text, l => l == $"P|{f.Snapshot.ItemId:D}|{W1:D}|2|5|16.0000000000|260.000000|2");          // the position the epoch wrote on: last sequence 2 before, 5 after, 16 / 260.00, two open layers
         Assert.Contains(text, l => l == $"O|1|{plan.Operations[0].OriginalOperationId}|{(short)plan.Operations[0].Kind}|{plan.Operations[0].Date:yyyy-MM-dd}|-|{Sha("replay-storno")}|-|{Sha($"epoch:{planId}:1:{plan.Operations[0].OriginalOperationId}")}|{creator}");
         Assert.Contains(text, l => l == $"O|2|-|{(short)plan.Operations[1].Kind}|{plan.Operations[1].Date:yyyy-MM-dd}|-|{Sha("stock-posting")}|execution-posting|{Sha($"epoch:{planId}:2")}|{creator}");
         // the storno restores 4 / 40 to layer 1; the new layer is layer 2 (arrival rank), entry sequence 4; the rebook consumes layer 1 again
@@ -120,7 +128,7 @@ public partial class EpochScheduleTests
         var remaining = new EpochTextRemaining[] { new(I, W2x, 1, 1m, 1m), new(I, W1x, 2, 1m, 1m), new(I, W1x, 1, 1m, 1m) };
         var entries = new EpochTextEntry[] { new(I, W2x, 2, 3, 1, 1, -1, date, 1m, 1m, 1m, 1m), new(I, W1x, 9, 3, 1, 1, -1, date, 1m, 1m, 1m, 1m), new(I, W1x, 8, 3, 1, 1, -1, date, 1m, 1m, 1m, 1m) };
         var ops = new EpochTextOperation[] { new(3, U('b'), 1, date, null, null, null, "k", U('9')), new(3, U('a'), 1, date, null, null, null, "k", U('9')), new(1, U('c'), 1, date, null, null, null, "k", U('9')), new(2, null, 1, date, null, null, null, "k", U('9')) };
-        var text = EpochText.Build(new EpochTextInput([.. ops], [.. entries], [.. layers], [.. consumptions], [.. remaining])).Text.Split('\n');
+        var text = EpochText.Build(new EpochTextInput([.. ops], [.. entries], [.. layers], [.. consumptions], [.. remaining], [new(I, W2x, 0, 1, 1m, 1m, 0), new(I, W1x, 7, 9, 1m, 1m, 1)])).Text.Split('\n');
         string Group(string g) => string.Join("\n", text.Where(l => l.StartsWith(g + "|")).Select(l => string.Join('|', l.Split('|').Skip(1).Take(g == "O" ? 2 : 4))));
         Assert.Equal($"1|{U('c')}\n2|-\n3|{U('a')}\n3|{U('b')}", Group("O"));
         Assert.Equal($"{I}|{W1x}|8|3\n{I}|{W1x}|9|3\n{I}|{W2x}|2|3", Group("E"));
@@ -129,6 +137,7 @@ public partial class EpochScheduleTests
         Assert.Equal(["6", "7", "7", "7"], c.Select(x => x[3]));
         Assert.Equal(["f", "t"], c.Where(x => x[3] == "7" && x[6] == "1").Select(x => x[9]));        // the same layer: not restoring before restoring
         Assert.Equal($"{I}|{W1x}|1\n{I}|{W1x}|2\n{I}|{W2x}|1", string.Join("\n", text.Where(l => l.StartsWith("R|")).Select(l => string.Join('|', l.Split('|').Skip(1).Take(3)))));
+        Assert.Equal($"{I}|{W1x}|7|9\n{I}|{W2x}|0|1", string.Join("\n", text.Where(l => l.StartsWith("P|")).Select(l => string.Join('|', l.Split('|').Skip(1).Take(4)))));
     }
 
     [Fact]
