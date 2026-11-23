@@ -249,6 +249,46 @@ public partial class EpochScheduleTests
     }
 
     [Fact]
+    public void An_entry_of_another_item_is_refused()
+    {
+        var f = Build(CostMethod.MovingAverage, [Receipt(0, W1, 10, 100), Issue(2, W1, 4)], Receipt(1, W1, 10, 200));
+        var other = f.Snapshot with { Entries = [.. f.Snapshot.Entries.Select(e => e.Id == 2 ? e with { ItemId = Id(7777) } : e)] };
+        Assert.Equal("impact_history_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(other, f.Comparison)).Code);
+    }
+
+    [Fact]
+    public void The_end_state_must_cover_every_closure_position_in_the_comparison_and_in_the_revised_trace()
+    {
+        // two positions through a transfer: both are in the closure and both must be proven
+        var f = Build(CostMethod.MovingAverage, [Receipt(0, W1, 10, 100), Transfer(1, W1, W2, 4)], Receipt(-1, W1, 10, 200));
+        Assert.Equal(2, f.Comparison.Positions.Length);
+        var noImpact = f.Comparison with { Positions = [.. f.Comparison.Positions.Where(p => p.WarehouseId == W1)] };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, noImpact)).Code);
+        var noTrace = f.Comparison with { RevisedTrace = f.Comparison.RevisedTrace with { Positions = [.. f.Comparison.RevisedTrace.Positions.Where(p => p.PositionId == W1)] } };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, noTrace)).Code);
+        var foreign = f.Comparison with { Positions = [.. f.Comparison.Positions, new CostFlowPositionImpact(Id(8888), 0m, 0m, 0m, 0m)] };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, foreign)).Code);
+        var twice = f.Comparison with { Positions = [.. f.Comparison.Positions, f.Comparison.Positions[0]] };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, twice)).Code);
+        var traceTwice = f.Comparison with { RevisedTrace = f.Comparison.RevisedTrace with { Positions = [.. f.Comparison.RevisedTrace.Positions, f.Comparison.RevisedTrace.Positions[0]] } };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, traceTwice)).Code);
+        // the revised trace proves another end for one position than the plan reaches (the comparison agrees with the plan)
+        var otherEnd = f.Comparison with { RevisedTrace = f.Comparison.RevisedTrace with { Positions = [.. f.Comparison.RevisedTrace.Positions.Select(p => p.PositionId == W2 ? p with { Value = p.Value + 1m } : p)] } };
+        Assert.Equal("epoch_schedule_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(f.Snapshot, otherEnd)).Code);
+        Assert.NotNull(EpochSchedule.Derive(f.Snapshot, f.Comparison));      // the untouched input is accepted
+    }
+
+    [Fact]
+    public void The_written_order_of_the_rebooks_is_checked_not_only_the_trace_order()
+    {
+        // one operation holds entries 1 and 4 (a two-line document) with the transfer's entries between them: in the trace the entries are ascending, but WRITTEN grouped by operation they are 1, 4, 2, 3
+        var f = Build(CostMethod.MovingAverage, [Receipt(0, W1, 10, 100), Transfer(1, W1, W2, 4), Receipt(2, W1, 5, 50)], Receipt(-1, W1, 10, 200));
+        var first = f.Snapshot.Entries.Single(e => e.Id == 1).OperationId;
+        var tampered = f.Snapshot with { Entries = [.. f.Snapshot.Entries.Select(e => e.Id == 4 ? e with { OperationId = first } : e)] };
+        Assert.Equal("epoch_order_inconsistent", Assert.Throws<CostingException>(() => EpochSchedule.Derive(tampered, f.Comparison)).Code);
+    }
+
+    [Fact]
     public void The_derivation_is_deterministic_and_its_fingerprint_follows_every_figure()
     {
         var f = Build(CostMethod.Fifo, [Receipt(0, W1, 10, 100), Issue(2, W1, 4)], Receipt(1, W1, 10, 200));
