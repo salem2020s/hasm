@@ -309,11 +309,11 @@ public class ReplaySignerRegistryTests : PlanExecutionTestBase
     }
 
     [PostgresRoleFact]
-    public async Task Nothing_in_the_database_calls_the_verifier_yet_and_no_grant_can_exist_for_the_runtime_role()
+    public async Task Only_the_grant_insert_trigger_function_of_slice_A2_calls_the_verifier_and_no_grant_exists_for_the_runtime_role()
     {
         await PrepareRuntime();
-        // no trigger or function of the database but the verifier itself mentions it: the migration is inert
-        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM pg_proc p WHERE p.prosrc LIKE '%{RA.FnRsaVerify}%'"));
+        // slice A2 (company 0038) calls the verifier from exactly one function: the insert-time check of a grant; nothing else in the database mentions it
+        Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM pg_proc p WHERE p.prosrc LIKE '%{RA.FnRsaVerify}%' AND p.proname <> '{RA.FnRsaVerify}'"));
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {RG.Table}"));
         Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {RU.Table}"));
         // an execution is still refused for the runtime role (no INSERT on the four execution tables), grant tables or not
