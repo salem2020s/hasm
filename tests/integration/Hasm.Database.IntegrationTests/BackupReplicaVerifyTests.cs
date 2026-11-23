@@ -10,6 +10,7 @@ using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using E = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
+using ST = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -76,6 +77,12 @@ public class BackupReplicaVerifyTests : PostgresTestBase
         var registry = new CompanyRegistry(SystemConnection, NewTestName);
         company = await registry.RegisterPendingAsync();
         await new CompanyProvisioner(Options, registry).ProvisionAsync(company.Id);
+        company = (await registry.GetAsync(company.Id))!;
+        // the company has a time zone that resolves: without one retention classifies it unknown and the default re-verification selection holds all its copies (review U3 of PR 214)
+        await using var db = new NpgsqlConnection(Options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName));
+        await db.OpenAsync();
+        await using var zone = new NpgsqlCommand($"INSERT INTO {ST.Table} ({ST.TimeZone}, {ST.UpdatedAtUtc}) VALUES ('UTC', now()) ON CONFLICT ({ST.Singleton}) DO UPDATE SET {ST.TimeZone} = EXCLUDED.{ST.TimeZone}, {ST.Revision} = {ST.Table}.{ST.Revision} + 1, {ST.UpdatedAtUtc} = now()", db);
+        await zone.ExecuteNonQueryAsync();
     }
 
     private async Task<string> RunAsync()
