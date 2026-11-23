@@ -95,6 +95,7 @@ var validUsage = command switch
     "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
     "identity-tag" => args.Length is 1 or 2,
+    "identity-audit-report" => args.Length is 1 or 3 && (args.Length == 1 || args[1] == "--out"),
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "migrate-companies" => args.Length == 1
         || (args.Length == 3 && args[1] == "--company" && Guid.TryParse(args[2], out var only) && only != Guid.Empty && (onlyCompany = only) is not null),
@@ -134,7 +135,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | identity-tag (refused until the S-2c report exists) | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | identity-audit-report [--out <file>] | identity-tag (refused until its reviewed-report binding exists) | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -298,7 +299,7 @@ try
     options = HasmDatabaseOptions.FromConfiguration(configuration);
     if (allowSuperuserForDevelopment) options.AllowSuperuserMigrationAccountForDevelopment();
     // Verification and anchoring are read-only with respect to the database and use the least-privilege runtime account.
-    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor"));
+    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor" or "identity-audit-report"));
 }
 catch (DatabaseConfigurationException ex)
 {
@@ -455,6 +456,19 @@ try
             var report = await new AuditVerifier(await VerifierConnectionAsync(options, auditStream), keys, store).VerifyAsync(auditStream);
             PrintReport(report);
             return report.Verdict switch { AuditVerdict.Verified => Ok, AuditVerdict.Failed => AuditFailed, _ => AuditIncomplete };
+        }
+        case "identity-audit-report":
+        {
+            // READ-ONLY (identity integrity S-2c, owner decision OD-3): the user rows reconciled against the net state of the verified system audit stream. Prints codes, counts and ids and the report hash; writes only the optional --out file.
+            var (keys, store) = BuildAuditEvidence(auditOptions, null, requireActiveKey: false);
+            var encryption = EncryptionOptions.FromConfiguration(configuration);
+            IdentityKeys? identityKeys = encryption.KeyDirectory is null ? null : new IdentityKeys(new FileKekRing(encryption), encryption.IdentityPreviousKeyIds);
+            var reportConnection = await VerifierConnectionAsync(options, AuditStream.System);
+            var result = await IdentityAuditReport.BuildAsync(reportConnection, new AuditVerifier(reportConnection, keys, store), identityKeys);
+            var text = IdentityAuditReport.Render(result);
+            Console.Write(text);
+            if (args.Length == 3 && !result.Refused) await File.WriteAllTextAsync(args[2], text);
+            return result.Refused ? AuditFailed : Ok;
         }
         case "audit-anchor":
         {
