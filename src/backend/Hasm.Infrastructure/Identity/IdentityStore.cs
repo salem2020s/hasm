@@ -204,15 +204,15 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
                 foreach (var key in companyLocks) await AdministratorContinuity.LockCompanyAsync(conn, tx, Guid.ParseExact(key, "N"), ct);
             }
 
-            if (actorUserId is { } actor && (await ReadStateAsync(conn, tx, actor, ct)).State != UserState.Active)
+            if (actorUserId is { } actor && (await ReadStateAsync(conn, tx, RequireKeys(), actor, ct)) is not { State: UserState.Active, Authentic: true })
                 return SetStateOutcome.ActorNotActive;
-            var (current, isIdentityAdmin) = await ReadStateAsync(conn, tx, userId, ct);
+            var (current, isIdentityAdmin, _) = await ReadStateAsync(conn, tx, RequireKeys(), userId, ct);
             if (current is null)
                 return SetStateOutcome.NotFound;
 
             if (state != UserState.Active && current == UserState.Active)
             {
-                if (isIdentityAdmin && await CountActiveIdentityAdministratorsAsync(conn, tx, exclude: userId, ct) == 0)
+                if (isIdentityAdmin && await CountActiveIdentityAdministratorsAsync(conn, tx, RequireKeys(), exclude: userId, ct) == 0)
                     return SetStateOutcome.LastIdentityAdministrator;
 
                 // Companies this user administers: lock them all (sorted) and re-check; a membership granted meanwhile adds a
@@ -248,20 +248,24 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         throw new InvalidOperationException("Administrator continuity locking did not converge.");
     }
 
-    private static async Task<(UserState? State, bool IsIdentityAdministrator)> ReadStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, CancellationToken ct)
+    /// <summary>The state and the administrator flag of a user from the row, with whether the row VERIFIES (review L1 of PR 235: the continuity decisions are taken from the verified row; an administrator that does not verify is not a usable administrator).</summary>
+    private static async Task<(UserState? State, bool IsIdentityAdministrator, bool Authentic)> ReadStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, Guid userId, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand($"SELECT {U.State}, {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @id", conn, tx);
-        cmd.Parameters.AddWithValue("id", userId);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        return await r.ReadAsync(ct) ? ((UserState)r.GetInt16(0), r.GetBoolean(1)) : (null, false);
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row) return (null, false, false);
+        var authentic = row.IsValid(keys);
+        return ((UserState)row.State, authentic && row.IsAdministrator, authentic);
     }
 
-    private static async Task<long> CountActiveIdentityAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid exclude, CancellationToken ct)
+    private static async Task<long> CountActiveIdentityAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, Guid exclude, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand(
-            $"SELECT count(*) FROM {U.Table} WHERE {U.IsIdentityAdministrator} AND {U.State} = 0 AND {U.Id} <> @x", conn, tx);
-        cmd.Parameters.AddWithValue("x", exclude);
-        return (long)(await cmd.ExecuteScalarAsync(ct))!;
+        var rows = new List<UserRow>();
+        await using (var cmd = new NpgsqlCommand($"SELECT {UserRow.Columns("u")} FROM {U.Table} u WHERE u.{U.IsIdentityAdministrator} AND u.{U.State} = 0 AND u.{U.Id} <> @x", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("x", exclude);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) rows.Add(UserRow.Read(r));
+        }
+        return rows.Count(row => row.IsValid(keys));                                                            // only an authentic administrator counts as one
     }
 
     /// <summary>Replaces the stored hash. <paramref name="passwordChanged"/> false = transparent rehash with the same password.</summary>
@@ -344,10 +348,11 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     /// <summary>The MFA state of a user (None when the user does not exist). Read by the login to refuse a password-only session when no second-factor services are wired.</summary>
     public async Task<MfaState> GetMfaStateAsync(Guid userId, CancellationToken ct = default)
     {
+        var k = RequireKeys();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : MfaState.None;
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row) return MfaState.None;
+        return row.IsValid(k) ? (MfaState)row.MfaState : MfaState.RecoveryRequired;                               // taken from the VERIFIED row; a row that does not verify is the strictest state (fail closed, review L1 of PR 235)
     }
 
     /// <summary>
@@ -358,11 +363,9 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         var reasons = MfaMandatoryReason.None;
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using (var cmd = new NpgsqlCommand($"SELECT {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @u", conn))
-        {
-            cmd.Parameters.AddWithValue("u", userId);
-            if (await cmd.ExecuteScalarAsync(ct) is true) reasons |= MfaMandatoryReason.IdentityAdministrator;
-        }
+        await using (var tx0 = await conn.BeginTransactionAsync(ct))
+            if (await UserRow.LoadAsync(conn, tx0, userId, forUpdate: false, ct) is { } row && (row.IsAdministrator || !row.IsValid(RequireKeys())))   // from the verified row; a row that does not verify requires the most (review L1 of PR 235)
+                reasons |= MfaMandatoryReason.IdentityAdministrator;
         var roles = new Dictionary<Guid, List<string>>();
         await using (var cmd = new NpgsqlCommand(
             $"SELECT DISTINCT r.{RL.Id}, p.{RP.Permission} FROM {RA.Table} a JOIN {RL.Table} r ON r.{RL.Id} = a.{RA.RoleId} AND r.{RL.IsActive} " +

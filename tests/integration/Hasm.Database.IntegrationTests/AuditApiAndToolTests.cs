@@ -202,6 +202,29 @@ public class AuditAdminToolTests : FileEvidenceTestBase
     }
 
     [PostgresFact]
+    public async Task The_identity_tag_command_is_refused_until_the_reviewed_report_exists_and_changes_nothing()
+    {
+        // review H1 of PR 235 (owner decision OD-3): tagging the existing users blesses whatever the rows say now, a row written with the runtime credentials included
+        await StartAccess();
+        await using (var conn = new Npgsql.NpgsqlConnection(Options.BuildSystemConnectionString(admin: true)))
+        {
+            await conn.OpenAsync();
+            await using var ins = new Npgsql.NpgsqlCommand($"INSERT INTO {Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Table} ({Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Id},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Login},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.DisplayName},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.PasswordHash},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.State},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.IsIdentityAdministrator},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.CreatedAtUtc},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.StateChangedAtUtc},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.PasswordChangedAtUtc}) VALUES (gen_random_uuid(),'minted','M',@h,0,true,now(),now(),now())", conn);
+            ins.Parameters.AddWithValue("h", Passwords.Hash(Pw));
+            await ins.ExecuteNonQueryAsync();
+        }
+        foreach (var args in new[] { new[] { "identity-tag" }, ["identity-tag", "--confirm-reviewed"] })
+        {
+            var run = await Tool(null, args);
+            Assert.NotEqual(0, run.Exit);
+            Assert.Contains("OD-3", run.Err);
+            Assert.Contains("S-2c", run.Err);
+            Assert.DoesNotContain("tagged;", run.Out);
+        }
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Table} WHERE {Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag.Tag} IS NOT NULL"));   // nothing was tagged
+    }
+
+    [PostgresFact]
     public async Task Verification_of_an_intact_stream_exits_zero_and_prints_the_verified_range_without_secrets()
     {
         var (company, admin, stream, service) = await Written();

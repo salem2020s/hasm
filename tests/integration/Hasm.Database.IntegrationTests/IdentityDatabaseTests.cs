@@ -52,14 +52,40 @@ public abstract class IdentityTestBase : PostgresTestBase
     /// A direct SQL write to the user table by a test stands for "a legitimate writer set the row" (a restore, an offline step): the users are re-tagged afterwards under the suite's keys, so the identity checks
     /// of the product see authentic rows. The tamper tests of the product use their own writers that do NOT re-tag (IdentitySessionIntegrityTests, UserIntegrityTests).
     /// </summary>
-    protected override async Task AfterExecAsync(string sql)
+    private HashSet<Guid> tamperedBeforeExec = [];
+
+    private static bool WritesUsers(string sql)
     {
         var text = sql.TrimStart();
-        if (!sql.Contains(U.Table, StringComparison.Ordinal) || !(text.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase) || text.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))) return;
-        await RetagAllUsersAsync();
+        return sql.Contains(U.Table, StringComparison.Ordinal) && (text.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase) || text.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase));
     }
 
-    protected async Task RetagAllUsersAsync()
+    protected override async Task BeforeExecAsync(string sql)
+    {
+        tamperedBeforeExec = [];
+        if (!WritesUsers(sql)) return;
+        tamperedBeforeExec = await TaggedButInvalidAsync();                                                       // rows an earlier tamper left behind: the re-tag after this statement must never bless them (review L2 of PR 235)
+    }
+
+    protected override async Task AfterExecAsync(string sql)
+    {
+        if (WritesUsers(sql)) await RetagAllUsersAsync(except: tamperedBeforeExec);
+    }
+
+    private async Task<HashSet<Guid>> TaggedButInvalidAsync()
+    {
+        var keys = SessionKeys; var invalid = new HashSet<Guid>();
+        await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        var ids = new List<Guid>();
+        await using (var sel = new NpgsqlCommand($"SELECT {U.Id} FROM {U.Table} WHERE {UT.Tag} IS NOT NULL", conn, tx))
+        await using (var r = await sel.ExecuteReaderAsync()) while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
+        foreach (var id in ids) if (!(await UserRow.LoadAsync(conn, tx, id, false, default))!.IsValid(keys)) invalid.Add(id);
+        return invalid;
+    }
+
+    protected async Task RetagAllUsersAsync(HashSet<Guid>? except = null)
     {
         var keys = SessionKeys; var key = keys.Active();
         await using var conn = new NpgsqlConnection(Options.BuildSystemConnectionString(admin: true));
@@ -70,6 +96,7 @@ public abstract class IdentityTestBase : PostgresTestBase
         await using (var r = await sel.ExecuteReaderAsync()) while (await r.ReadAsync()) ids.Add(r.GetGuid(0));
         foreach (var id in ids)
         {
+            if (except?.Contains(id) == true) continue;
             var row = (await UserRow.LoadAsync(conn, tx, id, false, default))!;
             row = row with { KeyId = key.Id, Tag = null };
             await using var set = new NpgsqlCommand($"UPDATE {U.Table} SET {UT.KeyId} = @k, {UT.Tag} = @t WHERE {U.Id} = @i", conn, tx);

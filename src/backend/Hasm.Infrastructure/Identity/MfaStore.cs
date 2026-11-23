@@ -68,9 +68,9 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
     public async Task<MfaState?> GetStateAsync(Guid userId, CancellationToken ct = default)
     {
         await using var conn = await OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : null;
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row) return null;
+        return row.IsValid(RequireKeys()) ? (MfaState)row.MfaState : MfaState.RecoveryRequired;                   // from the VERIFIED row; a row that does not verify is the strictest state (review L1 of PR 235)
     }
 
     /// <summary>
