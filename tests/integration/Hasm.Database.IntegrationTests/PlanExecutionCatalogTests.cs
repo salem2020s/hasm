@@ -61,12 +61,12 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
         // what the migration ADDED to tables that already existed: exactly four triggers (three insert guards and the deferred position check of review M2; a constraint trigger also has a constraint row), plus the internal foreign-key triggers of the new tables' references; no column, constraint or index
         var oldTables = before.Keys.Where(k => k.StartsWith("table ")).Select(k => k["table ".Length..]).ToHashSet();
         var addedToOld = after.Keys.Except(before.Keys).Where(k => !k.StartsWith("function ") && !k.StartsWith("table ") && oldTables.Contains(k.Split(' ')[1].Split('.')[0])).ToList();
-        Assert.Equal(new[] { $"constraint {EN.Table}.{EG.TrEntryCommit}", $"trigger {EN.Table}.{EG.TrEntry}", $"trigger {EN.Table}.{EG.TrEntryCommit}", $"trigger {OP.Table}.{EG.TrOperation}", $"trigger {CompanySchema.StockPosting.Table}.{EG.TrPosting}" }.Order(StringComparer.Ordinal),
+        Assert.Equal(new[] { $"constraint {EN.Table}.{EG.TrEntryCommit}", $"trigger {EN.Table}.{EG.TrEntry}", $"trigger {EN.Table}.{EG.TrEntryCommit}", $"trigger {OP.Table}.{EG.TrOperation}", $"trigger {CompanySchema.StockPosting.Table}.{EG.TrPosting}", $"trigger {CompanySchema.BusinessAudit.Table}.{CompanySchema.AuditHeadLink.TrBusinessLink}" }.Order(StringComparer.Ordinal),
             addedToOld.Where(k => !k.Contains(".internal:")).Order(StringComparer.Ordinal));
         Assert.All(addedToOld.Where(k => k.Contains(".internal:")), k => Assert.StartsWith("trigger ", k));
         Assert.Equal(9, after.Keys.Count(k => k.StartsWith("table ")) - oldTables.Count);
         // every function the migration added is new by name: none of the earlier names was redefined (CREATE OR REPLACE would have changed a definition above)
-        Assert.Equal(21, after.Keys.Except(before.Keys).Count(k => k.StartsWith("function ")));
+        Assert.Equal(22, after.Keys.Except(before.Keys).Count(k => k.StartsWith("function ")));    // 21 of the plan's migration plus the link guard function of the later audit head migration (0037)
     }
 
     /// <summary>The CHECK constraints (all of earlier migrations) whose printed text changes in a dump and restore: PostgreSQL re-parses the expression. None belongs to migration 0035. Pinned by review L4.</summary>

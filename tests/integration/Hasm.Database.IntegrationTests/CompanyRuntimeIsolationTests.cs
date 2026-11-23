@@ -183,7 +183,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
 
         // What it may do.
         Assert.Equal(c.Id, await Run<Guid>(conn, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(36L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(37L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
         Assert.Equal(0L, await Run<long>(conn, $"SELECT count(*) FROM {B.Table}"));
 
         // What it must not: modify or truncate audit events (a privilege failure, before any trigger runs).
@@ -484,7 +484,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
     /// <summary>A structurally valid event inserted by the owner (the chain itself is not under test here).</summary>
     private Task SeedEvent(CompanyRecord c) => InCompany(c.PhysicalDatabaseName,
         $"INSERT INTO {B.Table} ({B.StreamKey},{B.Seq},{B.EventId},{B.OccurredAtUtc},{B.EventType},{B.CompanyId},{B.FormatVersion},{B.KeyId},{B.PrevHash},{B.Hash},{B.Mac}) " +
-        $"VALUES ('{AuditStream.ForBusiness(c.Id).Key}', 1, gen_random_uuid(), now(), 1000, '{c.Id}', 1, 'k1', decode(repeat('00',32),'hex'), decode(repeat('01',32),'hex'), decode(repeat('02',32),'hex'))");
+        $"VALUES ('{AuditStream.ForBusiness(c.Id).Key}', 1, gen_random_uuid(), now(), 1000, '{c.Id}', 1, 'k1', sha256(convert_to('HASM-AUDIT-GENESIS-v1', 'UTF8') || decode('00', 'hex') || convert_to('{AuditStream.ForBusiness(c.Id).Key}', 'UTF8')), decode(repeat('01',32),'hex'), decode(repeat('02',32),'hex'))");
 
     private async Task RoleAdmin(string sql)
     {
@@ -575,7 +575,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
 
         var first = await AdminTool.Run(Configured(), "migrate-companies");
         Assert.Equal(0, first.Exit);
-        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036)", first.Out);
+        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037)", first.Out);
         Assert.Contains($"Company {current.Id}: UpToDate", first.Out);
         Assert.Contains("grant-company-runtime", first.Out);                     // reminder to re-grant after a migration
 
@@ -600,7 +600,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
         Assert.Contains($"Company {bad.Id}: Failed [migration]", run.Out);
         Assert.Contains("1 failed", run.Out);
         AssertNoLeak([run.All], good, bad);
-        Assert.Equal(36L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(37L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]

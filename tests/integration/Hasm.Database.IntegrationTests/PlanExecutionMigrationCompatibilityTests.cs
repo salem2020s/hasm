@@ -89,12 +89,13 @@ public class PlanExecutionMigrationCompatibilityTests : PlanExecutionTestBase
         Assert.True(rowsBefore[CompanySchema.CostEntry.Table] >= 8 && rowsBefore[CompanySchema.StockPosting.Table] >= 6 && rowsBefore[CompanySchema.JournalEntry.Table] >= 4, "representative data exists");
         var journalBefore = await Sql<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}");
 
-        // ---- the real migrator applies exactly migration 0036
+        // ---- the real migrator applies migration 0036 and every later migration (the audit head link guard, 0037, is later and independent of it)
         var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync(), o => o.CompanyId == Company.Id);
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal([PlanScript.Version], outcome.Applied);
-        live.Add(PlanScript);          // the resolvers of this test now know the new script (they read the list at every schema check)
-        Assert.Equal(journalBefore + 1, await Sql<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        var applied = All.Where(s => s.Version >= PlanScript.Version).ToList();
+        Assert.Equal(applied.Select(s => s.Version), outcome.Applied);
+        live.AddRange(applied);        // the resolvers of this test now know the new scripts (they read the list at every schema check)
+        Assert.Equal(journalBefore + applied.Count, await Sql<long>($"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
         Assert.Equal(CompanyMigrationStatus.UpToDate, Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync(), o => o.CompanyId == Company.Id).Status);   // idempotent
 
         // ---- additive: every earlier catalog entry is byte-identical, no trigger is disabled, the catalog only gained objects
