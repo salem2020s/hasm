@@ -38,7 +38,13 @@ public sealed record ReplicaFinding(string Code, int ExitCode);
 /// yet (<c>replica_tombstone_unexplained</c>); and whether it shares the primary's volume.
 /// </summary>
 public sealed record ReplicaState(BackupDestination Destination, bool Reachable, string? NewestCopyRunId, DateTimeOffset? NewestCopyFinishedUtc, bool HoldsPrimaryNewest,
-    IReadOnlyList<string> ConflictRunIds, IReadOnlyList<string> CorruptRunIds, int StaleIncoming, int UnexplainedTombstones, bool SameVolumeAsPrimary);
+    IReadOnlyList<string> ConflictRunIds, IReadOnlyList<string> CorruptRunIds, int StaleIncoming, int UnexplainedTombstones, bool SameVolumeAsPrimary)
+{
+    /// <summary>Copies the system audit stream last reported corrupt by a re-verification (2042) while their folder is still there (S8c); empty when the audit stream was not read.</summary>
+    public IReadOnlyList<string> ReportedCorruptRunIds { get; init; } = [];
+    /// <summary>When a copy at this destination was last RE-verified (a 2040 with <c>reverified=true</c>); null when never or when the audit stream was not read.</summary>
+    public DateTimeOffset? LastReverifiedUtc { get; init; }
+}
 
 /// <summary>
 /// The ONE status function of slice 8 (D-186): the contribution of a configured destination, used by every command that reports or depends on it, so the same state has the same severity
@@ -69,7 +75,7 @@ public static partial class ReplicaStatus
         else if (now - s.NewestCopyFinishedUtc.Value > maxAge) findings.Add(new("replica_stale", 1));
         else if (primaryNewestReplicable is not null && !s.HoldsPrimaryNewest) findings.Add(new("replica_lagging", 8));
         if (s.ConflictRunIds.Count > 0) findings.Add(new("replica_conflict", 1));
-        if (s.CorruptRunIds.Count > 0) findings.Add(new("replica_corrupt", 1));
+        if (s.CorruptRunIds.Count > 0 || s.ReportedCorruptRunIds.Count > 0) findings.Add(new("replica_corrupt", 1));
         if (s.UnexplainedTombstones > 0) findings.Add(new("replica_tombstone_unexplained", 1));
         if (s.StaleIncoming > 0) findings.Add(new("replica_incoming_stale", 8));
         if (s.SameVolumeAsPrimary) findings.Add(new("destination_same_volume", 8));
@@ -90,15 +96,15 @@ public static partial class ReplicaStatus
     /// Any tombstone under <c>.retention/tombstones</c> or any <c>.deleting-*</c> folder counts as unexplained: no deletion at a destination exists in this slice, and the audit evidence that can
     /// explain one (the 2015/2016 pair with the destination id, D-187) is read when retention per destination is built.
     /// </summary>
-    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now)
+    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit = null)
     {
         ReplicaState Unreachable() => new(d.Destination, false, null, null, false, [], [], 0, 0, d.SameVolumeAsPrimary);
         if (!d.Exists) return Unreachable();
-        try { return Read(d, primaryRuns, trust, now); }
+        try { return Read(d, primaryRuns, trust, now, audit); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unreachable(); }   // an unreadable share holds no verified copy
     }
 
-    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now)
+    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit)
     {
         var (copies, deletingFolders) = RetentionInventory.Scan(d.ResolvedPath, trust);
         var primaryHash = primaryRuns.Where(r => r.StatusSha256 is not null).ToDictionary(r => r.RunId, r => r.StatusSha256!, StringComparer.Ordinal);
@@ -106,9 +112,12 @@ public static partial class ReplicaStatus
         var verified = new List<RetentionRun>();
         var conflicts = new List<string>();
         var corrupt = new List<string>();
+        var reported = new List<string>();
         foreach (var c in copies)
         {
             if (!IsReplicable(c)) { corrupt.Add(c.RunId); continue; }
+            // S8c: a copy that the last re-verification reported corrupt no longer counts as a verified copy while its folder is there (the operator moves it away; it stays evidence)
+            if (audit is not null && audit.ReportedCorrupt(d.Destination.Id, c.RunId)) { reported.Add(c.RunId); continue; }
             if (primaryHash.TryGetValue(c.RunId, out var h) && !string.Equals(h, c.StatusSha256, StringComparison.Ordinal)) { conflicts.Add(c.RunId); continue; }
             verified.Add(c);
         }
@@ -118,6 +127,6 @@ public static partial class ReplicaStatus
         var tombstones = Path.Combine(d.ResolvedPath, RetentionInventory.RetentionFolder, RetentionInventory.TombstonesFolder);
         var unexplained = deletingFolders.Count + (Directory.Exists(tombstones) ? new DirectoryInfo(tombstones).EnumerateFileSystemInfos().Count() : 0);
         return new(d.Destination, true, newest?.RunId, newest?.FinishedUtc, newestPrimary is not null && verified.Any(v => v.RunId == newestPrimary), conflicts, corrupt, staleIncoming, unexplained,
-            d.SameVolumeAsPrimary);
+            d.SameVolumeAsPrimary) { ReportedCorruptRunIds = reported, LastReverifiedUtc = audit?.LastReverified(d.Destination.Id) };
     }
 }

@@ -15,6 +15,15 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class CashAccountSensitiveTests : CashAccountTestBase
 {
+    /// <summary>
+    /// The text without its GUID-shaped identifiers (the 32-hex form and the dashed form). The log, audit and detail lines legitimately carry RANDOM ids (the account id, request and user ids), and a random
+    /// GUID contains any given four hex digits now and then: "0380" appeared inside one and failed a test that was meant to prove the account number's digits (and the injected exception's digits) are absent.
+    /// That was a collision, not a leak. Identifiers are removed before a SHORT digit run is searched; the full number, its tail, the exception message and every other assertion still search the raw text,
+    /// and a number or message that leaked would not look like a GUID.
+    /// </summary>
+    private static string WithoutIdentifiers(string text) =>
+        System.Text.RegularExpressions.Regex.Replace(text, @"(?<![0-9a-fA-F])(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})(?![0-9a-fA-F])", "<id>");
+
     private const string Number = "SA0380000000608010167519";
 
     private async Task<string> Details() => await Sql<string>($"SELECT string_agg(coalesce({Audit_.Detail}, ''), ' | ') FROM {Audit_.Table}");
@@ -32,7 +41,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
             Assert.DoesNotContain("0380000000", r.Body);
             Assert.Contains("****7519", r.Body);
         }
-        Assert.DoesNotContain("0380", await Details());
+        Assert.DoesNotContain("0380", WithoutIdentifiers(await Details()));
         Assert.DoesNotContain(Number, string.Join("\n", apiLogs.Entries));
         var stored = await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{id}'");
         Assert.DoesNotContain("0380000000", Encoding.UTF8.GetString(stored));
@@ -181,7 +190,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         Assert.Equal(2L, await Events(CashAuditEvents.NumberRewrapped));
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {Audit_.Table} WHERE {Audit_.EventType} = {CashAuditEvents.NumberRewrapped} AND {Audit_.SubjectId} = '{a}'"));
         var details = await Details();
-        Assert.Contains("from=k1 to=k2", details); Assert.DoesNotContain(Number, details); Assert.DoesNotContain("0380", details);
+        Assert.Contains("from=k1 to=k2", details); Assert.DoesNotContain(Number, details); Assert.DoesNotContain("0380", WithoutIdentifiers(details));
         Assert.Equal(Number, (await Send(HttpMethod.Get, $"{Base}/{a}/account-number", cookie: reveal)).Json.GetProperty("accountNumber").GetString());   // still readable under the new key
         Assert.Equal(2, (await UsageAsync())["k2"]);
         Assert.False((await UsageAsync()).ContainsKey("k1"));
@@ -240,7 +249,7 @@ public class CashAccountSensitiveTests : CashAccountTestBase
             Assert.Contains("reason=encryption_key_unavailable", line);
             Assert.Contains("error=InvalidOperationException", line);
             var all = string.Join("\n", apiLogs.Entries);
-            Assert.DoesNotContain(Number, all); Assert.DoesNotContain("0380", all); Assert.DoesNotContain("secret detail", all);   // no number, no exception message
+            Assert.DoesNotContain(Number, all); Assert.DoesNotContain("0380", WithoutIdentifiers(all)); Assert.DoesNotContain("secret detail", all);   // no number, no exception message
         }
         finally { service.BeforeFailureAuditForTests = null; }
     }
