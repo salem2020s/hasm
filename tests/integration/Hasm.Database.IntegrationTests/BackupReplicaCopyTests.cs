@@ -40,6 +40,7 @@ public class BackupReplicaCopyTests : PostgresTestBase
     private AttachmentOptions Attachments => new() { StorageDirectory = Storage };
     private SigningTrust Trust => new([new TrustedSigningKey(signingId, signingPem, SigningKeyStatus.Active)]);
     private BackupMaterial Material() => new(RecoveryPublicKey.FromPem(pair.PublicKeyPem), BackupSigningKeys.Load(SigningDir, signingId, true));
+    private readonly StrictlyOrderedClock clock = new();                                                // runs created in one test are strictly ordered by creation (no same-second ordering by random suffix)
     private string SystemConnection => Options.BuildSystemConnectionString(admin: true);
     private AuditTrail Trail() => AuditTrail.FromOptions(new AuditOptions { KeyDirectory = AuditKeys, ActiveKeyId = "a1", CheckpointDirectory = Path.Combine(work, "checkpoints"), AllowInsecureFilePermissions = true }, TimeProvider.System);
     private ReplicationService Service(TimeSpan? wait = null, ReplicaCopyHooks? hooks = null) =>
@@ -79,7 +80,7 @@ public class BackupReplicaCopyTests : PostgresTestBase
     /// <summary>One encrypted run into the primary root through the service (no destination involved); returns its run id.</summary>
     private async Task<string> RunAsync()
     {
-        var (report, dir) = await new BackupRunService(Options, Attachments, Encryption, TimeProvider.System).RunAsync(Root, Material());
+        var (report, dir) = await new BackupRunService(Options, Attachments, Encryption, clock).RunAsync(Root, Material());
         Assert.Equal("ok", report.Verdict);
         return Path.GetFileName(dir);
     }
@@ -174,7 +175,8 @@ public class BackupReplicaCopyTests : PostgresTestBase
         Assert.True(replicate.Exit == 8, replicate.All);                                      // only the same-volume warning remains
         Assert.DoesNotContain("[FAILURE]", replicate.Out);
         var verified = (await Events(BackupAuditEvents.ReplicaVerified)).Select(d => Token(d, "run")).ToList();
-        Assert.Equal([first, .. new[] { second, third }.Order(StringComparer.Ordinal)], verified);      // oldest first by run id (runs of one second order by their random suffix); the first run was not copied again
+        Assert.True(string.CompareOrdinal(first, second) < 0 && string.CompareOrdinal(second, third) < 0);   // the fixture's runs are strictly ordered by creation
+        Assert.Equal([first, second, third], verified);                                       // oldest first; the first run was not copied again
         Assert.All(new[] { first, second, third }, id => Assert.Equal(Tree(Path.Combine(Root, id)), Tree(Path.Combine(Nas, id))));
         // nothing left to copy: a second pass writes no new event
         var again = await AdminTool.RunWith(Options, env, "backup-replicate", Root);
@@ -184,7 +186,7 @@ public class BackupReplicaCopyTests : PostgresTestBase
         Directory.CreateDirectory(Usb);
         var usb = Destination("usb", Usb, "local");
         await Service().ReplicateAsync(Root, [usb], new ReplicationRequest(NewestFirst: true));
-        Assert.Equal(new[] { first, second, third }.Order(StringComparer.Ordinal).Reverse().ToList(), (await Events(BackupAuditEvents.ReplicaVerified)).Skip(3).Select(d => Token(d, "run")).ToList());
+        Assert.Equal([third, second, first], (await Events(BackupAuditEvents.ReplicaVerified)).Skip(3).Select(d => Token(d, "run")).ToList());
     }
 
     [PostgresFact]
