@@ -10,6 +10,7 @@ using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using E = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
+using ST = Hasm.Infrastructure.CompanyDatabase.CompanySchema.Settings;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -76,6 +77,12 @@ public class BackupReplicaVerifyTests : PostgresTestBase
         var registry = new CompanyRegistry(SystemConnection, NewTestName);
         company = await registry.RegisterPendingAsync();
         await new CompanyProvisioner(Options, registry).ProvisionAsync(company.Id);
+        company = (await registry.GetAsync(company.Id))!;
+        // the company has a time zone that resolves: without one retention classifies it unknown and the default re-verification selection holds all its copies (review U3 of PR 214)
+        await using var db = new NpgsqlConnection(Options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName));
+        await db.OpenAsync();
+        await using var zone = new NpgsqlCommand($"INSERT INTO {ST.Table} ({ST.TimeZone}, {ST.UpdatedAtUtc}) VALUES ('UTC', now()) ON CONFLICT ({ST.Singleton}) DO UPDATE SET {ST.TimeZone} = EXCLUDED.{ST.TimeZone}, {ST.Revision} = {ST.Table}.{ST.Revision} + 1, {ST.UpdatedAtUtc} = now()", db);
+        await zone.ExecuteNonQueryAsync();
     }
 
     private async Task<string> RunAsync()
@@ -282,6 +289,27 @@ public class BackupReplicaVerifyTests : PostgresTestBase
         Assert.Empty(await Events(BackupAuditEvents.ReplicaCorrupt));
         Assert.Single(await Events(BackupAuditEvents.ReplicaVerified));                                 // only the copy itself: nothing was re-verified or reported
         Assert.Equal(3, (await AdminTool.RunWith(Options, noKey, "backup-replicate", Root)).Exit);
+    }
+
+    [PostgresFact]
+    public async Task A_copy_whose_file_is_a_hard_link_to_the_primarys_is_not_independent_in_the_status_and_corrupt_in_the_verification()
+    {
+        await Init();
+        var run = await RunAsync();
+        Directory.CreateDirectory(Nas);
+        await Replicate(run);
+        var ours = Dump(Path.Combine(Nas, run)); var theirs = Dump(Path.Combine(Root, run));
+        File.Delete(ours);
+        using (var ln = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ln") { ArgumentList = { theirs, ours }, UseShellExecute = false })!) { ln.WaitForExit(); Assert.Equal(0, ln.ExitCode); }
+        var status = await AdminTool.RunWith(Options, NasOnly(), "backup-status", Root);                  // review U1 of PR 214: the primary is known here
+        Assert.Equal(1, status.Exit);
+        Assert.Contains("[FAILURE] replica_not_independent destination=nas", status.Out);
+        var verify = await AdminTool.RunWith(Options, NasOnly(), "backup-replica-verify");               // no primary here: the link count finds it
+        Assert.True(verify.Exit == 1, verify.All);
+        Assert.Contains("CORRUPT (link)", verify.Out);
+        var replicate = await AdminTool.RunWith(Options, NasOnly(), "backup-replicate", Root);
+        Assert.Contains("replica_not_independent", replicate.Out + replicate.Err);                         // and a copy over it is refused too
+        Assert.True(replicate.Exit != 0);
     }
 
     private static async Task<string> DigestOf(string connectionString)

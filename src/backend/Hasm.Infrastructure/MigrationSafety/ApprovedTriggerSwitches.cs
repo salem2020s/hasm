@@ -12,7 +12,7 @@ public static partial class MigrationGuard
 {
     /// <summary>
     /// SAFEGUARD-CHANGE ALLOWLIST (frozen). A migration may contain a matched "ALTER TABLE t DISABLE TRIGGER x ... ALTER TABLE t ENABLE TRIGGER x"
-    /// pair ONLY when it is listed here. The 26 entries are exactly the migrations on <c>main</c> that already used the pattern when the rule was introduced; they
+    /// pair ONLY when it is listed here. The first 26 entries are exactly the migrations on <c>main</c> that already used the pattern when the rule was introduced (the 27th is the first approved NEW use, X4); they
     /// are all SYSTEM migrations (no company migration uses it). Each pauses the permission-immutability trigger (and, in some, the role-permission trigger) of the
     /// system database for exactly one versioned insert of permission rows into a preset role, inside the migration's own transaction, and re-enables it before the
     /// transaction ends (the runner verifies this after every script). Applied migrations are immutable, so they are listed, never rewritten. Adding an entry is a
@@ -71,6 +71,10 @@ public static partial class MigrationGuard
         new(MigrationSet.System, 30, "0030_attachment_retention_access.sql", "004c557674706584afb9e753dc50d3929e2cc467cc2b5a9f23564e00b21f8f9b",
             ["t_359332ac/r_d3408f58", "t_3e3d4119/r_2601e368"]),
         new(MigrationSet.System, 34, "0034_company_mfa_policy.sql", "f9aedd4eee2de5ee1c4db6fa84ca48d92b75fda4b906c039d37c521c70794ead",
+            ["t_359332ac/r_d3408f58", "t_3e3d4119/r_2601e368"]),
+        // X4-PRESET-ROLE (owner Option A, 2026-11-22; plan docs/X4-PRESET-ROLES-PLAN.md): the two dedicated cash and bank account presets. A NEW migration: it creates two preset roles and their permission rows, so
+        // both immutability triggers are paused. The number is provisional until the final merge round; when it changes, Version, Name and Checksum of this entry change with it, in the same reviewed change.
+        new(MigrationSet.System, 36, "0036_cash_account_presets.sql", "22f90773c2601e80db36ce5282c3cb422746ae7a39bae84f1800ff6322dfb907",
             ["t_359332ac/r_d3408f58", "t_3e3d4119/r_2601e368"]),
     ];
 }

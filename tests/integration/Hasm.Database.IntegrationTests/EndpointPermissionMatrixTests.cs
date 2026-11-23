@@ -164,7 +164,7 @@ public class EndpointPermissionMatrixTests : JournalTestBase
 
     private void RegisterServices(IServiceCollection s)
     {
-        s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+        s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
         s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
         s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));   // the internal test document type (D-049), as in CommercialApiTests
     }

@@ -15,13 +15,13 @@ namespace Hasm.Database.IntegrationTests;
 /// </summary>
 public class MfaStoreTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
 
     private async Task Setup()
     {
         await Start();
-        Mfa = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring));
+        Mfa = new MfaStore(Options.BuildSystemConnectionString(admin: true), Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
     }
 
     private long Step => Totp.StepFor(Clock.GetUtcNow());

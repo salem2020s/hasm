@@ -30,7 +30,7 @@ public abstract class BranchAccessTestBase : BranchTestBase
     {
         await Prepare();
         Resolver = SinglePrincipalResolver(Company);
-        Rbac = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, new CompanyBranchScopeValidator(() => Resolver));
+        Rbac = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, new CompanyBranchScopeValidator(() => Resolver), keys: TestIdentityKeys.Instance);
         Domain = new CompanyBranchService(Resolver, new CompanyAuditedTransactions(Resolver, Audit, Clock), policy ?? new BranchLimitPolicy(50), Clock);
         Mgmt = new BranchManagementService(Rbac, Domain);
     }

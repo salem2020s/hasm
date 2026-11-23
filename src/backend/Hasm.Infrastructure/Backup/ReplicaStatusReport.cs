@@ -22,7 +22,7 @@ public static class ReplicaStatusReport
         {
             // existence is read NOW: a destination folder may have been created by the copy that just ran (the configuration was checked before it)
             var d = listed with { Exists = Directory.Exists(listed.ResolvedPath) };
-            var state = ReplicaStatus.Inspect(d, primaryRuns, trust, now, audit, primaryTombstones);
+            var state = ReplicaStatus.Inspect(d, primaryRuns, trust, now, audit, BackupSet.RealPath(primaryRoot), primaryTombstones);
             var findings = ReplicaStatus.Contribution(state, primaryNewest, now, defaultMaxAge);
             var lines = new List<string>
             {

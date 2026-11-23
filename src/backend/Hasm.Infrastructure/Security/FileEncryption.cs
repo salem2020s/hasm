@@ -28,6 +28,8 @@ public sealed class EncryptionOptions
     public string? ActiveKeyId { get; init; }
     /// <summary>Operator-supplied relaxation of the key-file permission checks for disposable test environments only.</summary>
     public bool AllowInsecureFilePermissions { get; init; }
+    /// <summary>Key ids (comma separated in configuration) whose identity tokens, session tags and identity tags are STILL accepted during a controlled key rotation (owner decision OD-6): list the retired key only for the configured maximum session lifetime, then remove it. Values are always written under the active key.</summary>
+    public IReadOnlyList<string> IdentityPreviousKeyIds { get; init; } = [];
 
     public static EncryptionOptions FromConfiguration(IConfiguration configuration)
     {
@@ -35,7 +37,7 @@ public sealed class EncryptionOptions
         var insecure = false;
         var text = Get("AllowInsecureFilePermissions");
         if (text is not null && !bool.TryParse(text, out insecure)) insecure = false;
-        return new EncryptionOptions { KeyDirectory = Get("KeyDirectory"), ActiveKeyId = Get("ActiveKeyId"), AllowInsecureFilePermissions = insecure };
+        return new EncryptionOptions { KeyDirectory = Get("KeyDirectory"), ActiveKeyId = Get("ActiveKeyId"), AllowInsecureFilePermissions = insecure, IdentityPreviousKeyIds = (Get("IdentityPreviousKeyIds") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(KekRing.IsValidKeyId).Distinct().ToList() };
     }
 }
 

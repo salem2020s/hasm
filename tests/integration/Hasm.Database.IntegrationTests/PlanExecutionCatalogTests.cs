@@ -29,9 +29,9 @@ public class PlanExecutionCatalogTests : PlanExecutionTestBase
         var legacy = await ReadyCompany([.. all.Where(s => s.Version < plan.Version)]);
         var before = await Catalog(legacy.PhysicalDatabaseName);
 
-        var outcome = Assert.Single(await new CompanyMigrator(Options, Registry).MigrateAsync());
+        var outcome = Assert.Single(await new CompanyMigrator(Options, Registry, [.. all.Where(s => s.Version <= plan.Version)]).MigrateAsync());       // exactly the scripts up to 0036: later migrations have their own tests
         Assert.Equal(CompanyMigrationStatus.Migrated, outcome.Status);
-        Assert.Equal(all.Where(s => s.Version >= plan.Version).Select(s => s.Version), outcome.Applied);
+        Assert.Equal([plan.Version], outcome.Applied);
         var after = await Catalog(legacy.PhysicalDatabaseName);
 
         // the catalog before the migration is not trivially small, and it holds the named backstops of design 3.7

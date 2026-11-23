@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Companies;
 using Hasm.Infrastructure.CompanyDatabase;
@@ -56,7 +57,7 @@ public sealed record CompanySummary(Guid Id, string? NameAr, string? NameEn);
 /// server-validated source and never trusts client claims. Mutations run in one transaction under a per-company advisory lock
 /// and re-evaluate the actor's privileges inside that lock, so concurrent permission changes serialize (no check-then-act race).
 /// </summary>
-public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : IAsyncDisposable
+public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null, IdentityKeys? keys = null) : IAsyncDisposable
 {
     private const string UniqueViolation = "23505";
     private const int MaxDetailLength = 1000;
@@ -65,7 +66,9 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
 
-    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : this(() => connectionString, clock, catalog, audit, scopeValidator) { }
+    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null, IdentityKeys? keys = null) : this(() => connectionString, clock, catalog, audit, scopeValidator, keys) { }
+
+    internal IdentityKeys? Keys => keys;
 
     private readonly IScopeTargetValidator scopeValidator = scopeValidator ?? DenyAllScopeTargetValidator.Instance;
 
@@ -128,12 +131,11 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         if (companyId is { } id && !await IsActiveMemberAsync(conn, null, userId, id, ct)) return false;
-        await using var cmd = new NpgsqlCommand(
-            $"UPDATE {S.Table} SET {S.SelectedCompanyId} = @c WHERE {S.Id} = @s AND {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", conn);
-        cmd.Parameters.AddWithValue("c", (object?)companyId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("s", sessionId);
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        var k = keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (!await SessionRow.SelectCompanyAsync(conn, tx, k, sessionId, userId, companyId, ct)) { await tx.RollbackAsync(ct); return false; }
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     // ------------------------------------------------------------------ authorization
@@ -583,12 +585,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             mem.Parameters.AddWithValue("c", companyId);
             await mem.ExecuteNonQueryAsync(ct);
         }
-        await using (var ses = new NpgsqlCommand($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.UserId} = @u AND {S.SelectedCompanyId} = @c", conn, tx))
-        {
-            ses.Parameters.AddWithValue("u", targetUserId);
-            ses.Parameters.AddWithValue("c", companyId);
-            await ses.ExecuteNonQueryAsync(ct);
-        }
+        await SessionRow.ClearCompanyAsync(conn, tx, keys, targetUserId, companyId, now, ct);
         await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, null, AccessEvent.MembershipRevoked, $"assignments revoked: {revoked}", ct);
         await CommitAuditedAsync(tx, ct);
         return AccessResult<bool>.Ok(true);
@@ -905,6 +902,12 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     /// <summary>Offline delegation of the preset Retention Approver role (company-wide; a SENSITIVE grant, D-080 item 6): no company user can grant it (the administrator lacks the permission), so it comes from the administrative tool.</summary>
     public Task<FiscalApproverStatus> GrantRetentionApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.RetentionApproverId, "retention approver", ct);
     public Task<FiscalApproverStatus> RevokeRetentionApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.RetentionApproverId, "retention approver", ct);
+    /// <summary>Offline delegation of the dedicated preset Cash Account Manager (company-wide; PRIVILEGED, D-158). No company user can grant it (the administrator lacks the cash permissions), so it comes from the administrative tool, audited with no actor user.</summary>
+    public Task<FiscalApproverStatus> GrantCashAccountManagerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountManagerId, "cash account manager", ct);
+    public Task<FiscalApproverStatus> RevokeCashAccountManagerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountManagerId, "cash account manager", ct);
+    /// <summary>Offline delegation of the dedicated preset Cash Account Sensitive Viewer (company-wide; PRIVILEGED; may read a FULL bank account number, D-155). Same rules as the other offline delegations.</summary>
+    public Task<FiscalApproverStatus> GrantCashAccountSensitiveViewerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountSensitiveViewerId, "cash account sensitive viewer", ct);
+    public Task<FiscalApproverStatus> RevokeCashAccountSensitiveViewerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountSensitiveViewerId, "cash account sensitive viewer", ct);
     public Task<FiscalApproverStatus> RevokeCommercialApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CommercialApproverId, "commercial approver", ct);
     public Task<FiscalApproverStatus> RevokeJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
 

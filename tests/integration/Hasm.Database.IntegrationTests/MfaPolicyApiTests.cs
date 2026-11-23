@@ -20,7 +20,9 @@ public class MfaPolicyApiTests : AccessTestBase
 {
     private WebApplicationFactory<Program>? factory;
     private HttpClient client = null!;
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
+    private IdentityKeys? sessionKeys;
+    protected override IdentityKeys SessionKeys => sessionKeys ??= new IdentityKeys(ring);
     /// <summary>Test seam for the request pipeline's policy question only (the selection endpoint uses the real service): lets a test act between authorization and the endpoint.</summary>
     private Func<ICompanyMfaPolicyEvaluator, ICompanyMfaPolicyEvaluator>? wrapEvaluator;
 
@@ -143,7 +145,7 @@ public class MfaPolicyApiTests : AccessTestBase
         Assert.Equal("company_not_selected", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));              // and the selection was undone
 
         // a stale selection (made before the policy existed) is refused per request too, while the open routes keep working
-        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = @c WHERE {S.UserId} = @u", ("c", company), ("u", plain.Id));
+        await SelectCompanyForSessions(plain.Id, company);
         Assert.Equal("mfa_enrolment_required", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));
         Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(HttpMethod.Get, "/api/v1/company/branches", token)).Status);
         Assert.Equal(HttpStatusCode.OK, (await SendAsync(HttpMethod.Get, "/api/v1/companies", token)).Status);
@@ -295,7 +297,7 @@ public class MfaPolicyApiTests : AccessTestBase
 
         // the exemption is identity administration only: a company administrator who is NOT an identity administrator is still refused there (403), and an enrolled identity administrator still needs the proof
         var plain = await NewAdmin(company, "plainadmin");
-        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.UserId} = @u", ("u", plain.Id));
+        await SelectCompanyForSessions(plain.Id, null);
         var plainToken = await PasswordLogin(plain);
         Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(HttpMethod.Post, "/api/v1/admin/users", plainToken, new { login = "nope1", displayName = "No", password = "New-Passphrase-Strong-3" })).Status);
     }
@@ -375,7 +377,7 @@ public class MfaPolicyApiTests : AccessTestBase
         // the same with no company selected at authorization
         Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(HttpMethod.Delete, "/api/v1/session/company", token)).Status);
         // (no company: the handler asks no policy question, so the seam cannot act; the binding itself is asserted through the database instead)
-        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.Id} = @s", ("s", sessionId));
+        await SelectCompanyForSessions(racer.Id, null);
         Assert.Equal("company_not_selected", await ErrorOf(HttpMethod.Get, "/api/v1/access/me", token));
     }
 
@@ -424,7 +426,7 @@ public class MfaPolicyApiTests : AccessTestBase
         var mfa = factory!.Services.GetRequiredService<MfaStore>();
         Assert.True(await mfa.ActivatePendingAsync(late.Id, await mfa.CreatePendingAsync(late.Id, Totp.GenerateSecret(), null), Step - 10, null));   // enrolled elsewhere; THIS session keeps no proof
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {S.Table} WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", ("u", late.Id)));
-        await Exec($"UPDATE {S.Table} SET {S.SelectedCompanyId} = @c WHERE {S.UserId} = @u", ("c", company), ("u", late.Id));   // even with a selection from before the policy
+        await SelectCompanyForSessions(late.Id, company, mustApply: false);   // even with a selection from before the policy
 
         foreach (var (method, path, body) in new (HttpMethod, string, object?)[] { (HttpMethod.Post, "/api/v1/session/company", new { companyId = company }), (HttpMethod.Get, "/api/v1/access/me", null), (HttpMethod.Get, "/api/v1/company/branches", null) })
         {

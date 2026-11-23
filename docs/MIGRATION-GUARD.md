@@ -132,7 +132,7 @@ Implemented: `init-system-db`, `provision-company` (also for a company that is a
 Implemented: section "Migration account" above (privileges, separation, enforcement) and `NonSuperuserMigrationAccountTests`.
 
 ## Frozen trigger-switch allowlist (owner decision Q1)
-The 26 migrations on `main` that contain a matched `DISABLE`/`ENABLE` TRIGGER pair; each pauses an immutability trigger of the system database for one versioned insert of permission rows into a preset role, inside the migration's own transaction. No company migration uses the pattern. The list is pinned by `MigrationTriggerSwitchAllowlistTests`, independently of the production list.
+The 27 migrations that contain a matched `DISABLE`/`ENABLE` TRIGGER pair: the 26 that were on `main` when the rule was introduced, and the first approved NEW use (the last row: the cash and bank account presets of X4-PRESET-ROLE, owner Option A of 2026-11-22; its number is provisional and its Version, Name and Checksum are finalised at the merge round); each pauses an immutability trigger of the system database for one versioned insert of permission rows into a preset role, inside the migration's own transaction. No company migration uses the pattern. The list is pinned by `MigrationTriggerSwitchAllowlistTests`, independently of the production list.
 
 | Set | Number | Name | Checksum (SHA-256, line endings normalized) | Triggers switched (table.trigger) |
 |-----|--------|------|------------------------------------------|-----------------------------------|
@@ -162,6 +162,7 @@ The 26 migrations on `main` that contain a matched `DISABLE`/`ENABLE` TRIGGER pa
 | System | 0029 | `0029_commercial_approver.sql` | `902fa5bd6ec1fa94a04a82bbf95569fd4a5386ec1bebef706add375bc31efa80` | `t_359332ac.r_d3408f58, t_3e3d4119.r_2601e368` |
 | System | 0030 | `0030_attachment_retention_access.sql` | `004c557674706584afb9e753dc50d3929e2cc467cc2b5a9f23564e00b21f8f9b` | `t_359332ac.r_d3408f58, t_3e3d4119.r_2601e368` |
 | System | 0034 | `0034_company_mfa_policy.sql` | `f9aedd4eee2de5ee1c4db6fa84ca48d92b75fda4b906c039d37c521c70794ead` | `t_359332ac.r_d3408f58, t_3e3d4119.r_2601e368` |
+| System | 0036 (provisional) | `0036_cash_account_presets.sql` | `22f90773c2601e80db36ce5282c3cb422746ae7a39bae84f1800ff6322dfb907` | `t_359332ac.r_d3408f58, t_3e3d4119.r_2601e368` |
 
 Adding an entry is a safeguard change: the owner approves the specific migration explicitly (recorded in the owner-decision register), an independent security review reads the migration, and the pinned list in `MigrationTriggerSwitchAllowlistTests` is extended in the same reviewed change.
 

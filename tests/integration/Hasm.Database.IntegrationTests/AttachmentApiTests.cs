@@ -20,6 +20,8 @@ public class AttachmentApiTests : HttpApiTestBase
     private string dir = null!;
     private Guid party;
 
+    private InMemoryKekRing? apiRing;
+
     private async Task Start(bool keyUnavailable = false, string? maxBytes = null, (string Key, string Value)[]? settings = null)
     {
         dir = Path.Combine(Path.GetTempPath(), "hasm-att-api-" + Guid.NewGuid().ToString("N"));
@@ -30,7 +32,8 @@ public class AttachmentApiTests : HttpApiTestBase
             foreach (var (key, value) in settings ?? []) b.UseSetting("Hasm:Attachments:" + key, value);
             b.ConfigureServices(s =>
             {
-                s.AddSingleton<KekRing>(new InMemoryKekRing("k1") { Unavailable = keyUnavailable });
+                apiRing = new InMemoryKekRing("k1", TestIdentityKeys.Master) { Unavailable = keyUnavailable };
+                s.AddSingleton<KekRing>(apiRing);
                 s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
             });
         });
@@ -300,12 +303,15 @@ public class AttachmentApiTests : HttpApiTestBase
     [PostgresFact]
     public async Task Without_a_usable_encryption_key_a_sensitive_upload_is_a_503_and_stores_nothing()
     {
-        await Start(keyUnavailable: true);
-        var cookie = await SignIn(Admin);
+        await Start();
+        var cookie = await SignIn(Admin);                                                                                     // sign-in needs the identity key too (identity integrity S-1): the key goes away AFTER it
+        apiRing!.Unavailable = true;
         var r = await Upload(cookie, Pdf, sensitive: true);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, r.Status);
-        Assert.Equal("encryption_key_unavailable", r.Error);
-        Assert.Equal(HttpStatusCode.OK, (await Upload(cookie, Pdf)).Status);                                                  // normal files do not need the key
+        Assert.Equal("encryption_unavailable", r.Error);                                                                      // refused at authentication already: the same fail-closed 503, nothing stored (the service-level code is covered by the service tests)
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await Upload(cookie, Pdf)).Status);                                  // with no identity key NOBODY is authenticated, so not even a normal upload is served
+        apiRing.Unavailable = false;
+        Assert.Equal(HttpStatusCode.OK, (await Upload(cookie, Pdf)).Status);                                                  // normal files do not need the key themselves, and the key coming back restores service
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {AT.Table}"));
     }
 }

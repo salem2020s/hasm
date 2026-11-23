@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Hasm.Infrastructure.Security;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -14,5 +15,30 @@ internal static class TestAssemblyDefaults
     {
         if (Environment.GetEnvironmentVariable("Hasm__Database__AllowOverprivilegedSystemRuntime") is null)
             Environment.SetEnvironmentVariable("Hasm__Database__AllowOverprivilegedSystemRuntime", "true");
+        // Identity integrity S-1: every authenticated request needs the identity keys, which come from the existing key ring. The assembly gets ONE disposable ring (a random key in a temporary directory, never
+        // committed) as an environment default, so a suite that registers no ring of its own still has one; a suite that sets its own ring or its own variables keeps them.
+        if (Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory") is null)
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "hasm-test-identity-keys-" + Guid.NewGuid().ToString("N"));
+            FileKekRing.Generate(dir, "k1");
+            Environment.SetEnvironmentVariable("Hasm__Encryption__KeyDirectory", dir);
+            Environment.SetEnvironmentVariable("Hasm__Encryption__ActiveKeyId", "k1");
+            Environment.SetEnvironmentVariable("Hasm__Encryption__AllowInsecureFilePermissions", "true");
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { Directory.Delete(dir, true); } catch { } };
+        }
     }
+}
+
+/// <summary>The identity keys of the assembly's disposable ring (the same ring the API under test reads from the environment), for tests that construct the stores directly.</summary>
+internal static class TestIdentityKeys
+{
+    /// <summary>The master key bytes of the assembly's disposable ring (key id k1). API suites that register an in-memory ring of their own use THESE bytes, so users and sessions the suite creates directly (tagged under the assembly ring) verify under the API's ring.</summary>
+    public static byte[] Master => Convert.FromBase64String(File.ReadAllText(Path.Combine(Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory")!, "k1" + FileKekRing.Extension)).Trim());
+
+    public static readonly IdentityKeys Instance = new(new FileKekRing(new EncryptionOptions
+    {
+        KeyDirectory = Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory"),
+        ActiveKeyId = Environment.GetEnvironmentVariable("Hasm__Encryption__ActiveKeyId"),
+        AllowInsecureFilePermissions = true,
+    }));
 }

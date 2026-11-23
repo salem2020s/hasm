@@ -20,6 +20,8 @@ using Npgsql;
 //   Hasm.Admin migrate-companies [--company <id>]  (applies pending forward-only company migrations to Ready companies; per-company outcome; exit 8 on partial failure)
 //   Hasm.Admin grant-company-runtime <company-id> [--rotate-credential]  (creates/updates the company's own least-privilege runtime login role and credential file; idempotent)
 //   Hasm.Admin grant-system-runtime           (D-235: converges the API runtime account's privileges on the SYSTEM database to the reviewed catalog, least-privilege for the TOTP secret store; owner account; idempotent; never creates a role)
+//   Hasm.Admin grant-cash-account-manager <login> <company-id> | revoke-cash-account-manager <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED Cash Account Manager preset; audited; X4-PRESET-ROLE)
+//   Hasm.Admin grant-cash-account-sensitive-viewer <login> <company-id> | revoke-cash-account-sensitive-viewer <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED preset that may read a full bank account number; audited)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 //   Hasm.Admin grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id>  (offline delegation of the Import Approver role: approval of imports; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
@@ -92,13 +94,16 @@ var validUsage = command switch
 {
     "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
+    "identity-tag" => args.Length is 1 or 2,
+    "identity-audit-report" => args.Length is 1 or 3 && (args.Length == 1 || args[1] == "--out"),
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "migrate-companies" => args.Length == 1
         || (args.Length == 3 && args[1] == "--company" && Guid.TryParse(args[2], out var only) && only != Guid.Empty && (onlyCompany = only) is not null),
     "grant-company-runtime" => (args.Length == 2 || (args.Length == 3 && (rotateCredential = args[2] == "--rotate-credential")))
         && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
-    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
+    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver"
+        or "grant-cash-account-manager" or "revoke-cash-account-manager" or "grant-cash-account-sensitive-viewer" or "revoke-cash-account-sensitive-viewer" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
     "encryption-keygen" => args.Length == 2 && KekRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
@@ -129,7 +134,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | identity-audit-report [--out <file>] | identity-tag (refused until its reviewed-report binding exists) | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -273,6 +278,15 @@ if (command == "backup-recovery-keygen")
     catch (BackupException ex) { Console.Error.WriteLine($"backup-recovery-keygen stopped ({ex.Code}); nothing usable was written."); return Failed; }
 }
 
+if (command == "identity-tag")
+{
+    // Owner decision OD-3 (identity integrity plan section 7): tagging the existing users blesses whatever the rows say NOW, including a row a runtime-credential holder wrote. It is therefore NOT available until the
+    // reviewed reconciliation report of slice S-2c exists and the command is bound to that report. Until then an upgraded installation keeps its untagged users locked out (OD-2: no compatibility mode); a fresh
+    // installation creates its first administrator tagged through bootstrap-admin. Nothing is read or written here.
+    Console.Error.WriteLine("identity-tag is not available yet. Owner decision OD-3 requires a reviewed reconciliation report before any existing user is tagged, and that report is slice S-2c of docs/IDENTITY-INTEGRITY-PLAN.md. Nothing was changed.");
+    return Failed;
+}
+
 if (command == "encryption-keygen")
 {
     // No database involved. The master key is written to the configured key directory with owner-only permissions; only its id is printed.
@@ -293,7 +307,7 @@ try
     options = HasmDatabaseOptions.FromConfiguration(configuration);
     if (allowSuperuserForDevelopment) options.AllowSuperuserMigrationAccountForDevelopment();
     // Verification and anchoring are read-only with respect to the database and use the least-privilege runtime account.
-    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor"));
+    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor" or "identity-audit-report"));
 }
 catch (DatabaseConfigurationException ex)
 {
@@ -346,9 +360,11 @@ try
 
             // Administrative tool: the privileged account is acceptable here (never in the API runtime).
             var trail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
-            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail);
+            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail, new IdentityKeys(new FileKekRing(EncryptionOptions.FromConfiguration(configuration))));   // the first administrator is created TAGGED: no key ring, no administrator (fails closed)
             var auth = new AuthService(store, new PasswordService(authOptions.Pbkdf2Iterations), authOptions);
-            var result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password);
+            CreateUserResult? result;
+            try { result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password); }
+            catch (EncryptionUnavailableException) { Console.Error.WriteLine("The encryption key ring is not available (Hasm__Encryption__KeyDirectory and Hasm__Encryption__ActiveKeyId): the administrator is created with an integrity tag and cannot be created without it. Nothing was changed."); return BadConfig; }
             if (result is null)
             {
                 Console.Error.WriteLine("An identity administrator already exists; nothing was changed.");
@@ -394,15 +410,25 @@ try
         case "revoke-journal-approver":
         case "grant-import-approver":
         case "revoke-import-approver":
+        case "grant-cash-account-manager":
+        case "revoke-cash-account-manager":
+        case "grant-cash-account-sensitive-viewer":
+        case "revoke-cash-account-sensitive-viewer":
         {
             // Offline delegation of the Fiscal Approver role (approval of exceptional fiscal reopenings). No HTTP endpoint exists for this: a company administrator
             // cannot grant a permission they do not hold, so this is the supported way to create the first approver and the recovery path. Audited without an actor user.
             await using var access = new AccessService(options.BuildSystemConnectionString(admin: true), TimeProvider.System, PermissionCatalog.Default, AuditTrail.FromOptions(auditOptions, TimeProvider.System));
             var importRole = command.EndsWith("import-approver", StringComparison.Ordinal);
             var journalRole = command.EndsWith("journal-approver", StringComparison.Ordinal);
-            var roleName = importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
+            var cashManager = command.EndsWith("cash-account-manager", StringComparison.Ordinal);
+            var cashViewer = command.EndsWith("cash-account-sensitive-viewer", StringComparison.Ordinal);
+            var roleName = cashManager ? "Cash Account Manager" : cashViewer ? "Cash Account Sensitive Viewer" : importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
             var granting = command.StartsWith("grant-", StringComparison.Ordinal);
-            var status = importRole
+            var status = cashManager
+                ? (granting ? await access.GrantCashAccountManagerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountManagerOfflineAsync(args[1], companyId))
+                : cashViewer
+                ? (granting ? await access.GrantCashAccountSensitiveViewerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountSensitiveViewerOfflineAsync(args[1], companyId))
+                : importRole
                 ? (granting ? await access.GrantImportApproverOfflineAsync(args[1], companyId) : await access.RevokeImportApproverOfflineAsync(args[1], companyId))
                 : journalRole
                 ? (granting ? await access.GrantJournalApproverOfflineAsync(args[1], companyId) : await access.RevokeJournalApproverOfflineAsync(args[1], companyId))
@@ -438,6 +464,19 @@ try
             var report = await new AuditVerifier(await VerifierConnectionAsync(options, auditStream), keys, store).VerifyAsync(auditStream);
             PrintReport(report);
             return report.Verdict switch { AuditVerdict.Verified => Ok, AuditVerdict.Failed => AuditFailed, _ => AuditIncomplete };
+        }
+        case "identity-audit-report":
+        {
+            // READ-ONLY (identity integrity S-2c, owner decision OD-3): the user rows reconciled against the net state of the verified system audit stream. Prints codes, counts and ids and the report hash; writes only the optional --out file.
+            var (keys, store) = BuildAuditEvidence(auditOptions, null, requireActiveKey: false);
+            var encryption = EncryptionOptions.FromConfiguration(configuration);
+            IdentityKeys? identityKeys = encryption.KeyDirectory is null ? null : new IdentityKeys(new FileKekRing(encryption), encryption.IdentityPreviousKeyIds);
+            var reportConnection = await VerifierConnectionAsync(options, AuditStream.System);
+            var result = await IdentityAuditReport.BuildAsync(reportConnection, new AuditVerifier(reportConnection, keys, store), identityKeys);
+            var text = IdentityAuditReport.Render(result);
+            Console.Write(text);
+            if (args.Length == 3 && !result.Refused) await File.WriteAllTextAsync(args[2], text);
+            return result.Refused ? AuditFailed : Ok;
         }
         case "audit-anchor":
         {
@@ -694,7 +733,10 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                         + (o.Result == "corrupt" ? (o.Reported ? "; reported (audit 2042); the copy is left exactly as it is: move the folder away, then run backup-replicate" : "; already reported earlier (no new 2042); the copy is left as it is") : ""));
                 var bad = outcomes.Count(o => !o.IsVerified);
                 Console.WriteLine($"Re-verification: {outcomes.Count(o => o.IsVerified)} copy(ies) verified again, {bad} not ({(replicate.All ? "every run folder" : "default selection: newest copy, newest per company, held and pinned runs")}).");
-                return bad == 0 ? Ok : Failed;
+                // review U2 of PR 214: where the hard-link count could not be read nothing is claimed about independence, and the operator is told once
+                var unavailable = outcomes.Any(o => o.LinkCheckUnavailable);
+                if (unavailable) Console.WriteLine("  [WARNING] link_check_unavailable (the hard-link count of the copies could not be read on this platform, so their independence from other storage was not checked)");
+                return bad > 0 ? Failed : unavailable ? Warnings : Ok;
             }
             case "backup-replicate":
             {

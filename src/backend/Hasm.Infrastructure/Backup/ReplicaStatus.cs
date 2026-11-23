@@ -48,6 +48,10 @@ public sealed record ReplicaState(BackupDestination Destination, bool Reachable,
     public IReadOnlyList<string> ExplainedDeletionRunIds { get; init; } = [];
     /// <summary>When a copy at this destination was last RE-verified (a 2040 with <c>reverified=true</c>); null when never or when the audit stream was not read.</summary>
     public DateTimeOffset? LastReverifiedUtc { get; init; }
+    /// <summary>Copies whose folder or files share storage with the primary's run of the same id (review U1 of PR 214): no independent copy; empty when the primary is not known.</summary>
+    public IReadOnlyList<string> NotIndependentRunIds { get; init; } = [];
+    /// <summary>True when an identity needed for that check could not be read (review U2): nothing is claimed and the status warns.</summary>
+    public bool LinkCheckUnavailable { get; init; }
 }
 
 /// <summary>
@@ -80,10 +84,12 @@ public static partial class ReplicaStatus
         else if (primaryNewestReplicable is not null && !s.HoldsPrimaryNewest) findings.Add(new("replica_lagging", 8));
         if (s.ConflictRunIds.Count > 0) findings.Add(new("replica_conflict", 1));
         if (s.CorruptRunIds.Count > 0 || s.ReportedCorruptRunIds.Count > 0) findings.Add(new("replica_corrupt", 1));
+        if (s.NotIndependentRunIds.Count > 0) findings.Add(new("replica_not_independent", 1));
         if (s.UnexplainedTombstones > 0) findings.Add(new("replica_tombstone_unexplained", 1));
         if (s.IncompleteDeletionRunIds.Count > 0) findings.Add(new("retention_deletion_incomplete", 1));
         if (s.StaleIncoming > 0) findings.Add(new("replica_incoming_stale", 8));
         if (s.SameVolumeAsPrimary) findings.Add(new("destination_same_volume", 8));
+        if (s.LinkCheckUnavailable) findings.Add(new("link_check_unavailable", 8));
         return findings;
     }
 
@@ -102,16 +108,16 @@ public static partial class ReplicaStatus
     /// with the primary's hash and has its 2015 is an unfinished deletion (<c>retention_deletion_incomplete</c>) or, with the 2016 and no later copy, an explained deletion; anything else stays
     /// <c>replica_tombstone_unexplained</c>. Only an AUTHENTICATED audit state makes a run count as explained (not pending); a raw state classifies for the alert lines only.
     /// </summary>
-    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit = null,
+    public static ReplicaState Inspect(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit = null, string? primaryRoot = null,
         IReadOnlyDictionary<string, string>? primaryTombstoneHashes = null)
     {
         ReplicaState Unreachable() => new(d.Destination, false, null, null, false, [], [], 0, 0, d.SameVolumeAsPrimary);
         if (!d.Exists) return Unreachable();
-        try { return Read(d, primaryRuns, trust, now, audit, primaryTombstoneHashes); }
+        try { return Read(d, primaryRuns, trust, now, audit, primaryRoot, primaryTombstoneHashes); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unreachable(); }   // an unreadable share holds no verified copy
     }
 
-    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit, IReadOnlyDictionary<string, string>? primaryTombstoneHashes)
+    private static ReplicaState Read(CheckedDestination d, IReadOnlyList<RetentionRun> primaryRuns, SigningTrust? trust, DateTimeOffset now, ReplicaAuditState? audit, string? primaryRoot, IReadOnlyDictionary<string, string>? primaryTombstoneHashes)
     {
         var (copies, deletingFolders) = RetentionInventory.Scan(d.ResolvedPath, trust);
         var primaryHash = primaryRuns.Where(r => r.StatusSha256 is not null).ToDictionary(r => r.RunId, r => r.StatusSha256!, StringComparer.Ordinal);
@@ -120,12 +126,21 @@ public static partial class ReplicaStatus
         var conflicts = new List<string>();
         var corrupt = new List<string>();
         var reported = new List<string>();
+        var notIndependent = new List<string>();
+        var linkUnavailable = false;
         foreach (var c in copies)
         {
             if (!IsReplicable(c)) { corrupt.Add(c.RunId); continue; }
             // S8c: a copy that the last re-verification reported corrupt no longer counts as a verified copy while its folder is there (the operator moves it away; it stays evidence)
             if (audit is not null && audit.ReportedCorrupt(d.Destination.Id, c.RunId)) { reported.Add(c.RunId); continue; }
             if (primaryHash.TryGetValue(c.RunId, out var h) && !string.Equals(h, c.StatusSha256, StringComparison.Ordinal)) { conflicts.Add(c.RunId); continue; }
+            // review U1 of PR 214: where the primary is known, a copy that shares its storage is not a copy
+            if (primaryRoot is not null && primaryHash.ContainsKey(c.RunId))
+            {
+                var independence = ReplicaIndependence.Check(Path.Combine(d.ResolvedPath, c.RunId), Path.Combine(primaryRoot, c.RunId));
+                if (independence.Unavailable) linkUnavailable = true;
+                if (independence.Shares) { notIndependent.Add(c.RunId); continue; }
+            }
             verified.Add(c);
         }
         var newest = verified.OrderByDescending(r => r.RunId, StringComparer.Ordinal).FirstOrDefault();
@@ -138,7 +153,7 @@ public static partial class ReplicaStatus
         return new(d.Destination, true, newest?.RunId, newest?.FinishedUtc, newestPrimary is not null && verified.Any(v => v.RunId == newestPrimary), conflicts, corrupt, staleIncoming, scan.Unexplained.Count,
             d.SameVolumeAsPrimary)
         {
-            ReportedCorruptRunIds = reported, LastReverifiedUtc = audit?.LastReverified(d.Destination.Id),
+            ReportedCorruptRunIds = reported, LastReverifiedUtc = audit?.LastReverified(d.Destination.Id), NotIndependentRunIds = notIndependent, LinkCheckUnavailable = linkUnavailable,
             IncompleteDeletionRunIds = scan.Incomplete, ExplainedDeletionRunIds = audit is { Authenticated: true } ? scan.Explained : [],
         };
     }

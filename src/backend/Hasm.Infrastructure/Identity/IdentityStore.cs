@@ -1,9 +1,13 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
+using SI = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionIntegrity;
+using UI = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserIntegrity;
+using UT = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag;
 using T = Hasm.Infrastructure.SystemDatabase.SystemSchema.LoginThrottle;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
 using M = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserMfa;
@@ -29,8 +33,8 @@ public sealed record ActiveSession(
     Guid SessionId, Guid UserId, SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset LastSeenAtUtc,
     string Login, string DisplayName, bool IsIdentityAdministrator, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None, Guid? SelectedCompanyId = null);
 
-/// <summary>A session to create: its id, the hash of its token, the client, its expiries and (after the second factor) the verification time.</summary>
-public sealed record SessionIssue(Guid SessionId, byte[] TokenHash, SessionClient Client, DateTimeOffset IdleExpires, DateTimeOffset AbsoluteExpires, DateTimeOffset? MfaVerifiedAt);
+/// <summary>A session to create: its id, its plaintext token (hashed under the token key by the one insert primitive, never stored), the client, its expiries and (after the second factor) the verification time.</summary>
+public sealed record SessionIssue(Guid SessionId, string Token, SessionClient Client, DateTimeOffset IdleExpires, DateTimeOffset AbsoluteExpires, DateTimeOffset? MfaVerifiedAt);
 
 public sealed class DuplicateLoginException() : Exception("The login identifier is already in use.");
 
@@ -39,13 +43,16 @@ public sealed class DuplicateLoginException() : Exception("The login identifier 
 /// parameterized. Uses the connection string it is given (the Backend passes the runtime, least-privilege account);
 /// connections are pooled through a lazily created data source.
 /// </summary>
-public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit) : IThrottleStore, IAsyncDisposable
+public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, IdentityKeys? keys = null) : IThrottleStore, IAsyncDisposable
 {
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
     // Arbitrary constant key for "initial administrator bootstrap" (transaction-scoped advisory lock).
     private const long BootstrapLockKey = 0x4841534D_0002;
 
-    public IdentityStore(string connectionString, TimeProvider clock, AuditTrail audit) : this(() => connectionString, clock, audit) { }
+    public IdentityStore(string connectionString, TimeProvider clock, AuditTrail audit, IdentityKeys? keys = null) : this(() => connectionString, clock, audit, keys) { }
+
+    /// <summary>The identity keys (identity integrity S-1). A store without them cannot issue or accept a session: it fails closed with the service-unavailable exception, it never falls back to an untagged session.</summary>
+    internal IdentityKeys RequireKeys() => keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
 
     public DateTimeOffset UtcNow => clock.GetUtcNow();
 
@@ -102,9 +109,12 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         var id = Guid.NewGuid();
         var now = clock.GetUtcNow();
+        var tagged = UserRow.ForNewUser(RequireKeys(), id, login, hash, admin);                                      // a user is created already tagged (identity integrity S-2a); no key, no user
         await using var cmd = new NpgsqlCommand(
-            $"INSERT INTO {U.Table} ({U.Id},{U.Login},{U.DisplayName},{U.PasswordHash},{U.State},{U.IsIdentityAdministrator},{U.CreatedAtUtc},{U.StateChangedAtUtc},{U.PasswordChangedAtUtc}) " +
-            "VALUES (@id,@l,@d,@h,0,@a,@n,@n,@n)", conn, tx);
+            $"INSERT INTO {U.Table} ({U.Id},{U.Login},{U.DisplayName},{U.PasswordHash},{U.State},{U.IsIdentityAdministrator},{U.CreatedAtUtc},{U.StateChangedAtUtc},{U.PasswordChangedAtUtc},{UT.KeyId},{UT.Tag}) " +
+            "VALUES (@id,@l,@d,@h,0,@a,@n,@n,@n,@k,@g)", conn, tx);
+        cmd.Parameters.AddWithValue("k", tagged.KeyId!);
+        cmd.Parameters.AddWithValue("g", tagged.Tag!);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("l", login);
         cmd.Parameters.AddWithValue("d", displayName);
@@ -116,6 +126,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         {
             throw new DuplicateLoginException();
         }
+        if (tx is not null) await IdentityAnchors.WriteAsync(conn, tx, RequireKeys(), IdentityAnchors.KindUser, id, 0, ct);   // the first anchor of the user (revision 0)
         return new UserRecord(id, login, displayName, hash, UserState.Active, admin, now, null);
     }
 
@@ -125,13 +136,64 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     public Task<UserRecord?> FindUserByIdAsync(Guid id, CancellationToken ct = default) =>
         FindUserAsync($"{U.Id} = @v", id, ct);
 
+    /// <summary>
+    /// Finds a user whose row is AUTHENTIC (identity integrity S-2a): a row whose tag does not verify, or that has none, is answered as no user at all (the neutral failure of login and of every flow that starts from the
+    /// user), and recorded in the audit stream for the operator (at most once a minute per user). Throws the service-unavailable exception when no identity key is available.
+    /// </summary>
     private async Task<UserRecord?> FindUserAsync(string where, object value, CancellationToken ct)
     {
+        var k = RequireKeys();
+        UserRecord user; UserRow row; IdentityAnchors.Bound bound = default;
+        await using (var conn = await dataSource.Value.OpenConnectionAsync(ct))
+        {
+            // the row and its anchors are read in ONE snapshot: a concurrent legitimate bump must not look like a rollback (review L1 of PR 239)
+            await using var snapshot = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
+            await using (var cmd = new NpgsqlCommand($"SELECT {UserColumns}, {UserRow.Columns("u")} FROM {U.Table} u WHERE {where}", conn, snapshot))
+            {
+                cmd.Parameters.AddWithValue("v", value);
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                if (!await r.ReadAsync(ct)) return null;
+                user = ReadUser(r); row = UserRow.Read(r, 8);
+            }
+            if (row.IsValid(k)) bound = await IdentityAnchors.ReadBoundAsync(conn, snapshot, k, IdentityAnchors.KindUser, row.Id, ct);
+        }
+        if (!row.IsValid(k)) { await RejectUserAsync(row.Id, ct); return null; }
+        if (bound.Ignored > 0) await AlertAnchorsAsync(row.Id, bound, ct);                                         // junk anchors: ignored for the bound, reported, never a lockout
+        if (bound.Unknown) { await RejectRecordAsync(row.Id, "user", ct, "anchor scan limit"); return null; }       // the window held only junk: the bound is unknown, never "none" (fail closed)
+        if (bound.MaxValidRevision is { } floor && row.Revision < floor) { await RejectRecordAsync(row.Id, "user", ct, "anchor"); return null; }   // an older, once-valid row written back
+        return user;
+    }
+
+    /// <summary>Audits a challenge that failed its tag (no cause detail in the answer; the operator sees it here), at most once a minute per challenge.</summary>
+    public Task AuditRejectedChallengeAsync(Guid challengeId, CancellationToken ct = default) => RejectRecordAsync(challengeId, "challenge", ct);
+
+    private Task RejectUserAsync(Guid userId, CancellationToken ct) => RejectRecordAsync(userId, "user", ct);
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> lastAnchorAlert = new();
+
+    /// <summary>Reports anchors that were ignored (bad tag or unknown key id), at most once a minute per subject: the audit stream shows an operator what the junk is, it never changes an answer.</summary>
+    private async Task AlertAnchorsAsync(Guid subject, IdentityAnchors.Bound bound, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (lastAnchorAlert.TryGetValue(subject, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
+        lastAnchorAlert[subject] = now;
+        if (lastAnchorAlert.Count > 10_000) lastAnchorAlert.Clear();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand($"SELECT {UserColumns} FROM {U.Table} WHERE {where}", conn);
-        cmd.Parameters.AddWithValue("v", value);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        return await r.ReadAsync(ct) ? ReadUser(r) : null;
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, subject, $"user {subject:N} anchors ignored: {bound.Ignored} invalid{(bound.ScanLimitReached ? ", scan limit reached" : "")}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
+    }
+
+    private async Task RejectRecordAsync(Guid userId, string kind, CancellationToken ct, string cause = "tag")
+    {
+        var now = clock.GetUtcNow();
+        if (lastRejectionAudit.TryGetValue(userId, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
+        lastRejectionAudit[userId] = now;
+        if (lastRejectionAudit.Count > 10_000) lastRejectionAudit.Clear();
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, kind == "user" ? userId : null, $"{kind} {userId:N} rejected: {cause}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
     }
 
     public async Task<bool> AnyIdentityAdministratorAsync(CancellationToken ct = default)
@@ -170,15 +232,15 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
                 foreach (var key in companyLocks) await AdministratorContinuity.LockCompanyAsync(conn, tx, Guid.ParseExact(key, "N"), ct);
             }
 
-            if (actorUserId is { } actor && (await ReadStateAsync(conn, tx, actor, ct)).State != UserState.Active)
+            if (actorUserId is { } actor && (await ReadStateAsync(conn, tx, RequireKeys(), actor, ct)) is not { State: UserState.Active, Authentic: true })
                 return SetStateOutcome.ActorNotActive;
-            var (current, isIdentityAdmin) = await ReadStateAsync(conn, tx, userId, ct);
+            var (current, isIdentityAdmin, _) = await ReadStateAsync(conn, tx, RequireKeys(), userId, ct);
             if (current is null)
                 return SetStateOutcome.NotFound;
 
             if (state != UserState.Active && current == UserState.Active)
             {
-                if (isIdentityAdmin && await CountActiveIdentityAdministratorsAsync(conn, tx, exclude: userId, ct) == 0)
+                if (isIdentityAdmin && await CountActiveIdentityAdministratorsAsync(conn, tx, RequireKeys(), exclude: userId, ct) == 0)
                     return SetStateOutcome.LastIdentityAdministrator;
 
                 // Companies this user administers: lock them all (sorted) and re-check; a membership granted meanwhile adds a
@@ -195,15 +257,18 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
                         return SetStateOutcome.LastCompanyAdministrator;
             }
 
-            await using (var cmd = new NpgsqlCommand(
-                $"UPDATE {U.Table} SET {U.State} = @s, {U.StateChangedAtUtc} = @n WHERE {U.Id} = @id", conn, tx))
+            // the state is a covered field: it changes through the tagged primitive (verified row, revision +1, re-tag under CAS). Leaving Active is a security-reducing change and is allowed on a row that does not verify
+            // (it keeps its invalid tag); re-activating a user requires an authentic row.
+            var changed = await UserRow.ChangeAsync(conn, tx, RequireKeys(), userId, async () =>
             {
+                await using var cmd = new NpgsqlCommand($"UPDATE {U.Table} SET {U.State} = @s, {U.StateChangedAtUtc} = @n WHERE {U.Id} = @id", conn, tx);
                 cmd.Parameters.AddWithValue("s", (short)state);
                 cmd.Parameters.AddWithValue("n", now);
                 cmd.Parameters.AddWithValue("id", userId);
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-            if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, now, ct);
+                return await cmd.ExecuteNonQueryAsync(ct) == 1;
+            }, bump: true, requireValid: state == UserState.Active, ct);
+            if (!changed) return SetStateOutcome.NotFound;
+            if (state != UserState.Active) await RevokeUserSessionsAsync(conn, tx, keys, userId, SessionRevocation.Administrative, null, now, ct, bumpRevision: false);
             var receipt = await AuditAsync(conn, tx, AuditEventTypes.UserStateChanged, actorUserId, userId, $"state: {state}", ct);
             await audit.CommitAsync(tx, receipt, ct);
             return SetStateOutcome.Changed;
@@ -211,20 +276,24 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         throw new InvalidOperationException("Administrator continuity locking did not converge.");
     }
 
-    private static async Task<(UserState? State, bool IsIdentityAdministrator)> ReadStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid userId, CancellationToken ct)
+    /// <summary>The state and the administrator flag of a user from the row, with whether the row VERIFIES (review L1 of PR 235: the continuity decisions are taken from the verified row; an administrator that does not verify is not a usable administrator).</summary>
+    private static async Task<(UserState? State, bool IsIdentityAdministrator, bool Authentic)> ReadStateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, Guid userId, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand($"SELECT {U.State}, {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @id", conn, tx);
-        cmd.Parameters.AddWithValue("id", userId);
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        return await r.ReadAsync(ct) ? ((UserState)r.GetInt16(0), r.GetBoolean(1)) : (null, false);
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row) return (null, false, false);
+        var authentic = row.IsValid(keys);
+        return ((UserState)row.State, authentic && row.IsAdministrator, authentic);
     }
 
-    private static async Task<long> CountActiveIdentityAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Guid exclude, CancellationToken ct)
+    private static async Task<long> CountActiveIdentityAdministratorsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, Guid exclude, CancellationToken ct)
     {
-        await using var cmd = new NpgsqlCommand(
-            $"SELECT count(*) FROM {U.Table} WHERE {U.IsIdentityAdministrator} AND {U.State} = 0 AND {U.Id} <> @x", conn, tx);
-        cmd.Parameters.AddWithValue("x", exclude);
-        return (long)(await cmd.ExecuteScalarAsync(ct))!;
+        var rows = new List<UserRow>();
+        await using (var cmd = new NpgsqlCommand($"SELECT {UserRow.Columns("u")} FROM {U.Table} u WHERE u.{U.IsIdentityAdministrator} AND u.{U.State} = 0 AND u.{U.Id} <> @x", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("x", exclude);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) rows.Add(UserRow.Read(r));
+        }
+        return rows.Count(row => row.IsValid(keys));                                                            // only an authentic administrator counts as one
     }
 
     /// <summary>Replaces the stored hash. <paramref name="passwordChanged"/> false = transparent rehash with the same password.</summary>
@@ -232,14 +301,18 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        await using (var cmd = new NpgsqlCommand(
-            $"UPDATE {U.Table} SET {U.PasswordHash} = @h" + (passwordChanged ? $", {U.PasswordChangedAtUtc} = @n" : "") + $" WHERE {U.Id} = @id", conn, tx))
+        // the password hash is a covered field: tagged primitive. A real change raises the revision (every other session ends through the revoke-all that follows); a transparent rehash of the same password
+        // re-tags without a bump (it must not sign the user out of every device at each login).
+        var done = await UserRow.ChangeAsync(conn, tx, RequireKeys(), userId, async () =>
         {
+            await using var cmd = new NpgsqlCommand(
+                $"UPDATE {U.Table} SET {U.PasswordHash} = @h" + (passwordChanged ? $", {U.PasswordChangedAtUtc} = @n" : "") + $" WHERE {U.Id} = @id", conn, tx);
             cmd.Parameters.AddWithValue("h", hash);
             cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
             cmd.Parameters.AddWithValue("id", userId);
-            await cmd.ExecuteNonQueryAsync(ct);
-        }
+            return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        }, bump: passwordChanged, requireValid: true, ct);
+        if (!done) throw new InvalidOperationException("user_not_authentic");
         // A real password change is a security event (a transparent rehash with the same password is not).
         if (!passwordChanged) { await tx.CommitAsync(ct); return; }
         var receipt = await AuditAsync(conn, tx, AuditEventTypes.PasswordChanged, userId, userId, null, ct);
@@ -248,33 +321,48 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
 
     // ---- Sessions ----
 
-    public async Task CreateSessionAsync(Guid sessionId, Guid userId, byte[] tokenHash, SessionClient client, DateTimeOffset idleExpires, DateTimeOffset absoluteExpires, DateTimeOffset? mfaVerifiedAt = null, CancellationToken ct = default)
+    public async Task CreateSessionAsync(Guid sessionId, Guid userId, string token, SessionClient client, DateTimeOffset idleExpires, DateTimeOffset absoluteExpires, DateTimeOffset? mfaVerifiedAt = null, CancellationToken ct = default)
     {
+        var k = RequireKeys();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        await InsertSessionAsync(conn, tx, new SessionIssue(sessionId, tokenHash, client, idleExpires, absoluteExpires, mfaVerifiedAt), userId, clock.GetUtcNow(), ct);
+        await InsertSessionAsync(conn, tx, k, new SessionIssue(sessionId, token, client, idleExpires, absoluteExpires, mfaVerifiedAt), userId, clock.GetUtcNow(), ct);
         await tx.CommitAsync(ct);
     }
 
-    /// <summary>Inserts a session (and records the login time) inside the CALLER's transaction, so a session can be created atomically with another change.</summary>
-    internal static async Task InsertSessionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, SessionIssue issue, Guid userId, DateTimeOffset now, CancellationToken ct)
+    /// <summary>
+    /// THE ONE primitive that creates a session (identity integrity S-1), inside the CALLER's transaction so a session can be created atomically with another change: it hashes the token under the token key,
+    /// reads the user's security revision under a row lock, and writes the row with the key id and the tag over its security fields. No other code inserts a session row.
+    /// </summary>
+    internal static async Task InsertSessionAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, SessionIssue issue, Guid userId, DateTimeOffset now, CancellationToken ct)
     {
-        var (sessionId, tokenHash, client, idleExpires, absoluteExpires, mfaVerifiedAt) = (issue.SessionId, issue.TokenHash, issue.Client, issue.IdleExpires, issue.AbsoluteExpires, issue.MfaVerifiedAt);
-        // a session created after the second factor records it: auth_methods 3 (password + totp) with the verification time; otherwise the column defaults (1, password only)
-        var mfaColumns = mfaVerifiedAt is null ? "" : $",{SM.AuthMethods},{SM.VerifiedAtUtc}";
-        var mfaValues = mfaVerifiedAt is null ? "" : ",3,@mv";
-        await using (var cmd = new NpgsqlCommand(
-            $"INSERT INTO {S.Table} ({S.Id},{S.UserId},{S.TokenHash},{S.CreatedAtUtc},{S.LastSeenAtUtc},{S.IdleExpiresAtUtc},{S.AbsoluteExpiresAtUtc},{S.ClientKind}{mfaColumns}) " +
-            $"VALUES (@id,@u,@t,@n,@n,@i,@a,@c{mfaValues})", conn, tx))
+        var key = keys.Active();
+        long revision;
+        await using (var rev = new NpgsqlCommand($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u FOR SHARE", conn, tx))
         {
-            if (mfaVerifiedAt is { } mv) cmd.Parameters.AddWithValue("mv", mv);
-            cmd.Parameters.AddWithValue("id", sessionId);
+            rev.Parameters.AddWithValue("u", userId);
+            revision = await rev.ExecuteScalarAsync(ct) is long l ? l : throw new InvalidOperationException("session_user_missing");
+        }
+        // a session created after the second factor records it: auth_methods 3 (password + totp) with the verification time; otherwise password only (1)
+        var row = new SessionRow(issue.SessionId, userId, keys.TokenHash(key, issue.Token), (short)issue.Client, MacInput.Truncate(now), MacInput.Truncate(issue.AbsoluteExpires),
+            issue.MfaVerifiedAt is null ? (short)1 : (short)3, issue.MfaVerifiedAt is { } mv ? MacInput.Truncate(mv) : null, false, null, revision, key.Id, null);
+        row = row with { Tag = row.ComputeTag(keys, key) };
+        await using (var cmd = new NpgsqlCommand(
+            $"INSERT INTO {S.Table} ({S.Id},{S.UserId},{S.TokenHash},{S.CreatedAtUtc},{S.LastSeenAtUtc},{S.IdleExpiresAtUtc},{S.AbsoluteExpiresAtUtc},{S.ClientKind},{SM.AuthMethods},{SM.VerifiedAtUtc},{SM.Emergency},{SI.UserRevisionAtIssue},{SI.KeyId},{SI.Tag}) " +
+            "VALUES (@id,@u,@t,@n,@n,@i,@a,@c,@am,@mv,false,@r,@k,@g)", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("id", row.Id);
             cmd.Parameters.AddWithValue("u", userId);
-            cmd.Parameters.AddWithValue("t", tokenHash);
-            cmd.Parameters.AddWithValue("n", now);
-            cmd.Parameters.AddWithValue("i", idleExpires);
-            cmd.Parameters.AddWithValue("a", absoluteExpires);
-            cmd.Parameters.AddWithValue("c", (short)client);
+            cmd.Parameters.AddWithValue("t", row.TokenHash);
+            cmd.Parameters.AddWithValue("n", row.CreatedAt);
+            cmd.Parameters.AddWithValue("i", MacInput.Truncate(issue.IdleExpires));
+            cmd.Parameters.AddWithValue("a", row.AbsoluteExpires);
+            cmd.Parameters.AddWithValue("c", row.ClientKind);
+            cmd.Parameters.AddWithValue("am", row.AuthMethods);
+            cmd.Parameters.AddWithValue("mv", (object?)row.VerifiedAt ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("r", revision);
+            cmd.Parameters.AddWithValue("k", key.Id);
+            cmd.Parameters.AddWithValue("g", row.Tag!);
             await cmd.ExecuteNonQueryAsync(ct);
         }
         await using (var login = new NpgsqlCommand($"UPDATE {U.Table} SET {U.LastLoginAtUtc} = @n WHERE {U.Id} = @u", conn, tx))
@@ -288,10 +376,11 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     /// <summary>The MFA state of a user (None when the user does not exist). Read by the login to refuse a password-only session when no second-factor services are wired.</summary>
     public async Task<MfaState> GetMfaStateAsync(Guid userId, CancellationToken ct = default)
     {
+        var k = RequireKeys();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand($"SELECT {M.State} FROM {U.Table} WHERE {U.Id} = @u", conn);
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteScalarAsync(ct) is short s ? (MfaState)s : MfaState.None;
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (await UserRow.LoadAsync(conn, tx, userId, forUpdate: false, ct) is not { } row) return MfaState.None;
+        return row.IsValid(k) ? (MfaState)row.MfaState : MfaState.RecoveryRequired;                               // taken from the VERIFIED row; a row that does not verify is the strictest state (fail closed, review L1 of PR 235)
     }
 
     /// <summary>
@@ -302,11 +391,9 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
     {
         var reasons = MfaMandatoryReason.None;
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using (var cmd = new NpgsqlCommand($"SELECT {U.IsIdentityAdministrator} FROM {U.Table} WHERE {U.Id} = @u", conn))
-        {
-            cmd.Parameters.AddWithValue("u", userId);
-            if (await cmd.ExecuteScalarAsync(ct) is true) reasons |= MfaMandatoryReason.IdentityAdministrator;
-        }
+        await using (var tx0 = await conn.BeginTransactionAsync(ct))
+            if (await UserRow.LoadAsync(conn, tx0, userId, forUpdate: false, ct) is { } row && (row.IsAdministrator || !row.IsValid(RequireKeys())))   // from the verified row; a row that does not verify requires the most (review L1 of PR 235)
+                reasons |= MfaMandatoryReason.IdentityAdministrator;
         var roles = new Dictionary<Guid, List<string>>();
         await using (var cmd = new NpgsqlCommand(
             $"SELECT DISTINCT r.{RL.Id}, p.{RP.Permission} FROM {RA.Table} a JOIN {RL.Table} r ON r.{RL.Id} = a.{RA.RoleId} AND r.{RL.IsActive} " +
@@ -329,25 +416,66 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return new MfaRequirement(reasons);
     }
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> lastRejectionAudit = new();
+
     /// <summary>
-    /// Finds a session that is not revoked, not idle-expired, not absolute-expired and whose user is Active.
+    /// Finds a session that is not revoked, not idle-expired, not absolute-expired and whose user is Active, AND whose row is authentic: the token hash is the keyed hash under an accepted key, the tag over the
+    /// security fields verifies, and the revision at issue equals the user's current security revision. A row that fails the integrity checks is not a session: it is revoked, answered with the same neutral null as an
+    /// unknown token (no cryptographic detail), and recorded in the audit stream for the operator (at most once a minute per session). Throws the service-unavailable exception when no identity key is available.
     /// The user's current state and administrator flag are read on every call, so changes apply immediately.
     /// </summary>
-    public async Task<ActiveSession?> FindActiveSessionAsync(byte[] tokenHash, CancellationToken ct = default)
+    public async Task<ActiveSession?> FindActiveSessionAsync(string token, CancellationToken ct = default)
     {
+        var k = RequireKeys();
+        var now = clock.GetUtcNow();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            $"SELECT s.{S.Id}, s.{S.UserId}, s.{S.ClientKind}, s.{S.IdleExpiresAtUtc}, s.{S.AbsoluteExpiresAtUtc}, s.{S.LastSeenAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator}, s.{SM.VerifiedAtUtc}, u.{M.State}, s.{S.SelectedCompanyId} " +
-            $"FROM {S.Table} s JOIN {U.Table} u ON u.{U.Id} = s.{S.UserId} " +
-            $"WHERE s.{S.TokenHash} = @t AND s.{S.RevokedAtUtc} IS NULL AND s.{S.IdleExpiresAtUtc} > @n AND s.{S.AbsoluteExpiresAtUtc} > @n AND u.{U.State} = 0", conn);
-        cmd.Parameters.AddWithValue("t", tokenHash);
-        cmd.Parameters.AddWithValue("n", clock.GetUtcNow());
-        await using var r = await cmd.ExecuteReaderAsync(ct);
-        if (!await r.ReadAsync(ct)) return null;
-        return new ActiveSession(
-            r.GetGuid(0), r.GetGuid(1), (SessionClient)r.GetInt16(2),
-            r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetFieldValue<DateTimeOffset>(5),
-            r.GetString(6), r.GetString(7), r.GetBoolean(8), r.IsDBNull(9) ? null : r.GetFieldValue<DateTimeOffset>(9), (MfaState)r.GetInt16(10), r.IsDBNull(11) ? null : r.GetGuid(11));
+        foreach (var key in k.Accepted())
+        {
+            await using var cmd = new NpgsqlCommand(
+                $"SELECT s.{S.LastSeenAtUtc}, s.{S.IdleExpiresAtUtc}, u.{U.Login}, u.{U.DisplayName}, u.{U.IsIdentityAdministrator}, u.{M.State}, u.{UI.SecurityRevision}, {SessionRow.Columns("s")}, {UserRow.Columns("u")} " +
+                $"FROM {S.Table} s JOIN {U.Table} u ON u.{U.Id} = s.{S.UserId} " +
+                $"WHERE s.{S.TokenHash} = @t AND s.{S.RevokedAtUtc} IS NULL AND s.{S.IdleExpiresAtUtc} > @n AND s.{S.AbsoluteExpiresAtUtc} > @n AND u.{U.State} = 0", conn);
+            cmd.Parameters.AddWithValue("t", k.TokenHash(key, token));
+            cmd.Parameters.AddWithValue("n", now);
+            SessionRow row; UserRow userRow; DateTimeOffset lastSeen, idle; string login, display; bool admin; MfaState mfa; long currentRevision;
+            await using (var r = await cmd.ExecuteReaderAsync(ct))
+            {
+                if (!await r.ReadAsync(ct)) continue;
+                lastSeen = r.GetFieldValue<DateTimeOffset>(0); idle = r.GetFieldValue<DateTimeOffset>(1);
+                login = r.GetString(2); display = r.GetString(3); admin = r.GetBoolean(4); mfa = (MfaState)r.GetInt16(5); currentRevision = r.GetInt64(6);
+                row = SessionRow.Read(r, 7); userRow = UserRow.Read(r, 7 + 13);
+            }
+            // the tag (under the key id the row names, which must be an accepted key) must verify, and the revision at issue must still be the user's current revision. The key that hashed the TOKEN and the key
+            // that tagged the row may differ during a rotation (a re-tag moves the row to the active key, the token hash stays), both are accepted keys.
+            var tagValid = row.IsValid(k);
+            var userValid = tagValid && userRow.IsValid(k);                                                  // identity integrity S-2a: the user the session belongs to must be authentic too
+            if (!tagValid || !userValid || row.RevisionAtIssue != currentRevision)
+            {
+                await RejectSessionAsync(conn, row, !tagValid ? "tag" : !userValid ? "user tag" : "revision", ct);
+                return null;
+            }
+            return new ActiveSession(row.Id, row.UserId, (SessionClient)row.ClientKind, idle, row.AbsoluteExpires, lastSeen, login, display, admin, row.VerifiedAt, mfa, row.SelectedCompanyId);
+        }
+        return null;
+    }
+
+    private async Task RejectSessionAsync(NpgsqlConnection conn, SessionRow row, string cause, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using (var cmd = new NpgsqlCommand($"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn, tx))
+        {
+            cmd.Parameters.AddWithValue("n", now);
+            cmd.Parameters.AddWithValue("r", (short)SessionRevocation.Administrative);
+            cmd.Parameters.AddWithValue("id", row.Id);
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return; }
+        }
+        // audit at most once a minute per session (the row is revoked here, so a repeat is rare; the bound keeps a flood from growing the stream)
+        if (lastRejectionAudit.TryGetValue(row.Id, out var last) && now - last < TimeSpan.FromMinutes(1)) { await tx.CommitAsync(ct); return; }
+        lastRejectionAudit[row.Id] = now;
+        if (lastRejectionAudit.Count > 10_000) lastRejectionAudit.Clear();
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, row.UserId, $"session {row.Id:N} rejected: {cause}", ct);
+        await audit.CommitAsync(tx, receipt, ct);
     }
 
     /// <summary>Records activity and extends the idle expiry (capped at the absolute expiry) of a live session.</summary>
@@ -376,20 +504,63 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
 
     public async Task<int> RevokeUserSessionsAsync(Guid userId, SessionRevocation reason, Guid? exceptSessionId = null, CancellationToken ct = default)
     {
+        var k = RequireKeys();                                           // the user row is re-tagged and the kept session re-tagged: a key is required (identity integrity S-2a)
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
-        return await RevokeUserSessionsAsync(conn, null, userId, reason, exceptSessionId, clock.GetUtcNow(), ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var n = await RevokeUserSessionsAsync(conn, tx, k, userId, reason, exceptSessionId, clock.GetUtcNow(), ct);
+        await tx.CommitAsync(ct);
+        return n;
     }
 
-    internal static async Task<int> RevokeUserSessionsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, SessionRevocation reason, Guid? except, DateTimeOffset now, CancellationToken ct)
+    /// <summary>
+    /// Revokes every live session of the user and raises the user's SECURITY REVISION in the same transaction (identity integrity S-1): a session row written back after the revocation (the replay of vector A)
+    /// carries the old revision and is never honoured. The <paramref name="except"/> session (the one that changed the password) is kept: it is re-tagged under the new revision by compare-and-swap, so it stays live
+    /// and no other row does.
+    /// </summary>
+    internal static async Task<int> RevokeUserSessionsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys? keys, Guid userId, SessionRevocation reason, Guid? except, DateTimeOffset now, CancellationToken ct, bool bumpRevision = true)
     {
-        await using var cmd = new NpgsqlCommand(
-            $"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL" +
-            (except is null ? "" : $" AND {S.Id} <> @x"), conn, tx);
-        cmd.Parameters.AddWithValue("n", now);
-        cmd.Parameters.AddWithValue("r", (short)reason);
-        cmd.Parameters.AddWithValue("u", userId);
-        if (except is not null) cmd.Parameters.AddWithValue("x", except.Value);
-        return await cmd.ExecuteNonQueryAsync(ct);
+        if (keys is null) throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
+        // the revision is a covered field of the user: raised (and the user row re-tagged when it verifies; a row that does not verify keeps its invalid tag) through the tagged primitive, never by a bare UPDATE
+        if (bumpRevision && !await UserRow.ChangeAsync(conn, tx, keys, userId, () => Task.FromResult(true), bump: true, requireValid: false, ct)) throw new InvalidOperationException("session_user_missing");
+        long revision;
+        await using (var read = new NpgsqlCommand($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", conn, tx))
+        {
+            read.Parameters.AddWithValue("u", userId);
+            revision = await read.ExecuteScalarAsync(ct) is long l ? l : throw new InvalidOperationException("session_user_missing");
+        }
+        int revoked;
+        await using (var cmd = new NpgsqlCommand(
+            $"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL" + (except is null ? "" : $" AND {S.Id} <> @x"), conn, tx))
+        {
+            cmd.Parameters.AddWithValue("n", now);
+            cmd.Parameters.AddWithValue("r", (short)reason);
+            cmd.Parameters.AddWithValue("u", userId);
+            if (except is not null) cmd.Parameters.AddWithValue("x", except.Value);
+            revoked = await cmd.ExecuteNonQueryAsync(ct);
+        }
+        if (except is { } keep && await SessionRow.LoadForUpdateAsync(conn, tx, keep, ct) is { } before)
+        {
+            // keep the session only when its own tag is valid and it belongs to the user; re-tag it under the new revision. Anything else is revoked.
+            var ok = before.UserId == userId && before.IsValid(keys);
+            if (ok)
+            {
+                var after = before with { RevisionAtIssue = revision };
+                var key = keys.Active();
+                after = after with { KeyId = key.Id, Tag = null };
+                after = after with { Tag = after.ComputeTag(keys, key) };
+                await using var up = new NpgsqlCommand($"UPDATE {S.Table} SET {SI.UserRevisionAtIssue} = @r, {SI.KeyId} = @k, {SI.Tag} = @t WHERE {S.Id} = @id AND {SI.Tag} = @old", conn, tx);
+                up.Parameters.AddWithValue("r", revision); up.Parameters.AddWithValue("k", key.Id); up.Parameters.AddWithValue("t", after.Tag!);
+                up.Parameters.AddWithValue("id", keep); up.Parameters.AddWithValue("old", before.Tag!);
+                ok = await up.ExecuteNonQueryAsync(ct) == 1;
+            }
+            if (!ok)
+            {
+                await using var rv = new NpgsqlCommand($"UPDATE {S.Table} SET {S.RevokedAtUtc} = @n, {S.RevokedReason} = @r WHERE {S.Id} = @id AND {S.RevokedAtUtc} IS NULL", conn, tx);
+                rv.Parameters.AddWithValue("n", now); rv.Parameters.AddWithValue("r", (short)reason); rv.Parameters.AddWithValue("id", keep);
+                revoked += await rv.ExecuteNonQueryAsync(ct);
+            }
+        }
+        return revoked;
     }
 
     // ---- Failed-login throttling ----

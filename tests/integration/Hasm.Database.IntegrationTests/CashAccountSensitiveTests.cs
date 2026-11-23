@@ -141,8 +141,9 @@ public class CashAccountSensitiveTests : CashAccountTestBase
     [PostgresFact]
     public async Task A_missing_key_fails_closed_nothing_is_stored_in_clear_and_a_number_cannot_be_moved_to_another_account()
     {
-        await Start(keyUnavailable: true);
-        var main = await MainBranch(); var cookie = await Manager();
+        await Start();
+        var main = await MainBranch(); var cookie = await Manager();                                          // sign-in needs the identity key too (identity integrity S-1): the key goes away AFTER it
+        Keys.Unavailable = true;
         var failed = await Send(HttpMethod.Post, Base, Bank("nb", main, await Gl("1101"), Number), cookie);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.Status);
         Assert.Equal(0L, await AccountRows());
@@ -211,6 +212,8 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         var moved = IdOf(await Create(cookie, Bank("nb-new", main, await Gl("1102"), "GB29NWBK60161331926819")));   // under k2 already
         Rotate("k3");
         Assert.True(Keys.Remove("k1"));                                                                         // the old key is gone: its number cannot be re-wrapped
+        await RetagAllUsersAsync();                                                                             // and every user tag under it (the retag tool of the rotation slice does this in production)
+        cookie = await Manager();                                                                               // and so is every session under it: a new sign-in (under the active key) replaces the cookie
         var cipher = await Sql<byte[]>($"SELECT {Ca.NumberCipher} FROM {Ca.Table} WHERE {Ca.Id} = '{lost}'");
         var r = await Send(HttpMethod.Post, $"{Base}/maintenance/rewrap", new { }, cookie);
         Assert.Equal(HttpStatusCode.OK, r.Status);
@@ -235,6 +238,8 @@ public class CashAccountSensitiveTests : CashAccountTestBase
         await Create(cookie, Cashbox("c1", main, await Gl("1102")));
         Rotate("k2");
         Assert.True(Keys.Remove("k1"));                                                                         // the number cannot be re-wrapped: the failure path runs
+        await RetagAllUsersAsync();
+        cookie = await Manager();                                                                               // sessions under the retired key are gone with it: sign in again under the active key
         var service = factory!.Services.GetRequiredService<CashAccountService>();
         service.BeforeFailureAuditForTests = _ => throw new InvalidOperationException("audit store secret detail 0380");   // the audit of the failure itself fails
         try

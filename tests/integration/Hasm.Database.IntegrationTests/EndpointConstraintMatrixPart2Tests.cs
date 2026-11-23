@@ -239,7 +239,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         storage = Path.Combine(Path.GetTempPath(), "hasm-cvm2-" + Guid.NewGuid().ToString("N"));
         await StartApi(new WarehouseLimitPolicy(50, 50), b => b.UseSetting("Hasm:Attachments:StorageDirectory", storage).ConfigureServices(s =>
         {
-            s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+            s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
             s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
             s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));   // the internal test document type (D-049)
         }));

@@ -43,7 +43,7 @@ public abstract class AccessTestBase : IdentityTestBase
     protected async Task StartAccess()
     {
         await Start();
-        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit, new KnownScopeValidator());
+        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, TestCatalog, Audit, new KnownScopeValidator(), keys: SessionKeys);
     }
 
     public override async Task DisposeAsync()
@@ -138,7 +138,7 @@ public class AccessMigrationTests : AccessTestBase
         Assert.Empty(second.AppliedMigrations);
         Assert.Equal(checksum, await Scalar<string>($"SELECT checksum FROM {SystemSchema.MigrationJournalTable} WHERE version = 4"));
         Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {Co.Table}"));                // data preserved
-        Assert.Equal(8L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));                // presets seeded exactly once
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));                // presets seeded exactly once
     }
 
     [PostgresFact]
@@ -457,7 +457,7 @@ public class RoleTests : AccessTestBase
         Fails(await Access.CreateRoleAsync(admin.Id, company, new string('n', 101), []), AccessStatus.Invalid, "invalid_name");
         Fails(await Access.CreateRoleAsync(admin.Id, company, "bad\nname", []), AccessStatus.Invalid, "invalid_name");
         Assert.Equal(before, await AuditCount(company));
-        Assert.Equal(8L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
+        Assert.Equal(10L, await Scalar<long>($"SELECT count(*) FROM {Ro.Table}"));
     }
 
     [PostgresFact]
