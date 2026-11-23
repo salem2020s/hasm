@@ -93,6 +93,18 @@ public class PlanExecutionDisabledTests : JournalTestBase
         foreach (var type in PureEpochTypes)
         {
             Assert.False(type.IsPublic, type.FullName);
+            // no nested type except the compiler's own closure and display classes, whose methods are lambdas and local functions only (names start with '<') and whose fields pass the same check
+            foreach (var nested in type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                Assert.True(nested.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null, type.Name + " declares the nested type " + nested.Name);
+                Assert.Empty(nested.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
+                Assert.All(nested.GetMethods(all).Where(m => !m.Name.StartsWith('<') && !m.IsSpecialName && m.DeclaringType == nested && m.Name is not ("ToString" or "Equals" or "GetHashCode")), m => Assert.Fail(type.Name + "/" + nested.Name + "." + m.Name + " is not a lambda"));
+                foreach (var f in nested.GetFields(all).Where(f => !f.Name.StartsWith("<>9", StringComparison.Ordinal)))      // <>9 is the static cache of the nested closure class itself and of its lambdas
+                    AssertPureType(f.FieldType, type.Name + "/" + nested.Name + "." + f.Name);
+            }
+            // a record or an enum-free data type holds no static state and no field of an unknown type
+            if (!type.IsEnum && type != typeof(EpochSchedule))
+                Assert.All(type.GetFields(all), f => Assert.False(f.IsStatic, type.Name + "." + f.Name + " is static state"));
             if (type != schedule)
             {
                 Assert.Empty(type.GetMethods(all).Where(m => !Generated(m)));            // records and the enum: compiler-generated members only
@@ -102,29 +114,38 @@ public class PlanExecutionDisabledTests : JournalTestBase
                 Assert.DoesNotMatch("Execute|Executor|Replay|Storno|Rebook", method.Name);
             foreach (var method in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all)))
             {
-                if (method is MethodInfo mi) { Assert.False(typeof(Task).IsAssignableFrom(mi.ReturnType) || mi.ReturnType.Name.StartsWith("ValueTask", StringComparison.Ordinal), type.Name + "." + method.Name + " returns a task"); AssertPureType(mi.ReturnType, type.Name + "." + method.Name); }
-                foreach (var p in method.GetParameters()) AssertPureType(p.ParameterType, type.Name + "." + method.Name + "(" + p.Name + ")");
+                if (method is MethodInfo mi) { Assert.False(typeof(Task).IsAssignableFrom(mi.ReturnType) || mi.ReturnType.Name.StartsWith("ValueTask", StringComparison.Ordinal), type.Name + "." + method.Name + " returns a task"); AssertPureType(mi.ReturnType, type.Name + "." + method.Name, null, member: false); }
+                foreach (var p in method.GetParameters()) AssertPureType(p.ParameterType, type.Name + "." + method.Name + "(" + p.Name + ")", null, member: false);
             }
             foreach (var f in type.GetFields(all)) AssertPureType(f.FieldType, type.Name + "." + f.Name);
             foreach (var p in type.GetProperties(all)) AssertPureType(p.PropertyType, type.Name + "." + p.Name);
         }
     }
 
-    private static void AssertPureType(Type type, string where)
+    private static void AssertPureType(Type type, string where, HashSet<Type>? visited = null, bool member = true)
     {
+        visited ??= [];
         if (type == typeof(void)) return;
-        if (type.HasElementType) { AssertPureType(type.GetElementType()!, where); return; }
-        if (type.IsGenericType) { foreach (var argument in type.GetGenericArguments()) AssertPureType(argument, where); }
+        if (type.HasElementType) { AssertPureType(type.GetElementType()!, where, visited, member); return; }
+        if (type.IsGenericType) { foreach (var argument in type.GetGenericArguments()) AssertPureType(argument, where, visited, member); }
         var ns = type.Namespace ?? "";
         Assert.False(type == typeof(IServiceProvider) || typeof(IServiceProvider).IsAssignableFrom(type), where + ": " + type);
+        Assert.False(typeof(Delegate).IsAssignableFrom(type), where + ": a delegate type: " + type);
+        Assert.False(member && type == typeof(object), where + ": an untyped member");
         Assert.False(ns.StartsWith("Npgsql", StringComparison.Ordinal) || ns.StartsWith("System.Data", StringComparison.Ordinal) || ns.StartsWith("System.Net", StringComparison.Ordinal) ||
             ns.StartsWith("System.IO", StringComparison.Ordinal) || ns.StartsWith("Microsoft.", StringComparison.Ordinal) || ns.StartsWith("System.Threading.Tasks", StringComparison.Ordinal), where + ": " + type);
-        if (ns.StartsWith("Hasm.", StringComparison.Ordinal))
-        {
-            // a backend type may appear only as plain data (an enum or a record) or as the static function itself: a service, store, resolver or transaction never does
-            var data = type.IsEnum || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null || type == typeof(EpochSchedule) || type == typeof(CostingException);   // the refusal the derivation throws is a plain exception with a code
-            Assert.True(data, where + ": " + type + " is not plain data");
-        }
+        if (!ns.StartsWith("Hasm.", StringComparison.Ordinal) || !visited.Add(type)) return;
+        // a backend type may appear only as plain data (an enum or a record) or as the static function itself or an exception code: a service, store, resolver or transaction never does
+        var isFunction = type == typeof(EpochSchedule) || type == typeof(CostingException);
+        var data = (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer) && type.IsNestedPrivate) || type.IsEnum || isFunction || type.IsValueType ||      // a struct (a record struct) is data too: its fields are checked below
+            type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null;
+        Assert.True(data, where + ": " + type + " is not plain data");
+        if (type.IsEnum || isFunction) return;
+        // and its own members are plain too, transitively: a record wrapping a service is found here
+        const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        foreach (var f in type.GetFields(all)) { Assert.False(f.IsStatic, where + ": " + type.Name + "." + f.Name + " is static state"); AssertPureType(f.FieldType, where + " > " + type.Name + "." + f.Name, visited); }
+        foreach (var p in type.GetProperties(all)) AssertPureType(p.PropertyType, where + " > " + type.Name + "." + p.Name, visited, member: p.Name != "EqualityContract");
+        foreach (var c in type.GetConstructors(all)) foreach (var p in c.GetParameters()) AssertPureType(p.ParameterType, where + " > " + type.Name + ".ctor(" + p.Name + ")", visited);
     }
 
     [PostgresFact]
