@@ -292,6 +292,33 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
     }
 
     [PostgresRoleFact]
+    public async Task A_user_cannot_be_inserted_with_a_revision_at_or_above_the_bound_and_a_normal_insert_works()
+    {
+        // delta review H1' of PR 227: the runtime role inserted a user at the bigint maximum, after which deactivation overflowed and the user stayed active
+        await StartRestricted();
+        var hash = Passwords.Hash(Pw);
+        async Task<int> Insert(string login, string revision) => await Attack(
+            $"INSERT INTO {U.Table} ({U.Id},{U.Login},{U.DisplayName},{U.PasswordHash},{U.State},{U.IsIdentityAdministrator},{U.CreatedAtUtc},{U.StateChangedAtUtc},{U.PasswordChangedAtUtc},{UI.SecurityRevision}) VALUES (@i,@l,@l,@h,0,false,now(),now(),now(),{revision})",
+            ("i", Guid.NewGuid()), ("l", login), ("h", hash));
+        foreach (var bad in new[] { "9223372036854775807", "4611686018427387904", "-1" })
+        {
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => Insert("bad" + Guid.NewGuid().ToString("N")[..8], bad));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, ex.SqlState);
+        }
+        Assert.Equal(1, await Insert("good", "4611686018427387903"));                                                // the largest allowed value
+        Assert.Equal(1, await Insert("zero", "0"));
+        var user = (await Store_FindAsync("zero"))!;
+        await using var store = RuntimeStore();
+        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));     // and a bump from a normal start works
+        // an UPDATE past the bound is refused as well (the +1 guard and the bound agree)
+        var edge = (await Store_FindAsync("good"))!;
+        var ex2 = await Assert.ThrowsAsync<PostgresException>(() => Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = {UI.SecurityRevision} + 1 WHERE {U.Id} = @u", ("u", edge.Id)));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, ex2.SqlState);
+    }
+
+    private Task<UserRecord?> Store_FindAsync(string login) => Store.FindUserByLoginAsync(login);
+
+    [PostgresRoleFact]
     public async Task A_stale_row_whose_revocation_was_cleared_is_not_re_tagged_by_step_up_or_company_selection()
     {
         // review L1 of PR 227: defence in depth, the change sites refuse a row whose revision at issue is no longer the user's current revision

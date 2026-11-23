@@ -55,6 +55,7 @@ public class IdentityIntegritySchemaDerivationTests
         Assert.Contains($"{SystemSchema.SessionIntegrity.Tag} bytea NULL", sql);
         Assert.Contains($"{SystemSchema.SessionIntegrity.UserRevisionAtIssue} bigint NULL", sql);
         Assert.Contains($"{SystemSchema.UserIntegrity.SecurityRevision} bigint NOT NULL DEFAULT 0", sql);
+        Assert.Contains($"{SystemSchema.UserIntegrity.SecurityRevision} < 4611686018427387904", sql);                  // the bound (2^62) applies to INSERT as well: no row can start where a bump overflows
         // the database enforces what needs no key: the revision stays or grows by exactly one
         Assert.Contains($"NEW.{SystemSchema.UserIntegrity.SecurityRevision} <> OLD.{SystemSchema.UserIntegrity.SecurityRevision} + 1", sql);
         Assert.Contains($"CREATE TRIGGER {SystemSchema.UserIntegrity.TrRevisionGuard} BEFORE UPDATE ON {SystemSchema.User.Table}", sql);

@@ -44,7 +44,7 @@ ALTER TABLE [[Session.Table]]
 
 ALTER TABLE [[User.Table]]
     ADD COLUMN {{UserIntegrity.SecurityRevision}} bigint NOT NULL DEFAULT 0,
-    ADD CONSTRAINT {{UserIntegrity.CkRevision}} CHECK ({{UserIntegrity.SecurityRevision}} >= 0);
+    ADD CONSTRAINT {{UserIntegrity.CkRevision}} CHECK ({{UserIntegrity.SecurityRevision}} >= 0 AND {{UserIntegrity.SecurityRevision}} < 4611686018427387904);
 
 CREATE FUNCTION {{UserIntegrity.FnRevisionGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
