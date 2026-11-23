@@ -1,6 +1,49 @@
 # Identity integrity plan (register item SEC-RT-SESSION): the runtime database credentials must not be able to mint sessions, identities or grants
 
-**Status: PLAN ONLY (a proposal; nothing is built; no decision ID, audit code or migration number is allocated).** It answers the finding recorded by Agent OSEC during the review of PR 218 (T2), 2026-11-22, severity **High**, and it is **blocking** for T2 and for any control that relies on the application authenticating a person against someone who holds the database credentials. Implementation starts only after an independent review of this plan and the owner decisions of section 12. Everything here that is not a quoted owner decision is a proposal.
+**Status: slice S-1 BUILT in its own PR (section 13 records exactly what was built and what was left for later slices); every other slice is still a plan. The rest of this text is the plan as approved; where section 13 differs, section 13 is what the code does.** Originally: PLAN ONLY (a proposal; nothing is built; no decision ID, audit code or migration number is allocated). It answers the finding recorded by Agent OSEC during the review of PR 218 (T2), 2026-11-22, severity **High**, and it is **blocking** for T2 and for any control that relies on the application authenticating a person against someone who holds the database credentials. Implementation starts only after an independent review of this plan and the owner decisions of section 12. Everything here that is not a quoted owner decision is a proposal.
+
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-240..D-247) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (SEC-RT-SESSION-OD). The owner text follows verbatim; the decision IDs, which the status line below says were not yet allocated, are D-240 to D-247 for OD-1 to OD-8. Nothing else of this document changes.
+>
+> A. Identity Integrity — OD-1 to OD-8
+> OD-1 — Key custody: APPROVED
+> Reuse the existing protected key ring with the four separately derived, purpose-bound identity keys: `identity-token`, `identity-session`, `identity-user` and `identity-access`.
+> Preserve D-080, D-087 and D-093, encrypted offline recovery, rotation, access restrictions and independent approval for key retirement. Never store the raw keys in PostgreSQL.
+
+> OD-2 — Rollout: APPROVED
+> Use one controlled maintenance window. Force all Web and Desktop users to sign in again, including MFA where applicable.
+> Never offer a compatibility mode that trusts unsigned identity records. Deployment and activation require a successful backup, verified recovery readiness and a rollback procedure that does not reopen the vulnerability.
+
+> OD-3 — Existing identities and permissions: POLICY APPROVED
+> For each installation, the installation owner must designate a named, authorized security operator before rollout.
+> That person reviews the complete identity and permission reconciliation report against the authenticated audit history.
+> Previously revoked permissions reintroduced into the database must not be automatically trusted. Suspicious or unsupported records require explicit documented disposition.
+> The authorized owner-account operation may tag only verified and approved records.
+> This installation-specific appointment does not block development or testing. Until completed for a real installation, production rollout remains blocked.
+
+> OD-4 — IdentityAnchor: APPROVED
+> Implement the append-only, cryptographically authenticated revision history.
+> Only valid key-backed anchors count. Invalid or unknown-key anchors must never be able to lock legitimate users out; alert and ignore those entries for the revision bound.
+> Prove that previously valid but revoked identity or access records cannot be restored by database-only manipulation.
+
+> OD-5 — Residual threat boundaries: CONDITIONALLY ACCEPTED
+> Accept the documented limits concerning availability attacks, bounded session lifetime, full application-process compromise and database-superuser compromise as explicit threat-model boundaries, not as permission to weaken security.
+> Preserve the absolute session expiration, signed revocation/version checks, MFA attempt protections, alerts and audit evidence.
+> The known single-logout resurrection scenario must be documented and tested. Prefer a narrowly scoped, independently reviewed protection if feasible without unexpectedly signing users out from every device. Do not block the primary security fix on a speculative redesign; do not silently claim that the residual is eliminated.
+
+> OD-6 — Rotation: APPROVED
+> Existing sessions may use the previous key for no longer than their configured maximum lifetime, initially 12 hours.
+> Existing user and access records may use the previous key only during the controlled re-tagging operation. Retagging must have observable completion and failure states, not indefinite grace.
+> Retire a key only after zero references are verified and independent approval is obtained.
+
+> OD-7 — Scope: APPROVED
+> Protect cost-center assignments alongside users, sessions, roles, role assignments and company access.
+> Narrowing the application database role's remaining permissions is a separate least-privilege workstream. Track it explicitly; do not mistake cryptographic integrity checks for a complete replacement for least privilege.
+
+> OD-8 — Refusal responses: APPROVED
+> Missing required keys produce a fail-closed service-unavailable response.
+> Invalid identity or access records receive neutral authentication or authorization failures, without revealing cryptographic validation details. Record safe, actionable diagnostic information in the protected audit/administrator channel.
+> Proceed with the identity-integrity implementation and independent adversarial security tests.
+
 
 ## 1. The problem, restated
 
@@ -58,7 +101,7 @@ Every fact the API takes from a row to decide identity, second factor or authori
 | second factor | MFA `VerifiedAtUtc` (null encoded explicitly), `AuthMethods`, `Emergency` |
 | company context | `SelectedCompanyId` (null encoded explicitly) |
 | lifetime | `AbsoluteExpiresAtUtc` |
-| revocation | `RevokedAtUtc` (null encoded explicitly) and `RevokedReason` |
+| revocation | NOT covered (review L2 of PR 227, built as OD-5): `RevokedAtUtc` and `RevokedReason` are outside the tag. Revoke-all, password change and deactivation are protected by the user revision; a SINGLE logout is the documented residual until the logout record (S-1b) |
 | the user row it was issued under | the user's security revision at issue (section 5) |
 | key | `KeyId` |
 
@@ -171,6 +214,8 @@ Also unit: golden values per MAC (so a silent change of the covered field set fa
 
 ## 13. Owner decisions (final wording, as put to the owner; none is implied by this plan)
 
+**Decided 2026-11-22: see the owner decision at the top of this document (D-240..D-247; register item SEC-RT-SESSION-OD). The questions below are kept as put to the owner.**
+
 **OD-1 - Key custody.** "The existing protected key ring, which already protects authenticator secrets (D-080(2)), will also be used, through four separate derived keys, to authenticate login sessions, short-lived login challenges, user records and permission records. It is backed up and recovered as today (D-087), and a key is retired only with independent approval (D-080(6)). Do you approve? (Alternative, not recommended: a separate owner-only key folder, with its own backup and recovery procedure.)" [Technical reference: section 3; the four subkeys are `identity-token`, `identity-session`, `identity-user`, `identity-access`.]
 
 **OD-2 - Rollout.** "At rollout there is one maintenance window, and every user, Web and Desktop, is signed out once and signs in again with their second factor. There is no transitional mode that would accept unprotected records. Do you approve?" [Section 9.]
@@ -195,3 +240,19 @@ T2 (PR 218 C1) and every control that depends on "the application authenticates 
 
 * **Revision 2 (after the independent review of PR 220 at b99eba4, `docs/review-records/PR-220-identity-integrity-plan-review.md`):** H1 (the three enrolment-code columns are inside the user MAC; the challenge-based enrolment begin and confirm paths and the code issue, spend and clear writers are listed as verification and recompute sites; S-2 closes vector B only with this in place; a test for the demonstrated attack); M2 (section 5.1: every challenge purpose analysed against a runtime attacker, RecoveryRequest has no caller and a source-scan test keeps it so; challenge rows bound by a keyed token hash and a tag; tests 3b); M1 (the anchor bound is the maximum over VALID-tagged anchors only, invalid ones ignored and alerted; test 3c; folded into OD-4); M3 (the audit report reconciles each live row against the NET of grant and revocation events, so a revoked-then-reinserted row is flagged and not tagged; a test; folded into OD-3); L1 (four subkeys, the heading corrected); L2 (`ActivateAndIssueAsync` named; all session creation goes through `IdentityStore.InsertSessionAsync`, which now also computes the tag and the keyed hash, so no creation path can skip it).
 * **Revision 3 (after the confirmation review at 31e3aab, `docs/review-records/PR-220-identity-integrity-plan-delta-confirmation.md`):** Q1 (the PREFERRED fix, not the residual): section 5.2, an append-only, tagged second-factor attempt log from which the per-user, per-pair and per-challenge limits are derived (the attempt is written before the verification under a per-user advisory lock; deleting or resetting throttle rows or the challenge counter changes no limit); session validity bound to the user's current anchored revision (password change, revoke-all and administrative revocation bump it; the surviving session is re-tagged), tests 3d and 3e, slice S-2b; R2 (`UserRevisionAtIssue` in the migration of section 10 and in section 4.2); R3 (revoke-all and the membership-revocation clear become per-row compare-and-swap that retries until applied, a row with an invalid tag is revoked unconditionally, a concurrency test); the owner decisions use the final owner wording of OD-1 to OD-8 and OD-5 no longer carries the guessing and the undo-logout items.
+
+## 13. Slice S-1 as built (vector A: sessions)
+
+**What exists.** `IdentityKeys` (the four purposes `identity-token`, `identity-session`, `identity-user`, `identity-access`, derived from the existing key ring with the TOTP construction; active key plus the key ids listed in `Hasm:Encryption:IdentityPreviousKeyIds`, comma separated, accepted during a rotation and under no other); the keyed token hash (HMAC-SHA-256 under the token key, replacing the plain SHA-256 for SESSION tokens; the challenge, throttle and enrolment-code hashes are unchanged and belong to S-2); the session tag (`SessionRow`: id, user, keyed token hash, client kind, creation, absolute expiry, authentication methods, second-factor proof time, emergency flag, selected company, user revision at issue and the key id, canonical length-prefixed encoding, times to the microsecond); the ONE insert primitive `IdentityStore.InsertSessionAsync` (hashes, reads the user revision under a row lock, tags; the login, the MFA login and the enrolment reissue all use it; no other code inserts a session row); per-row compare-and-swap with `SELECT ... FOR UPDATE` and re-tag under the active key at every change site (step-up, company selection, clearing a selection when a membership ends); `User.SecurityRevision` (non-decreasing, database guard trigger) raised by password change, revoke-all, user deactivation and the enrolment reissue, with session validity equal to `UserRevisionAtIssue == SecurityRevision`; a session that fails its tag or revision is revoked, answered with the neutral "not authenticated", and recorded as audit event **1339** (PROVISIONAL, to be allocated by the lead; detail names the session and the cause `tag` or `revision`, never a key or tag), at most once a minute per session; a missing key is `EncryptionUnavailableException` (503 `encryption_unavailable`, nothing written, nothing revoked). The migration is system migration **0037** (additive: three NULLable columns and a check on the session table, `SecurityRevision` with a check and a guard trigger on the user table; no DISABLE/ENABLE, no OR REPLACE, generated by `tools/schema/system-identity-integrity.cjs`). Existing session rows carry no tag and are never honoured: every user signs in again after the rollout (no compatibility mode, OD-2).
+
+**Not in S-1 (later slices, unchanged).** The migration of the plan's section 10 is split by slice: S-1 adds only the session columns and `User.SecurityRevision`; the `MfaChallenge`, `MfaAttemptLog`, `User` tag, `Role`, assignment and `IdentityAnchor` parts belong to S-2, S-2b and S-3 and need their own migration numbers (allocated in `INTEGRATION-STATUS.md` in merge order). The user tag and the anchor are S-2, so `SecurityRevision` itself is not yet tamper-evident (a runtime role can RAISE it, which only signs sessions out; it can never lower it).
+
+**OD-5, the single-logout residual (documented AND tested, NOT eliminated).** A single logout is stored in the revocation column, which the tag does not cover. A runtime role that clears the revocation of a logged-out session revives it with its original valid tag and revision, until its absolute expiry. Revoke-all, password change and deactivation are NOT affected (the revision changes). The test `KNOWN_RESIDUAL_OD5_a_single_logout_can_be_undone_by_the_runtime_role_until_the_logout_record_slice_exists` pins this behaviour; the narrow logout record (OD-5(b): an append-only, tagged logout row checked at validation) needs a new table with its own catalogue entry, privileges and generator, was not built inside this 1 to 2 day slice, and is proposed as slice S-1b. Until it exists, the residual must not be described as closed.
+
+**Key rotation.** Values are always written under the active key. During a rotation, list the retired key id in `Hasm:Encryption:IdentityPreviousKeyIds` for no longer than the configured maximum session lifetime (initially 12 hours, OD-6), then remove it: sessions still under it stop being honoured (they are simply not found; the user signs in again). A changed row is re-tagged under the active key; the token hash of a session is not re-hashed (the token is unknown), so a session whose token was hashed under the retired key stays valid only while that key is listed.
+
+**Operational requirement of S-1.** The API now needs the protected key ring (`Hasm__Encryption__KeyDirectory` and `Hasm__Encryption__ActiveKeyId`, the settings the attachment and TOTP features already use) to sign anybody in or to authenticate any request that carries a session token; without it those requests are 503 `encryption_unavailable` (anonymous endpoints are unaffected). An installation that had no key ring configured must configure one BEFORE this release is deployed. Every existing session ends at the rollout.
+
+**Revision guard (review H1 of PR 227).** The database guard on `User.SecurityRevision` allows only "unchanged or exactly +1" per update, so a runtime-credential holder can neither lower it nor jump it (a jump to the bigint maximum would make every later bump overflow and block deactivation, password change and revoke-all). Raising it by one at a time only signs users out (nuisance, OD-5(2)); reaching the maximum would take about 9.2x10^18 updates, which is not realistic. The change sites also refuse to re-tag a row whose revision at issue is stale (review L1).
+
+**Revision start and bound (delta reviews H1' and H1'' of PR 227).** The guard trigger fires on INSERT as well as UPDATE: a user row must START at revision 0 (the application never writes the column on insert), and an UPDATE may only keep it or add exactly one. A CHECK keeps the column in [0, 2^62) as defence in depth. Together: a runtime-credential holder cannot start a user anywhere the application bump `+ 1` could fail or approach its limit, and cannot move one there, so deactivation, password change and revoke-all always succeed; reaching 2^62 one step at a time would take about 4.6x10^18 updates, which is not realistic.

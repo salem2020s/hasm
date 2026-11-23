@@ -89,6 +89,7 @@ public static class AuthenticationSetup
         services.AddSingleton(TimeProvider.System);
         // The runtime (least-privilege) database account is used; the connection string is built lazily so the API
         // starts, and anonymous endpoints work, without a database. Never the provisioning administrator account.
+        services.AddSingleton(sp => new IdentityKeys(sp.GetService<KekRing>() ?? new NoKeyRing(), EncryptionOptions.FromConfiguration(configuration).IdentityPreviousKeyIds));
         services.AddSingleton(sp => new IdentityStore(
             () =>
             {
@@ -97,7 +98,8 @@ public static class AuthenticationSetup
                 return options.BuildSystemConnectionString(admin: false);
             },
             sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<AuditTrail>()));
+            sp.GetRequiredService<AuditTrail>(),
+            sp.GetRequiredService<IdentityKeys>()));
         // Phase 4.1: the second factor. The secrets are protected by the existing key ring (KekRing, fail closed when it is not configured); every component uses the same runtime connection as the identity store.
         string SystemConnection() { var options = HasmDatabaseOptions.FromConfiguration(configuration); options.EnsureValid(requireAdmin: false); return options.BuildSystemConnectionString(admin: false); }
         // owner decision D-235: the runtime account must be least-privilege for the TOTP secret store. The gate refuses otherwise (the API does not start; the MFA store never opens a
@@ -108,7 +110,7 @@ public static class AuthenticationSetup
             try { allow = HasmDatabaseOptions.FromConfiguration(configuration).AllowOverprivilegedSystemRuntime; } catch (DatabaseConfigurationException) { allow = false; }
             return new SystemRuntimeGate(allow, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<SystemRuntimeGate>>());
         });
-        services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing()), sp.GetRequiredService<SystemRuntimeGate>()));
+        services.AddSingleton(sp => new MfaStore(SystemConnection, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), new TotpSecretProtector(sp.GetService<KekRing>() ?? new NoKeyRing()), sp.GetRequiredService<SystemRuntimeGate>(), sp.GetRequiredService<IdentityKeys>()));
         services.AddHostedService(sp => new SystemRuntimeGateService(SystemConnection, sp.GetRequiredService<SystemRuntimeGate>(), sp.GetRequiredService<ILogger<SystemRuntimeGateService>>()));
         services.AddSingleton(sp => new MfaChallengeStore(SystemConnection, sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IMfaAttemptLimiter>(sp => new MfaAttemptLimiter(sp.GetRequiredService<IdentityStore>(), sp.GetRequiredService<TimeProvider>()));

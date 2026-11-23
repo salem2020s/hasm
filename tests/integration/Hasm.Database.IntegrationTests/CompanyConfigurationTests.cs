@@ -47,7 +47,7 @@ public abstract class ConfigurationTestBase : CompanyRuntimeTestBase
     protected async Task Prepare(IEntitlementPolicy? policy = null, FinancialHistoryGuard? guard = null)
     {
         await StartCompanies();
-        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit);
+        Access = new AccessService(Options.BuildSystemConnectionString(admin: true), Clock, PermissionCatalog.Default, Audit, keys: TestIdentityKeys.Instance);
         Company = await ReadyCompany();
         Admin = await NewAdminOf(Company);
         Svc = MakeService(Company, policy, guard);

@@ -1,6 +1,45 @@
 # Phase 3.8D threat T2: authorization of replay operations (design proposal)
 
-Status: **DESIGN PROPOSAL, revision 4, documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
+Status: **DESIGN PROPOSAL, revision 5 (amendment: the P group and `hasm-replay-v5`), documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
+
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-248..D-253) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (T2-AUTHORIZATION-D1-D6). The owner text follows verbatim; D1 to D6 are D-248 to D-253; the owner approves the reviewer-recommended offline signer model (Resolution (i)); activation stays CLOSED. Nothing else of this document changes.
+>
+> B. Replay Executor T2 — D1 to D6
+> D1 — Security baseline: APPROVE THE REVIEWER-RECOMMENDED OFFLINE SIGNER MODEL
+> For sensitive backdated replay execution, require a narrowly scoped, single-use signed authorization from a separately registered signer using a key outside the application server and PostgreSQL.
+> The signer must independently verify the plan with its creator and approver through an out-of-application channel.
+> Do not silently downgrade to the in-application signer model. If the offline requirement makes a particular installation unable to use replay, keep that feature unavailable for the installation until its authorization prerequisites are met.
+> No ordinary runtime database credential may independently produce a valid execution authorization.
+
+> D2 — Signers and participants: APPROVED
+> Only the installation owner can register or revoke authorized signers.
+> Maintain a versioned, owner-signed participant registry, with independent contact information and strict segregation of duties. Never allow a signer to authorize their own conflicting work.
+> The owner must configure an independent alert destination for failed confirmations and suspensions. Support a configured external notification channel, such as an authorized email endpoint or equivalent, alongside in-app alerts.
+> Without a valid signer registry and required alert configuration, replay activation must fail closed. Installation-specific names and addresses are provided during installation setup, not development.
+
+> D3 — Signing-key custody: APPROVED WITH CONFIGURABLE INSTALLATION POLICY
+> Each signer generates and controls their own signing key on a separately protected offline device.
+> Require an encrypted offline backup held separately from the production application and database. Recovery must require the signer and an independently authorized custodian, under an audited recovery procedure.
+> Default key rotation interval: 12 months, with immediate replacement on suspected compromise.
+> The installation owner may initiate revocation, with independent approval for sensitive key recovery or retirement where required by existing policy.
+> Preserve public verification keys and the historical evidence needed to verify previously accepted signatures.
+> Do not invent physical backup locations or named custodians. Require the installation owner to configure and confirm them before activation.
+
+> D4 — Grant validity: APPROVED
+> An execution grant is valid for 2 hours, for exactly one approved replay, with exact binding to the plan, participants, closure, epoch contents and financial effects.
+> Prevent replay, substitution, partial execution and reuse. Revalidate the transaction state and approval conditions at execution time.
+
+> D5 — Suspected compromise: APPROVED
+> Allow audited, owner-authorized retroactive key revocation from the suspected compromise time.
+> Affected replay executions must be flagged and treated as untrusted for financial verification and fiscal closing.
+> Investigate and remediate using separately approved, auditable correcting transactions. Never silently rewrite posted history or automatically reverse complex financial entries without the required approvals.
+
+> D6 — Unsigned lifecycle steps: APPROVED
+> Plan creation, application approval, cancellation, rejection and stale marking do not require an offline execution signature.
+> They still require the existing authentication, RBAC, segregation of duties and audit protections.
+> Only the actual financial replay requires the independent signed authorization. Do not allow unsigned operations to change the books.
+> Activation remains CLOSED until the authorization design, cryptographic checks, independent security review, full replay/ledger test matrix, production caller and all required permissions are verified.
+
 
 Review history (records: `review-records/PR-218-t2-design-review.md`, `PR-218-t2-design-delta-confirmation.md`, `PR-218-t2-design-rev3-confirmation.md`):
 * Revision 1 (`a5010a5`): 1 Critical, 4 Medium, 3 Low.
@@ -22,6 +61,12 @@ Sources:
 ---
 
 ## 0. Findings and resolutions
+
+### 0.00 Revision 5 (amendment after the E1b implementation; ODC delta record R3 of PR 219, T2 follow-up S1)
+
+| Finding | Resolution in revision 5 |
+|---|---|
+| **S1 / R3.** The epoch text binds every entry, layer and consumption but not the per-position totals the executor's pure derivation (E1b) proves: the position's sequence base and end, its final quantity and value and its open-layer count. A position total that disagrees with its last entry's running figures, or open layers that do not match the signed `R` lines, would be a state the text does not name. | Section 4.4. The epoch text gains the **`P` group** (one line per position that has an epoch entry). The message version is now **`hasm-replay-v5`**. All five dependent vectors are recomputed (epoch text, request digest, attestation, grant, approval) and the version 4 vectors are kept as history. Section 12, test 4 gains the `P` deviations and the mutation list the `P` fields. Section 15 (slice A) is cut into PRs. |
 
 ### 0.0 Revision 4 (findings at `05055a7`)
 
@@ -195,7 +240,7 @@ Nothing in 0036 is changed or replaced; these are new triggers on new and existi
 
 ### 4.4 The signed messages, byte-exact
 
-The version line is `hasm-replay-v4`. Revision 3 added `epoch=` and `attestation=`. Revision 4 added the `O` and `R` groups to the epoch text and changed the version. Earlier vectors no longer apply.
+The version line is `hasm-replay-v5`. Revision 3 added `epoch=` and `attestation=`. Revision 4 added the `O` and `R` groups to the epoch text and changed the version to `hasm-replay-v4`. **Revision 5 adds the `P` group and changes the version to `hasm-replay-v5`.** Version 4 vectors no longer apply to new grants; they are kept below as history, and the verifier of slice A accepts `hasm-replay-v5` only (a message of any other version is refused).
 
 **Encoding.**
 * The UTF-8 bytes of ASCII text, except that the attestation's note may hold other UTF-8.
@@ -205,7 +250,7 @@ The version line is `hasm-replay-v4`. Revision 3 added `epoch=` and `attestation
 **Grant message** (resolutions (i) and (ii)):
 
 ```
-hasm-replay-v4
+hasm-replay-v5
 grant
 company=<company id>
 plan=<plan id>
@@ -263,7 +308,7 @@ not-after=<integer>
 * "Epoch entries" are the cost entries of those operations.
 * Operation ids, entry ids (identity) and layer ids (random uuids) are not deterministic. Rows are therefore keyed by member role and original operation (operations), or by position (item, warehouse) and sequence (entries and layers). 0014 makes (position, sequence) unique for entries and for layers.
 
-Five groups, in this order, every line LF-joined, with no trailing LF:
+Six groups, in this order, every line LF-joined, with no trailing LF:
 1. **`O` lines**, one per epoch operation, ordered by role, then original operation id (uuid order; the single event operation has none):
 
    `O|<role>|<original operation>|<kind>|<effective date>|<reverses operation>|<source type>|<source id>|<key>|<created by>`
@@ -296,7 +341,17 @@ Five groups, in this order, every line LF-joined, with no trailing LF:
 
    These are the remaining figures at commit, after the whole epoch. 0014 only bounds them to `[0, original]` and does not derive them from the consumption rows. They drive future FIFO cost, so they are signed.
 
-An epoch with no rows hashes as the empty string. Each position's final quantity and value are bound by its last entry's running figures.
+6. **`P` lines (revision 5)**, one per position (item, warehouse) that has at least one epoch entry, ordered by item and warehouse (uuid order):
+
+   `P|<item>|<warehouse>|<baseline last seq>|<final last seq>|<final quantity>|<final value>|<open layers>`
+
+   * `baseline last seq` is the position's last sequence before the epoch: the sequence of its first epoch entry minus one (the next-sequence rule of 0036 makes it exact).
+   * `final last seq` is the sequence of the position's last epoch entry, which must equal the position row's last sequence at commit.
+   * `final quantity` is `numeric(28,10)` and `final value` is `numeric(28,6)`: the position row at commit, which must equal the last epoch entry's running figures.
+   * `open layers` is the number of the position's layers with a remaining quantity above zero at commit (always 0 for the average method), written as an integer. It must equal the number of FIFO layers the `R` lines and the unchanged earlier layers leave open.
+   * The pre-state's own quantity and value are not repeated here: they are bound by the plan's position fingerprint.
+
+An epoch with no rows hashes as the empty string. A position's final quantity and value are bound twice: by its last entry's running figures and by its `P` line, and a disagreement refuses the commit.
 
 **Column classification (pinned by test 4c of section 12).** Every column of the four 0014 tables is either signed or excluded with a reason:
 
@@ -361,7 +416,7 @@ note=<free text, UTF-8, no LF, at most 500 characters>
   * `epoch:22222222-2222-4222-8222-222222222222:3:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`, hash `KR`.
 
   The source types are `replay-storno` (hash `ccafea491d240486f275df9056349c5d84f517dafe92fec1cc99defaea3b2a10`), `stock-posting` (hash `2e894c7e770e61084d405fbf348f2fc5a0651051ea182d5a84aa9de8ad81ad1d`) and `replay-rebook` (hash `0397383eedde7014d68ceb3b5cf095472a3d1ad576436b60388de7ce5a22e6bc`). These are written TS, TE and TR below. KS, KE and KR are the hex SHA-256 of the keys above. The executor's uuid 9 is written X.
-* **Epoch text.** Eleven lines. I = item 7, W = warehouse 8, and O, X, TS, TE, TR, KS, KE and KR are written in full in the real text:
+* **Epoch text (version 5).** Twelve lines. I = item 7, W = warehouse 8, and O, X, TS, TE, TR, KS, KE and KR are written in full in the real text:
   ```
   O|1|O|2|2026-03-11|-|TS|-|KS|X
   O|2|-|1|2026-03-11|-|TE|execution-posting|KE|X
@@ -374,26 +429,28 @@ note=<free text, UTF-8, no LF, at most 500 characters>
   C|I|W|43|I|W|3|5.0000000000|60.000000|f
   R|I|W|3|10.0000000000|120.000000
   R|I|W|9|20.0000000000|240.000000
+  P|I|W|40|43|120.0000000000|1492.500000|2
   ```
-  In full, the text is 1777 bytes and its hash is `719a4407b03e42328b6ff19850e5be69ff57dffb4a0e9a65919e72054a21fc0a`. The kind, direction, key and source-type values are illustrative; the vector pins only the format.
-* **Request digest:** `7af26e059fb7e332`.
+  The `P` line: the position's last sequence was 40 before the epoch, is 43 after it (entries 41 to 43), and ends at 120 and 1492.50 with two open layers (layers 3 and 9, the two `R` lines). In full, the text is **1888 bytes** and its hash is `4329df10c3039a9f9e66941607a58ebd1474826d1c4ac2cc7a82a11284b7aa42`. The kind, direction, key and source-type values are illustrative; the vector pins only the format.
+* **Request digest (version 5):** `b0953249b1f326dd`.
 * **Attestation.**
   ```
   hasm-replay-attestation-v1
   creator=55555555-5555-4555-8555-555555555555|phone|1795650600
   approver=44444444-4444-4444-8444-444444444444|in-person|1795650900
-  request=7af26e059fb7e332
+  request=b0953249b1f326dd
   participants=3
   note=plan, document and totals confirmed
   ```
-  It is 236 bytes, and its hash is `66ed1fd687167197170dea6145943a63d7c20b43ecd121ce78536839ad7f6f6f`.
+  It is 236 bytes, and its hash is `6e403bf40283b64f96df716b55dadb52dec9250764c47e26a6f09e846e1e9e3a`.
 * **Results.**
 
   | Message | Length | SHA-256 |
   |---|---|---|
-  | Grant | 1408 bytes | `ba4b8e2a9f83f426df0f46585567e7e06edc49ef2e0737886dc29ec2364f82ad` |
-  | Approval (signer `4`, which is the approver; key `k1`; `signed-at=1795651200`) | 1151 bytes | `7786134c565c3664ca624303045e2a171e9fdc8a12be29d42ba3965356858713` |
+  | Grant | 1408 bytes | `ef7615cb4c06e2fcd5422e2bbd901334439f1f58285c51c3ae9b3412a7715e1b` |
+  | Approval (signer `4`, which is the approver; key `k1`; `signed-at=1795651200`) | 1151 bytes | `3352bf3b2817690602a2636845d74b67f6e7a29b36d1e60fdf7a8fa77a73e9de` |
 
+* **Version 4 vectors (history, superseded by revision 5; not valid for new grants).** The same inputs under `hasm-replay-v4` and without the `P` group gave: epoch text 1777 bytes, hash `719a4407b03e42328b6ff19850e5be69ff57dffb4a0e9a65919e72054a21fc0a`; request digest `7af26e059fb7e332`; attestation hash `66ed1fd687167197170dea6145943a63d7c20b43ecd121ce78536839ad7f6f6f`; grant message 1408 bytes, hash `ba4b8e2a9f83f426df0f46585567e7e06edc49ef2e0737886dc29ec2364f82ad`; approval message 1151 bytes, hash `7786134c565c3664ca624303045e2a171e9fdc8a12be29d42ba3965356858713`. The version 5 values above were recomputed from the same inputs by a script that first reproduced every version 4 value above exactly (so the assembly of the messages is the same, and only the version line and the `P` line differ). The lengths of the grant, approval and attestation are unchanged because the version label and the 16-character request digest have the same length.
 * **RSA vectors.** Slice A's tests also use a fixed 3072-bit test key with a valid signature over the grant vector, and Wycheproof-style invalid cases. Each case must give the same result in SQL and in .NET:
   * wrong length, 383 and 385 bytes;
   * the leading zero byte dropped;
@@ -713,6 +770,8 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
    * the pre-state changed by an ordinary posting between export and execution.
    * an `O` line deviation: another operation kind, date, key, source, reverses link or creator;
    * an `R` line deviation: a layer's remaining quantity or amount changed after the epoch's last entry within the same transaction.
+   * a `P` line deviation (revision 5): a position's baseline last sequence, final last sequence, final quantity, final value or open-layer count differing from the rows; a position with epoch entries but no `P` line, and a `P` line for a position without epoch entries; a position's quantity or value changed after the epoch's last entry within the same transaction.
+   * a message with version `hasm-replay-v4`: refused (only v5 is accepted).
 4b. **Journal binding (P1), with a valid grant:**
    * a plan with lines whose execution has no linked journal (the state before CI): refused at commit;
    * missing, extra or altered journal lines (date, period, branch, account, debit or credit), or an extra rounding line: refused at commit;
@@ -746,7 +805,7 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
     * the expiry check at commit;
     * the content re-verification at commit;
     * the epoch comparison at commit;
-    * any single field of the `O`, `E`, `L`, `C` or `R` lines;
+    * any single field of the `O`, `E`, `L`, `C`, `R` or `P` lines;
     * the journal check, in either direction, and its "no lines, no journal" rule;
     * the attestation checks;
     * the signer independence check;
@@ -769,6 +828,7 @@ The tests run on the role-capable isolated cluster. The attackers are the SYSTEM
 * every storno, event and rebook entry with position, sequence, kind, direction, date, amounts and running figures;
 * every layer and consumption;
 * the post-epoch remaining figures of every layer the epoch touches.
+* (revision 5) the per-position `P` totals of 4.4: the baseline and final last sequence, the final quantity and value and the open-layer count.
 
 Today the merged E1 states only "the expected rebook amount per entry, the expected final position and layer state, and the lineage map". New tests check that E2b's writers and the real `PostInWorkAsync` produce rows whose rebuilt text equals E1's, for FIFO and average, one- and two-warehouse chains, and both directions with equal dates.
 
@@ -806,6 +866,8 @@ It stays inert while no key is registered. For (ii) it also contains the system 
 Plans with lines become executable only once CI writes matching journals. No grant or trigger change is needed for that.
 
 ## 14. Owner decisions needed before activation
+
+**Decided 2026-11-22: see the owner decision at the top of this document (D-248..D-253; register item T2-AUTHORIZATION-D1-D6). The questions below are kept as put to the owner.**
 
 The wording below is opusSEC's final wording (review record `PR-218-t2-design-rev3-confirmation.md`), adopted as is. Bracketed items are for the owner to fill in.
 
@@ -852,3 +914,17 @@ The alternative, not recommended: two owner-registered in-application signers, e
   * Not protected against a fully compromised application process.
 * **Security-critical code.** The verification code, about 25 lines of PL/pgSQL and their .NET twin, together with the message, epoch-text and attestation builders, needs the vectors and mutation proofs of section 12.
 * **Key loss.** It blocks new grants but never reading, because verification needs only public keys. History accepted before a key's revoke-from remains verifiable.
+
+## 16. Slice A: the cut into pull requests (proposal, revision 5)
+
+Slice A is resolution (i)'s database side (sections 4, 10, 11, 12). It is too large for one review, so it is cut into pull requests of about 1 to 2 days each. **Every one is inert: no grant is ever issued, no application caller exists, the INSERT grant on the four execution tables does not return, and the activation stays CLOSED.** Migration numbers are allocated by the lead at each PR's final round (company migration **0037** is allocated to A1); each is additive and forward-only and passes the migration guard of PR 188: no `SECURITY DEFINER`, no `search_path`, no `pg_` name except the allow-listed ones, **every relation schema-qualified** (the temp-table shadowing finding, opusSEC PR 228 Y1), no dynamic SQL.
+
+| PR | Scope | Migration | Tests (all PostgreSQL ones on the isolated cluster, through the CPU gate) |
+|---|---|---|---|
+| **A1** | The key registry and the verifier: table `ReplaySignerKey` (4.1, owner-only writes, append-only except the one-time revoke-from, R holds SELECT only), the function `rsa_verify` (4.2, invoker rights, exact-encoding comparison), the tables `ReplayExecutionGrant` and `ReplayGrantUse` as empty shells with their grants (R may SELECT and INSERT; nothing inserts), the **no TEMPORARY and no CREATE for R** invariant on fresh, provisioned and restored databases (M1, test 8) and the name-resolution hardening of 4.5 | 0037 | The Wycheproof-style RSA vectors of 4.4 (wrong length 383 and 385, leading zero dropped, s = 0, 1, n - 1, n, > n, altered padding, altered DigestInfo, SHA-1 DigestInfo, PSS, 2048-bit key, exponent 3) in SQL and in a .NET twin giving the same result; a valid fixed 3072-bit signature; writes to the key table by R and by the system account fail 42501; the TEMP and CREATE invariant; the guard (`MigrationGuardTests` style) accepts the migration; a catalog test that no `SECURITY DEFINER` and no `search_path` exists; mutation proofs (the length check, the range check, the full-encoding comparison) |
+| **A2** | Insert-time verification: SQL builders of the lines text, the grant message (`hasm-replay-v5`) and the request digest from the plan, approval and closure rows; the attestation checks (N2); the key, time-window, single-use, executor, segregation-of-duties (test 7) and per-plan binding checks on the grant insert; `ReplayGrantUse` | next | The v5 vectors of 4.4 for lines, grant, request digest, attestation and approval (SQL and .NET byte-identical, with TimeZone, DateStyle, IntervalStyle, `bytea_output`, `extra_float_digits` and `lc_numeric` changed); tests 3, 5, 6, 7; mutation proofs for each check |
+| **A3** | Commit-time epoch comparison: the SQL builder of the six epoch groups (`O`, `E`, `L`, `C`, `R`, `P`) over the rows of an execution's epoch, compared with the grant's signed epoch digest in the deferred completeness checks; the grant's not-after re-checked at commit | next | The epoch vector of 4.4 (1888 bytes) against both the SQL builder and E1b's `EpochText`; test 4 (every deviation, including the `P` ones) and the epoch mutation list of test 11; E1b's `EpochText` must equal the SQL text for the engine-oracle epochs |
+| **A4** | Journal equality (P1, 4.8): the commit-time comparison of the linked compensation journal lines with the signed plan lines, in both directions, and the "no lines, no journal" rule | next | Test 4b; mutation proofs of the journal check in either direction |
+| **A5** | Tooling and the read side (no migration): the .NET message and text builders with the vectors, the pinned-key verifier of section 9, `Hasm.Admin register-replay-signer`, `revoke-replay-signer` and `export-replay-plan`, the offline `Hasm.ReplaySigner` | none | Test 9 (SQL and .NET agree), test 10 (the readers refuse the cases of M4), the vectors |
+
+Order: A1, A2, A3 and A4 are sequential (each uses the previous one's tables and functions); A5 can start once A2's message formats are merged. **A3 needs E1b (the epoch content and text) merged**, and the executor slices E2b and E3 need A2 to A4 before any activation. Each PR has the independent review of the autonomous merge policy (full diff, recorded) and is never merged with a weakened test.

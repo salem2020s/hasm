@@ -161,7 +161,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Needs a design proposal first: the approved costing scope is item x warehouse (D-018); lot/serial dimensions must not break it (OD-11: costing rule already approved).
+* **Notes:** Needs a design proposal first: the approved costing scope is item x warehouse (D-018); lot/serial dimensions must not break it (OD-11: costing rule already approved). Owner decision 2026-11-22 (D-256, D-257): the CQ-1 to CQ-17 conservative defaults are approved with the owner's interpretations (no expired-stock sale or delivery override; lots and serials stay tracking dimensions under the two approved costing methods; no specific-identification costing; no invented cost entries for relabeling; a dedicated expiry-disposal mapping is preferred and posting is refused until it and its tests exist); no tracked-item posting is activated before the applicable migration, reconciliation and tests pass. Reservations remain in Release 1 scope as a later, independently designed stock-allocation contract (RESERVATIONS-SCOPE); they are not part of the lot/serial implementation and do not block it.
 
 ### Phase 3.8D — Back-dated movements, impact preview, recalculation, method change and revaluation
 * **Exact approved scope:** SRS 9.2, 9.5, 9.7; Scenario 21.5
@@ -172,6 +172,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
+* **Notes:** Owner decisions 2026-11-22: the revaluation contract directions RQ-1 to RQ-16 are approved (D-255): write-down only in the first implementation, per item/warehouse position, the lineage-preserving approach RQ-9 only after the outstanding independent database-safety review and reader-regression evidence; revaluation execution stays DISABLED until its accounting contract, database representation, tests and independent review are accepted. The replay authorization (threat T2) is decided as D1 to D6 (D-248 to D-253): the offline signer model; replay activation stays CLOSED until the authorization design, cryptographic checks, independent security review, full replay/ledger test matrix, production caller and all required permissions are verified. The preset roles of X4-PRESET-ROLE (Inventory Cost Approver, short-close) are approved as Option A (D-254), after the migration guard is merged and the implementation is independently verified.
 
 ### Phase 3.8E — Inventory reports and cost-of-sales statement
 * **Exact approved scope:** RR-1, RR-2, RR-10, SRS 13.1
@@ -265,6 +266,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company, system
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
+* **Notes:** Owner decision 2026-11-22 (D-259, D-254): only the safely masked tail of an account number is stored outside the encrypted full number; during the configuration-only stage deactivation is a master-data operation without a balance check, and before cash or bank posting is activated deactivation must be refused when a nonzero balance, unsettled documents or unresolved dependent transactions exist; D-211 to D-214 are not reopened and financial posting is not activated early. The cash-account preset (X4-PRESET-ROLE, Option A) may proceed only after the migration guard is merged and the implementation is independently verified.
 
 ### Phase 3.15 — Purchasing
 * **Exact approved scope:** SRS 7.1, 7.2, 7.5, 6.3, 8.4
@@ -275,7 +277,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** company, system
 * **Security and accounting risk:** Critical
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
-* **Notes:** Purchase-cost composition is decided (OD-2, D-218): a versioned landed-cost allocation contract, designed and independently reviewed before it is built.
+* **Notes:** Purchase-cost composition is decided (OD-2, D-218): a versioned landed-cost allocation contract, designed and independently reviewed before it is built. Owner decision 2026-11-22 (D-258): the reviewed conservative directions of docs/PHASE-3.15-LANDED-COST-CONTRACT.md (LQ-1 to LQ-19) are approved: late capitalization (LQ-8) needs a separately reviewed amendment of the revaluation mechanism and may not be enabled early; late freight is never silently expensed while claiming complete inventory costs; unsupported foreign-currency charges are refused until Phase 3.18; unsupported tax-recoverability capitalization is refused; unsupported financial posting paths stay disabled and the purchasing and landed-cost feature is not production-ready before its reconciliation and review gates pass.
 
 ### Phase 3.16 — Sales
 * **Exact approved scope:** SRS 7.1, 7.2, 8.3, 8.4, 6.3
@@ -420,6 +422,7 @@ Execution order is in `docs/RELEASE1-DEPENDENCIES.md`. Risk is the accounting an
 * **Database migration implications:** system
 * **Security and accounting risk:** High
 * **Definition of Done:** the common Definition of Done above, plus the acceptance criteria and tests of this phase
+* **Notes:** Owner decision 2026-11-22 (D-240 to D-247, docs/IDENTITY-INTEGRITY-PLAN.md section 13): the identity-integrity protection (register item SEC-RT-SESSION) is approved in all eight points: key custody on the existing protected key ring, one controlled maintenance window with forced re-login and no compatibility mode, the existing-identity reconciliation by a named security operator designated by each installation owner (production rollout of a real installation stays blocked until that appointment), the append-only IdentityAnchor, the documented residual boundaries, rotation with a 12-hour session grace, cost-center assignments in scope, and neutral refusal responses. It is the first priority of the autonomous continuation.
 
 ### Phase 4.2 — Licensing and Trial
 * **Exact approved scope:** SRS 15.1-15.7, 19.6

@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
@@ -17,6 +18,8 @@ public static class MfaAuditEvents
     public const short StepUpSucceeded = 1336, StepUpFailed = 1337;
     /// <summary>Phase 4.1 S3b-1b (D-167): a company's MFA policy was changed (detail: the kinds and the role count; never a secret).</summary>
     public const short PolicyChanged = 1338;
+    /// <summary>Identity integrity S-1 (PROVISIONAL code, allocated by the lead): a session row failed its integrity check (tag or security revision) and was revoked. Detail: the session id and the cause (tag or revision); never a key or a tag.</summary>
+    public const short IdentityRecordRejected = 1339;
 }
 
 public sealed record RewrapResult(int Rewrapped, int Remaining);
@@ -27,7 +30,7 @@ public sealed record RestoreMfaResult(int UsersMarkedRecoveryRequired, int Enrol
 /// transaction: a mutation without its audit event does not happen. Secrets are encrypted by <see cref="TotpSecretProtector"/> before they reach the database. This layer holds NO policy (who may enrol or recover is
 /// slices S2 to S7); it guarantees the invariants of the tables: one Active and one Pending secret per user, a monotonic accepted step, an MFA state that follows <see cref="MfaStateGraph"/>.
 /// </summary>
-public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector, SystemRuntimeGate? gate = null) : IMfaSecretStore, IAsyncDisposable
+public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector, SystemRuntimeGate? gate = null, IdentityKeys? keys = null) : IMfaSecretStore, IAsyncDisposable
 {
     /// <summary>Every connection of the store passes the least-privilege gate when one is given (the API always gives one; owner decision D-235): a runtime account that is not least-privilege
     /// for the secret store never reads or writes a secret. The administrative tool runs under the owner account and gives none.</summary>
@@ -41,7 +44,7 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
 
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
 
-    public MfaStore(string connectionString, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector) : this(() => connectionString, clock, audit, protector) { }
+    public MfaStore(string connectionString, TimeProvider clock, AuditTrail audit, TotpSecretProtector protector, IdentityKeys? keys = null) : this(() => connectionString, clock, audit, protector, null, keys) { }
 
     /// <summary>TEST SEAM (internal): called inside the activation transaction at "after_activate" and "after_revoke", so tests can inject a failure between the steps and prove nothing is half done.</summary>
     internal Func<string, Task>? FaultProbe { get; set; }
@@ -204,9 +207,9 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         if (reissue is not null)
         {
             // D-142 (d), review M2/M3: the new factor invalidates EVERY session of the user (the confirming one too) and a NEW session, verified now, replaces them, all in this ONE transaction with the activation
-            await IdentityStore.RevokeUserSessionsAsync(conn, tx, userId, SessionRevocation.Administrative, null, clock.GetUtcNow(), ct);
+            await IdentityStore.RevokeUserSessionsAsync(conn, tx, keys, userId, SessionRevocation.Administrative, null, clock.GetUtcNow(), ct);
             if (FaultProbe is { } afterRevoke) await afterRevoke("after_revoke");
-            await IdentityStore.InsertSessionAsync(conn, tx, reissue, userId, clock.GetUtcNow(), ct);
+            await IdentityStore.InsertSessionAsync(conn, tx, keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured."), reissue, userId, clock.GetUtcNow(), ct);
         }
         await audit.CommitAsync(tx, receipts, ct);
         return true;
@@ -227,17 +230,16 @@ public sealed class MfaStore(Func<string> connectionStringFactory, TimeProvider 
         var now = clock.GetUtcNow();
         await using var conn = await OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        await using (var cmd = new NpgsqlCommand(
-            $"UPDATE {S.Table} SET {SM.VerifiedAtUtc} = @n, {SM.AuthMethods} = 3 WHERE {S.Id} = @s AND {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL AND ({SM.VerifiedAtUtc} IS NULL OR {SM.VerifiedAtUtc} < @n)", conn, tx))
-        {
-            cmd.Parameters.AddWithValue("n", now);
-            cmd.Parameters.AddWithValue("s", sessionId);
-            cmd.Parameters.AddWithValue("u", userId);
-            if (await cmd.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return null; }
-        }
+        // identity integrity S-1: the proof time is a tagged field, so it is written by compare-and-swap on the session's tag, under the row lock, after the row itself verified
+        var k = keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
+        var before = await SessionRow.LoadForUpdateAsync(conn, tx, sessionId, ct);
+        if (before is null || before.UserId != userId || !before.IsValid(k)) { await tx.RollbackAsync(ct); return null; }
+        var stamp = MacInput.Truncate(now);
+        if (before.VerifiedAt is { } prior && prior >= stamp) { await tx.RollbackAsync(ct); return null; }
+        if (!await SessionRow.UpdateAsync(conn, tx, k, before, before with { AuthMethods = 3, VerifiedAt = stamp }, ct)) { await tx.RollbackAsync(ct); return null; }
         var receipt = await AuditAsync(conn, tx, MfaAuditEvents.StepUpSucceeded, userId, userId, $"step-up succeeded session {sessionId:N}", ct);
         await audit.CommitAsync(tx, receipt, ct);
-        return now;
+        return stamp;
     }
 
     /// <summary>Audits a step-up refused for a wrong or replayed code (never the code). Called only for verifier-counted failures, so the shared MFA throttle bounds how many rows one session can append; throttled and unavailable answers are not audited.</summary>

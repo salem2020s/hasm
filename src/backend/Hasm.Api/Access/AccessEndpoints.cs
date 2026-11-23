@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
@@ -41,7 +42,7 @@ public static class AccessSetup
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<PermissionCatalog>(),
             sp.GetRequiredService<AuditTrail>(),
-            sp.GetRequiredService<CompanyBranchScopeValidator>()));   // branch scope is confirmed against the real branches (and their activation epochs)
+            sp.GetRequiredService<CompanyBranchScopeValidator>(), sp.GetRequiredService<IdentityKeys>()));   // branch scope is confirmed against the real branches (and their activation epochs)
         return services;
     }
 }
