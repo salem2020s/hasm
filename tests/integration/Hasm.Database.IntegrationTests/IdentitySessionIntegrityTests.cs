@@ -255,8 +255,65 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
 
         // the database refuses to lower a revision (the way back to an old row's revision)
         var ex = await Assert.ThrowsAsync<PostgresException>(() => Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = 0 WHERE {U.Id} = @u", ("u", user.Id)));
-        Assert.Contains("never decreases", ex.MessageText);
+        Assert.Contains("exactly one", ex.MessageText);
         Assert.Equal(2L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));
+    }
+
+    [PostgresRoleFact]
+    public async Task The_revision_guard_refuses_a_jump_and_a_decrease_and_deactivation_password_change_and_revoke_all_work_after_any_allowed_sequence()
+    {
+        // review H1 of PR 227: the runtime role set the revision to the bigint maximum, after which every bump overflowed and an account could no longer be disabled or signed out
+        await StartRestricted();
+        var user = await NewUser("victim");
+        await using var store = RuntimeStore();
+        var auth = RuntimeAuth(store);
+        Task<long> Rev() => Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id));
+        Task Set(string value) => Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = {value} WHERE {U.Id} = @u", ("u", user.Id));
+
+        foreach (var jump in new[] { "9223372036854775807", "9223372036854775806", "5", "-1", $"{UI.SecurityRevision} + 2", $"{UI.SecurityRevision} - 1" })
+        {
+            var ex = await Assert.ThrowsAsync<PostgresException>(() => Set(jump));
+            Assert.Contains("exactly one", ex.MessageText);
+        }
+        Assert.Equal(0L, await Rev());
+        for (var i = 0; i < 3; i++) await Set($"{UI.SecurityRevision} + 1");                                       // the allowed step, repeated: a nuisance (sign-out), never a block
+        await Set($"{UI.SecurityRevision}");                                                                         // unchanged is allowed too
+        Assert.Equal(3L, await Rev());
+
+        var session = await Login(auth, "victim");                                                                   // issued under revision 3: the changer, re-tagged under 4
+        var authenticated = (await auth.AuthenticateAsync(session.Token))!;
+        Assert.Equal(ChangePasswordStatus.Changed, (await auth.ChangePasswordAsync(authenticated, Pw, "Replacement-Passphrase-3")).Status);
+        Assert.Equal(4L, await Rev());
+        await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
+        Assert.Equal(5L, await Rev());
+        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));       // deactivation: bump and revoke still work
+        Assert.Equal(6L, await Rev());
+        Assert.Equal(UserState.Disabled, (await store.FindUserByIdAsync(user.Id))!.State);
+    }
+
+    [PostgresRoleFact]
+    public async Task A_stale_row_whose_revocation_was_cleared_is_not_re_tagged_by_step_up_or_company_selection()
+    {
+        // review L1 of PR 227: defence in depth, the change sites refuse a row whose revision at issue is no longer the user's current revision
+        await StartRestricted();
+        var user = await NewUser("victim");
+        var company = await Registry.RegisterPendingAsync();
+        await using var store = RuntimeStore();
+        await using var mfa = RuntimeMfa();
+        var login = await Login(RuntimeAuth(store), "victim");
+        await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
+        Assert.Equal(1, await Attack($"UPDATE {S.Table} SET {S.RevokedAtUtc} = NULL, {S.RevokedReason} = NULL WHERE {S.Id} = @i", ("i", login.SessionId)));
+        var tag = await Scalar<byte[]>($"SELECT {SI.Tag} FROM {S.Table} WHERE {S.Id} = @i", ("i", login.SessionId));
+        Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Null(await mfa.RecordStepUpAsync(login.SessionId, user.Id));
+        await using (var conn = new NpgsqlConnection(RuntimeConnection))
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            Assert.False(await SessionRow.SelectCompanyAsync(conn, tx, Keys, login.SessionId, user.Id, company.Id, default));
+            await tx.RollbackAsync();
+        }
+        Assert.Equal(tag, await Scalar<byte[]>($"SELECT {SI.Tag} FROM {S.Table} WHERE {S.Id} = @i", ("i", login.SessionId)));   // untouched
     }
 
     // ---------------------------------------------------------------- OD-5: the documented residual

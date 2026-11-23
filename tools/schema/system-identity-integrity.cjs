@@ -33,7 +33,7 @@ const TEMPLATE = `-- Migration (system): identity integrity slice S-1 (docs/IDEN
 -- WHAT THIS IS: a session row is authenticated by the API with keys the database does not hold (the keyed token hash and a MAC over the security fields of the row, key id and tag stored here); a row without a valid
 -- tag is not a session. UserRevisionAtIssue is the security revision of the user at the time the session was issued: a session is valid only while it equals the user's current revision, which password change and
 -- revoke-all raise. Existing session rows carry no tag and stop matching at rollout (every user signs in again; there is no compatibility mode, owner decision OD-2). The database cannot verify a MAC (it has no key);
--- what needs no key it enforces: the shape of the three columns, and that a user's security revision never decreases.
+-- what needs no key it enforces: the shape of the three columns, and that a user's security revision stays or grows by exactly one per update (never decreases, never jumps, so the application bump can never overflow).
 
 ALTER TABLE [[Session.Table]]
     ADD COLUMN {{SessionIntegrity.KeyId}} varchar(32) NULL,
@@ -48,8 +48,8 @@ ALTER TABLE [[User.Table]]
 
 CREATE FUNCTION {{UserIntegrity.FnRevisionGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF NEW.{{UserIntegrity.SecurityRevision}} < OLD.{{UserIntegrity.SecurityRevision}} THEN
-        RAISE EXCEPTION 'the security revision of a user never decreases';
+    IF NEW.{{UserIntegrity.SecurityRevision}} <> OLD.{{UserIntegrity.SecurityRevision}} AND NEW.{{UserIntegrity.SecurityRevision}} <> OLD.{{UserIntegrity.SecurityRevision}} + 1 THEN
+        RAISE EXCEPTION 'the security revision of a user only stays or grows by exactly one';
     END IF;
     RETURN NEW;
 END;

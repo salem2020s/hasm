@@ -3,6 +3,8 @@ using Npgsql;
 using S = Hasm.Infrastructure.SystemDatabase.SystemSchema.Session;
 using SI = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionIntegrity;
 using SM = Hasm.Infrastructure.SystemDatabase.SystemSchema.SessionMfa;
+using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
+using UI = Hasm.Infrastructure.SystemDatabase.SystemSchema.UserIntegrity;
 
 namespace Hasm.Infrastructure.Identity;
 
@@ -54,6 +56,12 @@ internal sealed record SessionRow(
     /// </summary>
     public static async Task<bool> UpdateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, IdentityKeys keys, SessionRow before, SessionRow after, CancellationToken ct)
     {
+        // defence in depth (review L1 of PR 227): a row whose revision at issue is no longer the user's current revision is stale and is never re-blessed with a fresh tag
+        await using (var rev = new NpgsqlCommand($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", conn, tx))      // no row lock: revoke-all locks the user row first and the session rows second, a lock here in the other order would deadlock; a bump after this read leaves a stale row that the lookup refuses anyway
+        {
+            rev.Parameters.AddWithValue("u", before.UserId);
+            if (await rev.ExecuteScalarAsync(ct) is not long current || current != before.RevisionAtIssue) return false;
+        }
         var key = keys.Active();
         var next = after with { KeyId = key.Id, Tag = null };
         next = next with { Tag = next.ComputeTag(keys, key) };

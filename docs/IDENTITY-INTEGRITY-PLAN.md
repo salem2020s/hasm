@@ -101,7 +101,7 @@ Every fact the API takes from a row to decide identity, second factor or authori
 | second factor | MFA `VerifiedAtUtc` (null encoded explicitly), `AuthMethods`, `Emergency` |
 | company context | `SelectedCompanyId` (null encoded explicitly) |
 | lifetime | `AbsoluteExpiresAtUtc` |
-| revocation | `RevokedAtUtc` (null encoded explicitly) and `RevokedReason` |
+| revocation | NOT covered (review L2 of PR 227, built as OD-5): `RevokedAtUtc` and `RevokedReason` are outside the tag. Revoke-all, password change and deactivation are protected by the user revision; a SINGLE logout is the documented residual until the logout record (S-1b) |
 | the user row it was issued under | the user's security revision at issue (section 5) |
 | key | `KeyId` |
 
@@ -252,3 +252,5 @@ T2 (PR 218 C1) and every control that depends on "the application authenticates 
 **Key rotation.** Values are always written under the active key. During a rotation, list the retired key id in `Hasm:Encryption:IdentityPreviousKeyIds` for no longer than the configured maximum session lifetime (initially 12 hours, OD-6), then remove it: sessions still under it stop being honoured (they are simply not found; the user signs in again). A changed row is re-tagged under the active key; the token hash of a session is not re-hashed (the token is unknown), so a session whose token was hashed under the retired key stays valid only while that key is listed.
 
 **Operational requirement of S-1.** The API now needs the protected key ring (`Hasm__Encryption__KeyDirectory` and `Hasm__Encryption__ActiveKeyId`, the settings the attachment and TOTP features already use) to sign anybody in or to authenticate any request that carries a session token; without it those requests are 503 `encryption_unavailable` (anonymous endpoints are unaffected). An installation that had no key ring configured must configure one BEFORE this release is deployed. Every existing session ends at the rollout.
+
+**Revision guard (review H1 of PR 227).** The database guard on `User.SecurityRevision` allows only "unchanged or exactly +1" per update, so a runtime-credential holder can neither lower it nor jump it (a jump to the bigint maximum would make every later bump overflow and block deactivation, password change and revoke-all). Raising it by one at a time only signs users out (nuisance, OD-5(2)); reaching the maximum would take about 9.2x10^18 updates, which is not realistic. The change sites also refuse to re-tag a row whose revision at issue is stale (review L1).
