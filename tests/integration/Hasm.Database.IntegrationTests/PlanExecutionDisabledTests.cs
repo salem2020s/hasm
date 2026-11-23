@@ -170,6 +170,24 @@ public class PlanExecutionDisabledTests : JournalTestBase
         }
     }
 
+    private static bool IsPlainData(Type type) => type.IsEnum || type.IsValueType || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null;
+
+    /// <summary>
+    /// MEMBER-level allow-list for a callee on a backend type (ODC M1 of PR 221): the three pure functions with their closures and records, the named pure helpers of the costing arithmetic, the exception code, and for any
+    /// other plain data type (record, struct, enum) only what the compiler generates (constructor, property accessors, generated members). A static method of a backend record, a service, a store: never.
+    /// </summary>
+    private static bool PermittedBackendCallee(MethodBase callee, Type type)
+    {
+        if (PureEpochTypes.Contains(type) || (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer))) return true;
+        if (type == typeof(CostingMath)) return callee.Name is "PlanFifo" or "ToUnits" or "FromUnits";
+        if (type == typeof(CostHistoryEntry)) return callee.Name == "SimulationId";
+        if (type == typeof(CostingException)) return callee.IsConstructor;
+        if (!IsPlainData(type)) return false;
+        if (callee.IsConstructor) return true;
+        if (callee.IsSpecialName && (callee.Name.StartsWith("get_", StringComparison.Ordinal) || callee.Name.StartsWith("set_", StringComparison.Ordinal))) return true;      // property accessors
+        return callee.GetCustomAttribute<System.Runtime.CompilerServices.CompilerGeneratedAttribute>() is not null;
+    }
+
     private static bool PermittedCallee(MethodBase callee)
     {
         var type = callee.DeclaringType!;
@@ -177,20 +195,16 @@ public class PlanExecutionDisabledTests : JournalTestBase
         if (type.Name.StartsWith("<>f__AnonymousType", StringComparison.Ordinal)) return true;          // the anonymous objects the fingerprint serialises: compiler-generated plain data
         var ns = type.Namespace ?? "";
         var name = type.IsGenericType ? type.GetGenericTypeDefinition().Name : type.Name;
-        if (ns.StartsWith("Hasm.", StringComparison.Ordinal))
-        {
-            // only plain data (records, enums, structs), the exception code and the pure static functions of the costing arithmetic and of this derivation
-            return type.IsEnum || type.IsValueType || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null ||
-                (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer)) || PureEpochTypes.Contains(type) ||
-                (ns == "Hasm.Infrastructure.Costing" && name is "CostingMath" or "CostReplay" or "CostHistoryEntry" or "CostingException" or "CostingMath+Take");
-        }
-        if (ns.StartsWith("System.Collections", StringComparison.Ordinal) || ns.StartsWith("System.Linq", StringComparison.Ordinal) || ns.StartsWith("System.Numerics", StringComparison.Ordinal) ||
-            ns == "System.Text.Json" || ns.StartsWith("System.Runtime.CompilerServices", StringComparison.Ordinal) || ns == "System.Text") return true;
-        if (ns == "System.Runtime.InteropServices") return name == "ImmutableCollectionsMarshal";        // what a collection expression of an ImmutableArray compiles to
+        if (ns.StartsWith("Hasm.", StringComparison.Ordinal)) return PermittedBackendCallee(callee, type);
+        // the framework: data structures and queries over them by namespace (they only call the delegates the scanned closures hand them); everything with a side effect or a reflective reach by MEMBER
+        if (ns.StartsWith("System.Collections", StringComparison.Ordinal) || ns.StartsWith("System.Linq", StringComparison.Ordinal) || ns.StartsWith("System.Numerics", StringComparison.Ordinal)) return true;
+        if (ns == "System.Text.Json") return name == "JsonSerializer" && callee.Name == "SerializeToUtf8Bytes";           // serialising, never deserialising (no type is ever instantiated by name)
+        if (ns == "System.Text") return name == "Encoding" && callee.Name is "GetBytes" or "get_UTF8";
+        if (ns == "System.Runtime.InteropServices") return name == "ImmutableCollectionsMarshal" && callee.Name == "AsImmutableArray";        // what a collection expression of an ImmutableArray compiles to
         if (ns == "System.Globalization") return name == "CultureInfo" && callee.Name == "get_InvariantCulture";
-        if (ns == "System.Security.Cryptography") return name == "SHA256";
-        if (ns == "System.Threading") return name == "CancellationToken";
-        if (ns != "System") return false;
+        if (ns == "System.Security.Cryptography") return name == "SHA256" && callee.Name == "HashData";
+        if (ns == "System.Threading") return name == "CancellationToken" && callee.Name == "ThrowIfCancellationRequested";
+        if (ns != "System") return false;                                                                                         // System.Runtime.CompilerServices (RuntimeHelpers and the like) included
         if (name == "IDisposable") return callee.Name == "Dispose";                                     // the end of every foreach
         if (name == "Type") return callee.Name == "GetTypeFromHandle";                                // typeof(...) in the compiler-generated record code
         return name is "Object" or "ValueType" or "Enum" or "String" or "Guid" or "Decimal" or "DateOnly" or "Math" or "Convert" or "Boolean" or "Int32" or "Int64" or "Int16" or "StringComparer" or "StringComparison" or
