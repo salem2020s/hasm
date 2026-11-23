@@ -131,6 +131,94 @@ public class PlanExecutionDisabledTests : JournalTestBase
         }
     }
 
+    // ---- T2 (ODC N6): the CALLEES of the pure derivation. Every call, constructor call and function pointer in the compiled code of Derive, its helpers and its closures must target a permitted type: a reflective
+    // Activator.CreateInstance, a Type or MethodInfo invocation, a Process, a file, a socket or a service cannot hide in it. The scan has a positive control (it must see calls it is known to contain).
+    private static readonly Dictionary<short, System.Reflection.Emit.OpCode> OpCodeTable = typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Select(f => (System.Reflection.Emit.OpCode)f.GetValue(null)!).ToDictionary(o => o.Value);
+
+    private static IEnumerable<MethodBase> CalleesOf(MethodBase method)
+    {
+        var il = method.GetMethodBody()?.GetILAsByteArray();
+        if (il is null) yield break;
+        var generics = method.DeclaringType is { IsGenericType: true } t ? t.GetGenericArguments() : null;
+        var methodGenerics = method.IsGenericMethod ? method.GetGenericArguments() : null;
+        for (var i = 0; i < il.Length;)
+        {
+            short code = il[i++];
+            if (code == 0xFE) code = (short)(0xFE00 | il[i++]);
+            var op = OpCodeTable[code];
+            int size = op.OperandType switch
+            {
+                System.Reflection.Emit.OperandType.InlineNone => 0,
+                System.Reflection.Emit.OperandType.ShortInlineBrTarget or System.Reflection.Emit.OperandType.ShortInlineI or System.Reflection.Emit.OperandType.ShortInlineVar => 1,
+                System.Reflection.Emit.OperandType.InlineVar => 2,
+                System.Reflection.Emit.OperandType.InlineI8 or System.Reflection.Emit.OperandType.InlineR => 8,
+                System.Reflection.Emit.OperandType.InlineSwitch => 4 + 4 * BitConverter.ToInt32(il, i),
+                _ => 4,
+            };
+            if (op.OperandType == System.Reflection.Emit.OperandType.InlineSig) throw new Xunit.Sdk.XunitException(method.DeclaringType!.Name + "." + method.Name + " uses calli");
+            if (op.OperandType == System.Reflection.Emit.OperandType.InlineMethod)
+                yield return method.Module.ResolveMethod(BitConverter.ToInt32(il, i), generics, methodGenerics)!;
+            i += size;
+        }
+    }
+
+    private static bool PermittedCallee(MethodBase callee)
+    {
+        var type = callee.DeclaringType!;
+        if (type.Name.StartsWith("<>f__AnonymousType", StringComparison.Ordinal)) return true;          // the anonymous objects the fingerprint serialises: compiler-generated plain data
+        var ns = type.Namespace ?? "";
+        var name = type.IsGenericType ? type.GetGenericTypeDefinition().Name : type.Name;
+        if (ns.StartsWith("Hasm.", StringComparison.Ordinal))
+        {
+            // only plain data (records, enums, structs), the exception code and the pure static functions of the costing arithmetic and of this derivation
+            return type.IsEnum || type.IsValueType || type.GetMethod("<Clone>$", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) is not null ||
+                (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer)) || PureEpochTypes.Contains(type) ||
+                (ns == "Hasm.Infrastructure.Costing" && name is "CostingMath" or "CostReplay" or "CostHistoryEntry" or "CostingException" or "CostingMath+Take");
+        }
+        if (ns.StartsWith("System.Collections", StringComparison.Ordinal) || ns.StartsWith("System.Linq", StringComparison.Ordinal) || ns.StartsWith("System.Numerics", StringComparison.Ordinal) ||
+            ns == "System.Text.Json" || ns.StartsWith("System.Runtime.CompilerServices", StringComparison.Ordinal) || ns == "System.Text") return true;
+        if (ns == "System.Runtime.InteropServices") return name == "ImmutableCollectionsMarshal";        // what a collection expression of an ImmutableArray compiles to
+        if (ns == "System.Security.Cryptography") return name == "SHA256";
+        if (ns == "System.Threading") return name == "CancellationToken";
+        if (ns != "System") return false;
+        if (name == "IDisposable") return callee.Name == "Dispose";                                     // the end of every foreach
+        if (name == "Type") return callee.Name == "GetTypeFromHandle";                                // typeof(...) in the compiler-generated record code
+        return name is "Object" or "ValueType" or "Enum" or "String" or "Guid" or "Decimal" or "DateOnly" or "Math" or "Convert" or "Boolean" or "Int32" or "Int64" or "Int16" or "StringComparer" or "StringComparison" or
+            "Nullable`1" or "Tuple" or "Exception" or "ArgumentException" or "InvalidOperationException" or "OperationCanceledException" or "Array" or "IEquatable`1" or "IComparable" or "IComparable`1" ||
+            name.StartsWith("Func`", StringComparison.Ordinal) || name == "Predicate`1" || name == "Comparison`1" || name.StartsWith("Action`", StringComparison.Ordinal) || name.StartsWith("ValueTuple`", StringComparison.Ordinal);
+    }
+
+    private static void AssertCalleesPermitted()
+    {
+        const BindingFlags all = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var scanned = new HashSet<string>(); var offenders = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var root in new[] { typeof(EpochSchedule), typeof(EpochContent) })
+        {
+            var types = new List<Type> { root };
+            for (var n = 0; n < types.Count; n++) types.AddRange(types[n].GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
+            foreach (var type in types)
+                foreach (var method in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all)))
+                    foreach (var callee in CalleesOf(method))
+                    {
+                        scanned.Add(callee.DeclaringType!.Name + "." + callee.Name);
+                        if (!PermittedCallee(callee)) offenders.Add(callee.DeclaringType + "::" + callee.Name);
+                    }
+        }
+        Assert.True(offenders.Count == 0, "callees outside the permitted set: " + string.Join("; ", offenders));
+        // positive control: the scan sees the calls these functions are known to make
+        Assert.Contains("SHA256.HashData", scanned); Assert.Contains("JsonSerializer.SerializeToUtf8Bytes", scanned); Assert.Contains("CostingException..ctor", scanned);
+    }
+
+    // the plain non-backend types a member, parameter or return type of the pure derivation may have (primitives are allowed by IsPrimitive): values, immutable and generic collections, tuples
+    private static readonly HashSet<Type> PermittedSystemTypes =
+    [
+        typeof(Guid), typeof(decimal), typeof(string), typeof(DateOnly), typeof(System.Numerics.BigInteger), typeof(CancellationToken), typeof(Type), typeof(System.Text.StringBuilder),
+        typeof(Nullable<>), typeof(System.Collections.Immutable.ImmutableArray<>), typeof(System.Collections.Immutable.ImmutableArray<>.Builder),
+        typeof(IGrouping<,>), typeof(List<>), typeof(Dictionary<,>), typeof(HashSet<>), typeof(KeyValuePair<,>), typeof(IReadOnlyList<>), typeof(IEnumerable<>),
+        typeof(ValueTuple<,>), typeof(ValueTuple<,,>), typeof(ValueTuple<,,,>), typeof(ValueTuple<,,,,>), typeof(ValueTuple<,,,,,>),
+    ];
+
     private static void AssertPureType(Type type, string where, HashSet<Type>? visited = null, bool member = true)
     {
         visited ??= [];
@@ -143,7 +231,14 @@ public class PlanExecutionDisabledTests : JournalTestBase
         Assert.False(member && type == typeof(object), where + ": an untyped member");
         Assert.False(ns.StartsWith("Npgsql", StringComparison.Ordinal) || ns.StartsWith("System.Data", StringComparison.Ordinal) || ns.StartsWith("System.Net", StringComparison.Ordinal) ||
             ns.StartsWith("System.IO", StringComparison.Ordinal) || ns.StartsWith("Microsoft.", StringComparison.Ordinal) || ns.StartsWith("System.Threading.Tasks", StringComparison.Ordinal), where + ": " + type);
-        if (!ns.StartsWith("Hasm.", StringComparison.Ordinal) || !visited.Add(type)) return;
+        // T1: a type that is not a backend type must be on a short allow-list (no interface such as IDisposable, no System.Array, no MethodInfo or other reflection type, no object as a member)
+        if (!ns.StartsWith("Hasm.", StringComparison.Ordinal))
+        {
+            var definition = type.IsGenericType ? type.GetGenericTypeDefinition() : type;
+            Assert.True(type.IsPrimitive || PermittedSystemTypes.Contains(definition) || (member == false && type == typeof(object)), where + ": " + type + " is not on the allow-list of plain member types");
+            return;
+        }
+        if (!visited.Add(type)) return;
         // a backend type may appear only as plain data (an enum or a record) or as the static function itself or an exception code: a service, store, resolver or transaction never does
         var isFunction = type == typeof(EpochSchedule) || type == typeof(EpochContent) || type == typeof(CostingException);
         var data = (type.DeclaringType is { } outer && PureEpochTypes.Contains(outer) && type.IsNestedPrivate) || type.IsEnum || isFunction || type.IsValueType ||      // a struct (a record struct) is data too: its fields are checked below
@@ -170,6 +265,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
         var offenders = types.Where(t => PlanTypeName.IsMatch(t.Name) && !allowed.Contains(t.Name) && !PureEpochTypes.Contains(t) && !t.Name.StartsWith("DocumentState", StringComparison.Ordinal)).Select(t => t.FullName).ToList();
         Assert.Empty(offenders);
         AssertPureEpochShape();
+        AssertCalleesPermitted();
         // no method of the services or of anything in a Costing/plan namespace is an execution entry point
         foreach (var type in new[] { typeof(CompensationPlanService), typeof(CompensationPlanApprovalService), typeof(CompensationPlanStore), typeof(CompensationPlanBinding) })
             Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly), m => Regex.IsMatch(m.Name, "Execute|Executor|Replay|Storno|Rebook"));
