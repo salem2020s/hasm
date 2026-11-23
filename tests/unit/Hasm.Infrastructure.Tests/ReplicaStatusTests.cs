@@ -127,4 +127,13 @@ public sealed class ReplicaStatusTests
         Assert.Equal(new DateTimeOffset(2026, 3, 9, 0, 0, 0, TimeSpan.Zero), (Good() with { LastReverifiedUtc = new DateTimeOffset(2026, 3, 9, 0, 0, 0, TimeSpan.Zero) }).LastReverifiedUtc);
         Assert.Empty(Codes(Good()));                                                                // without a report nothing changes
     }
+
+    [Fact]
+    public void A_copy_sharing_storage_with_the_primary_fails_and_an_unreadable_identity_warns()
+    {
+        Assert.Equal(["replica_not_independent:1"], Codes(Good() with { NotIndependentRunIds = ["20260309T020000Z-0a0b0c0d"] }));
+        Assert.Equal(["link_check_unavailable:8"], Codes(Good() with { LinkCheckUnavailable = true }));
+        Assert.Equal(["replica_not_independent:1", "link_check_unavailable:8"], Codes(Good() with { NotIndependentRunIds = ["20260309T020000Z-0a0b0c0d"], LinkCheckUnavailable = true }));
+        Assert.Equal(1, BackupSeverity.Worst(8, 1));
+    }
 }
