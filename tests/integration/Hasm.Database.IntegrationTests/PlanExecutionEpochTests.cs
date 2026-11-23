@@ -28,7 +28,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
 
     private static Script Copy(Script s)
     {
-        var c = new Script { AuditSubject = s.AuditSubject, AuditTarget = s.AuditTarget };
+        var c = new Script { AuditSubject = s.AuditSubject, AuditTarget = s.AuditTarget, GrantPlan = s.GrantPlan, GrantExecution = s.GrantExecution, AutoGrant = s.AutoGrant, GrantNotAfterIn = s.GrantNotAfterIn, GrantEpochOverride = s.GrantEpochOverride, DryRunSql = s.DryRunSql };
         c.AddRange(s);
         return c;
     }
@@ -181,7 +181,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
         var entry = await EntryOf(issue.CostOperationId);
         var p = await ApprovedPlan(Avg, "2026-03-11");
         var storno = Guid.NewGuid();
-        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution };
+        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution, GrantPlan = p.Id, GrantExecution = p.Execution };
         script.Add(("audit", [])); script.Add(("execution", [ExecutionInsert(p)]));
         script.Add(("storno", [Op(storno, 2, D3), Member(storno, p.Execution, 1, issue.CostOperationId), .. Move(storno, Avg.Id, W1.Id, 2, 1, D3, 3m, 15m, entry)]));
         RefusedWith("an epoch never touches a position with an open negative-stock obligation", await Run(script));
@@ -395,7 +395,7 @@ public class PlanExecutionEpochTests : PlanExecutionTestBase
         // the back-dated event: a receipt of 10 for 200.00 into W1 on 10 March. Replay: W1 20 / 300.00 (average 15.00); the first transfer carries 4 at 15.00 = 60.00, the second 2 at 15.00 = 30.00.
         var p = await ApprovedPlan(Avg, "2026-03-10", (Avg.Id, W2.Id));
         Guid s2 = Guid.NewGuid(), s1 = Guid.NewGuid(), ev = Guid.NewGuid(), b1 = Guid.NewGuid(), b2 = Guid.NewGuid();
-        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution };
+        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution, GrantPlan = p.Id, GrantExecution = p.Execution };
         script.Add(("audit", [])); script.Add(("execution", [ExecutionInsert(p)]));
         // storno in GLOBAL descending entry order: e5, e4 (second transfer), then e3, e2 (first transfer); every storno carries the original date
         script.Add(("storno", [Op(s2, 3, D2), Member(s2, p.Execution, 1, t2.OperationId), .. Move(s2, Avg.Id, W1.Id, 4, -1, D2, 2m, 20m, e5), .. Move(s2, Avg.Id, W2.Id, 3, 1, D2, 2m, 20m, e4),

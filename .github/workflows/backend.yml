@@ -64,6 +64,8 @@ jobs:
         run: node tools/schema/company-0037-replay-signer-registry.cjs --check
       - name: Replay grant verification schema files (company 0038, T2 slice A2) match their generator
         run: node tools/schema/company-0038-replay-grant-verification.cjs --check
+      - name: Replay epoch commit schema files (company 0039, T2 slice A3) match their generator
+        run: node tools/schema/company-0039-replay-epoch-commit.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
@@ -159,7 +161,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1788 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1795 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -326,6 +328,8 @@ jobs:
                 "ReplaySignerRegistryTests": 10,
                 # Phase 3.8D threat T2 slice A2 (company migration 0038): insert-time verification of a grant (vectors, a real key and real signatures, every rule of 4.3, inertness)
                 "ReplayGrantVerificationTests": 7,
+                # Phase 3.8D threat T2 slice A3 (company migration 0039): the commit-time checks and the epoch text rebuilt from the rows (SQL against the .NET builder on real epochs, every rule refused)
+                "ReplayEpochCommitTests": 7,
                 # Phase 3.8D executor slice E1b: the derived epoch content against the real engine (8 scenarios), the T2 column-pin test 4c (one PostgreSQL test and one pure test)
                 "EpochContentEngineOracleTests": 8, "EpochTextColumnPinTests": 2,
             }

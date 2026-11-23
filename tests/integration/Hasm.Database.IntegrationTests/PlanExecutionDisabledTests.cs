@@ -71,7 +71,7 @@ public class PlanExecutionDisabledTests : JournalTestBase
     // the ONLY types named like a plan, epoch or execution that may exist besides the services above: values and one static function (slice E1), allowed by identity
     private static readonly Type[] PureEpochTypes = [typeof(EpochSchedule), typeof(EpochScheduleResult), typeof(EpochOperationPlan), typeof(EpochEntryPlan), typeof(EpochLineagePlan), typeof(EpochRole),
         typeof(EpochContent), typeof(EpochContentResult), typeof(EpochEntryContent), typeof(EpochConsumption), typeof(EpochLayerCreation), typeof(EpochLayerKey), typeof(EpochLayerRemaining), typeof(EpochPositionTotal), typeof(EpochLayerState),
-        typeof(EpochText), typeof(EpochTextOperation), typeof(EpochTextEntry), typeof(EpochTextLayer), typeof(EpochTextConsumption), typeof(EpochTextRemaining), typeof(EpochTextInput), typeof(EpochTextResult)];
+        typeof(EpochText), typeof(EpochTextOperation), typeof(EpochTextEntry), typeof(EpochTextLayer), typeof(EpochTextConsumption), typeof(EpochTextRemaining), typeof(EpochTextPosition), typeof(EpochTextInput), typeof(EpochTextResult)];
 
     /// <summary>
     /// Pins the exact shape of the allowed types so the exception cannot hide an executor: EpochSchedule is a static class whose only own methods are Derive (exact signature) and the private Inconsistent; the

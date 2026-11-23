@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using Hasm.Infrastructure.Audit;
@@ -19,6 +20,11 @@ using FP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.FiscalPeriod;
 using OP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostOperation;
 using PO = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CostPosition;
 using SP = Hasm.Infrastructure.CompanyDatabase.CompanySchema.StockPosting;
+using RE = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayEpoch;
+using RF = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayGrant;
+using RGR = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayExecutionGrant;
+using RGU = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplayGrantUse;
+using RKY = Hasm.Infrastructure.CompanyDatabase.CompanySchema.ReplaySignerKey;
 
 namespace Hasm.Database.IntegrationTests;
 
@@ -50,6 +56,14 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
     {
         public short AuditType = CostingAuditEvents.PlanExecuted;
         public Guid? AuditSubject, AuditTarget;
+        /// <summary>A script that writes an execution gets a valid signed grant and its use just before the plan is marked executed (since T2 slice A3 the database refuses an execution without one at commit); a test of the grant itself turns it off.</summary>
+        public bool AutoGrant = true;
+        /// <summary>The plan and the execution the automatic grant names (separate from the audit event's subject and target, which some tests falsify on purpose).</summary>
+        public Guid? GrantPlan, GrantExecution;
+        /// <summary>For tests of the commit-time rules only: the grant expires this many seconds from now; the epoch digest the grant signs is this text instead of the digest of the rows; the dry run (which fixes the digest) applies this transformation to the SQL of a step.</summary>
+        public int? GrantNotAfterIn;
+        public string? GrantEpochOverride;
+        public Func<string, string, string>? DryRunSql;
         public Dictionary<string, Func<Task>> Hooks { get; } = [];
         public Script Without(string name) { RemoveAll(s => s.Name == name); return this; }
         public Script Set(string name, params string[] sql) { this[FindIndex(s => s.Name == name)] = (name, sql); return this; }
@@ -76,7 +90,7 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         var granted = await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
         Assert.True(granted.LoginVerified);
         if (executorGrant)
-            await Sql($"GRANT INSERT ON {string.Join(", ", ExecutionTables)} TO \"{CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName)}\"");
+            await Sql($"GRANT INSERT ON {string.Join(", ", ExecutionTables)}, {RGR.Table}, {RGU.Table} TO \"{CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName)}\"");
         RuntimeTx = new CompanyAuditedTransactions(RealResolver(), Audit, Clock);
     }
 
@@ -87,6 +101,83 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         var conn = new NpgsqlConnection(cs.ConnectionString);
         await conn.OpenAsync();
         return conn;
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------- the automatic grant of a test execution (T2 slice A3)
+    private static readonly Lazy<RSA> AutoKey = new(() => RSA.Create(3072));
+    private static readonly Guid AutoSigner = Guid.NewGuid();
+    protected const string AutoKeyId = "auto-test";
+    protected readonly record struct AutoGrant(Guid Id, Guid Executor, string Epoch);
+
+    /// <summary>Registers, as the owner, the test key (one per test process) for the signer that the automatic grants name. Idempotent.</summary>
+    protected async Task EnsureAutoKey()
+    {
+        var n = new BigInteger(AutoKey.Value.ExportParameters(false).Modulus!, isUnsigned: true, isBigEndian: true);
+        await Sql($"INSERT INTO {RKY.Table} ({RKY.KeyId}, {RKY.Modulus}, {RKY.SignerUserId}) VALUES ('{AutoKeyId}', '{n}'::numeric, '{AutoSigner}') ON CONFLICT DO NOTHING");
+    }
+
+    private static bool WritesAnExecution(Script script) => script.AutoGrant && script.GrantPlan is not null && script.GrantExecution is not null && script.Any(s => s.Name == "execution");
+
+    /// <summary>
+    /// Since T2 slice A3 the database refuses an execution without a signed grant whose epoch digest is the digest of the rows the execution wrote, and a grant is written BEFORE the execution (the plan is still approved and its
+    /// document unposted). So the epoch is dry-run first: the whole script runs in a transaction that is always rolled back, and the epoch text its rows give is the digest to sign. Rows are deterministic (the script fixes every id
+    /// that the text names), so the real run writes exactly the same epoch. A script that cannot even run (a refusal test) gets no grant and meets its own refusal.
+    /// </summary>
+    private async Task<AutoGrant?> PlanAutoGrantAsync(Script script, CompanyAuditedTransactions transactions)
+    {
+        if (!WritesAnExecution(script)) return null;
+        await EnsureAutoKey();
+        try
+        {
+            await transactions.ExecuteAsync(Company.Id, async work =>
+            {
+                await RunSteps(work, script, hooks: false, afterExecution: null, transform: script.DryRunSql);
+                await using var c1 = new NpgsqlCommand($"SELECT {CX.ExecutedBy} FROM {CX.Table} WHERE {CX.Id} = '{script.GrantExecution}'", work.Connection, work.Transaction);
+                if (await c1.ExecuteScalarAsync() is not Guid executor) return 0;
+                await using var c2 = new NpgsqlCommand($"SELECT encode(sha256(convert_to(public.{RE.FnRowsText}('{script.GrantExecution}'), 'UTF8')), 'hex')", work.Connection, work.Transaction);
+                throw new DryRunDone(script.GrantEpochOverride ?? (string)(await c2.ExecuteScalarAsync())!, executor);
+            });
+        }
+        catch (Exception ex) when (ex is DryRunDone || ex.InnerException is DryRunDone)
+        {
+            var done = ex as DryRunDone ?? (DryRunDone)ex.InnerException!;
+            return new AutoGrant(Guid.NewGuid(), done.Executor, done.Epoch);
+        }
+        catch (Exception) { return null; }
+        return null;
+    }
+
+    /// <summary>Writes the grant (before the execution, as the real executor will), signed with the test key over the message the SQL builders give. In a savepoint: when it cannot be written nothing is left behind.</summary>
+    private async Task AutoGrantAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Script script, AutoGrant grant)
+    {
+        async Task<object?> One(string sql) { await using var c = new NpgsqlCommand(sql, conn, tx); var v = await c.ExecuteScalarAsync(); return v is DBNull ? null : v; }
+        async Task Exec(string sql) { await using var c = new NpgsqlCommand(sql, conn, tx); await c.ExecuteNonQueryAsync(); }
+        var plan = script.GrantPlan!.Value;
+        await Exec("SAVEPOINT autogrant");
+        try
+        {
+            if (await One($"SELECT public.{RF.FnPlanHead}('{plan}', '{grant.Epoch}', '{grant.Executor}')") is not string head) { await Exec("ROLLBACK TO SAVEPOINT autogrant"); return; }
+            var request = (string)(await One($"SELECT public.{RF.FnRequestDigest}($h${head}$h$)"))!;
+            var creator = (Guid)(await One($"SELECT {CP.CreatedBy} FROM {CP.Table} WHERE {CP.Id} = '{plan}'"))!;
+            var approver = (Guid)(await One($"SELECT a.{CA.Approver} FROM {CA.Table} a JOIN {CP.Table} p ON p.{CP.ApprovalId} = a.{CA.Id} WHERE p.{CP.Id} = '{plan}'"))!;
+            var notBefore = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 300; var notAfter = script.GrantNotAfterIn is { } within ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() + within : notBefore + 7200;
+            var attestation = string.Join('\n', "hasm-replay-attestation-v1", $"creator={creator}|phone|{notBefore - 600}", $"approver={approver}|in-person|{notBefore - 300}", $"request={request}", "participants=3", "note=automatic test grant");
+            var message = (string)(await One($"SELECT public.{RF.FnGrantMessage}($h${head}$h$, $a${attestation}$a$, '{grant.Id}', '{AutoSigner}', '{AutoKeyId}', {notBefore}, {notAfter})"))!;
+            var signature = AutoKey.Value.SignData(Encoding.UTF8.GetBytes(message), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            await Exec($"INSERT INTO {RGR.Table} ({RGR.Id}, {RGR.KeyId}, {RGR.PlanId}, {RGR.ExecutorUserId}, {RGR.SignerUserId}, {RGR.NotBefore}, {RGR.NotAfter}, {RGR.EpochDigest}, {RGR.Attestation}, {RGR.Signature}) " +
+                       $"VALUES ('{grant.Id}', '{AutoKeyId}', '{plan}', '{grant.Executor}', '{AutoSigner}', {notBefore}, {notAfter}, '{grant.Epoch}', $a${attestation}$a$, '\\x{Convert.ToHexStringLower(signature)}'::bytea)");
+            await Exec("RELEASE SAVEPOINT autogrant");
+        }
+        catch (PostgresException) { await Exec("ROLLBACK TO SAVEPOINT autogrant"); }
+    }
+
+    /// <summary>The grant use, right after the execution row (it names the execution and the grant, one each).</summary>
+    private async Task AutoUseAsync(NpgsqlConnection conn, NpgsqlTransaction tx, Script script, AutoGrant grant)
+    {
+        await using var exists = new NpgsqlCommand($"SELECT count(*) FROM {RGR.Table} WHERE {RGR.Id} = '{grant.Id}'", conn, tx);
+        if ((long)(await exists.ExecuteScalarAsync())! == 0) return;              // no grant could be written: the execution meets its own refusal
+        await using var use = new NpgsqlCommand($"INSERT INTO {RGU.Table} ({RGU.ExecutionId}, {RGU.GrantId}) VALUES ('{script.GrantExecution}', '{grant.Id}')", conn, tx);
+        await use.ExecuteNonQueryAsync();
     }
 
     protected static string Describe(Exception ex)
@@ -110,23 +201,22 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
     }
 
     /// <summary>Runs a script as the RUNTIME ROLE inside the real audited company transaction (business change and audit event commit together). Null when it committed.</summary>
-    protected async Task<string?> Run(Script script)
+    protected async Task<string?> Run(Script script) => await RunCore(script, RuntimeTx, owner: false);
+
+    /// <summary>Runs a script as the OWNER of the disposable test database inside the real audited company transaction: a FIXTURE (for example an executed epoch that a step 5 test needs to exist), never a claim about the runtime role. Null when it committed.</summary>
+    protected async Task<string?> RunAsOwner(Script script) => await RunCore(script, new CompanyAuditedTransactions(Resolver, Audit, Clock), owner: true);
+
+    private sealed class DryRunDone(string epoch, Guid executor) : Exception { public string Epoch { get; } = epoch; public Guid Executor { get; } = executor; }
+
+    private async Task<string?> RunCore(Script script, CompanyAuditedTransactions transactions, bool owner)
     {
         try
         {
-            await RuntimeTx.ExecuteAsync(Company.Id, async work =>
+            var grant = await PlanAutoGrantAsync(script, transactions);
+            await transactions.ExecuteAsync(Company.Id, async work =>
             {
-                var audit = "gen_random_uuid()";
-                foreach (var (name, sql) in script.ToList())
-                {
-                    if (name == "audit")
-                    {
-                        var receipt = await work.AppendAuditAsync(new AuditEventData(script.AuditType, Executor, script.AuditTarget, script.AuditSubject, "compensation plan executed"));
-                        audit = $"(SELECT {AU.EventId} FROM {AU.Table} WHERE {AU.StreamKey} = '{receipt.StreamKey}' AND {AU.Seq} = {receipt.Seq})";
-                    }
-                    foreach (var s in sql) { await using var cmd = new NpgsqlCommand(s.Replace("@AUDIT@", audit), work.Connection, work.Transaction); await cmd.ExecuteNonQueryAsync(); }
-                    if (script.Hooks.TryGetValue(name, out var hook)) await hook();
-                }
+                if (grant is not null) await AutoGrantAsync(work.Connection, work.Transaction, script, grant.Value);
+                await RunSteps(work, script, hooks: true, afterExecution: grant is null ? null : () => AutoUseAsync(work.Connection, work.Transaction, script, grant.Value));
                 return 0;
             });
             return null;
@@ -134,30 +224,20 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         catch (Exception ex) { return Describe(ex); }
     }
 
-    /// <summary>Runs a script as the OWNER of the disposable test database inside the real audited company transaction: a FIXTURE (for example an executed epoch that a step 5 test needs to exist), never a claim about the runtime role. Null when it committed.</summary>
-    protected async Task<string?> RunAsOwner(Script script)
+    private async Task RunSteps(CompanyAuditedWork work, Script script, bool hooks, Func<Task>? afterExecution, Func<string, string, string>? transform = null)
     {
-        var owner = new CompanyAuditedTransactions(Resolver, Audit, Clock);
-        try
+        var audit = "gen_random_uuid()";
+        foreach (var (name, sql) in script.ToList())
         {
-            await owner.ExecuteAsync(Company.Id, async work =>
+            if (name == "audit")
             {
-                var audit = "gen_random_uuid()";
-                foreach (var (name, sql) in script.ToList())
-                {
-                    if (name == "audit")
-                    {
-                        var receipt = await work.AppendAuditAsync(new AuditEventData(script.AuditType, Executor, script.AuditTarget, script.AuditSubject, "compensation plan executed"));
-                        audit = $"(SELECT {AU.EventId} FROM {AU.Table} WHERE {AU.StreamKey} = '{receipt.StreamKey}' AND {AU.Seq} = {receipt.Seq})";
-                    }
-                    foreach (var s in sql) { await using var cmd = new NpgsqlCommand(s.Replace("@AUDIT@", audit), work.Connection, work.Transaction); await cmd.ExecuteNonQueryAsync(); }
-                    if (script.Hooks.TryGetValue(name, out var hook)) await hook();
-                }
-                return 0;
-            });
-            return null;
+                var receipt = await work.AppendAuditAsync(new AuditEventData(script.AuditType, Executor, script.AuditTarget, script.AuditSubject, "compensation plan executed"));
+                audit = $"(SELECT {AU.EventId} FROM {AU.Table} WHERE {AU.StreamKey} = '{receipt.StreamKey}' AND {AU.Seq} = {receipt.Seq})";
+            }
+            foreach (var s in sql) { await using var cmd = new NpgsqlCommand((transform is null ? s : transform(name, s)).Replace("@AUDIT@", audit), work.Connection, work.Transaction); await cmd.ExecuteNonQueryAsync(); }
+            if (name == "execution" && afterExecution is not null) await afterExecution();
+            if (hooks && script.Hooks.TryGetValue(name, out var hook)) await hook();
         }
-        catch (Exception ex) { return Describe(ex); }
     }
 
     /// <summary>The refusal of an epoch entry in a period that is not Open: either the plan guard's own ("period_not_open") or the message of the stock-period guard (STOCK-PERIOD-DB, company migration 0034), whichever of the
@@ -267,7 +347,7 @@ public abstract class PlanExecutionTestBase : NegativeStockTestBase
         var issueEntry = await EntryOf(issue.CostOperationId);
         var p = await ApprovedPlan(item, "2026-03-11");
         Guid s = Guid.NewGuid(), e = Guid.NewGuid(), b = Guid.NewGuid();
-        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution };
+        var script = new Script { AuditSubject = p.Id, AuditTarget = p.Execution, GrantPlan = p.Id, GrantExecution = p.Execution };
         script.Add(("audit", []));
         script.Add(("execution", [ExecutionInsert(p)]));
         script.Add(("storno", [Op(s, 2, D3), Member(s, p.Execution, 1, issue.CostOperationId), .. Move(s, item.Id, W1.Id, 2, 1, D3, 4m, 40m, issueEntry)]));

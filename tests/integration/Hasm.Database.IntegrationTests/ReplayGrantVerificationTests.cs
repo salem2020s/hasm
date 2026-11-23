@@ -345,7 +345,7 @@ public class ReplayGrantVerificationTests : PlanExecutionTestBase
             await tx.RollbackAsync();
         }
         // nothing but the grant insert trigger function calls the verifier; the builders are called only by the readers and the two trigger functions
-        Assert.Equal(new[] { RF.FnGrantInsert }, await StringsAsync($"SELECT proname FROM pg_proc WHERE prosrc LIKE '%{RA.FnRsaVerify}%' AND proname <> '{RA.FnRsaVerify}' ORDER BY proname"));
+        Assert.Equal(new[] { CompanySchema.ReplayEpoch.FnCheckExecution, RF.FnGrantInsert }.Order(StringComparer.Ordinal).ToArray(), await StringsAsync($"SELECT proname FROM pg_proc WHERE prosrc LIKE '%{RA.FnRsaVerify}%' AND proname <> '{RA.FnRsaVerify}' ORDER BY proname"));
         Assert.Equal(new[] { RF.FnAttestationProblem }, await StringsAsync($"SELECT proname FROM pg_proc WHERE prosrc LIKE '%{RF.FnRequestDigest}%' AND proname <> '{RF.FnRequestDigest}' ORDER BY proname"));
         // the verifier returns FALSE (never NULL) on NULL input, so an IF NOT on its result cannot pass on NULL (I1 of the review of PR 233)
         Assert.False(await Sql<bool>($"SELECT public.{RA.FnRsaVerify}(NULL, NULL, NULL)"));
