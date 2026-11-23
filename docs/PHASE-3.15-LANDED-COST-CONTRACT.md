@@ -4,6 +4,23 @@
 
 **Status: PROPOSAL** for independent accounting review and explicit owner approval. Nothing is built, no migration is written, and no decision ID, audit code, permission name or migration number is allocated; names are working names. **No landed cost is capitalised by HASM beyond what an authorised poster enters as the exact receipt amount today, until this contract is approved and its tests have passed review.**
 
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-258) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (LANDED-COST-CONTRACT). The owner text follows verbatim; approved as policy direction; unsupported financial posting paths stay disabled. Nothing else of this document changes.
+>
+> G. Landed Costs — LQ-1 to LQ-19
+> Approve the reviewed conservative directions in `docs/PHASE-3.15-LANDED-COST-CONTRACT.md`, with the following precise decisions:
+> * LQ-1 to LQ-3: Accept company-approved attributable charge types, documented source evidence and deterministic value-based allocation, with the documented alternatives only when their prerequisites are met.
+> * LQ-4: Do not silently expense routine attributable late freight while claiming that inventory costs are complete. Until late capitalization is properly implemented, an affected transaction must be explicitly identified as unsupported or accounting-pending, unless an independently approved company accounting policy specifically authorizes expense treatment.
+> * LQ-5 to LQ-7: Use the proposed conservative on-hand, transferred-quantity and write-down interaction rules within the supported first implementation. Do not claim destination valuation is complete when the late-cost mechanism cannot follow transferred goods.
+> * LQ-8: Late capitalization requires a separately reviewed amendment to the revaluation/value-adjustment mechanism, including all affected costing readers and reversal behavior. It may not be enabled early.
+> * LQ-9: Accept explicit versioned clearing and late-cost accounts, refusing missing mappings.
+> * LQ-10: Follow RQ-3: atomic accounting and valuation effects where the contract requires both.
+> * LQ-11: Refuse unsupported foreign-currency charges until Phase 3.18.
+> * LQ-12: Do not silently assume non-recoverable taxes are recoverable or omit them from required acquisition cost. Until tax recoverability is modeled and independently reviewed, refuse unsupported capitalization rather than misstate inventory valuation.
+> * LQ-13 to LQ-15: Accept independent Inventory Cost Approver approval, D-215 Trial counting and no arbitrary fixed late-charge cutoff.
+> * LQ-16 to LQ-19: Accept the proposed conservative defaults: do not enable a clearing process with no reconciliation path; no unsupported multi-receipt charge allocation; refuse unsupported negative-stock settlements; treat early-payment discounts through the payable/payment accounting contract rather than silently modifying inventory value.
+> Keep unsupported financial posting paths disabled. Do not label the complete purchasing or landed-cost feature production-ready before its reconciliation and review gates pass.
+
+
 **Revision 2.** The independent accounting review of revision 1 (Agent FAC, at `1a6f27e`: request changes, 5 Medium and 7 Low; scope, sources and every worked example confirmed; the at-receipt path found sound) is worked in. Where the reviewer recommends another default, it is now the proposal and both are shown. Section 18 lists the reviewer's recommendation per owner question.
 
 How to read it. **[APPROVED: source]** is settled by the approved SRS or a recorded owner decision. **[AS BUILT: file, function]** is a statement about `main` verified in the named code for this document. **[PROPOSAL]** binds nobody until approved. **[OPEN: LQ-n]** is not settled by the approved sources: options, consequences and a proposed conservative default are given, and it is listed in section 17.

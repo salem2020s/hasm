@@ -49,6 +49,15 @@ public sealed class HasmDatabaseOptions
     /// </summary>
     public bool AllowOverprivilegedSystemRuntime { get; init; }
 
+    /// <summary>
+    /// Owner decision 2026-11-22 (Q3). False (the only value configuration can give): the migrating commands refuse a PostgreSQL superuser account. Only the administrative tool sets
+    /// it, from the explicit command-line switch <c>--allow-superuser-for-development</c>, never from configuration or environment variables, so a production configuration file can
+    /// not carry it silently. Every use is logged.
+    /// </summary>
+    public bool AllowSuperuserMigrationAccount { get; private set; }
+
+    public void AllowSuperuserMigrationAccountForDevelopment() => AllowSuperuserMigrationAccount = true;
+
     public const int DefaultCompanyMaxPoolSize = 10;
     public const int MaxCompanyMaxPoolSize = 50;
 
