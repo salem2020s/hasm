@@ -156,7 +156,12 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         return null;
     }
 
-    private async Task RejectUserAsync(Guid userId, CancellationToken ct)
+    /// <summary>Audits a challenge that failed its tag (no cause detail in the answer; the operator sees it here), at most once a minute per challenge.</summary>
+    public Task AuditRejectedChallengeAsync(Guid challengeId, CancellationToken ct = default) => RejectRecordAsync(challengeId, "challenge", ct);
+
+    private Task RejectUserAsync(Guid userId, CancellationToken ct) => RejectRecordAsync(userId, "user", ct);
+
+    private async Task RejectRecordAsync(Guid userId, string kind, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
         if (lastRejectionAudit.TryGetValue(userId, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
@@ -164,7 +169,7 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         if (lastRejectionAudit.Count > 10_000) lastRejectionAudit.Clear();
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, userId, $"user {userId:N} rejected: tag", ct);
+        var receipt = await AuditAsync(conn, tx, MfaAuditEvents.IdentityRecordRejected, null, kind == "user" ? userId : null, $"{kind} {userId:N} rejected: tag", ct);
         await audit.CommitAsync(tx, receipt, ct);
     }
 
