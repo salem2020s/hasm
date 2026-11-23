@@ -6,6 +6,27 @@
 
 **Status: PROPOSAL** for independent review (D-219: "Use independently reviewed implementation slices") and, where it raises policy, for the owner. Nothing is built, no migration is written, and no decision ID, audit code, permission name or migration number is allocated; names are working names.
 
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-256..D-257) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (3.8C-DESIGN and RESERVATIONS-SCOPE). The owner text follows verbatim; CQ-1 to CQ-17 are D-256 and the reservations clarification is D-257. Nothing else of this document changes.
+>
+> E. Lots, Serials and Expiry — CQ-1 to CQ-17
+> Approve the proposed conservative defaults in `docs/PHASE-3.8C-DESIGN.md` for CQ-1 through CQ-17, subject to these explicit interpretations:
+> * CQ-4 and CQ-5: No expired-stock sale or delivery override. Disposal requires privileged approval and audit. A quarantine-transfer capability may be designed later, but it must not become a normal dispatch bypass.
+> * CQ-10 and CQ-11: Lots and serials remain tracking dimensions under the two approved costing methods. Do not silently introduce specific-identification costing as a third method. Clearly identify goods whose required accounting treatment cannot be represented by this model as unsupported.
+> * CQ-13: Preserve original-document lineage for returns. Expired returns must not re-enter saleable inventory; any later physical quarantine-receipt workflow requires its own reviewed rules.
+> * CQ-14 and CQ-15: Only approved, auditable tracking-only reassignment may correct zero-net lot discrepancies. Do not invent cost entries for relabeling. Existing stocked tracked items require explicit reconciliation before activation.
+> * CQ-16: Prefer a dedicated, company-configured expiry-disposal account mapping, rather than silently mixing expiry losses into ordinary stock issues. Refuse posting until the required mapping and accounting tests exist.
+> * CQ-17: Reject contradictory lot attributes rather than silently replacing dates.
+> All remaining CQ defaults are accepted as written in the reviewed design. No tracked-item posting is activated before the applicable migration, reconciliation and tests pass.
+
+> F. Reservations — RESERVATIONS-SCOPE
+> Clarification: Reservations remain within Release 1 scope, as a later independently designed inventory capability.
+> They are not automatically part of the lot/serial implementation.
+> Prepare a separate stock-allocation contract covering reservation creation, release, expiry, concurrency, warehouse restrictions and available-stock calculation.
+> Reservations must never oversubscribe available stock.
+> No quotation, order or other document silently reserves inventory until that behavior is explicitly specified, independently reviewed and implemented.
+> This decision must not block unrelated lot, serial and expiry work.
+
+
 **Revision 2.** The independent review of revision 1 (Agent FAC, at `6754ad6`: request changes, 5 Medium and 7 Low; scope, sources and arithmetic confirmed) is worked in. Section 15 lists the reviewer's recommendation per owner question.
 
 How to read it. **[APPROVED: source]** is a rule settled by the approved SRS or a recorded owner decision. **[AS BUILT: file, function]** is a statement about `main` that was verified in the named code for this document. **[PROPOSAL]** binds nobody until reviewed and, where needed, approved. **[OPEN: CQ-n]** is a point the approved sources do not settle: options, consequences and a proposed conservative default are given, and it is listed in section 14.
@@ -252,6 +273,8 @@ One implementation in the shared React and TypeScript frontend on the UI-1 desig
 * **No reservation column, badge or action anywhere.**
 
 ## 14. Owner questions (each with a proposed conservative default; none is decided here)
+
+**Decided 2026-11-22: see the owner decision at the top of this document (D-256..D-257; register item 3.8C-DESIGN and RESERVATIONS-SCOPE). The questions below are kept as put to the owner.**
 
 | # | Question | Proposed default | Alternatives and consequences |
 |---|---|---|---|

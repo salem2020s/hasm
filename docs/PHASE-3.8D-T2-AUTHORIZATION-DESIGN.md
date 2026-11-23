@@ -2,6 +2,45 @@
 
 Status: **DESIGN PROPOSAL, revision 4, documentation only. Nothing here is implemented.** Author: Agent ODC (design author). The independent adversarial review is Agent opusSEC's. Base: `main` `22c9d23`.
 
+> **OWNER DECISION 2026-11-22 - the questions of this document are DECIDED.** Recorded once in `docs/DECISIONS.md` (D-248..D-253) and in the owner-decision register of `docs/INTEGRATION-STATUS.md` (T2-AUTHORIZATION-D1-D6). The owner text follows verbatim; D1 to D6 are D-248 to D-253; the owner approves the reviewer-recommended offline signer model (Resolution (i)); activation stays CLOSED. Nothing else of this document changes.
+>
+> B. Replay Executor T2 — D1 to D6
+> D1 — Security baseline: APPROVE THE REVIEWER-RECOMMENDED OFFLINE SIGNER MODEL
+> For sensitive backdated replay execution, require a narrowly scoped, single-use signed authorization from a separately registered signer using a key outside the application server and PostgreSQL.
+> The signer must independently verify the plan with its creator and approver through an out-of-application channel.
+> Do not silently downgrade to the in-application signer model. If the offline requirement makes a particular installation unable to use replay, keep that feature unavailable for the installation until its authorization prerequisites are met.
+> No ordinary runtime database credential may independently produce a valid execution authorization.
+
+> D2 — Signers and participants: APPROVED
+> Only the installation owner can register or revoke authorized signers.
+> Maintain a versioned, owner-signed participant registry, with independent contact information and strict segregation of duties. Never allow a signer to authorize their own conflicting work.
+> The owner must configure an independent alert destination for failed confirmations and suspensions. Support a configured external notification channel, such as an authorized email endpoint or equivalent, alongside in-app alerts.
+> Without a valid signer registry and required alert configuration, replay activation must fail closed. Installation-specific names and addresses are provided during installation setup, not development.
+
+> D3 — Signing-key custody: APPROVED WITH CONFIGURABLE INSTALLATION POLICY
+> Each signer generates and controls their own signing key on a separately protected offline device.
+> Require an encrypted offline backup held separately from the production application and database. Recovery must require the signer and an independently authorized custodian, under an audited recovery procedure.
+> Default key rotation interval: 12 months, with immediate replacement on suspected compromise.
+> The installation owner may initiate revocation, with independent approval for sensitive key recovery or retirement where required by existing policy.
+> Preserve public verification keys and the historical evidence needed to verify previously accepted signatures.
+> Do not invent physical backup locations or named custodians. Require the installation owner to configure and confirm them before activation.
+
+> D4 — Grant validity: APPROVED
+> An execution grant is valid for 2 hours, for exactly one approved replay, with exact binding to the plan, participants, closure, epoch contents and financial effects.
+> Prevent replay, substitution, partial execution and reuse. Revalidate the transaction state and approval conditions at execution time.
+
+> D5 — Suspected compromise: APPROVED
+> Allow audited, owner-authorized retroactive key revocation from the suspected compromise time.
+> Affected replay executions must be flagged and treated as untrusted for financial verification and fiscal closing.
+> Investigate and remediate using separately approved, auditable correcting transactions. Never silently rewrite posted history or automatically reverse complex financial entries without the required approvals.
+
+> D6 — Unsigned lifecycle steps: APPROVED
+> Plan creation, application approval, cancellation, rejection and stale marking do not require an offline execution signature.
+> They still require the existing authentication, RBAC, segregation of duties and audit protections.
+> Only the actual financial replay requires the independent signed authorization. Do not allow unsigned operations to change the books.
+> Activation remains CLOSED until the authorization design, cryptographic checks, independent security review, full replay/ledger test matrix, production caller and all required permissions are verified.
+
+
 Review history (records: `review-records/PR-218-t2-design-review.md`, `PR-218-t2-design-delta-confirmation.md`, `PR-218-t2-design-rev3-confirmation.md`):
 * Revision 1 (`a5010a5`): 1 Critical, 4 Medium, 3 Low.
 * Revision 2 (`d62bc29`): C1, M1 to M4, L1 and L2 resolved; L3 partly resolved. New: 3 Medium (N1 to N3) and 2 Low (N4, N5).
@@ -806,6 +845,8 @@ It stays inert while no key is registered. For (ii) it also contains the system 
 Plans with lines become executable only once CI writes matching journals. No grant or trigger change is needed for that.
 
 ## 14. Owner decisions needed before activation
+
+**Decided 2026-11-22: see the owner decision at the top of this document (D-248..D-253; register item T2-AUTHORIZATION-D1-D6). The questions below are kept as put to the owner.**
 
 The wording below is opusSEC's final wording (review record `PR-218-t2-design-rev3-confirmation.md`), adopted as is. Bracketed items are for the owner to fill in.
 
