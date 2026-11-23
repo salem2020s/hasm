@@ -12,7 +12,7 @@ public sealed record DestinationReport(CheckedDestination Destination, ReplicaSt
 /// </summary>
 public static class ReplicaStatusReport
 {
-    public static IReadOnlyList<DestinationReport> Evaluate(IReadOnlyList<CheckedDestination> destinations, string primaryRoot, SigningTrust? trust, DateTimeOffset now, TimeSpan defaultMaxAge)
+    public static IReadOnlyList<DestinationReport> Evaluate(IReadOnlyList<CheckedDestination> destinations, string primaryRoot, SigningTrust? trust, DateTimeOffset now, TimeSpan defaultMaxAge, ReplicaAuditState? audit = null)
     {
         var primaryRuns = RetentionInventory.Scan(BackupSet.RealPath(primaryRoot), trust).Runs;
         var primaryNewest = primaryRuns.Where(ReplicaStatus.IsReplicable).OrderByDescending(r => r.RunId, StringComparer.Ordinal).FirstOrDefault()?.RunId;
@@ -21,7 +21,7 @@ public static class ReplicaStatusReport
         {
             // existence is read NOW: a destination folder may have been created by the copy that just ran (the configuration was checked before it)
             var d = listed with { Exists = Directory.Exists(listed.ResolvedPath) };
-            var state = ReplicaStatus.Inspect(d, primaryRuns, trust, now);
+            var state = ReplicaStatus.Inspect(d, primaryRuns, trust, now, audit);
             var findings = ReplicaStatus.Contribution(state, primaryNewest, now, defaultMaxAge);
             var lines = new List<string>
             {
@@ -29,6 +29,7 @@ public static class ReplicaStatusReport
                 + (state.NewestCopyRunId is { } copy ? $"{copy}, finished {(now - state.NewestCopyFinishedUtc!.Value).TotalHours:0.0} hour(s) ago" : "none")
                 + $"; primary's newest replicable run {(primaryNewest is null ? "none" : state.HoldsPrimaryNewest ? "present" : "NOT present")}; result exit {BackupSeverity.Worst(findings.Select(f => f.ExitCode))}.",
             };
+            if (audit is not null) lines.Add($"  last re-verification: {(state.LastReverifiedUtc is { } at ? $"{(now - at).TotalHours:0.0} hour(s) ago" : "never")}");
             lines.AddRange(findings.Select(f => $"  [{(f.ExitCode == 1 ? "FAILURE" : "WARNING")}] {f.Code} destination={d.Destination.Id}"));
             reports.Add(new(d, state, findings, lines));
         }

@@ -228,6 +228,26 @@ public static partial class BackupDestinations
         return device;
     }
 
+    /// <summary>
+    /// True when <paramref name="path"/> itself is a mount point (a bind mount or a mounted volume where a plain folder is expected). Linux only (<c>/proc/self/mountinfo</c>); elsewhere false (a Windows
+    /// junction is a reparse point, which the callers check separately). Any read failure counts as "not detectable", not as a mount.
+    /// </summary>
+    internal static bool IsMountPoint(string path)
+    {
+        if (!OperatingSystem.IsLinux()) return false;
+        try
+        {
+            var real = Path.TrimEndingDirectorySeparator(BackupSet.RealPath(path));
+            foreach (var line in File.ReadAllLines("/proc/self/mountinfo"))
+            {
+                var f = line.Split(' ');
+                if (f.Length >= 5 && string.Equals(Path.TrimEndingDirectorySeparator(Unescape(f[4])), real, StringComparison.Ordinal)) return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or BackupException) { }
+        return false;
+    }
+
     /// <summary>mountinfo escapes space, tab, newline and backslash as three octal digits (<c>\040</c>).</summary>
     private static string Unescape(string s)
     {
