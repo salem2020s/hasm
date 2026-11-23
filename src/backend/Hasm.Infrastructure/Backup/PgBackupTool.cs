@@ -234,8 +234,7 @@ public sealed class PgBackupTool(HasmDatabaseOptions options, string? pgBinDirec
         {
             await using var conn = new NpgsqlConnection(options.BuildMaintenanceConnectionString());
             await conn.OpenAsync(CancellationToken.None);
-            await using var cmd = new NpgsqlCommand($"DROP DATABASE IF EXISTS {new NpgsqlCommandBuilder().QuoteIdentifier(database)} WITH (FORCE)", conn);
-            await cmd.ExecuteNonQueryAsync(CancellationToken.None);
+            await DatabaseDrop.ExecuteAsync(conn, database, ifExists: true, CancellationToken.None);
             return true;
         }
         catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException) { return false; }
