@@ -20,10 +20,16 @@ ALTER TABLE t_fc83d26e
 
 CREATE FUNCTION f_4fb9f223() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.c_320fa296 <> 0 THEN
+            RAISE EXCEPTION 'a user starts at security revision zero';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF NEW.c_320fa296 <> OLD.c_320fa296 AND NEW.c_320fa296 <> OLD.c_320fa296 + 1 THEN
         RAISE EXCEPTION 'the security revision of a user only stays or grows by exactly one';
     END IF;
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER r_ad5336a5 BEFORE UPDATE ON t_fc83d26e FOR EACH ROW EXECUTE FUNCTION f_4fb9f223();
+CREATE TRIGGER r_ad5336a5 BEFORE INSERT OR UPDATE ON t_fc83d26e FOR EACH ROW EXECUTE FUNCTION f_4fb9f223();

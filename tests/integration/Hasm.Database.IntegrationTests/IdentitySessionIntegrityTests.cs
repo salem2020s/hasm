@@ -292,7 +292,7 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
     }
 
     [PostgresRoleFact]
-    public async Task A_user_cannot_be_inserted_with_a_revision_at_or_above_the_bound_and_a_normal_insert_works()
+    public async Task A_user_cannot_be_inserted_with_a_revision_other_than_zero_and_a_user_inserted_at_zero_can_always_be_deactivated()
     {
         // delta review H1' of PR 227: the runtime role inserted a user at the bigint maximum, after which deactivation overflowed and the user stayed active
         await StartRestricted();
@@ -300,20 +300,22 @@ public class IdentitySessionIntegrityTests : CompanyRuntimeTestBase
         async Task<int> Insert(string login, string revision) => await Attack(
             $"INSERT INTO {U.Table} ({U.Id},{U.Login},{U.DisplayName},{U.PasswordHash},{U.State},{U.IsIdentityAdministrator},{U.CreatedAtUtc},{U.StateChangedAtUtc},{U.PasswordChangedAtUtc},{UI.SecurityRevision}) VALUES (@i,@l,@l,@h,0,false,now(),now(),now(),{revision})",
             ("i", Guid.NewGuid()), ("l", login), ("h", hash));
-        foreach (var bad in new[] { "9223372036854775807", "4611686018427387904", "-1" })
+        foreach (var bad in new[] { "9223372036854775807", "4611686018427387904", "4611686018427387903", "1", "-1" })
         {
             var ex = await Assert.ThrowsAsync<PostgresException>(() => Insert("bad" + Guid.NewGuid().ToString("N")[..8], bad));
-            Assert.Equal(PostgresErrorCodes.CheckViolation, ex.SqlState);
+            Assert.True(ex.SqlState is PostgresErrorCodes.CheckViolation or PostgresErrorCodes.RaiseException, bad);       // a start other than zero is refused (the trigger; the 2^62 CHECK is the second line)
         }
-        Assert.Equal(1, await Insert("good", "4611686018427387903"));                                                // the largest allowed value
         Assert.Equal(1, await Insert("zero", "0"));
+        // a runtime-inserted user at zero can be signed in, have its password changed, all sessions revoked and be deactivated: no bump ever fails
         var user = (await Store_FindAsync("zero"))!;
         await using var store = RuntimeStore();
-        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));     // and a bump from a normal start works
-        // an UPDATE past the bound is refused as well (the +1 guard and the bound agree)
-        var edge = (await Store_FindAsync("good"))!;
-        var ex2 = await Assert.ThrowsAsync<PostgresException>(() => Attack($"UPDATE {U.Table} SET {UI.SecurityRevision} = {UI.SecurityRevision} + 1 WHERE {U.Id} = @u", ("u", edge.Id)));
-        Assert.Equal(PostgresErrorCodes.CheckViolation, ex2.SqlState);
+        var auth = RuntimeAuth(store);
+        var login = Assert.IsType<LoginOutcome.Success>(await auth.LoginAsync("zero", Pw, SessionClient.Web, "10.0.0.9"));
+        Assert.Equal(ChangePasswordStatus.Changed, (await auth.ChangePasswordAsync((await auth.AuthenticateAsync(login.Token))!, Pw, "Replacement-Passphrase-3")).Status);
+        await store.RevokeUserSessionsAsync(user.Id, SessionRevocation.Administrative);
+        Assert.Equal(SetStateOutcome.Changed, await store.SetStateAsync(null, user.Id, UserState.Disabled));
+        Assert.Equal(UserState.Disabled, (await Store_FindAsync("zero"))!.State);
+        Assert.Equal(3L, await Scalar<long>($"SELECT {UI.SecurityRevision} FROM {U.Table} WHERE {U.Id} = @u", ("u", user.Id)));   // one bump each: password change, revoke-all, deactivation
     }
 
     private Task<UserRecord?> Store_FindAsync(string login) => Store.FindUserByLoginAsync(login);

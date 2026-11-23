@@ -48,13 +48,19 @@ ALTER TABLE [[User.Table]]
 
 CREATE FUNCTION {{UserIntegrity.FnRevisionGuard}}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.{{UserIntegrity.SecurityRevision}} <> 0 THEN
+            RAISE EXCEPTION 'a user starts at security revision zero';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF NEW.{{UserIntegrity.SecurityRevision}} <> OLD.{{UserIntegrity.SecurityRevision}} AND NEW.{{UserIntegrity.SecurityRevision}} <> OLD.{{UserIntegrity.SecurityRevision}} + 1 THEN
         RAISE EXCEPTION 'the security revision of a user only stays or grows by exactly one';
     END IF;
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER {{UserIntegrity.TrRevisionGuard}} BEFORE UPDATE ON [[User.Table]] FOR EACH ROW EXECUTE FUNCTION {{UserIntegrity.FnRevisionGuard}}();
+CREATE TRIGGER {{UserIntegrity.TrRevisionGuard}} BEFORE INSERT OR UPDATE ON [[User.Table]] FOR EACH ROW EXECUTE FUNCTION {{UserIntegrity.FnRevisionGuard}}();
 `;
 function prefixOf(token) {
   const last = token.split(".").pop();

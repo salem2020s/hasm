@@ -49,15 +49,16 @@ public class IdentityIntegritySchemaDerivationTests
         Assert.Single(Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b"));
         Assert.Single(Regex.Matches(sql, @"\bCREATE\s+TRIGGER\b"));
         Assert.Equal(4, Regex.Matches(sql, @"\bADD\s+COLUMN\b").Count);
-        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|GRANT|REVOKE|INSERT|DELETE|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|current_setting|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_", RegexOptions.IgnoreCase), sql.Replace("BEFORE UPDATE ON", "").Replace("NEW.", ""));
+        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|GRANT|REVOKE|INSERT|DELETE|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|current_setting|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_", RegexOptions.IgnoreCase), sql.Replace("BEFORE INSERT OR UPDATE ON", "").Replace("NEW.", ""));
         Assert.Empty(Regex.Matches(sql, @"\bpg_\w+"));                                                          // no catalog name at all
         // every new column is NULLable on the session table (a legacy row stays valid as a row and is simply never honoured) and the user revision starts at zero
         Assert.Contains($"{SystemSchema.SessionIntegrity.Tag} bytea NULL", sql);
         Assert.Contains($"{SystemSchema.SessionIntegrity.UserRevisionAtIssue} bigint NULL", sql);
         Assert.Contains($"{SystemSchema.UserIntegrity.SecurityRevision} bigint NOT NULL DEFAULT 0", sql);
         Assert.Contains($"{SystemSchema.UserIntegrity.SecurityRevision} < 4611686018427387904", sql);                  // the bound (2^62) applies to INSERT as well: no row can start where a bump overflows
+        Assert.Contains("NEW." + SystemSchema.UserIntegrity.SecurityRevision + " <> 0", sql);                          // a user starts at zero: no start where the bump can fail
         // the database enforces what needs no key: the revision stays or grows by exactly one
         Assert.Contains($"NEW.{SystemSchema.UserIntegrity.SecurityRevision} <> OLD.{SystemSchema.UserIntegrity.SecurityRevision} + 1", sql);
-        Assert.Contains($"CREATE TRIGGER {SystemSchema.UserIntegrity.TrRevisionGuard} BEFORE UPDATE ON {SystemSchema.User.Table}", sql);
+        Assert.Contains($"CREATE TRIGGER {SystemSchema.UserIntegrity.TrRevisionGuard} BEFORE INSERT OR UPDATE ON {SystemSchema.User.Table}", sql);
     }
 }
