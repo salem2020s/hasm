@@ -6,7 +6,13 @@ namespace Hasm.Infrastructure.Tests;
 /// <summary>
 /// The statement sequence of <see cref="DatabaseDrop"/> over a fake executor: FORCE; on 42501 the account's own sessions in that database are terminated and the plain drop follows; on 55006 from that,
 /// FORCE once more; everything else is thrown unchanged.
+/// <para>
+/// In the serial collection because of the counter test: <see cref="DatabaseDrop.Fallbacks"/> is one counter for the whole process, and the test asserts its EXACT steps. Parallelization is disabled for
+/// this collection, so no other class of the assembly runs while this one does (xUnit runs such collections after the parallel ones, one class at a time): a later unit class that reaches the
+/// helper's fallback cannot move the counter between two assertions here (review L5 of PR 241). The assertions are unchanged.
+/// </para>
 /// </summary>
+[Collection(SerialMeasurementCollection.Name)]
 public class DatabaseDropTests
 {
     private const string Name = "\"hasm_t_x\"";
@@ -107,7 +113,7 @@ public class DatabaseDropTests
     [Fact]
     public async Task The_fallback_is_counted_for_a_drop_that_took_it_and_not_for_one_whose_forced_drop_succeeded_or_failed_otherwise()
     {
-        // the counter is per process and other test classes do not drop databases through the helper; within this class xunit runs the tests one after the other
+        // the counter is per process: exact here because this class runs alone (the serial collection, see the class comment) and xunit runs the tests of one class one after the other
         var before = DatabaseDrop.Fallbacks;
         await Run(false, [null]);
         await Run(false, Pg("55006"));

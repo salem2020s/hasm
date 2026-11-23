@@ -29,6 +29,36 @@ public sealed class ReplicaDeletionEvidenceTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(work, true); } catch (IOException) { } }
 
+    [Fact]
+    public void A_primary_root_that_is_a_file_system_root_is_evaluated_and_never_refused_as_not_fully_qualified()
+    {
+        // review M1 of PR 243: RealPath gives a file-system root without its separator ("" for "/", "E:" for "E:\"), which the required-root guard of ReplicationPending refuses; the callers pass the
+        // qualified form. The rule itself, for both platforms' forms (the Windows form is covered HERE only: a Windows root cannot be resolved or scanned on Linux)
+        Assert.Equal("/", BackupSet.QualifiedRoot("", '/'));
+        Assert.Equal("E:\\", BackupSet.QualifiedRoot("E:", '\\'));
+        Assert.Equal("c:\\", BackupSet.QualifiedRoot("c:", '\\'));
+        Assert.Equal("E:\\backups", BackupSet.QualifiedRoot("E:\\backups", '\\'));                          // everything that is not a bare root is returned as it is
+        Assert.Equal("\\\\nas\\share", BackupSet.QualifiedRoot("\\\\nas\\share", '\\'));
+        Assert.Equal("/srv/backups", BackupSet.QualifiedRoot("/srv/backups", '/'));
+        var fsRoot = Path.GetPathRoot(Path.GetFullPath(work))!;                                            // "/" here, "C:\" on Windows
+        var resolved = BackupSet.RealPath(fsRoot);
+        Assert.False(Path.IsPathFullyQualified(resolved));                                                 // the premise: the resolved root alone is not fully qualified
+        Assert.Equal(fsRoot, BackupSet.QualifiedRoot(resolved));
+        Assert.True(Path.IsPathFullyQualified(BackupSet.QualifiedRoot(resolved)));
+
+        // backup-status with NO destination configured (the default): the readiness of the primary is reported, as before the guard existed
+        var none = DeletionReadiness.Locations(new RetentionOptions(), [], fsRoot, null, null, auditReadable: true);
+        Assert.Equal(["Deletion readiness: primary: blocked (retention_deletion_inactive, opt_in_absent, restore_safeguards_missing, destination_protection_missing)"], DeletionReadiness.Lines(none));
+        // and with a destination (backup-status with destinations, and the readiness part of backup-retention-plan)
+        var nas = Root("nas-root-primary");
+        var one = DeletionReadiness.Locations(new RetentionOptions(), [new CheckedDestination(new BackupDestination("nas", nas, BackupDestinationKind.Network, null, null, null), nas, true, false)], fsRoot, trust, null, true);
+        Assert.Equal(["primary", "nas"], one.Select(l => l.Location));
+        Assert.DoesNotContain("replication_pending", one[0].Reasons);                                      // no run under the root: nothing pending
+        // the library call both commands end in, with the root as the callers now pass it
+        Assert.Empty(ReplicationPending.Evaluate([], [], trust, null, null, BackupSet.QualifiedRoot(resolved)).RunIds);
+        Assert.Throws<ArgumentException>(() => ReplicationPending.Evaluate([], [], trust, null, null, resolved));   // the guard itself is unchanged: fail closed for a caller that does not qualify the root
+    }
+
     private string Root(string name) { var p = Path.Combine(work, name); Directory.CreateDirectory(p); return p; }
 
     /// <summary>Writes a really signed run status for <paramref name="runId"/> into <paramref name="dir"/> and returns its SHA-256.</summary>

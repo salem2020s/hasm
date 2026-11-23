@@ -296,6 +296,16 @@ public static class BackupSet
         throw new BackupException("path_too_deep");
     }
 
+    /// <summary>
+    /// The fully qualified form of a path <see cref="RealPath"/> returned. RealPath gives a file-system root WITHOUT its separator (the empty string for <c>/</c>, <c>E:</c> for <c>E:\</c>), which is not a
+    /// fully qualified path (and <c>E:</c> combined with a name would be drive-relative); a root gets its separator back here and every other path is returned as it is.
+    /// </summary>
+    internal static string QualifiedRoot(string resolved) => QualifiedRoot(resolved, Path.DirectorySeparatorChar);
+
+    /// <summary>The rule over an explicit separator (so that the Windows form is testable on every platform).</summary>
+    internal static string QualifiedRoot(string resolved, char separator) =>
+        resolved.Length == 0 || resolved is [>= 'A' and <= 'Z' or >= 'a' and <= 'z', ':'] ? resolved + separator : resolved;
+
     private static string RealPathOnce(string path)
     {
         var full = Path.GetFullPath(path);
