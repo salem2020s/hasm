@@ -73,7 +73,7 @@ public class CostFlowSnapshotTests : CostingTestBase
         var b = await Sql<Guid>($"SELECT {LayerTable.Id} FROM {LayerTable.Table} WHERE {LayerTable.ItemId}='{Fifo2.Id}' AND {LayerTable.WarehouseId}='{W2.Id}'");
         var c = await Sql<Guid>($"SELECT {LayerTable.Id} FROM {LayerTable.Table} WHERE {LayerTable.WarehouseId}='{w3.Id}'");
         // Deliberately corrupt only this disposable test database, restoring the guard atomically.
-        await Sql($"BEGIN; ALTER TABLE {LayerTable.Table} DISABLE TRIGGER {LayerTable.GuardRow}; UPDATE {LayerTable.Table} SET {LayerTable.SourceLayerId}=CASE WHEN {LayerTable.Id}='{a}' THEN '{b}'::uuid ELSE '{c}'::uuid END WHERE {LayerTable.Id} IN ('{a}','{b}'); ALTER TABLE {LayerTable.Table} ENABLE TRIGGER {LayerTable.GuardRow}; COMMIT;");
+        await Sql($"BEGIN; ALTER TABLE {LayerTable.Table} DISABLE TRIGGER {LayerTable.GuardRow}; UPDATE {LayerTable.Table} SET {LayerTable.SourceLayerId}=CASE WHEN {LayerTable.Id}='{a}' THEN '{b}'::uuid ELSE '{c}'::uuid END WHERE {LayerTable.Id} IN ('{a}','{b}'); SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {LayerTable.Table} ENABLE TRIGGER {LayerTable.GuardRow}; COMMIT;");
         var (viewer, role) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
         Assert.True((await Rbac.AssignRoleAsync(Admin.Id, Company.Id, viewer.Id, role, ScopeKind.Warehouse, W2.Id)).IsOk);
         // Grant the intermediate warehouse but deliberately not the final warehouse.
@@ -293,7 +293,7 @@ public class CostFlowSnapshotTests : CostingTestBase
             "consumption-amount" => (cc, CompanySchema.CostConsumption.GuardRow, $"{CompanySchema.CostConsumption.Amount}=2"),
             _ => (cc, CompanySchema.CostConsumption.GuardRow, $"{CompanySchema.CostConsumption.Restores}=true")
         };
-        await Sql($"BEGIN; ALTER TABLE {table} DISABLE TRIGGER {trigger}; UPDATE {table} SET {update}; ALTER TABLE {table} ENABLE TRIGGER {trigger}; COMMIT;");
+        await Sql($"BEGIN; ALTER TABLE {table} DISABLE TRIGGER {trigger}; UPDATE {table} SET {update}; SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {table} ENABLE TRIGGER {trigger}; COMMIT;");
         var before = await Footprint();
         Reject(await Read(Reader()), ConfigStatus.Conflict, "impact_history_inconsistent");
         Assert.Equal(before, await Footprint());
@@ -432,13 +432,13 @@ public class CostFlowSnapshotTests : CostingTestBase
         await IssueOf(Fifo, 1); await Receive(Fifo2, 1, 3, W2); var foreign = await Pos(Fifo2, W2);
         var ce = CompanySchema.CostEntry.Table; var cc = CompanySchema.CostConsumption.Table;
         if (corruption == "multiline-child-position")
-            await Sql($"BEGIN; ALTER TABLE {ce} DISABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; UPDATE {ce} SET {CompanySchema.CostEntry.PositionId}='{foreign.Id}',{CompanySchema.CostEntry.Seq}=99 WHERE {CompanySchema.CostEntry.Id}=(SELECT min({CompanySchema.CostEntry.Id}) FROM {ce}); ALTER TABLE {ce} ENABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; COMMIT;");
+            await Sql($"BEGIN; ALTER TABLE {ce} DISABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; UPDATE {ce} SET {CompanySchema.CostEntry.PositionId}='{foreign.Id}',{CompanySchema.CostEntry.Seq}=99 WHERE {CompanySchema.CostEntry.Id}=(SELECT min({CompanySchema.CostEntry.Id}) FROM {ce}); SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {ce} ENABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; COMMIT;");
         else
         {
             var update = corruption == "foreign-consumption-layer"
                 ? $"{CompanySchema.CostConsumption.LayerId}=(SELECT {LayerTable.Id} FROM {LayerTable.Table} WHERE {LayerTable.ItemId}='{Fifo2.Id}')"
                 : $"{CompanySchema.CostConsumption.EntryId}=(SELECT {CompanySchema.CostEntry.Id} FROM {ce} WHERE {CompanySchema.CostEntry.ItemId}='{Fifo2.Id}')";
-            await Sql($"BEGIN; ALTER TABLE {cc} DISABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; UPDATE {cc} SET {update}; ALTER TABLE {cc} ENABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; COMMIT;");
+            await Sql($"BEGIN; ALTER TABLE {cc} DISABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; UPDATE {cc} SET {update}; SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {cc} ENABLE TRIGGER {CompanySchema.CostConsumption.GuardRow}; COMMIT;");
         }
         var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
         var before = await Footprint();
@@ -458,7 +458,7 @@ public class StockDocumentCostFlowSnapshotTests : StockPostingTestBase
         Ok(await Post(await Approved(Transfer(W1, W2, "2026-03-11", L(Avg, Pcs, 6)))));
         var position = await Pos(Avg);
         var e = CompanySchema.CostEntry.Table;
-        await Sql($"BEGIN; ALTER TABLE {e} DISABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; UPDATE {e} SET {CompanySchema.CostEntry.PositionId}='{position.Id}',{CompanySchema.CostEntry.WarehouseId}='{W1.Id}',{CompanySchema.CostEntry.Seq}=99 WHERE {CompanySchema.CostEntry.Kind}=4; ALTER TABLE {e} ENABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; COMMIT;");
+        await Sql($"BEGIN; ALTER TABLE {e} DISABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; UPDATE {e} SET {CompanySchema.CostEntry.PositionId}='{position.Id}',{CompanySchema.CostEntry.WarehouseId}='{W1.Id}',{CompanySchema.CostEntry.Seq}=99 WHERE {CompanySchema.CostEntry.Kind}=4; SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {e} ENABLE TRIGGER {CompanySchema.CostEntry.GuardRow}; COMMIT;");
         var (viewer, _) = await Member([PermissionCatalog.Codes.StockBalanceView], ScopeKind.Warehouse, W1.Id);
         var before = await Counts(); var reader = new CostFlowSnapshotService(Resolver, Rbac);
         var denied = await reader.LoadAsync(viewer.Id, Company.Id, Avg.Id, W1.Id);

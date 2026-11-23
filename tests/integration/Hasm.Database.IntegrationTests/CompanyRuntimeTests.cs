@@ -175,7 +175,7 @@ public class CompanyRuntimeResolutionTests : CompanyRuntimeTestBase
 
         var foreign = await ReadyCompany();
         await InCompany(foreign.PhysicalDatabaseName,
-            $"ALTER TABLE {I.Table} DISABLE TRIGGER {I.GuardTrigger}; UPDATE {I.Table} SET {I.CompanyId} = gen_random_uuid(); ALTER TABLE {I.Table} ENABLE TRIGGER {I.GuardTrigger}");
+            $"ALTER TABLE {I.Table} DISABLE TRIGGER {I.GuardTrigger}; UPDATE {I.Table} SET {I.CompanyId} = gen_random_uuid(); SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {I.Table} ENABLE TRIGGER {I.GuardTrigger}");
         Assert.Equal(CompanyDatabaseException.SchemaIncompatible,
             (await Assert.ThrowsAsync<CompanyDatabaseException>(() => SinglePrincipalResolver(foreign).OpenAsync(foreign.Id))).Code);
     }
@@ -382,7 +382,7 @@ public class CompanyMigrationTests : CompanyRuntimeTestBase
         await StartCompanies();
         var foreign = await ReadyCompany(OnlyFirst);
         await InCompany(foreign.PhysicalDatabaseName,
-            $"ALTER TABLE {I.Table} DISABLE TRIGGER {I.GuardTrigger}; UPDATE {I.Table} SET {I.CompanyId} = gen_random_uuid(); ALTER TABLE {I.Table} ENABLE TRIGGER {I.GuardTrigger}");
+            $"ALTER TABLE {I.Table} DISABLE TRIGGER {I.GuardTrigger}; UPDATE {I.Table} SET {I.CompanyId} = gen_random_uuid(); SET CONSTRAINTS ALL IMMEDIATE; ALTER TABLE {I.Table} ENABLE TRIGGER {I.GuardTrigger}");
         var newer = await ReadyCompany(OnlyFirst);
         await InCompany(newer.PhysicalDatabaseName, $"INSERT INTO {SystemSchema.MigrationJournalTable} VALUES (99, '0099_unknown.sql', repeat('a', 64), now())");
         var edited = await ReadyCompany(OnlyFirst);
