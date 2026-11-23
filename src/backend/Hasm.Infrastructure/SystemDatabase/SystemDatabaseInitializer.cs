@@ -50,6 +50,9 @@ public sealed class SystemDatabaseInitializer(HasmDatabaseOptions options)
         {
             await using var create = new NpgsqlCommand($"CREATE DATABASE {quoted}", conn);
             await create.ExecuteNonQueryAsync(ct);
+            // PostgreSQL grants PUBLIC CONNECT, TEMPORARY on every new database: remove them (the owner keeps its own). grant-system-runtime later grants the runtime account CONNECT only.
+            await using var restrict = new NpgsqlCommand($"REVOKE ALL ON DATABASE {quoted} FROM PUBLIC", conn);
+            await restrict.ExecuteNonQueryAsync(ct);
             return true;
         }
         catch (PostgresException ex) when (IsConcurrentCreation(ex))
