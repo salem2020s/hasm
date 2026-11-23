@@ -151,7 +151,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1737 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1738 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -278,7 +278,7 @@ jobs:
                 # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
                 "BackupRetentionTests": 12,
                 # Phase 4.3 slice 8 (multiple backup destinations; no migration): S8a destination configuration, safety checks and the per-destination status; S8b the copy engine, backup-replicate and replication at the end of backup-run (audit 2040, 2041, 2043).
-                "BackupReplicationTests": 3, "BackupReplicaCopyTests": 10, "BackupReplicaVerifyTests": 7,
+                "BackupReplicationTests": 3, "BackupReplicaCopyTests": 10, "BackupReplicaVerifyTests": 8,
                 # Release 1 acceptance evidence for owner item 11 (D-088): real encrypted backup, trial restore with the recovery key, tampering and downgrade refusals, key rotation, key-export round trip (no migration).
                 "BackupAcceptanceEvidenceTests": 5,
                 # Acceptance scenario 21.10 and the upgrade test category: opaque physical names and intact schema on a new database, an upgrade from company level 3 and a trial restore (no migration).
