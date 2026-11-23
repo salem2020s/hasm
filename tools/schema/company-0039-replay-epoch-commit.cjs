@@ -33,7 +33,7 @@ const TEMPLATE = `-- Migration ${MIGRATION}: the commit-time checks of a replay 
 -- WHAT THIS IS: at commit every execution of the transaction must have exactly ONE grant use whose grant is the execution's (plan and executor), has not expired (database clock, epoch seconds), whose key was not revoked
 -- before the grant was accepted, whose signature VERIFIES over the message rebuilt NOW from the rows (a closure, line or approval changed after the grant was accepted fails), and whose signed epoch digest equals the SHA-256 of the
 -- EPOCH TEXT of design 4.4 rebuilt from the rows this execution wrote: operations (O), entries (E), layers (L), consumptions (C), the remaining figures of every layer touched (R) and the totals of every position touched (P).
--- Every position of the epoch must also end exactly at its last epoch entry's running figures. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
+-- A position's final figures are bound by its P line (the position row) and by the running figures of its last entry (E line); the cost position guard of 0014 keeps the two equal, so a mismatch cannot exist in the rows. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
 -- The execution trigger is named so that it fires AFTER the completeness trigger of 0036 on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
 -- fixed formats (lower-case uuids, decimal integers, numeric at its declared scale 10 or 6, dates by to_char with a fixed pattern, LF as chr(10)), so no session setting can change a byte.
 
@@ -111,7 +111,6 @@ DECLARE
     k public.[[ReplaySignerKey.Table]]%ROWTYPE;
     v_uses bigint;
     v_head text;
-    r record;
 BEGIN
     SELECT * INTO x FROM public.[[CompensationPlanExecution.Table]] WHERE [[CompensationPlanExecution.Id]] = p_execution;
     IF NOT FOUND THEN RAISE EXCEPTION 'execution_not_found'; END IF;
@@ -132,19 +131,6 @@ BEGIN
             g.[[ReplayExecutionGrant.Id]], g.[[ReplayExecutionGrant.SignerUserId]], g.[[ReplayExecutionGrant.KeyId]], g.[[ReplayExecutionGrant.NotBefore]], g.[[ReplayExecutionGrant.NotAfter]]), 'UTF8')) THEN
         RAISE EXCEPTION 'grant_signature_invalid_at_commit';
     END IF;
-    -- every position of the epoch ends exactly at its last epoch entry's running figures and sequence
-    FOR r IN
-        SELECT e.[[CostEntry.ItemId]] AS item, e.[[CostEntry.WarehouseId]] AS wh, max(e.[[CostEntry.Seq]]) AS last_seq
-          FROM public.[[CostEntry.Table]] e JOIN public.[[EpochMember.Table]] m ON m.[[EpochMember.OperationId]] = e.[[CostEntry.OperationId]] AND m.[[EpochMember.ExecutionId]] = p_execution
-         GROUP BY e.[[CostEntry.ItemId]], e.[[CostEntry.WarehouseId]]
-    LOOP
-        IF NOT EXISTS (SELECT 1 FROM public.[[CostPosition.Table]] po
-                         JOIN public.[[CostEntry.Table]] l ON l.[[CostEntry.ItemId]] = po.[[CostPosition.ItemId]] AND l.[[CostEntry.WarehouseId]] = po.[[CostPosition.WarehouseId]] AND l.[[CostEntry.Seq]] = po.[[CostPosition.LastSeq]]
-                        WHERE po.[[CostPosition.ItemId]] = r.item AND po.[[CostPosition.WarehouseId]] = r.wh AND po.[[CostPosition.LastSeq]] = r.last_seq
-                          AND po.[[CostPosition.Quantity]] = l.[[CostEntry.QuantityAfter]] AND po.[[CostPosition.Value]] = l.[[CostEntry.ValueAfter]]) THEN
-            RAISE EXCEPTION 'epoch_position_disagrees_with_its_last_entry';
-        END IF;
-    END LOOP;
     -- the epoch text rebuilt from the rows hashes to the signed epoch digest
     IF encode(sha256(convert_to(public.{{ReplayEpoch.FnRowsText}}(p_execution), 'UTF8')), 'hex') <> g.[[ReplayExecutionGrant.EpochDigest]]::text THEN RAISE EXCEPTION 'epoch_differs_from_the_signed_epoch'; END IF;
 END;

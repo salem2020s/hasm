@@ -46,10 +46,12 @@ public class ReplayEpochCommitTests : PlanExecutionTestBase
     /// <summary>A FIFO epoch of the smallest size with every layer effect: a receipt of 10 / 100.00 (layer 1), an issue of 4 / 40.00 on the 12th; back-dated receipt of 10 / 200.00 on the 11th (layer 2). Storno of the issue gives its 4 / 40.00 back to layer 1, the event makes layer 2, the rebook consumes layer 1 again.</summary>
     private async Task<(Simple S, Guid Layer1, Guid Storno, Guid Event, Guid Rebook)> FifoEpoch()
     {
+        await ReceiveDoc(Fifo, 5m, 50m, "2026-03-09");                                   // a layer that is consumed completely before the epoch: it stays at remaining 0 and is no open layer
+        await IssueDoc(Fifo, 5m, "2026-03-09");
         var receipt = await ReceiveDoc(Fifo, 10m, 100m, "2026-03-10");
         var issue = await IssueDoc(Fifo, 4m, "2026-03-12");
         var issueEntry = await EntryOf(issue.CostOperationId);
-        var layer1 = await Sql<Guid>($"SELECT {CL.Id} FROM {CL.Table} WHERE {CL.ItemId} = '{Fifo.Id}'");
+        var layer1 = await Sql<Guid>($"SELECT {CL.Id} FROM {CL.Table} WHERE {CL.ItemId} = '{Fifo.Id}' AND {CL.OriginalQuantity} = 10");
         var p = await ApprovedPlan(Fifo, "2026-03-11");
         Guid s = Guid.NewGuid(), e = Guid.NewGuid(), b = Guid.NewGuid();
         string Consumption(Guid op, bool restores) => $"INSERT INTO {CS.Table} ({CS.EntryId}, {CS.LayerId}, {CS.Quantity}, {CS.Amount}, {CS.Restores}) VALUES ({EntryId(op)}, '{layer1}', 4, 40, {(restores ? "true" : "false")})";
@@ -59,7 +61,7 @@ public class ReplayEpochCommitTests : PlanExecutionTestBase
         script.Add(("storno", [OpS(s, 2, Day3, "replay-storno", null), Member(s, p.Execution, 1, issue.CostOperationId), .. Move(s, Fifo.Id, W1.Id, 2, 1, Day3, 4m, 40m, issueEntry), Consumption(s, true), Layer1Delta("+")]));
         script.Add(("event", [OpS(e, 1, Day2, "stock-posting", p.Posting), Member(e, p.Execution, 2, null), .. Move(e, Fifo.Id, W1.Id, 1, 1, Day2, 10m, 200m),
             $"INSERT INTO {CL.Table} ({CL.PositionId}, {CL.ItemId}, {CL.WarehouseId}, {CL.EntryId}, {CL.Seq}, {CL.OriginalQuantity}, {CL.OriginalAmount}, {CL.RemainingQuantity}, {CL.RemainingAmount}, {CL.SourceLayerId}, {CL.CreatedAtUtc}) " +
-            $"SELECT {PO.Id}, {PO.ItemId}, {PO.WarehouseId}, {EntryId(e)}, 2, 10, 200, 10, 200, NULL, now() FROM {PO.Table} WHERE {PO.ItemId} = '{Fifo.Id}' AND {PO.WarehouseId} = '{W1.Id}'",
+            $"SELECT {PO.Id}, {PO.ItemId}, {PO.WarehouseId}, {EntryId(e)}, 3, 10, 200, 10, 200, '{layer1}', now() FROM {PO.Table} WHERE {PO.ItemId} = '{Fifo.Id}' AND {PO.WarehouseId} = '{W1.Id}'",
             PostingRow(p, e, Day2, 200m)]));
         script.Add(("rebook", [OpS(b, 2, Day3, "replay-rebook", null), Member(b, p.Execution, 3, issue.CostOperationId), .. Move(b, Fifo.Id, W1.Id, 2, -1, Day3, 4m, 40m), Consumption(b, false), Layer1Delta("-")]));
         script.Add(("lineage", [Lineage(issueEntry, s, b, p.Execution)]));
@@ -73,11 +75,11 @@ public class ReplayEpochCommitTests : PlanExecutionTestBase
         var item = Fifo.Id; var w = W1.Id; var original = s.Issue.CostOperationId;
         return new EpochTextInput(
             [new(1, original, 2, Day3, null, "replay-storno", null, $"epoch-{storno:N}", Executor), new(2, null, 1, Day2, null, "stock-posting", "execution-posting", $"epoch-{evt:N}", Executor), new(3, original, 2, Day3, null, "replay-rebook", null, $"epoch-{rebook:N}", Executor)],
-            [new(item, w, 3, 1, s.IssueEntry, 2, 1, Day3, 4m, 40m, 10m, 100m), new(item, w, 4, 2, null, 1, 1, Day2, 10m, 200m, 20m, 300m), new(item, w, 5, 3, s.IssueEntry, 2, -1, Day3, 4m, 40m, 16m, 260m)],
-            [new(item, w, 2, 4, 10m, 200m, null, null, null)],
-            [new(item, w, 3, item, w, 1, 4m, 40m, true), new(item, w, 5, item, w, 1, 4m, 40m, false)],
-            [new(item, w, 1, 6m, 60m), new(item, w, 2, 10m, 200m)],
-            [new(item, w, 2, 5, 16m, 260m, 2)]);
+            [new(item, w, 5, 1, s.IssueEntry, 2, 1, Day3, 4m, 40m, 10m, 100m), new(item, w, 6, 2, null, 1, 1, Day2, 10m, 200m, 20m, 300m), new(item, w, 7, 3, s.IssueEntry, 2, -1, Day3, 4m, 40m, 16m, 260m)],
+            [new(item, w, 3, 6, 10m, 200m, item, w, 2)],
+            [new(item, w, 5, item, w, 2, 4m, 40m, true), new(item, w, 7, item, w, 2, 4m, 40m, false)],
+            [new(item, w, 2, 6m, 60m), new(item, w, 3, 10m, 200m)],
+            [new(item, w, 4, 7, 16m, 260m, 2)]);
     }
 
     [PostgresRoleFact]

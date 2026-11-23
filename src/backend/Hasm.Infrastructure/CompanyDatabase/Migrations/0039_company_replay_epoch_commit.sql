@@ -6,7 +6,7 @@
 -- WHAT THIS IS: at commit every execution of the transaction must have exactly ONE grant use whose grant is the execution's (plan and executor), has not expired (database clock, epoch seconds), whose key was not revoked
 -- before the grant was accepted, whose signature VERIFIES over the message rebuilt NOW from the rows (a closure, line or approval changed after the grant was accepted fails), and whose signed epoch digest equals the SHA-256 of the
 -- EPOCH TEXT of design 4.4 rebuilt from the rows this execution wrote: operations (O), entries (E), layers (L), consumptions (C), the remaining figures of every layer touched (R) and the totals of every position touched (P).
--- Every position of the epoch must also end exactly at its last epoch entry's running figures. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
+-- A position's final figures are bound by its P line (the position row) and by the running figures of its last entry (E line); the cost position guard of 0014 keeps the two equal, so a mismatch cannot exist in the rows. The journal binding (design 4.8) is slice A4. A deviation anywhere (one amount, one quantity, an extra or missing row) changes the text and is refused.
 -- The execution trigger is named so that it fires AFTER the completeness trigger of 0036 on the same event. Name resolution (design 4.5): no search_path and no SECURITY DEFINER; every relation is written public.<name>; the text uses only
 -- fixed formats (lower-case uuids, decimal integers, numeric at its declared scale 10 or 6, dates by to_char with a fixed pattern, LF as chr(10)), so no session setting can change a byte.
 
@@ -84,7 +84,6 @@ DECLARE
     k public.t_23985c22%ROWTYPE;
     v_uses bigint;
     v_head text;
-    r record;
 BEGIN
     SELECT * INTO x FROM public.t_5b1a018a WHERE c_02771c43 = p_execution;
     IF NOT FOUND THEN RAISE EXCEPTION 'execution_not_found'; END IF;
@@ -105,19 +104,6 @@ BEGIN
             g.c_40570bad, g.c_2394a822, g.c_e660f536, g.c_31ac9d98, g.c_ff742bad), 'UTF8')) THEN
         RAISE EXCEPTION 'grant_signature_invalid_at_commit';
     END IF;
-    -- every position of the epoch ends exactly at its last epoch entry's running figures and sequence
-    FOR r IN
-        SELECT e.c_9ee52677 AS item, e.c_0f65c03c AS wh, max(e.c_2affbce9) AS last_seq
-          FROM public.t_bc727c1d e JOIN public.t_3bd31c9d m ON m.c_317cffcf = e.c_eb34b7d8 AND m.c_e909f2d4 = p_execution
-         GROUP BY e.c_9ee52677, e.c_0f65c03c
-    LOOP
-        IF NOT EXISTS (SELECT 1 FROM public.t_a2903683 po
-                         JOIN public.t_bc727c1d l ON l.c_9ee52677 = po.c_3380c61e AND l.c_0f65c03c = po.c_f0a91938 AND l.c_2affbce9 = po.c_ad2af2e5
-                        WHERE po.c_3380c61e = r.item AND po.c_f0a91938 = r.wh AND po.c_ad2af2e5 = r.last_seq
-                          AND po.c_8e61b559 = l.c_3437e13d AND po.c_2e1921d0 = l.c_30804877) THEN
-            RAISE EXCEPTION 'epoch_position_disagrees_with_its_last_entry';
-        END IF;
-    END LOOP;
     -- the epoch text rebuilt from the rows hashes to the signed epoch digest
     IF encode(sha256(convert_to(public.f_0eb1b095(p_execution), 'UTF8')), 'hex') <> g.c_4e121a52::text THEN RAISE EXCEPTION 'epoch_differs_from_the_signed_epoch'; END IF;
 END;
