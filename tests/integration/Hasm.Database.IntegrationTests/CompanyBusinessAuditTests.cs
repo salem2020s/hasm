@@ -284,7 +284,10 @@ public class CompanyBusinessAuditTests : CompanyRuntimeTestBase
         var s = await Prepare();
         var good = (await PostAndRead(s));
         string Insert(Guid company, string stream, short type) =>
-            $"INSERT INTO {B.Table} ({AuditTableMap.Business.SelectColumns.Replace("NULL::bigint, ", "")}) VALUES ('{stream}', 99, gen_random_uuid(), now(), {type}, '{company}', NULL, NULL, NULL, NULL, 1, 'k1', '\\x{Convert.ToHexString(good.Hash)}', '\\x{Convert.ToHexString(good.Hash)}', '\\x{Convert.ToHexString(good.Hash)}')";
+            // linked as the audit head guard requires (the next sequence and the head's hash on this company's own stream; sequence 1 and the genesis hash on any other stream), so the probes reach the constraints they are about
+            $"INSERT INTO {B.Table} ({AuditTableMap.Business.SelectColumns.Replace("NULL::bigint, ", "")}) VALUES ('{stream}', {(stream == s.Stream.Key ? 2 : 1)}, gen_random_uuid(), now(), {type}, '{company}', NULL, NULL, NULL, NULL, 1, 'k1', " +
+            (stream == s.Stream.Key ? $"'\\x{Convert.ToHexString(good.Hash)}'" : $"sha256(convert_to('HASM-AUDIT-GENESIS-v1', 'UTF8') || decode('00', 'hex') || convert_to('{stream}', 'UTF8'))") +
+            $", '\\x{Convert.ToHexString(good.Hash)}', '\\x{Convert.ToHexString(good.Hash)}')";
         Assert.Equal(1L, await InCompany<long>(s.Company.PhysicalDatabaseName, $"SELECT count(*) FROM {B.Table}"));
 
         var other = Guid.NewGuid();

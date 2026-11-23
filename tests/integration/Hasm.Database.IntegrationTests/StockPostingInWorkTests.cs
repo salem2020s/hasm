@@ -279,7 +279,7 @@ public class StockPostingInWorkTests : StockPostingTestBase
 
     private Task ForgeHead() =>
         Sql($"INSERT INTO {Audit_.Table} ({Audit_.StreamKey}, {Audit_.Seq}, {Audit_.EventId}, {Audit_.OccurredAtUtc}, {Audit_.EventType}, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, {Audit_.Detail}, {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac}) " +
-            $"SELECT {Audit_.StreamKey}, {Audit_.Seq} + 1, gen_random_uuid(), {Audit_.OccurredAtUtc}, 1998, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, 'forged', {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.PrevHash}, {Audit_.Hash}, {Audit_.Mac} " +
+            $"SELECT {Audit_.StreamKey}, {Audit_.Seq} + 1, gen_random_uuid(), {Audit_.OccurredAtUtc}, 1998, {Audit_.CompanyId}, {Audit_.ActorUserId}, {Audit_.TargetUserId}, {Audit_.SubjectId}, 'forged', {Audit_.FormatVersion}, {Audit_.KeyId}, {Audit_.Hash}, {Audit_.Hash}, {Audit_.Mac} " +
             $"FROM {Audit_.Table} ORDER BY {Audit_.Seq} DESC LIMIT 1");
 
     [PostgresFact]

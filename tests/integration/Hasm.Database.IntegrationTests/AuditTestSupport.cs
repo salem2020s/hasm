@@ -1,6 +1,7 @@
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Identity;
+using Hasm.Infrastructure.SystemDatabase;
 using Npgsql;
 using Au = Hasm.Infrastructure.SystemDatabase.SystemSchema.AccessAudit;
 using Ev = Hasm.Infrastructure.SystemDatabase.SystemSchema.AuditEvent;
@@ -31,7 +32,7 @@ public abstract class AuditTestBase : AccessTestBase
     }
 
     protected Task Tamper(string sql, params (string, object)[] ps) =>
-        Exec($"ALTER TABLE {Ev.Table} DISABLE TRIGGER {Ev.GuardTrigger}; {sql}; ALTER TABLE {Ev.Table} ENABLE TRIGGER {Ev.GuardTrigger};", ps);
+        Exec($"ALTER TABLE {Ev.Table} DISABLE TRIGGER {Ev.GuardTrigger}; ALTER TABLE {Ev.Table} DISABLE TRIGGER {SystemSchema.AuditHeadLink.TrSystemLink}; {sql}; ALTER TABLE {Ev.Table} ENABLE TRIGGER {SystemSchema.AuditHeadLink.TrSystemLink}; ALTER TABLE {Ev.Table} ENABLE TRIGGER {Ev.GuardTrigger};", ps);   // tampering as the OWNER: the append-only guard AND the link guard of the audit head are off around the statement (a DBA who disables a trigger is outside the database's own protection; the verifier detects it)
 
     protected Task TamperLegacy(string sql, params (string, object)[] ps) =>
         Exec($"ALTER TABLE {Au.Table} DISABLE TRIGGER {Au.GuardTrigger}; {sql}; ALTER TABLE {Au.Table} ENABLE TRIGGER {Au.GuardTrigger};", ps);
@@ -53,6 +54,14 @@ public abstract class AuditTestBase : AccessTestBase
 
     /// <summary>Inserts a raw row (an attacker with database access who does NOT hold the audit key).</summary>
     protected Task InsertRaw(AuditRecord r) => Tamper(
+        $"INSERT INTO {Ev.Table} ({AuditStorage.Columns}) VALUES (@s,@q,@id,@t,@e,@c,@a,@tu,@su,@l,@d,@v,@k,@p,@h,@m)",
+        ("s", r.StreamKey), ("q", r.Seq), ("id", r.EventId), ("t", r.OccurredAtUtc), ("e", r.EventType), ("c", (object?)r.CompanyId ?? DBNull.Value),
+        ("a", (object?)r.ActorUserId ?? DBNull.Value), ("tu", (object?)r.TargetUserId ?? DBNull.Value), ("su", (object?)r.SubjectId ?? DBNull.Value),
+        ("l", (object?)r.LegacyRef ?? DBNull.Value), ("d", (object?)r.Detail ?? DBNull.Value), ("v", r.FormatVersion), ("k", r.KeyId),
+        ("p", r.PrevHash), ("h", r.Hash), ("m", r.Mac));
+
+    /// <summary>Inserts a raw row with every trigger ENABLED (what the owner or the runtime role can do without tampering): the link guard of the audit head judges it.</summary>
+    protected Task InsertRawEnforced(AuditRecord r) => Exec(
         $"INSERT INTO {Ev.Table} ({AuditStorage.Columns}) VALUES (@s,@q,@id,@t,@e,@c,@a,@tu,@su,@l,@d,@v,@k,@p,@h,@m)",
         ("s", r.StreamKey), ("q", r.Seq), ("id", r.EventId), ("t", r.OccurredAtUtc), ("e", r.EventType), ("c", (object?)r.CompanyId ?? DBNull.Value),
         ("a", (object?)r.ActorUserId ?? DBNull.Value), ("tu", (object?)r.TargetUserId ?? DBNull.Value), ("su", (object?)r.SubjectId ?? DBNull.Value),
