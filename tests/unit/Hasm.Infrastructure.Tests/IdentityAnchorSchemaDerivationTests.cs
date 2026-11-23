@@ -39,11 +39,13 @@ public class IdentityAnchorSchemaDerivationTests
     {
         var sql = Regex.Replace(MigrationScript.LoadEmbedded().Single(s => s.Version == Version).Sql, "--[^\n]*", "");
         Assert.Single(Regex.Matches(sql, @"\bCREATE\s+TABLE\b"));
-        Assert.Equal(2, Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b").Count);
-        Assert.Equal(2, Regex.Matches(sql, @"\bCREATE\s+TRIGGER\b").Count);
-        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|ALTER|GRANT|INSERT|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase), sql);
+        Assert.Equal(3, Regex.Matches(sql, @"\bCREATE\s+FUNCTION\b").Count);                                   // append-only, the current-revision rule, the challenge margin
+        Assert.Equal(3, Regex.Matches(sql, @"\bCREATE\s+TRIGGER\b").Count);
+        Assert.DoesNotMatch(new Regex(@"\b(OR\s+REPLACE|DROP|ALTER|GRANT|INSERT|DISABLE|ENABLE|SECURITY\s+DEFINER|search_path|set_config|EXECUTE\s+(?!FUNCTION))\b|\bTRUNCATE\b|\bUPDATE\s+t_|\bDELETE\s+FROM\b", RegexOptions.IgnoreCase), sql.Replace("BEFORE INSERT ON", ""));
         Assert.Empty(Regex.Matches(sql, @"\bpg_\w+"));
         Assert.Contains($"CREATE TRIGGER {SystemSchema.IdentityAnchor.TrAppendOnly} BEFORE UPDATE OR DELETE ON {SystemSchema.IdentityAnchor.Table}", sql);
+        Assert.Contains($"CREATE TRIGGER {SystemSchema.IdentityAnchor.TrCurrentRevision} BEFORE INSERT ON {SystemSchema.IdentityAnchor.Table}", sql);   // an anchor only for the CURRENT revision of its subject (review H1 of PR 239)
+        Assert.Contains("CREATE UNIQUE INDEX", sql);
         Assert.Contains($"CREATE TRIGGER {SystemSchema.ChallengeGuard.TrMargin} BEFORE DELETE ON {SystemSchema.MfaChallenge.Table}", sql);
         Assert.Contains($"OLD.{SystemSchema.MfaChallenge.ExpiresAtUtc} >= clock_timestamp() - interval '1 hour'", sql);
         Assert.Contains($"REVOKE ALL ON TABLE {SystemSchema.IdentityAnchor.Table} FROM PUBLIC", sql);

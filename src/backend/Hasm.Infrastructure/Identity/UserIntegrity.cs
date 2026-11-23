@@ -32,6 +32,10 @@ internal sealed record UserRow(
         .Add(Id).Add(Login).Add(PasswordHash).Add((long)State).Add(IsAdministrator).Add((long)MfaState).Add(Revision)
         .Add(CodeHash).Add(CodeExpiresAt).Add(CodeConsumedAt).Add(key.Id));
 
+    /// <summary>A digest of EXACTLY what the tag covers (the canonical input without the key), for the identity audit report: a change of any covered field changes it, and it is safe to hash into a report because it is not printed (review M1 of PR 239).</summary>
+    public byte[] ReportDigest() => System.Security.Cryptography.SHA256.HashData(new MacInput("hasm.report.user.v1")
+        .Add(Id).Add(Login).Add(PasswordHash).Add((long)State).Add(IsAdministrator).Add((long)MfaState).Add(Revision).Add(CodeHash).Add(CodeExpiresAt).Add(CodeConsumedAt).Add(KeyId).ToBytes());
+
     /// <summary>True only for a row with an accepted key id and a tag that verifies. A row without a tag (an untagged legacy user) is never honoured.</summary>
     public bool IsValid(IdentityKeys keys)
     {

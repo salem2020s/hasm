@@ -146,17 +146,20 @@ public sealed class IdentityStore(Func<string> connectionStringFactory, TimeProv
         UserRecord user; UserRow row; IdentityAnchors.Bound bound = default;
         await using (var conn = await dataSource.Value.OpenConnectionAsync(ct))
         {
-            await using (var cmd = new NpgsqlCommand($"SELECT {UserColumns}, {UserRow.Columns("u")} FROM {U.Table} u WHERE {where}", conn))
+            // the row and its anchors are read in ONE snapshot: a concurrent legitimate bump must not look like a rollback (review L1 of PR 239)
+            await using var snapshot = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
+            await using (var cmd = new NpgsqlCommand($"SELECT {UserColumns}, {UserRow.Columns("u")} FROM {U.Table} u WHERE {where}", conn, snapshot))
             {
                 cmd.Parameters.AddWithValue("v", value);
                 await using var r = await cmd.ExecuteReaderAsync(ct);
                 if (!await r.ReadAsync(ct)) return null;
                 user = ReadUser(r); row = UserRow.Read(r, 8);
             }
-            if (row.IsValid(k)) bound = await IdentityAnchors.ReadBoundAsync(conn, null, k, IdentityAnchors.KindUser, row.Id, ct);
+            if (row.IsValid(k)) bound = await IdentityAnchors.ReadBoundAsync(conn, snapshot, k, IdentityAnchors.KindUser, row.Id, ct);
         }
         if (!row.IsValid(k)) { await RejectUserAsync(row.Id, ct); return null; }
         if (bound.Ignored > 0) await AlertAnchorsAsync(row.Id, bound, ct);                                         // junk anchors: ignored for the bound, reported, never a lockout
+        if (bound.Unknown) { await RejectRecordAsync(row.Id, "user", ct, "anchor scan limit"); return null; }       // the window held only junk: the bound is unknown, never "none" (fail closed)
         if (bound.MaxValidRevision is { } floor && row.Revision < floor) { await RejectRecordAsync(row.Id, "user", ct, "anchor"); return null; }   // an older, once-valid row written back
         return user;
     }

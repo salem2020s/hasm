@@ -17,6 +17,28 @@ CREATE TABLE t_d1b3d390 (
     CONSTRAINT k_b94e299b PRIMARY KEY (c_a8bdd4b3),
     CONSTRAINT k_b3653e45 CHECK (c_755bf467 >= 0 AND c_aa1ca826 >= 0 AND octet_length(c_723cb401) = 32 AND c_ae5b82bb ~ '^[a-z0-9][a-z0-9-]{0,31}$')
 );
+CREATE UNIQUE INDEX k_58e5933e ON t_d1b3d390 (c_755bf467, c_dc52d46d, c_aa1ca826);
+
+-- Review H1 of PR 239: an anchor can only be written for the CURRENT revision of its subject. The anchor of a revision is written in the same transaction that raises the revision, under the row lock, so no junk row can
+-- ever occupy a revision before its legitimate anchor, and none can exist ABOVE a record's revision: a flood of junk anchors cannot push the valid ones out of the window the verifier reads. (Only kind 1, the user,
+-- exists today; every later kind adds its own branch in its own migration. A kind the database does not know is refused.)
+CREATE FUNCTION f_16fec939() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    current_revision bigint;
+BEGIN
+    IF NEW.c_755bf467 = 1 THEN
+        SELECT u.c_320fa296 INTO current_revision FROM t_fc83d26e u WHERE u.c_74b9e5ad = NEW.c_dc52d46d;
+    ELSE
+        RAISE EXCEPTION 'an identity anchor of an unknown kind is refused';
+    END IF;
+    IF current_revision IS NULL OR NEW.c_aa1ca826 <> current_revision THEN
+        RAISE EXCEPTION 'an identity anchor is written only for the current revision of its subject';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER r_554d1185 BEFORE INSERT ON t_d1b3d390 FOR EACH ROW EXECUTE FUNCTION f_16fec939();
+
 CREATE INDEX k_eb80664c ON t_d1b3d390 (c_755bf467, c_dc52d46d, c_aa1ca826 DESC);
 
 CREATE FUNCTION f_f72f6cab() RETURNS trigger LANGUAGE plpgsql AS $$

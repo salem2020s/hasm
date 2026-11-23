@@ -18,7 +18,11 @@ internal static class IdentityAnchors
     public const int ScanLimit = 5000;
 
     /// <summary>The highest valid anchor revision of the subject (null when there is none) and how many anchors above it were ignored.</summary>
-    public readonly record struct Bound(long? MaxValidRevision, int Ignored, bool ScanLimitReached);
+    public readonly record struct Bound(long? MaxValidRevision, int Ignored, bool ScanLimitReached)
+    {
+        /// <summary>Anchors above the newest valid one filled the scan window without a valid anchor in it: the bound is UNKNOWN, never "none" (fail closed, review H1 of PR 239).</summary>
+        public bool Unknown => MaxValidRevision is null && ScanLimitReached;
+    }
 
     public static byte[] Tag(IdentityKeys keys, KekHandle key, short kind, Guid subject, long revision) =>
         keys.Mac(key, IdentityKeys.UserPurpose, new MacInput(Domain).Add((long)kind).Add(subject).Add(revision).Add(key.Id));

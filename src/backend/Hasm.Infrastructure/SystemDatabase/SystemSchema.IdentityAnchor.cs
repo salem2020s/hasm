@@ -17,6 +17,9 @@ public static partial class SystemSchema
         public const string CreatedAtUtc = "c_96437af6";
         public const string Pk = "k_b94e299b";
         public const string CkShape = "k_b3653e45";
+        public const string UqSubjectRevision = "k_58e5933e";
+        public const string FnCurrentRevision = "f_16fec939";
+        public const string TrCurrentRevision = "r_554d1185";
         public const string IxSubject = "k_eb80664c";
         public const string FnAppendOnly = "f_f72f6cab";
         public const string TrAppendOnly = "r_de51620a";
@@ -40,6 +43,9 @@ public static partial class SystemSchema
         ["IdentityAnchor.CreatedAtUtc"] = IdentityAnchor.CreatedAtUtc,
         ["IdentityAnchor.Pk"] = IdentityAnchor.Pk,
         ["IdentityAnchor.CkShape"] = IdentityAnchor.CkShape,
+        ["IdentityAnchor.UqSubjectRevision"] = IdentityAnchor.UqSubjectRevision,
+        ["IdentityAnchor.FnCurrentRevision"] = IdentityAnchor.FnCurrentRevision,
+        ["IdentityAnchor.TrCurrentRevision"] = IdentityAnchor.TrCurrentRevision,
         ["IdentityAnchor.IxSubject"] = IdentityAnchor.IxSubject,
         ["IdentityAnchor.FnAppendOnly"] = IdentityAnchor.FnAppendOnly,
         ["IdentityAnchor.TrAppendOnly"] = IdentityAnchor.TrAppendOnly,

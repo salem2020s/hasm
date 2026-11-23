@@ -23,7 +23,7 @@ function parseDictionary(file) {
     for (const c of m[2].matchAll(/public const string (\w+) = "([tcfkr]_[0-9a-f]{8})";/g)) map.set(`${m[1]}.${c[1]}`, c[2]);
   return map;
 }
-const EXISTING = new Map([...parseDictionary("SystemSchema.cs"), ...parseDictionary("SystemSchema.MfaLogin.cs")]);
+const EXISTING = new Map([...parseDictionary("SystemSchema.cs"), ...parseDictionary("SystemSchema.MfaLogin.cs"), ...parseDictionary("SystemSchema.IdentityIntegrity.cs")]);
 const ext = (key) => { const v = EXISTING.get(key); if (!v) throw new Error("unknown existing name " + key); return v; };
 
 const TEMPLATE = `-- Migration (system): identity integrity slice S-2c part 1 (docs/IDENTITY-INTEGRITY-PLAN.md section 5, owner decision OD-4). Forward-only and ADDITIVE: one new append-only table, one new trigger on the challenge table.
@@ -45,6 +45,28 @@ CREATE TABLE {{IdentityAnchor}} (
     CONSTRAINT {{IdentityAnchor.Pk}} PRIMARY KEY ({{IdentityAnchor.Id}}),
     CONSTRAINT {{IdentityAnchor.CkShape}} CHECK ({{IdentityAnchor.Kind}} >= 0 AND {{IdentityAnchor.Revision}} >= 0 AND octet_length({{IdentityAnchor.Tag}}) = 32 AND {{IdentityAnchor.KeyId}} ~ '^[a-z0-9][a-z0-9-]{0,31}$')
 );
+CREATE UNIQUE INDEX {{IdentityAnchor.UqSubjectRevision}} ON {{IdentityAnchor}} ({{IdentityAnchor.Kind}}, {{IdentityAnchor.SubjectId}}, {{IdentityAnchor.Revision}});
+
+-- Review H1 of PR 239: an anchor can only be written for the CURRENT revision of its subject. The anchor of a revision is written in the same transaction that raises the revision, under the row lock, so no junk row can
+-- ever occupy a revision before its legitimate anchor, and none can exist ABOVE a record's revision: a flood of junk anchors cannot push the valid ones out of the window the verifier reads. (Only kind 1, the user,
+-- exists today; every later kind adds its own branch in its own migration. A kind the database does not know is refused.)
+CREATE FUNCTION {{IdentityAnchor.FnCurrentRevision}}() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    current_revision bigint;
+BEGIN
+    IF NEW.{{IdentityAnchor.Kind}} = 1 THEN
+        SELECT u.[[UserIntegrity.SecurityRevision]] INTO current_revision FROM [[User.Table]] u WHERE u.[[User.Id]] = NEW.{{IdentityAnchor.SubjectId}};
+    ELSE
+        RAISE EXCEPTION 'an identity anchor of an unknown kind is refused';
+    END IF;
+    IF current_revision IS NULL OR NEW.{{IdentityAnchor.Revision}} <> current_revision THEN
+        RAISE EXCEPTION 'an identity anchor is written only for the current revision of its subject';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER {{IdentityAnchor.TrCurrentRevision}} BEFORE INSERT ON {{IdentityAnchor}} FOR EACH ROW EXECUTE FUNCTION {{IdentityAnchor.FnCurrentRevision}}();
+
 CREATE INDEX {{IdentityAnchor.IxSubject}} ON {{IdentityAnchor}} ({{IdentityAnchor.Kind}}, {{IdentityAnchor.SubjectId}}, {{IdentityAnchor.Revision}} DESC);
 
 CREATE FUNCTION {{IdentityAnchor.FnAppendOnly}}() RETURNS trigger LANGUAGE plpgsql AS $$

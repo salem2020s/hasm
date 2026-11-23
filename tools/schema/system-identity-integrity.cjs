@@ -78,7 +78,7 @@ function existingNames() {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { if (e.name !== "bin" && e.name !== "obj") scan(p); continue; }
-      if (p === outSql || p === outCs) continue;
+      if (p === outSql || p === outCs || p.endsWith("0040_append_only_anchor_history.sql") || p.endsWith("SystemSchema.IdentityAnchor.cs")) continue;   // the later slice that reads the revision column by reference
       if (!/\.(sql|cs)$/.test(e.name)) continue;
       for (const m of fs.readFileSync(p, "utf8").matchAll(/\b[tcfkr]_[0-9a-f]{8}\b/g)) names.add(m[0]);
     }
