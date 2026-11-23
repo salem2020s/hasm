@@ -9,7 +9,7 @@ namespace Hasm.Database.IntegrationTests;
 /// <summary>Phase 4.1 slice S3a against real PostgreSQL: step-up moves the session's second-factor proof, in one transaction with its audit event, through the single verifier. Disposable cluster only.</summary>
 public class MfaStepUpTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
     private AuthService MfaAuth = null!;
 
@@ -17,9 +17,9 @@ public class MfaStepUpTests : IdentityTestBase
     {
         await Start();
         var connection = Options.BuildSystemConnectionString(admin: true);
-        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring));
+        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
         var limiter = new MfaAttemptLimiter(Store, Clock);
-        MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(new MfaChallengeStore(connection, Clock), new MfaVerifier(Mfa, limiter, Clock), Mfa, limiter));
+        MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(new MfaChallengeStore(connection, Clock, keys: TestIdentityKeys.Instance), new MfaVerifier(Mfa, limiter, Clock), Mfa, limiter));
     }
 
     private long Step => Totp.StepFor(Clock.GetUtcNow());

@@ -41,7 +41,7 @@ public static class EncryptedSets
     /// captured locale; attachments are taken from <paramref name="attachmentDirectory"/> (stray files skipped and counted, symbolic links refused).
     /// </summary>
     internal static async Task<ManifestV2> CreateCompanyAsync(Guid companyId, string? runId, Func<Func<Stream, CancellationToken, Task>, Task<DatabaseLocale>> dump, string attachmentDirectory,
-        string destination, DateTimeOffset createdUtc, int migrationLevel, BackupMaterial material, CancellationToken ct)
+        string destination, DateTimeOffset createdUtc, int migrationLevel, BackupMaterial material, CancellationToken ct, Func<CancellationToken, Task<IReadOnlyList<string>>>? databaseKeyIds = null)
     {
         if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new BackupException("destination_not_empty");
         if (!Directory.Exists(destination)) CompanyBackupService.CreatePrivateDirectory(destination, "destination_not_empty", "destination_not_private");
@@ -68,6 +68,8 @@ public static class EncryptedSets
                     files.Add(await EncryptToFileAsync(source, destination, $"{AttachmentsFolder}/{storage}.hbe", AttachmentPurpose, material.Recovery, ct));
                 }
             }
+            // the keys that encrypted values INSIDE the database need (the cash and bank account numbers): they are part of the same inventory, so it is never reported complete while the database holds values under other keys
+            if (databaseKeyIds is not null) foreach (var k in await databaseKeyIds(ct)) keys.Add(k);
             var manifest = new ManifestV2(ManifestV2.CurrentVersion, CompanyKind, runId, companyId, createdUtc, material.Recovery.KeyId, material.Signer.KeyId, files,
                 new CompanyDetails(locale, migrationLevel, [.. keys], stray, lookalikes));
             await SignedDocuments.WriteManifestAsync(destination, manifest, material.Recovery, material.Signer, ct);

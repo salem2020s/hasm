@@ -77,7 +77,7 @@ public class AuditApiTests : FileEvidenceTestBase
 
     private (AuthService Auth, IdentityStore Store) FileBackedIdentity()
     {
-        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock));
+        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock), keys: TestIdentityKeys.Instance);
         return (new AuthService(store, Passwords, AuthSettings), store);
     }
 
@@ -199,6 +199,57 @@ public class AuditAdminToolTests : FileEvidenceTestBase
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         await process.WaitForExitAsync(timeout.Token);
         return new Run(process.ExitCode, await stdout, await stderr);
+    }
+
+    [PostgresFact]
+    public async Task The_identity_tag_command_is_refused_until_the_reviewed_report_exists_and_changes_nothing()
+    {
+        // review H1 of PR 235 (owner decision OD-3): tagging the existing users blesses whatever the rows say now, a row written with the runtime credentials included
+        await StartAccess();
+        await using (var conn = new Npgsql.NpgsqlConnection(Options.BuildSystemConnectionString(admin: true)))
+        {
+            await conn.OpenAsync();
+            await using var ins = new Npgsql.NpgsqlCommand($"INSERT INTO {Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Table} ({Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Id},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Login},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.DisplayName},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.PasswordHash},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.State},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.IsIdentityAdministrator},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.CreatedAtUtc},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.StateChangedAtUtc},{Hasm.Infrastructure.SystemDatabase.SystemSchema.User.PasswordChangedAtUtc}) VALUES (gen_random_uuid(),'minted','M',@h,0,true,now(),now(),now())", conn);
+            ins.Parameters.AddWithValue("h", Passwords.Hash(Pw));
+            await ins.ExecuteNonQueryAsync();
+        }
+        foreach (var args in new[] { new[] { "identity-tag" }, ["identity-tag", "--confirm-reviewed"] })
+        {
+            var run = await Tool(null, args);
+            Assert.NotEqual(0, run.Exit);
+            Assert.Contains("OD-3", run.Err);
+            Assert.Contains("S-2c", run.Err);
+            Assert.DoesNotContain("tagged;", run.Out);
+        }
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {Hasm.Infrastructure.SystemDatabase.SystemSchema.User.Table} WHERE {Hasm.Infrastructure.SystemDatabase.SystemSchema.UserTag.Tag} IS NOT NULL"));   // nothing was tagged
+    }
+
+    [PostgresFact]
+    public async Task The_identity_audit_report_command_reconciles_the_users_with_the_verified_chain_and_prints_codes_and_a_hash_only()
+    {
+        // identity integrity S-2c: read-only, prints counts, ids and the report hash; refuses when the stream does not verify
+        await StartAccess();
+        FileAuditKeyRing.Generate(KeyDir, "k1");
+        var store = new IdentityStore(Options.BuildSystemConnectionString(admin: true), Clock, AuditTrail.FromOptions(Opts("k1"), Clock), keys: TestIdentityKeys.Instance);
+        var auth = new AuthService(store, Passwords, AuthSettings);
+        Assert.Equal(CreateUserStatus.Created, (await auth.CreateUserAsync("reported", "Reported", Pw, true)).Status);
+        var encryption = new Dictionary<string, string?>
+        {
+            ["Hasm__Encryption__KeyDirectory"] = Environment.GetEnvironmentVariable("Hasm__Encryption__KeyDirectory"), ["Hasm__Encryption__ActiveKeyId"] = "k1", ["Hasm__Encryption__AllowInsecureFilePermissions"] = "true",
+        };
+        var run = await Tool(encryption, "identity-audit-report");
+        Assert.True(run.Exit == 0, run.All);
+        Assert.Contains("MATCHED: 1", run.Out);
+        Assert.Contains("administrator ", run.Out);
+        Assert.Matches("Report hash: [0-9a-f]{64}", run.Out);
+        Assert.DoesNotContain(Pw, run.All);
+        var again = await Tool(encryption, "identity-audit-report");
+        Assert.Equal(run.Out, again.Out);                                                                                  // the same state, the same report, the same hash
+        await Tamper($"UPDATE {Ev.Table} SET {Ev.Detail} = 'tampered' WHERE {Ev.StreamKey} = 'system' AND {Ev.Seq} = 1");
+        var refused = await Tool(encryption, "identity-audit-report");
+        Assert.NotEqual(0, refused.Exit);
+        Assert.Contains("REFUSED", refused.Out + refused.Err);
+        Assert.DoesNotContain("Report hash", refused.Out);
     }
 
     [PostgresFact]

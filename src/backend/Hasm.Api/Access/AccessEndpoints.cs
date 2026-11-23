@@ -1,3 +1,4 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Api.Auth;
 using Hasm.Infrastructure.Access;
 using Hasm.Infrastructure.Audit;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Http.Metadata;
 namespace Hasm.Api.Access;
 
 public sealed record SelectCompanyRequest(Guid? CompanyId);
+public sealed record SetMfaPolicyRequest(string? Policy, Guid[]? RoleIds);
 public sealed record CreateRoleRequest(string? Name, string[]? Permissions);
 public sealed record SetPermissionsRequest(string[]? Permissions);
 public sealed record GrantMembershipRequest(string? Login);
@@ -19,6 +21,16 @@ public static class AccessSetup
     public static IServiceCollection AddHasmAccess(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton(PermissionCatalog.Default);
+        // Phase 4.1 S3b-1b: the company MFA policy (same runtime connection; the service asks the access service for permissions and the identity store for the actor's MFA state)
+        services.AddSingleton(sp => new MfaPolicyService(
+            () =>
+            {
+                var options = HasmDatabaseOptions.FromConfiguration(configuration);
+                options.EnsureValid(requireAdmin: false);
+                return options.BuildSystemConnectionString(admin: false);
+            },
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<AuditTrail>(), sp.GetRequiredService<AccessService>(), sp.GetRequiredService<IdentityStore>()));
+        services.AddSingleton<ICompanyMfaPolicyEvaluator>(sp => sp.GetRequiredService<MfaPolicyService>());
         // Runtime (least-privilege) database account; never the provisioning administrator. Connection string is built lazily.
         services.AddSingleton(sp => new AccessService(
             () =>
@@ -30,7 +42,7 @@ public static class AccessSetup
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<PermissionCatalog>(),
             sp.GetRequiredService<AuditTrail>(),
-            sp.GetRequiredService<CompanyBranchScopeValidator>()));   // branch scope is confirmed against the real branches (and their activation epochs)
+            sp.GetRequiredService<CompanyBranchScopeValidator>(), sp.GetRequiredService<IdentityKeys>()));   // branch scope is confirmed against the real branches (and their activation epochs)
         return services;
     }
 }
@@ -47,11 +59,13 @@ public static class AccessEndpoints
 
     public static void MapAccessEndpoints(this WebApplication app)
     {
-        var api = app.MapGroup("/api/v1").RequireAuthorization();
+        // company list and selection stay reachable whatever the selected company's MFA policy says (a user must always be able to leave or change company)
+        var open = app.MapGroup("/api/v1").RequireAuthorization(AuthDefaults.AuthenticatedPolicy);
+        open.MapGet("/companies", ListCompanies);
+        open.MapPost("/session/company", SelectCompany).WithMetadata(new BodyLimit());
+        open.MapDelete("/session/company", ClearCompany);
 
-        api.MapGet("/companies", ListCompanies);
-        api.MapPost("/session/company", SelectCompany).WithMetadata(new BodyLimit());
-        api.MapDelete("/session/company", ClearCompany);
+        var api = app.MapGroup("/api/v1").RequireAuthorization();
 
         var access = api.MapGroup("/access").RequireAuthorization(AuthDefaults.MfaVerifiedPolicy);
         access.MapGet("/me", Me);
@@ -67,6 +81,8 @@ public static class AccessEndpoints
         access.MapPost("/assignments", AssignRole).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
         access.MapDelete("/assignments/{id:guid}", RevokeAssignment);
         access.MapGet("/audit", ListAudit);
+        access.MapGet("/mfa-policy", GetMfaPolicy);
+        access.MapPut("/mfa-policy", SetMfaPolicy).RequireAuthorization(AuthDefaults.MfaFreshPolicy).WithMetadata(new BodyLimit());
     }
 
     internal static IResult Error(int status, string code) => Results.Json(new { error = code }, statusCode: status);
@@ -78,6 +94,9 @@ public static class AccessEndpoints
         AccessStatus.Forbidden => Error(403, result.Code ?? "forbidden"),
         AccessStatus.NotFound => Error(404, result.Code ?? "not_found"),
         AccessStatus.Invalid => Error(400, result.Code ?? "invalid_request"),
+        // optimistic concurrency, the same answers as the settings endpoints (CompanyConfigurationEndpoints.Map): 428 without If-Match, 412 with the current revision on a stale one
+        AccessStatus.PreconditionRequired => Error(428, "precondition_required"),
+        AccessStatus.PreconditionFailed => Results.Json(new { error = "revision_conflict", currentRevision = result.CurrentRevision }, statusCode: 412),
         _ => Error(409, result.Code ?? "conflict"),
     };
 
@@ -89,6 +108,10 @@ public static class AccessEndpoints
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession session) return (null, Error(401, "unauthenticated"));
         var ctx = await access.GetSessionContextAsync(session.SessionId, http.RequestAborted);
         if (ctx is null) return (null, Error(401, "unauthenticated"));
+        // Review H1 of PR 181: the company MFA policy was judged for the company the session had when it was authenticated. The selection is read again here, so a different company now (another request
+        // of the same session selected it in between) was NOT judged: refuse, fail closed, with a stable code. The client repeats the request, which is then judged for the new company.
+        if (http.Items[MfaEnforcement.EvaluatedCompanyItemKey] is MfaEnforcement.EvaluatedCompany evaluated && evaluated.CompanyId != ctx.CompanyId)
+            return (null, Error(409, "company_selection_changed"));
         if (ctx.CompanyId is not { } companyId) return (null, Error(409, "company_not_selected"));
         return (new Actor(ctx.UserId, companyId), null);
     }
@@ -101,6 +124,36 @@ public static class AccessEndpoints
         return Enum.IsDefined(kind);
     }
 
+    // ---- company MFA policy (Phase 4.1 S3b-1b, D-167)
+
+    private static object PolicyView(CompanyMfaPolicy p) => new
+    {
+        policy = p.Kind switch { CompanyMfaPolicyKind.RequiredForRoles => "roles", CompanyMfaPolicyKind.RequiredForAll => "all", _ => "off" },
+        roleIds = p.RoleIds,
+        revision = p.Revision,
+        updatedAtUtc = p.UpdatedAtUtc,
+    };
+
+    /// <summary>The policy with its revision as the strong <c>ETag</c> (the convention of the settings endpoints).</summary>
+    private static IResult PolicyResult(CompanyMfaPolicy p) => new Hasm.Api.Company.CompanyConfigurationEndpoints.EtagResult(p.Revision, PolicyView(p));
+
+    private static async Task<IResult> GetMfaPolicy(HttpContext http, AccessService access, MfaPolicyService policies)
+    {
+        var (actor, failure) = await ResolveActor(http, access);
+        if (failure is not null) return failure;
+        return Map(await policies.GetAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), PolicyResult);
+    }
+
+    private static async Task<IResult> SetMfaPolicy(SetMfaPolicyRequest? body, HttpContext http, AccessService access, MfaPolicyService policies)
+    {
+        var kind = body?.Policy?.ToLowerInvariant() switch { "off" => (CompanyMfaPolicyKind?)CompanyMfaPolicyKind.Off, "roles" => CompanyMfaPolicyKind.RequiredForRoles, "all" => CompanyMfaPolicyKind.RequiredForAll, _ => null };
+        if (kind is null) return Error(400, "invalid_request");
+        var (actor, failure) = await ResolveActor(http, access);
+        if (failure is not null) return failure;
+        if (!Hasm.Api.Company.CompanyConfigurationEndpoints.TryReadIfMatch(http, out var expected)) return Error(400, "invalid_if_match");
+        return Map(await policies.SetAsync(actor!.UserId, actor.CompanyId, expected, kind.Value, body!.RoleIds, http.RequestAborted), PolicyResult);
+    }
+
     // ---- company selection
 
     private static async Task<IResult> ListCompanies(HttpContext http, AccessService access)
@@ -110,14 +163,20 @@ public static class AccessEndpoints
         return Results.Json(new { companies = companies.Select(c => new { id = c.Id, nameAr = c.NameAr, nameEn = c.NameEn }) });
     }
 
-    private static async Task<IResult> SelectCompany(SelectCompanyRequest? body, HttpContext http, AccessService access)
+    private static async Task<IResult> SelectCompany(SelectCompanyRequest? body, HttpContext http, MfaPolicyService policies)
     {
         if (body?.CompanyId is not { } companyId || companyId == Guid.Empty) return Error(400, "invalid_request");
         if (http.Items[AuthDefaults.SessionItemKey] is not AuthenticatedSession s) return Error(401, "unauthenticated");
-        // Unknown company, no membership, revoked membership and unavailable company are indistinguishable.
-        return await access.SelectCompanyAsync(s.SessionId, s.UserId, companyId, http.RequestAborted)
-            ? Results.Json(new { companyId })
-            : Error(403, "forbidden");
+        // ONE decision (review H1 of PR 181): membership, then the company's MFA policy (S3b-1b, D-167), and the selection is written only when both allow it, in one transaction under the company's policy
+        // lock. Nothing is written and then undone, so no concurrent request can be served for a company this session may not enter, and a refused selection keeps the previously selected company.
+        // Unknown company, no membership, revoked membership and unavailable company are indistinguishable, and the policy is asked only after the membership check.
+        return await policies.SelectCompanyAsync(s.SessionId, s.UserId, companyId, s.MfaState, s.MfaVerifiedAtUtc, http.RequestAborted) switch
+        {
+            CompanySelectionOutcome.Selected => Results.Json(new { companyId }),
+            CompanySelectionOutcome.EnrolmentRequired => Error(403, "mfa_enrolment_required"),
+            CompanySelectionOutcome.StepUpRequired => Error(401, "mfa_step_up_required"),
+            _ => Error(403, "forbidden"),
+        };
     }
 
     private static async Task<IResult> ClearCompany(HttpContext http, AccessService access)

@@ -189,6 +189,6 @@ public sealed class ImportManagementService(AccessService access, ImportService 
         await Allowed(userId, companyId, PermissionCatalog.Codes.ImportsConfigure, ct) ? ConfigResult<ImportMaintenanceResult>.Ok(await imports.MaintainAsync(userId, companyId, ct)) : Denied<ImportMaintenanceResult>();
 
     /// <summary>Key rotation: re-wraps the data keys of stored originals under the active master key (audited).</summary>
-    public async Task<ConfigResult<ImportMaintenanceResult>> RewrapAsync(Guid userId, Guid companyId, CancellationToken ct = default) =>
-        await Allowed(userId, companyId, PermissionCatalog.Codes.ImportsConfigure, ct) ? ConfigResult<ImportMaintenanceResult>.Ok(await imports.RewrapAsync(userId, companyId, ct)) : Denied<ImportMaintenanceResult>();
+    public async Task<ConfigResult<ImportRewrapOutcome>> RewrapAsync(Guid userId, Guid companyId, CancellationToken ct = default) =>
+        await Allowed(userId, companyId, PermissionCatalog.Codes.ImportsConfigure, ct) ? ConfigResult<ImportRewrapOutcome>.Ok(await imports.RewrapAsync(userId, companyId, ct)) : Denied<ImportRewrapOutcome>();
 }

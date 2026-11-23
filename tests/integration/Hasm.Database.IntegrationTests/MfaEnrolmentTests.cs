@@ -12,7 +12,7 @@ namespace Hasm.Database.IntegrationTests;
 /// <summary>Phase 4.1 slice S2, decision D-142: the enrolment steps against real PostgreSQL. Disposable cluster only.</summary>
 public class MfaEnrolmentTests : IdentityTestBase
 {
-    private readonly InMemoryKekRing ring = new("k1");
+    private readonly InMemoryKekRing ring = new("k1", TestIdentityKeys.Master);
     private MfaStore Mfa = null!;
     private AuthService MfaAuth = null!;
     private const string Source = "10.0.0.1";
@@ -21,8 +21,8 @@ public class MfaEnrolmentTests : IdentityTestBase
     {
         await Start();
         var connection = Options.BuildSystemConnectionString(admin: true);
-        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring));
-        var challenges = new MfaChallengeStore(connection, Clock);
+        Mfa = new MfaStore(connection, Clock, Audit, new TotpSecretProtector(ring), keys: TestIdentityKeys.Instance);
+        var challenges = new MfaChallengeStore(connection, Clock, keys: TestIdentityKeys.Instance);
         var limiter = new MfaAttemptLimiter(Store, Clock);
         MfaAuth = new AuthService(Store, Passwords, AuthSettings, null, new MfaLoginServices(challenges, new MfaVerifier(Mfa, limiter, Clock), Mfa, limiter));
     }
@@ -167,8 +167,8 @@ public class MfaEnrolmentTests : IdentityTestBase
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {TO.Table} WHERE {TO.UserId} = @u AND {TO.State} = 1", ("u", user.Id)));   // no active secret
         Assert.Equal(1L, await Pending(user.Id));                                                               // the enrolment is still pending
         Assert.True(await Mfa.CheckEnrolmentCodeAsync(user.Id, code));                                          // the one-time code is NOT spent
-        Assert.Null(await MfaAuth.AuthenticateAsync(early.Token));                                              // the earlier password-only session is rejected by the defence in depth (the user now needs MFA) ...
-        Assert.Equal(1L, await LiveSessions(user.Id));                                                          // ... but the failed attempt revoked nothing and created nothing
+        Assert.Equal(1L, await LiveSessions(user.Id));                                                          // the failed attempt revoked nothing and created nothing ...
+        Assert.Null(await MfaAuth.AuthenticateAsync(early.Token));                                              // ... and the earlier password-only session is rejected (the user now needs MFA, and the revision moved); the lookup itself revokes it
         // the challenge was consumed first (single use): the user simply logs in again and completes the enrolment
         var again = Assert.IsType<LoginOutcome.MfaEnrolmentRequired>(await MfaAuth.LoginAsync("atomic", Pw, SessionClient.Web, Source));
         Assert.IsType<MfaEnrolOutcome.Started>(await MfaAuth.BeginEnrolmentWithChallengeAsync(again.Challenge, code, SessionClient.Web, Source));

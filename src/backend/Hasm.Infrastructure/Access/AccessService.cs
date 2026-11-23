@@ -1,5 +1,7 @@
+using Hasm.Infrastructure.Security;
 using Hasm.Infrastructure.Audit;
 using Hasm.Infrastructure.Companies;
+using Hasm.Infrastructure.CompanyDatabase;
 using Hasm.Infrastructure.Identity;
 using Npgsql;
 using System.Runtime.CompilerServices;
@@ -15,14 +17,16 @@ using U = Hasm.Infrastructure.SystemDatabase.SystemSchema.User;
 
 namespace Hasm.Infrastructure.Access;
 
-public enum AccessStatus { Ok, Forbidden, NotFound, Invalid, Conflict }
+public enum AccessStatus { Ok, Forbidden, NotFound, Invalid, Conflict, PreconditionRequired, PreconditionFailed }
 
-/// <summary>Outcome of an access operation. <see cref="Code"/> is a short machine-readable reason, never an exception message.</summary>
-public sealed record AccessResult<T>(AccessStatus Status, string? Code, T? Value)
+/// <summary>Outcome of an access operation. <see cref="Code"/> is a short machine-readable reason, never an exception message. <see cref="CurrentRevision"/> is set on a concurrency failure
+/// (<see cref="AccessStatus.PreconditionFailed"/>) so the client can reload, as <c>ConfigResult</c> does.</summary>
+public sealed record AccessResult<T>(AccessStatus Status, string? Code, T? Value, long? CurrentRevision = null)
 {
     public bool IsOk => Status == AccessStatus.Ok;
     public static AccessResult<T> Ok(T value) => new(AccessStatus.Ok, null, value);
     public static AccessResult<T> Fail(AccessStatus status, string code) => new(status, code, default);
+    public static AccessResult<T> Stale(long currentRevision) => new(AccessStatus.PreconditionFailed, "revision_conflict", default, currentRevision);
 }
 
 /// <summary>Numeric values are persisted in the audit table; never renumber.</summary>
@@ -53,7 +57,7 @@ public sealed record CompanySummary(Guid Id, string? NameAr, string? NameEn);
 /// server-validated source and never trusts client claims. Mutations run in one transaction under a per-company advisory lock
 /// and re-evaluate the actor's privileges inside that lock, so concurrent permission changes serialize (no check-then-act race).
 /// </summary>
-public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : IAsyncDisposable
+public sealed class AccessService(Func<string> connectionStringFactory, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null, IdentityKeys? keys = null) : IAsyncDisposable
 {
     private const string UniqueViolation = "23505";
     private const int MaxDetailLength = 1000;
@@ -62,7 +66,9 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
 
     private readonly Lazy<NpgsqlDataSource> dataSource = new(() => NpgsqlDataSource.Create(connectionStringFactory()));
 
-    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null) : this(() => connectionString, clock, catalog, audit, scopeValidator) { }
+    public AccessService(string connectionString, TimeProvider clock, PermissionCatalog catalog, AuditTrail audit, IScopeTargetValidator? scopeValidator = null, IdentityKeys? keys = null) : this(() => connectionString, clock, catalog, audit, scopeValidator, keys) { }
+
+    internal IdentityKeys? Keys => keys;
 
     private readonly IScopeTargetValidator scopeValidator = scopeValidator ?? DenyAllScopeTargetValidator.Instance;
 
@@ -125,12 +131,11 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     {
         await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
         if (companyId is { } id && !await IsActiveMemberAsync(conn, null, userId, id, ct)) return false;
-        await using var cmd = new NpgsqlCommand(
-            $"UPDATE {S.Table} SET {S.SelectedCompanyId} = @c WHERE {S.Id} = @s AND {S.UserId} = @u AND {S.RevokedAtUtc} IS NULL", conn);
-        cmd.Parameters.AddWithValue("c", (object?)companyId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("s", sessionId);
-        cmd.Parameters.AddWithValue("u", userId);
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        var k = keys ?? throw new EncryptionUnavailableException("encryption_key_unavailable", "No identity key ring is configured.");
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        if (!await SessionRow.SelectCompanyAsync(conn, tx, k, sessionId, userId, companyId, ct)) { await tx.RollbackAsync(ct); return false; }
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     // ------------------------------------------------------------------ authorization
@@ -146,8 +151,18 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     public async Task<bool> IsAllowedAsync(Guid userId, Guid companyId, string permissionCode, ScopeTarget target, CancellationToken ct = default) =>
         (await GetEffectivePermissionsAsync(userId, companyId, ct)).Has(permissionCode, target);
 
-    private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct)
+    internal async Task<bool> IsAllowedAsync(Guid userId, Guid companyId, string permissionCode, ScopeTarget target, Action reserveCommand, CancellationToken ct)
+        => (await GetEffectivePermissionsAsync(userId, companyId, reserveCommand, ct)).Has(permissionCode, target);
+
+    internal async Task<EffectivePermissions> GetEffectivePermissionsAsync(Guid userId, Guid companyId, Action reserveCommand, CancellationToken ct)
     {
+        await using var conn = await dataSource.Value.OpenConnectionAsync(ct);
+        return await LoadEffectiveAsync(conn, null, userId, companyId, true, ct, reserveCommand);
+    }
+
+    private async Task<EffectivePermissions> LoadEffectiveAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, bool requireActiveUser, CancellationToken ct, Action? reserveCommand = null)
+    {
+        reserveCommand?.Invoke();
         await using var cmd = new NpgsqlCommand(
             $"SELECT a.{A.Id}, a.{A.RoleId}, a.{A.ScopeKind}, a.{A.ScopeId}, rp.{RP.Permission}, COALESCE(a.{A.ScopeEpoch}, a.{A.WarehouseScopeEpoch}) " +
             $"FROM {A.Table} a " +
@@ -173,6 +188,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             }
         }
         // Cost-center-scoped grants (own table: the scope check of the main assignment table cannot be extended without a DROP).
+        reserveCommand?.Invoke();
         await using (var ccCmd = new NpgsqlCommand(
             $"SELECT a.{CCA.Id}, a.{CCA.RoleId}, a.{CCA.CostCenterId}, rp.{RP.Permission}, a.{CCA.Epoch} " +
             $"FROM {CCA.Table} a " +
@@ -199,22 +215,25 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
         // assignment recorded. Anything else (deactivated, reactivated since, unknown, company database unavailable) drops the grant:
         // fail closed, never reinterpreted as company-wide access. Company-wide grants are unaffected. Evaluated on every call (no cache).
         foreach (var (grantId, g) in grants.Where(kv => kv.Value.Scope is ScopeKind.Branch or ScopeKind.Warehouse or ScopeKind.CostCenter).ToList())
-            if (!await ScopedGrantIsLiveAsync(companyId, g.Scope, g.ScopeId, g.Epoch, ct)) grants.Remove(grantId);
+            if (!await ScopedGrantIsLiveAsync(companyId, g.Scope, g.ScopeId, g.Epoch, ct, reserveCommand)) grants.Remove(grantId);
         return new EffectivePermissions(catalog, [.. grants.Select(kv => new GrantedRole(kv.Key, kv.Value.Role, kv.Value.Scope, kv.Value.ScopeId, kv.Value.Permissions))]);
     }
 
-    private async Task<bool> ScopedGrantIsLiveAsync(Guid companyId, ScopeKind kind, Guid? targetId, long? recordedEpoch, CancellationToken ct)
+    private async Task<bool> ScopedGrantIsLiveAsync(Guid companyId, ScopeKind kind, Guid? targetId, long? recordedEpoch, CancellationToken ct, Action? reserveCommand = null)
     {
         if (targetId is not { } id || recordedEpoch is not { } epoch) return false;
         try
         {
-            var state = await scopeValidator.GetStateAsync(companyId, kind, id, ct);
+            var state = reserveCommand is null ? await scopeValidator.GetStateAsync(companyId, kind, id, ct)
+                : scopeValidator is IBudgetedScopeTargetValidator counted
+                    ? await counted.GetStateAsync(companyId, kind, id, reserveCommand, ct)
+                    : throw new ReadCommandBudgetException(ReadBudgetFailure.UnsupportedValidator);
             return state is { Active: true } && state.Epoch == epoch;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ReadCommandBudgetException) { return false; }
     }
 
-    private static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
+    internal static async Task<bool> IsActiveMemberAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, Guid userId, Guid companyId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             $"SELECT 1 FROM {M.Table} m JOIN {C.Table} c ON c.{C.Id} = m.{M.CompanyId} JOIN {U.Table} u ON u.{U.Id} = m.{M.UserId} " +
@@ -566,12 +585,7 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
             mem.Parameters.AddWithValue("c", companyId);
             await mem.ExecuteNonQueryAsync(ct);
         }
-        await using (var ses = new NpgsqlCommand($"UPDATE {S.Table} SET {S.SelectedCompanyId} = NULL WHERE {S.UserId} = @u AND {S.SelectedCompanyId} = @c", conn, tx))
-        {
-            ses.Parameters.AddWithValue("u", targetUserId);
-            ses.Parameters.AddWithValue("c", companyId);
-            await ses.ExecuteNonQueryAsync(ct);
-        }
+        await SessionRow.ClearCompanyAsync(conn, tx, keys, targetUserId, companyId, now, ct);
         await WriteAuditAsync(conn, tx, actorUserId, companyId, targetUserId, null, AccessEvent.MembershipRevoked, $"assignments revoked: {revoked}", ct);
         await CommitAuditedAsync(tx, ct);
         return AccessResult<bool>.Ok(true);
@@ -888,6 +902,12 @@ public sealed class AccessService(Func<string> connectionStringFactory, TimeProv
     /// <summary>Offline delegation of the preset Retention Approver role (company-wide; a SENSITIVE grant, D-080 item 6): no company user can grant it (the administrator lacks the permission), so it comes from the administrative tool.</summary>
     public Task<FiscalApproverStatus> GrantRetentionApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.RetentionApproverId, "retention approver", ct);
     public Task<FiscalApproverStatus> RevokeRetentionApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.RetentionApproverId, "retention approver", ct);
+    /// <summary>Offline delegation of the dedicated preset Cash Account Manager (company-wide; PRIVILEGED, D-158). No company user can grant it (the administrator lacks the cash permissions), so it comes from the administrative tool, audited with no actor user.</summary>
+    public Task<FiscalApproverStatus> GrantCashAccountManagerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountManagerId, "cash account manager", ct);
+    public Task<FiscalApproverStatus> RevokeCashAccountManagerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountManagerId, "cash account manager", ct);
+    /// <summary>Offline delegation of the dedicated preset Cash Account Sensitive Viewer (company-wide; PRIVILEGED; may read a FULL bank account number, D-155). Same rules as the other offline delegations.</summary>
+    public Task<FiscalApproverStatus> GrantCashAccountSensitiveViewerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => GrantPresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountSensitiveViewerId, "cash account sensitive viewer", ct);
+    public Task<FiscalApproverStatus> RevokeCashAccountSensitiveViewerOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CashAccountSensitiveViewerId, "cash account sensitive viewer", ct);
     public Task<FiscalApproverStatus> RevokeCommercialApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.CommercialApproverId, "commercial approver", ct);
     public Task<FiscalApproverStatus> RevokeJournalApproverOfflineAsync(string login, Guid companyId, CancellationToken ct = default) => RevokePresetApproverOfflineAsync(login, companyId, PresetRoles.JournalApproverId, "journal approver", ct);
 

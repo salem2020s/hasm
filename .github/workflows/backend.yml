@@ -48,8 +48,28 @@ jobs:
         run: node tools/schema/company-0033-short-close.cjs --check
       - name: Commercial-policies schema files match the deterministic generator (Phase 3.13 S5a, company migration 0032)
         run: node tools/schema/company-0032-commercial-policies.cjs --check
+      - name: Approval-policy-identity schema files match the deterministic generator (Phase 3.13, company migration 0033)
+        run: node tools/schema/company-0033-approval-policy-identity.cjs --check
       - name: Attachment-retention schema files match the deterministic generator (Phase R slice R1, company migration 0031)
         run: node tools/schema/company-0031-attachment-retention.cjs --check
+      - name: Stock-period-guard schema files match the deterministic generator (STOCK-PERIOD-DB, D-220, company migration 0034)
+        run: node tools/schema/company-0034-stock-period-guard.cjs --check
+      - name: TOTP owner-only schema files match the deterministic generator (D-235 second part, system migration 0035 provisional)
+        run: node tools/schema/system-totp-owner-only.cjs --check
+      - name: Identity integrity S-1 schema files match the deterministic generator (system migration 0037 provisional)
+        run: node tools/schema/system-identity-integrity.cjs --check
+      - name: User tag (S-2a) schema files match the deterministic generator (system migration 0038 provisional)
+        run: node tools/schema/system-user-tag.cjs --check
+      - name: Challenge tag (S-2d) schema files match the deterministic generator (system migration 0039 provisional)
+        run: node tools/schema/system-challenge-tag.cjs --check
+      - name: Identity anchor (S-2c) schema files match the deterministic generator (system migration 0040 provisional)
+        run: node tools/schema/system-identity-anchor.cjs --check
+      - name: Plan-execution schema files (company 0036, provisional number) match their generator
+        run: node tools/schema/company-0036-plan-execution.cjs --check
+      - name: Replay signer registry schema files (company 0037, T2 slice A1) match their generator
+        run: node tools/schema/company-0037-replay-signer-registry.cjs --check
+      - name: Replay grant verification schema files (company 0038, T2 slice A2) match their generator
+        run: node tools/schema/company-0038-replay-grant-verification.cjs --check
       - name: Load-test harness smoke test (no database; its route, query, enum and response-key contract is checked against the backend sources)
         run: node --test tools/loadtest/tests/smoke.test.js
       - run: dotnet restore src/backend/Hasm.slnx
@@ -145,13 +165,19 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1265 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1815 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
           EXPECTED_REGISTRY: |
             EXPECTED = {
-                "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                "IdentitySessionIntegrityTests": 11, "UserIntegrityTests": 11, "ChallengeIntegrityTests": 5, "IdentityAnchorTests": 10, "SystemDatabaseTests": 10, "CompanyProvisioningTests": 18, "IdentityMigrationTests": 8, "UserCreationTests": 9,
+                # Migration guard hardening (owner decision 2026-11-21, Q5): the post-migration check (no trigger switched off, removed or re-bound; replication role unchanged), on the system and a company database.
+                "MigrationGuardPostCheckTests": 12,
+                # Owner decisions 2026-11-22 (Q2, Q3): disabled triggers with nothing pending (diagnostics, nothing re-enabled, the application unaffected); the non-superuser administrative account end to end and the superuser refusal.
+                "MigrationAdminRefusalTests": 4, "NonSuperuserMigrationAccountTests": 2,
+                # X4-PRESET-ROLE (owner Option A, 2026-11-22): the two dedicated cash and bank account presets, each held alone through the real API, privileged and MFA, offline grant and revoke with audit; the Admin commands; the migration as an upgrade.
+                "CashPresetRolesApiTests": 7, "CashPresetRolesToolTests": 1, "CashPresetRolesMigrationTests": 1,
                 "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
                 "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,
                 "AccessRevocationTests": 5, "AccessAuditTests": 2, "OfflineAdministrationTests": 3,
@@ -159,13 +185,13 @@ jobs:
                 "LastAdministratorTests": 7, "AccountEnumerationTests": 2, "ScopeFailClosedTests": 3,
                 "LoginAbuseProtectionTests": 10, "AdministratorContinuityTests": 16, "SecurityHardeningApiTests": 10,
                 # Phase 2.3C-2 cryptographic audit integrity
-                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 2, "MfaStoreTests": 14, "MfaChallengeStoreTests": 6, "MfaLoginTests": 9, "MfaEnrolmentTests": 9, "MfaApiTests": 3, "MfaStepUpTests": 7, "MfaStepUpApiTests": 4, "MfaRequirementTests": 6, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
+                "AuditMigrationTests": 4, "AuditChainTests": 6, "AuditTouchedScopeTests": 2, "MfaStoreTests": 14, "MfaChallengeStoreTests": 6, "MfaLoginTests": 9, "MfaEnrolmentTests": 9, "MfaApiTests": 3, "MfaStepUpTests": 7, "MfaStepUpApiTests": 4, "MfaRequirementTests": 6, "MfaPolicyTests": 12, "MfaPolicyApiTests": 10, "AuditTamperDetectionTests": 18, "AuditAtomicityTests": 9,
                 "AuditConcurrencyTests": 4, "AuditKeyRotationTests": 4, "AuditFileEvidenceTests": 8, "AuditApiTests": 3,
-                "AuditAdminToolTests": 7, "AuditRecoveryTests": 6,
+                "AuditAdminToolTests": 9, "AuditRecoveryTests": 6,
                 # Phase 3.1A-1 company runtime foundation. The two role suites (CompanyRuntimeIsolationTests, CompanyAdminToolRoleTests) use REAL distinct
                 # PostgreSQL principals and run only here, on the job-local service with the CREATEROLE test account; they are skipped on ordinary servers.
                 "CompanyRuntimeResolutionTests": 14, "CompanyMigrationTests": 11, "CompanyRuntimeGrantGuardTests": 3, "CompanyBusinessAuditTests": 15,
-                "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 14, "CompanyAdminToolRoleTests": 2,
+                "CompanyAdminToolTests": 5, "CompanyRuntimeIsolationTests": 17, "CompanyAdminToolRoleTests": 2,
                 # Phase 3.1A-2 company configuration (migration 0003, system migration 0006, services, API, projection)
                 "CompanyConfigurationMigrationTests": 4, "CompanyProfileTests": 12, "CompanySettingsTests": 5, "CompanyCurrencyTests": 8,
                 "CompanyNameProjectionTests": 5, "CompanyHistoryTests": 2, "CompanyConfigurationApiTests": 11,
@@ -195,11 +221,11 @@ jobs:
                 # Phase 3.2C (company migration 0009, system migration 0012): slice S1 cost-center accounting policies and cost-center-scoped access.
                 "CostCenterPolicyTests": 8, "CostCenterScopeTests": 5,
                 # slice S2 risk-based and ordered approval policies; slice S3 fiscal-year closing and opening balances.
-                "ApprovalStageTests": 9, "FiscalClosingTests": 11,
+                "ApprovalStageTests": 9, "ApprovalPolicyDuplicateTests": 8, "ApprovalPolicyRuntimeRoleTests": 1, "FiscalClosingTests": 11,
                 # Phase 3.2C final review: mandatory independent year-end approval, unlimited year-end entry size, dimension carryforward, multi-year reporting and report authorization.
                 "YearEndApprovalTests": 4, "YearEndScaleTests": 1, "YearEndDimensionTests": 1, "MultiYearReportingTests": 1, "ReportAuthorizationTests": 1,
                 # Phase 3.2D generic import framework (company migration 0010, system migration 0013): S1 secure infrastructure, S2 mapping and dry run, S3 approval and controlled application.
-                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 11, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
+                "ImportDatabaseGuardTests": 3, "ImportServiceTests": 15, "ImportRetentionTests": 3, "ImportAccessTests": 2, "ImportApiTests": 4, "ImportDryRunTests": 8, "ImportApprovalTests": 7, "ChartImportTests": 11, "ChartBusinessTemplateTests": 8, "ChartBusinessTemplateApiTests": 2,
                 # Phase 3.3 financial reporting: S1 reporting foundation.
                 "ReportingFoundationTests": 6, "ReportingComparisonTests": 8, "FinancialStatementTests": 13, "ExcelExportTests": 4,
                 # Phase 3.4 inventory master data (company migration 0012, system migration 0015).
@@ -222,6 +248,8 @@ jobs:
                 "StockAdjustmentTests": 12, "StockAdjustmentApiTests": 1,
                 # Phase 3.8B-3 negative-stock exception: obligations, settlements, reversals, close probe (company migration 0020, system migration 0022).
                 "NegativeStockTests": 15, "NegativeStockReviewTests": 4, "NegativeStockApiTests": 1,
+                # STOCK-PERIOD-DB (D-220, company migration 0034): the database guard against stock and cost postings into closed or missing periods. The role class needs the CREATEROLE test account (CI service only).
+                "StockPeriodGuardTests": 21, "StockPeriodGuardRuntimeRoleTests": 6,
                 # Phase 3.9A party registry: shared identity, central approval, outbox and reconciliation (company migration 0021, system migration 0023).
                 "PartyRegistryTests": 5, "PartyOutboxTests": 3, "PartyAccessTests": 1, "PartyDatabaseGuardTests": 1, "PartyApiTests": 1, "PartyReviewTests": 5,
                 # Phase 3.9C slice 2 party import adapter: creation through the party service, queued proposals, validation and conflicts, atomic rollback, stale plan.
@@ -237,18 +265,20 @@ jobs:
                 # Phase 3.10 slice 2b tax engine configuration: dated rates, classes, rules, rounding policy, resolution (company migration 0022, system migration 0024).
                 "TaxConfigTests": 12,
                 "TaxApiTests": 4,
+                # Owner decision D-235 (M2-TOTP): least-privilege system runtime account for the TOTP secret store, with a real restricted login role, the gate, the grant routine and the real API (no migration yet).
+                "SystemRuntimeLeastPrivilegeTests": 16,
                 # Release 1 acceptance, cross-module accounting scenarios: company isolation over HTTP across every read family, the fiscal life cycle to year end, inventory valuation = inventory ledger.
                 "CrossModuleIsolationScenarioTests": 1, "CrossModuleFiscalLifecycleScenarioTests": 1, "CrossModuleInventoryValuationScenarioTests": 1,
                 # Phase 3.9B customers and suppliers: roles, terms, credit-limit data, control accounts, sales representatives (company migration 0023, system migration 0025).
                 "PartyRoleTests": 10, "PartyRoleApiTests": 8,
                 # Phase 3.12 attachments: metadata, hashed and encrypted files, tamper detection, rotation drill, authorization (company migration 0024, system migration 0026).
-                "AttachmentTests": 10, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 4, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1, "ApiInputHardeningTests": 3,
+                "AttachmentTests": 12, "AttachmentApiTests": 8, "AttachmentRetentionDatabaseTests": 4, "AttachmentRetentionApiTests": 1, "AttachmentRetentionRuntimeRoleTests": 1, "ApiInputHardeningTests": 3,
                 # Phase 3.9C reusable import mapping templates (company migration 0025).
                 "ImportTemplateTests": 6, "ImportTemplateApiTests": 2,
                 # Phase 4.3 restore drill (pg_dump/pg_restore into an isolated target; the CI service and runner provide the PostgreSQL 16 client tools).
                 "BackupRestoreDrillTests": 2,
                 # Phase 4.3 slice 3: registry-bound backup, trial restore with the 21.8 pre-cutover checks, kept trial databases and the Hasm.Admin commands (no migration).
-                "CompanyBackupServiceTests": 11, "CompanyRestoreIsolationTests": 2,
+                "CompanyBackupServiceTests": 12, "CompanyRestoreIsolationTests": 2,
                 # Phase 4.3 slice 4: backup run of the whole installation (system database without secret-store data, every Ready company), status, retention preview, Hasm.Admin (no migration).
                 "BackupRunTests": 6,
                 # Gapless numbering under failure for stock documents, stocktakes, stock adjustments and journal posting: reuse after a failure after the issue, and a number collision refused as number_already_issued (no migration).
@@ -258,11 +288,13 @@ jobs:
                 # Per-endpoint 403 matrix of every mutating /api/v1/company/** route (no permission, read-only, other branch, cost center or warehouse; route-table completeness).
                 "EndpointPermissionMatrixTests": 5, "EndpointPermissionMatrixWarehouseTests": 1,
                 # Phase 4.3 slice 5: encrypted, signed backups, trial restore with the recovery key, forged-set refusal, backup-keys, the recovery test, encryption by default (no migration).
-                "EncryptedBackupTests": 6,
+                "EncryptedBackupTests": 7,
                 # Release 1 accounting acceptance (gap items 4-5): stock posting racing a period close (race and deterministic), stocktake approval in closed periods (no migration).
                 "InventoryPeriodInvariantTests": 3,
                 # Phase 4.3 slice 6: retention preview, backup legal holds, inactive automatic deletion, the deletion engine through the test seam, run/restore locks (one system migration).
-                "BackupRetentionTests": 7,
+                "BackupRetentionTests": 12,
+                # Phase 4.3 slice 8 (multiple backup destinations; no migration): S8a destination configuration, safety checks and the per-destination status; S8b the copy engine, backup-replicate and replication at the end of backup-run (audit 2040, 2041, 2043).
+                "BackupReplicationTests": 3, "BackupReplicaCopyTests": 10, "BackupReplicaVerifyTests": 8, "ReplicaAuditVerifiedReadTests": 5, "ReplicaRetentionPlanTests": 3,
                 # Release 1 acceptance evidence for owner item 11 (D-088): real encrypted backup, trial restore with the recovery key, tampering and downgrade refusals, key rotation, key-export round trip (no migration).
                 "BackupAcceptanceEvidenceTests": 5,
                 # Acceptance scenario 21.10 and the upgrade test category: opaque physical names and intact schema on a new database, an upgrade from company level 3 and a trial restore (no migration).
@@ -275,5 +307,32 @@ jobs:
                 "EndpointConstraintMatrixPart2StockTests": 2,
                 # Constraint-violation matrix, part 2, batch 4: commercial documents and imports on their own fixtures (no migration).
                 "EndpointConstraintMatrixPart2CommercialTests": 1, "EndpointConstraintMatrixPart2ImportTests": 1,
+                # Phase 3.14 slice S1 cash and bank account master (company migration 0033, provisional number): binding, base currency, branch scope, sensitive bank number, runtime guards, HTTP API; constraint matrix batch 5 (cash accounts).
+                "CashAccountTests": 11, "CashAccountAccessTests": 4, "CashAccountSensitiveTests": 9, "EndpointConstraintMatrixPart2CashTests": 1,
+                # Phase 3.8D-1 authorized, repeatable-read/read-only ordinary-history snapshots; unsupported histories fail closed.
+                "CostHistorySnapshotTests": 15, "NegativeCostHistorySnapshotTests": 2, "StockDocumentCostHistorySnapshotTests": 4,
+                "CostFlowSnapshotTests": 49, "StockDocumentCostFlowSnapshotTests": 6, "NegativeCostFlowSnapshotTests": 2,
+                "CostFlowComparisonTests": 17,
+                "CostFlowPreviewTests": 13,
+                "CostReadBudgetTests": 4, "ReadBudgetRoleTests": 2,
+                "CostFlowItemsTests": 22,
+                "StockReadValidationTests": 15,
+                "CostSourceEvidenceTests": 40,
+                "CostSourceFiscalTests": 17,
+                "ClassificationEvidenceTests": 17,
+                "CompensationPlanTests": 4,
+                "CompensationPlanServiceTests": 12,
+                # Phase 3.8D step 4 (company migration 0036, provisional number): the X1-A database layer driven by SQL through the real runtime role (tests N1-N32 of the plan-execution design; no executor exists)
+                "PlanExecutionGuardTests": 10, "PlanExecutionPlanTests": 7, "PlanExecutionEpochTests": 28, "PlanExecutionCatalogTests": 4,
+                # Phase 3.8D step 5 slices 1 and 2: the plan storage and approval services
+                "CompensationPlanStorageTests": 7, "CompensationPlanApprovalTests": 9,
+                # Phase 3.8D part 1 (owner-approved re-scope of PR 48): the execution path is disabled and cannot be activated; migration 0036 is additive and compatible with an existing database
+                "PlanExecutionDisabledTests": 4, "PlanExecutionRuntimeRoleDisabledTests": 2, "PlanExecutionMigrationCompatibilityTests": 1,
+                # Phase 3.8D threat T2 slice A1 (company migration 0037): the replay signer registry, the RSA verifier against fixed vectors and the grant shells (inert)
+                "ReplaySignerRegistryTests": 10,
+                # Phase 3.8D threat T2 slice A2 (company migration 0038): insert-time verification of a grant (vectors, a real key and real signatures, every rule of 4.3, inertness)
+                "ReplayGrantVerificationTests": 7,
+                # Phase 3.8D executor slice E1b: the derived epoch content against the real engine (8 scenarios), the T2 column-pin test 4c (one PostgreSQL test and one pure test)
+                "EpochContentEngineOracleTests": 8, "EpochTextColumnPinTests": 2,
             }
         run: node tools/verify/pg-trx-check.js "$RUNNER_TEMP/trx/pg-integration.trx" .github/workflows/backend.yml

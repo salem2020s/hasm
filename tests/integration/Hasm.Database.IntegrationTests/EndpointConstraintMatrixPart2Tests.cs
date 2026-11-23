@@ -70,7 +70,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/parties/sync"] = "idempotent (same answer)",
             ["POST /api/v1/company/parties/reconcile"] = "read-only (same answer)",
             ["PUT /api/v1/company/statements/mapping"] = "stale-revision race",
-            ["POST /api/v1/company/approval-policies/"] = "append (no uniqueness rule)",
+            ["POST /api/v1/company/approval-policies/"] = "duplicate (409 approval_policy_duplicate)",
             ["PUT /api/v1/company/approval-policies/{id:guid}"] = "stale-revision race",
             ["POST /api/v1/company/approval-policies/{id:guid}/deactivate"] = "stale-revision race",
             ["POST /api/v1/company/approval-policies/{id:guid}/activate"] = "stale-revision race",
@@ -173,6 +173,14 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/imports/"] = "idempotent replay (same answer, one batch)",
             ["PUT /api/v1/company/imports/settings"] = "stale-revision race (first save included)",
         },
+        [nameof(EndpointConstraintMatrixPart2CashTests.Cash_and_bank_accounts_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/cash-accounts/"] = "duplicate code",
+            ["PUT /api/v1/company/cash-accounts/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/cash-accounts/{id:guid}/deactivate"] = "transition race",
+            ["POST /api/v1/company/cash-accounts/{id:guid}/activate"] = "transition race",
+            ["POST /api/v1/company/cash-accounts/maintenance/rewrap"] = "idempotent (same answer)",
+        },
     };
 
     /// <summary>The routes part 2 probes (the union of <see cref="Shares"/>), each with the kind of probe. A property: evaluated on use, never during type initialization.</summary>
@@ -231,7 +239,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         storage = Path.Combine(Path.GetTempPath(), "hasm-cvm2-" + Guid.NewGuid().ToString("N"));
         await StartApi(new WarehouseLimitPolicy(50, 50), b => b.UseSetting("Hasm:Attachments:StorageDirectory", storage).ConfigureServices(s =>
         {
-            s.AddSingleton<KekRing>(new InMemoryKekRing("k1"));
+            s.AddSingleton<KekRing>(new InMemoryKekRing("k1", TestIdentityKeys.Master));
             s.AddSingleton(new EncryptionOptions { AllowInsecureFilePermissions = true });
             s.AddSingleton<ICommercialDocumentTypeRegistry>(new CommercialDocumentTypeRegistry([CommercialTestType.Name]));   // the internal test document type (D-049)
         }));
@@ -265,8 +273,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((106, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));
-        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 8, 18], Shares.Values.Select(share => share.Count));
+        Assert.Equal((111, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));
+        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 8, 18, 5], Shares.Values.Select(share => share.Count));
         // AssertRan resolves each probed request to its route through the route table: every route must be reachable by exactly one template (no ambiguity)
         var ambiguous = all.Where(t => ConstraintRaces.TemplateOf(new HttpMethod(t[..t.IndexOf(' ')]), SamplePath(t[(t.IndexOf(' ') + 1)..]), all) != t).Order(StringComparer.Ordinal).ToList();
         Assert.True(ambiguous.Count == 0, "routes the probe resolver cannot tell apart:\n" + string.Join("\n", ambiguous));
@@ -364,9 +372,9 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
 
         // statement mapping and approval policies
         await Race("statement mapping", R, HttpMethod.Put, "/api/v1/company/statements/mapping", new StatementMappingInput([new StatementMappingEntryInput(IdOf(leaf), "current_assets")], "matrix", null), "\"0\"");
-        // approval policies carry no uniqueness rule (several policies per document type are allowed), so each create appends one: no refusal is expected
-        var policy = await Race("approval policy", [], HttpMethod.Post, "/api/v1/company/approval-policies",
-            new ApprovalPolicyInput(DocumentTypes.JournalEntry, "manual", null, 100m, 1, "سياسة", "Policy"), mode: Mode.Append);
+        // a semantically identical ACTIVE policy is refused (company migration 0033, owner decision of 2026-11-21): of the identical parallel creates exactly one wins and every other gets the mapped 409
+        var policy = await Race("approval policy", ["409:approval_policy_duplicate"], HttpMethod.Post, "/api/v1/company/approval-policies",
+            new ApprovalPolicyInput(DocumentTypes.JournalEntry, "manual", null, 100m, 1, "سياسة", "Policy"));
         if (policy is not null)
         {
             var updated = await Race("approval policy update", R, HttpMethod.Put, $"/api/v1/company/approval-policies/{IdOf(policy)}",

@@ -334,7 +334,7 @@ public class ImportDryRunTests : ImportTestBase
         await StartApi(configure: b =>
         {
             b.UseSetting("Hasm:Imports:StorageDirectory", StorageDir);
-            b.ConfigureServices(s => { s.AddSingleton<Hasm.Infrastructure.Security.KekRing>(new Hasm.Infrastructure.Security.InMemoryKekRing("k1")); s.AddSingleton(TestEncryption); s.AddSingleton<IImportAdapter>(Items); });
+            b.ConfigureServices(s => { s.AddSingleton<Hasm.Infrastructure.Security.KekRing>(new Hasm.Infrastructure.Security.InMemoryKekRing("k1", TestIdentityKeys.Master)); s.AddSingleton(TestEncryption); s.AddSingleton<IImportAdapter>(Items); });
         });
         Items.Existing["E2"] = ("Original", "goods");
         const string Base = "/api/v1/company/imports";

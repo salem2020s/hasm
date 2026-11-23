@@ -121,6 +121,68 @@ for (const mode of MODES) {
       expect(api.created.accounts[0]).toMatchObject({ type: "liability", nameEn: "Accounts payable", isGroup: true });
     });
 
+    test("company MFA policy: the first write sends If-Match \"0\", a concurrent change meets 412 and keeps the choice, the reload takes the new revision and the re-applied save succeeds", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      await go(page, "#/company/mfa-policy");
+      await expect(page.getByRole("heading", { name: E("mfapolicy.title"), level: 1 })).toBeVisible();
+      await page.getByLabel(new RegExp(E("mfapolicy.kind.all"))).check();
+      await page.getByTestId("mfapolicy-save").click();
+      await page.getByRole("dialog").getByRole("button", { name: E("mfapolicy.confirm") }).click();
+      await expect(page.getByTestId("mfapolicy-notice")).toContainText(E("mfapolicy.saved"));
+      expect(api.policyWrites.map((w) => w.ifMatch)).toEqual(['"0"']);
+      api.changePolicyElsewhere();                                                                            // revision 1 -> 2 behind the user's back
+      await page.getByLabel(new RegExp(E("mfapolicy.kind.off"))).check();
+      await page.getByTestId("mfapolicy-save").click();
+      await expect(page.getByTestId("mfapolicy-conflict")).toContainText(E("mfapolicy.conflict"));
+      await expect(page.getByLabel(new RegExp(E("mfapolicy.kind.off")))).toBeChecked();                       // the unsaved choice is kept
+      await page.getByTestId("mfapolicy-reload").click();
+      await expect(page.getByTestId("mfapolicy-reloaded")).toBeVisible();
+      await page.getByTestId("mfapolicy-save").click();
+      await expect(page.getByTestId("mfapolicy-notice")).toContainText(E("mfapolicy.saved"));
+      expect(api.policyWrites.map((w) => w.ifMatch)).toEqual(['"0"', '"1"', '"2"']);
+    });
+
+    test("cash and bank accounts: create a bank account, the list shows only the masked number, and a permitted user reveals the full number on request", async ({ page }) => {
+      const api = await start(page, mode);
+      await toEnglish(page);
+      await signIn(page);
+      await enterCompany(page, "Amal Co");
+      await go(page, "#/company/cash-accounts");
+      await expect(page.getByRole("heading", { name: E("cash.title"), level: 1 })).toBeVisible();
+      await page.getByRole("button", { name: E("cash.new") }).click();
+      const form = page.getByRole("form", { name: E("cash.form_section") });
+      await form.getByLabel(new RegExp(`^${E("cash.kind_field")}`)).selectOption("bank");
+      await form.getByLabel(new RegExp(`^${E("cash.code_field")}`)).fill("nb1");
+      await form.getByLabel(E("cash.name_en")).fill("National Bank");
+      await form.getByLabel(new RegExp(`^${E("cash.branch_field")}`)).selectOption("b1");
+      const gl = form.getByRole("combobox", { name: E("cash.gl_field") });
+      await expect(gl.locator("option")).toHaveCount(2);                                                     // the empty choice and the one free asset account
+      await gl.selectOption({ index: 1 });
+      await page.getByRole("tab", { name: new RegExp(E("cash.tab.bank")) }).click();
+      await form.getByLabel(E("cash.bank_name")).fill("National Bank");
+      await form.getByLabel(E("cash.number_new")).fill("SA03 8000 0000 6080 1016 7519");
+      await form.getByRole("button", { name: E("cash.save") }).click();
+      await expect(page.getByTestId("saved")).toContainText(E("cash.created"));
+      expect(api.cashCreated).toHaveLength(1);
+      expect(api.cashCreated[0]).toMatchObject({ kind: "bank", code: "NB1", nameEn: "National Bank", branchId: "b1", bankName: "National Bank", accountNumber: "SA03 8000 0000 6080 1016 7519" });
+      const row = page.getByTestId("cash-NB1");
+      await expect(row).toContainText("****7519");                                                             // the list shows the masked number only
+      expect(await page.locator("body").innerText()).not.toContain("0380000000");
+      expect(api.cashReveals).toHaveLength(0);
+      await row.getByRole("button", { name: E("cash.edit") }).click();
+      await page.getByRole("tab", { name: new RegExp(E("cash.tab.bank")) }).click();
+      await expect(page.getByTestId("cash-number-shown")).toHaveCount(0);
+      await page.getByTestId("cash-number-reveal").click();
+      await expect(page.getByTestId("cash-number-shown")).toContainText("SA0380000000608010167519");
+      expect(api.cashReveals).toEqual(["ca1"]);
+      await page.getByTestId("cash-number-reveal").click();                                                    // hide again
+      await expect(page.getByTestId("cash-number-shown")).toHaveCount(0);
+      expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("0380000000");
+    });
+
     test("journal draft: exact decimal text is saved as a draft through the API", async ({ page }) => {
       const api = await start(page, mode);
       await toEnglish(page);

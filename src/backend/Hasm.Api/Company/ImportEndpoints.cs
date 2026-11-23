@@ -336,6 +336,13 @@ public static class ImportEndpoints
     {
         var (actor, failure) = await AccessEndpoints.ResolveActor(http, access);
         if (failure is not null) return failure;
-        return CompanyConfigurationEndpoints.Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), MaintenanceBody);
+        return CompanyConfigurationEndpoints.Map(await svc.RewrapAsync(actor!.UserId, actor.CompanyId, http.RequestAborted), RewrapBody);
     }
+
+    // additive (D-180): the earlier fields stay; the retirability signal mirrors the attachments' rewrap response
+    private static object RewrapBody(ImportRewrapOutcome o) => new
+    {
+        expired = 0, purged = 0, rewrapped = o.Rewrapped, skipped = o.Skipped, failed = o.Failed, remainingUnderOtherKeys = o.Usage.UnderOtherKeys, unknownKeys = o.Usage.Unknown,
+        keyIdsInUse = o.Usage.KeyIdsInUse, oldKeysMayBeRetired = o.OldKeysMayBeRetired,
+    };
 }

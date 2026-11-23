@@ -13,12 +13,15 @@ using Npgsql;
 
 // Explicit administrative tool. Never started by the API; uses the privileged database account.
 // Usage:
-//   Hasm.Admin init-system-db
+//   Hasm.Admin init-system-db [--allow-superuser-for-development]  (also provision-company and migrate-companies: these three refuse a PostgreSQL superuser account unless the switch is given; development and tests only; logged)
 //   Hasm.Admin register-company              (registers a Pending company; prints its id only)
 //   Hasm.Admin bootstrap-admin <login> [display name]  (creates the FIRST identity administrator; refuses if one exists)
 //   Hasm.Admin provision-company <company-id> (creates + migrates its separate database; safe to repeat/resume)
 //   Hasm.Admin migrate-companies [--company <id>]  (applies pending forward-only company migrations to Ready companies; per-company outcome; exit 8 on partial failure)
 //   Hasm.Admin grant-company-runtime <company-id> [--rotate-credential]  (creates/updates the company's own least-privilege runtime login role and credential file; idempotent)
+//   Hasm.Admin grant-system-runtime           (D-235: converges the API runtime account's privileges on the SYSTEM database to the reviewed catalog, least-privilege for the TOTP secret store; owner account; idempotent; never creates a role)
+//   Hasm.Admin grant-cash-account-manager <login> <company-id> | revoke-cash-account-manager <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED Cash Account Manager preset; audited; X4-PRESET-ROLE)
+//   Hasm.Admin grant-cash-account-sensitive-viewer <login> <company-id> | revoke-cash-account-sensitive-viewer <login> <company-id>  (offline delegation of the dedicated, PRIVILEGED preset that may read a full bank account number; audited)
 //   Hasm.Admin grant-company-admin <login> <company-id>  (offline initial/recovery: membership + Company Administrator role; audited)
 //   Hasm.Admin grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id>  (offline delegation of the Import Approver role: approval of imports; audited)
 //   Hasm.Admin audit-keygen <key-id>          (creates a new random audit key file with owner-only permissions; never overwrites)
@@ -34,11 +37,25 @@ using Npgsql;
 //   Hasm.Admin backup-run <root>  (Phase 4.3 slice 4: system database + every Ready company into <root>/<run id>/, run.json last; exit 0 ok, 8 partial, 1 failed, 4 another run in progress)
 //   Hasm.Admin backup-signing-keygen  (Phase 4.3 slice 5: a new ECDSA P-256 backup signing key in Hasm__Backup__SigningKeyDirectory, owner-only, never overwrites; audited 2013)
 //   Hasm.Admin backup-keys <destination-dir>  (Phase 4.3 slice 5: every key directory as ONE encrypted, signed export; signing PUBLIC keys only; audited 2012)
-//   Hasm.Admin backup-retention-plan <root> [--json <file>]  (Phase 4.3 slice 6: the D-086 retention preview with every run's keep reasons; reads the databases; deletes nothing; audited 2014)
+//   Hasm.Admin backup-retention-plan <root> [--destination <id>] [--json <file>]  (Phase 4.3 slice 6: the D-086 retention preview with every run's keep reasons; reads the databases; deletes nothing; audited 2014)
 //   Hasm.Admin backup-retention-apply <root>  (Phase 4.3 slice 6: automatic deletion, INACTIVE (D-137): refuses with retention_deletion_inactive, audited 2017)
 //   Hasm.Admin backup-hold-place (--run <run-id> | --company <id> [--from <date>] [--to <date>]) --reason <text>  (a backup legal hold; never released by this tool; audited 2018)
 //   Hasm.Admin backup-hold-list
-//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY, no database: newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale)
+//   Hasm.Admin encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>]
+//              (D-181: which encryption master keys may be retired: none that is active, that a live attachment or import original needs, or that a run present in ANY given backup root lists;
+//               read-only; retires nothing (D-080(6)); exit 0 complete, 8 incomplete (then no key is retirable), 3 configuration. Fail closed: a root that is missing, not a directory, a
+//               symbolic link or without a complete, verified run is a blocker, and so is any entry of a root that is not a run folder, a .deleting-* folder or .retention (a run moved or
+//               copied under another name is not read; write --json outside the roots). It reads ONLY the given roots: other destinations, copies and standalone backup-company sets are not seen, so
+//               without --all-backup-copies-listed (the operator's attestation that the given roots are every place a backup is kept) the report is incomplete)
+//   Hasm.Admin backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first]  (slice 8, S8b: copies every complete signed encrypted run of the primary root that a
+//              destination lacks, oldest first, byte for byte into <destination>/<run>.incoming-<hex>, verifies the copy by read-back after flush, writes audit 2040 and then renames it into place;
+//              2041 on a failure; --run copies or re-verifies that run; never decrypts, never deletes; exit like backup-run: the worst of the replication result and the destinations' status, 1 > 8 > 0;
+//              4 destination busy, 3 invalid or unsafe destination configuration)
+//   Hasm.Admin backup-replica-verify [--destination <id>] [--all]  (slice 8, S8c: re-verifies copies already published, each alone against its own SIGNED ciphertext inventory (no primary, never decrypts);
+//              by default the newest copy, the newest copy of every company and the copies a legal hold or retention pin names; --all every run folder; a copy that verifies writes 2040 reverified=true, one that
+//              does not writes 2042 (once) and is left exactly as it is; exit 0 all verified, 1 a copy corrupt or a destination unreadable, 3 invalid destination configuration, 4 destination busy)
+//   Hasm.Admin backup-status <root> [--max-age-hours N]  (READ-ONLY; no database unless backup destinations are configured, then the system audit stream is read in a READ ONLY transaction (S8c): newest complete run; exit 0 ok, 8 partial or missed runs, 1 failed, missing or stale;
+//              slice 8: with Hasm__Backup__Destinations configured, also each destination's contribution and the OVERALL status, combined 1 > 8 > 0 (D-186); on a destination folder its root status only)
 //   Hasm.Admin backup-retention-preview <root> --keep-last N [--keep-days D]  (READ-ONLY, no database: lists the runs a policy WOULD remove; deletes nothing)
 // Configuration comes only from environment variables (Hasm__Database__*); see docs/DEVELOPMENT.md.
 // Physical database names are never printed.
@@ -55,22 +72,38 @@ var keepTrial = false;
 var maxAgeHours = 26;
 string? recoveryKeyFile = null, signingTrustFile = null, signingPublicKeyFile = null, keysExportDir = null;
 string? holdRun = null, holdReason = null, planJson = null;
+List<string> retirementRoots = [];
+var retirementScopeAttested = false;
 Guid? holdCompany = null;
 DateOnly? holdFrom = null, holdTo = null;
 var passphraseStdin = false;
+string? replicateRun = null, replicateDestination = null, retentionDestination = null;
+var replicateNewestFirst = false;
+var verifyAll = false;
 var keepLast = 0;
 int? keepDays = null;
+// Owner decision 2026-11-22 (Q3): the migrating commands refuse a PostgreSQL superuser account. The override exists for development and tests only, is accepted by these three commands
+// only (any other command that receives it fails the usage check) and is logged on every use. It is never read from configuration.
+var allowSuperuserForDevelopment = false;
+if (command is "init-system-db" or "provision-company" or "migrate-companies" && args.Contains(MigrationAccountPolicy.OverrideSwitch, StringComparer.Ordinal))
+{
+    allowSuperuserForDevelopment = true;
+    args = [.. args.Where(a => !string.Equals(a, MigrationAccountPolicy.OverrideSwitch, StringComparison.Ordinal))];
+}
 var validUsage = command switch
 {
-    "init-system-db" or "register-company" => args.Length == 1,
+    "init-system-db" or "register-company" or "grant-system-runtime" => args.Length == 1,
     "bootstrap-admin" => args.Length is 2 or 3,
+    "identity-tag" => args.Length is 1 or 2,
+    "identity-audit-report" => args.Length is 1 or 3 && (args.Length == 1 || args[1] == "--out"),
     "provision-company" => args.Length == 2 && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "migrate-companies" => args.Length == 1
         || (args.Length == 3 && args[1] == "--company" && Guid.TryParse(args[2], out var only) && only != Guid.Empty && (onlyCompany = only) is not null),
     "grant-company-runtime" => (args.Length == 2 || (args.Length == 3 && (rotateCredential = args[2] == "--rotate-credential")))
         && Guid.TryParse(args[1], out companyId) && companyId != Guid.Empty,
     "grant-company-admin" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
-    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
+    "grant-fiscal-approver" or "revoke-fiscal-approver" or "grant-journal-approver" or "revoke-journal-approver" or "grant-import-approver" or "revoke-import-approver"
+        or "grant-cash-account-manager" or "revoke-cash-account-manager" or "grant-cash-account-sensitive-viewer" or "revoke-cash-account-sensitive-viewer" => args.Length == 3 && Guid.TryParse(args[2], out companyId) && companyId != Guid.Empty,
     "audit-keygen" => args.Length == 2 && AuditKeyRing.IsValidKeyId(args[1]),
     "encryption-keygen" => args.Length == 2 && KekRing.IsValidKeyId(args[1]),
     "audit-verify" => AuditStream.TryParse(args.Length > 1 ? args[1] : null, out auditStream)
@@ -83,13 +116,15 @@ var validUsage = command switch
     "drop-trial-restore" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-recovery-keygen" => args.Length >= 2 && args.Length <= 4 && Path.IsPathFullyQualified(args[1]) && args.Skip(2).All(a => a is "--separate-passphrases" or "--passphrase-stdin") && args.Skip(2).Distinct().Count() == args.Length - 2,
     "backup-run" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
+    "backup-replicate" => ParseReplicateArgs(),
+    "backup-replica-verify" => ParseVerifyArgs(),
     "backup-signing-keygen" => args.Length == 1,
     "backup-keys" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
-    "backup-retention-plan" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "")
-        && (args.Length == 2 || (args.Length == 4 && args[2] == "--json" && Path.IsPathFullyQualified(planJson = args[3]))),
+    "backup-retention-plan" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && ParseRetentionPlanFlags(),
     "backup-retention-apply" => args.Length == 2 && Path.IsPathFullyQualified(args[1]),
     "backup-hold-place" => ParseHoldFlags(),
     "backup-hold-list" => args.Length == 1,
+    "encryption-key-retirement-report" => ParseRetirementArgs(),
     "backup-status" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length == 2
         || (args.Length == 4 && args[2] == "--max-age-hours" && int.TryParse(args[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out maxAgeHours) && maxAgeHours is >= 1 and <= 8760)),
     "backup-retention-preview" => Path.IsPathFullyQualified(args.Length > 1 ? args[1] : "") && (args.Length is 4 or 6) && args[2] == "--keep-last"
@@ -99,7 +134,7 @@ var validUsage = command switch
 };
 if (!validUsage)
 {
-    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | bootstrap-admin <login> [display name] | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
+    Console.Error.WriteLine("Usage: Hasm.Admin init-system-db | register-company | migrate-companies [--company <id>] | grant-company-runtime <company-id> [--rotate-credential] | grant-system-runtime | bootstrap-admin <login> [display name] | identity-audit-report [--out <file>] | identity-tag (refused until its reviewed-report binding exists) | provision-company <company-id> | grant-company-admin <login> <company-id> | grant-fiscal-approver <login> <company-id> | grant-journal-approver <login> <company-id> | grant-import-approver <login> <company-id> | revoke-import-approver <login> <company-id> | revoke-journal-approver <login> <company-id> | revoke-fiscal-approver <login> <company-id> | audit-keygen <key-id> | encryption-keygen <key-id> | audit-verify <system|company-id|business:company-id> [--checkpoint-dir <dir>] | audit-anchor <system|company-id|business:company-id> [--establish-baseline] | backup-company <company-id> <destination-dir> | trial-restore-company <set-dir> <company-id> <attachment-target-dir> [--keep] [--recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--passphrase-stdin]] | backup-recovery-test <run-dir> --recovery-key <file> (--signing-trust <file> | --signing-public-key <pem>) [--keys-export <dir>] [--passphrase-stdin] | drop-trial-restore <kept-file> | backup-recovery-keygen <out-dir> [--separate-passphrases] [--passphrase-stdin] | backup-run <root> | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-replica-verify [--destination <id>] [--all] | backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] | backup-signing-keygen | backup-keys <destination-dir> | backup-retention-plan <root> [--json <file>] | backup-retention-apply <root> | backup-hold-place (--run <run-id> | --company <id> [--from <yyyy-mm-dd>] [--to <yyyy-mm-dd>]) --reason <text> | backup-hold-list | encryption-key-retirement-report <backup-root> [<backup-root> ...] [--all-backup-copies-listed] [--json <file>] | backup-status <root> [--max-age-hours N] | backup-retention-preview <root> --keep-last N [--keep-days D]  (all paths absolute)");
     return Usage;
 }
 
@@ -136,6 +171,54 @@ if (command is "backup-status" or "backup-retention-preview")
         Console.WriteLine($"Never selected: the newest complete run; incomplete run(s): {runs.Count(r => !r.IsComplete && !r.HasReportFile)}; unreadable report(s): {runs.Count(r => r.IsUnreadable)}.");
         return Ok;
     }
+    // slice 8 (D-183, D-184): the destinations are read and checked FIRST; an invalid or unsafe configuration is a refusal (exit 3) returned alone, never a skipped destination.
+    // backup-status on a destination folder gives that folder's ROOT status only (D-186): it has no view of the primary or of the other destinations.
+    IReadOnlyList<CheckedDestination> destinations;
+    bool onDestination;
+    try
+    {
+        var configured = BackupDestinations.FromConfiguration(configuration);
+        onDestination = BackupDestinations.IsDestinationPath(args[1], configured);
+        destinations = BackupDestinations.Check(configured, onDestination ? null : args[1],
+            [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, auditOptions.KeyDirectory, statusOptions.SigningKeyDirectory]);
+    }
+    catch (BackupException ex)
+    {
+        Console.Error.WriteLine($"backup-status refused ({ex.Code}{(ex.Cause is null ? "" : $": {ex.Cause}")}). Fix Hasm__Backup__Destinations; no destination is ever skipped.");
+        return BadConfig;
+    }
+    var rootExit = RootStatus();
+    if (onDestination)
+    {
+        Console.WriteLine("This folder is a configured backup destination: its ROOT status only (no view of the primary or of the other destinations).");
+        return rootExit;
+    }
+    var readinessTrust = BackupMaterialLoader.ServerTrust(statusOptions);
+    var readinessOptions = RetentionOptions.FromConfiguration(configuration);
+    if (destinations.Count == 0)
+    {
+        Console.WriteLine("Replicas: none (no backup destination configured).");
+        foreach (var line in DeletionReadiness.Lines(DeletionReadiness.Locations(readinessOptions, destinations, args[1], readinessTrust, null, auditReadable: true))) Console.WriteLine(line);
+        return rootExit;
+    }
+    // slice 8 (S8c): with destinations configured the system audit stream is read, read-only, for the last re-verification of each copy (2040 reverified, 2042 corrupt); an unreadable stream is a failure
+    ReplicaAuditState? auditState = null;
+    var auditReadable = true;
+    try { auditState = await ReplicaAuditReader.ReadAsync(HasmDatabaseOptions.FromConfiguration(configuration).BuildSystemConnectionString(admin: true)); }
+    catch (Exception ex) when (ex is BackupException or ArgumentException or InvalidOperationException or Hasm.Infrastructure.Configuration.DatabaseConfigurationException) { auditReadable = false; }
+    var reports = ReplicaStatusReport.Evaluate(destinations, args[1], BackupMaterialLoader.ServerTrust(statusOptions), now, TimeSpan.FromHours(maxAgeHours), auditState);
+    foreach (var line in reports.SelectMany(r => r.Lines)) Console.WriteLine(line);
+    if (!auditReadable) Console.WriteLine("  [FAILURE] audit_unreadable (the system audit stream could not be read, so re-verification results are unknown)");
+    // S8d (5.9): the readiness of deletion at the primary and each destination, reason codes only. This status read is informational (the audit rows are read as stored), so it never makes a run count as accounted for.
+    foreach (var line in DeletionReadiness.Lines(DeletionReadiness.Locations(readinessOptions, destinations, args[1], readinessTrust, auditState, auditReadable))) Console.WriteLine(line);
+    var contributions = reports.Select(r => r.Findings).ToList();
+    if (!auditReadable) contributions.Add([new ReplicaFinding("audit_unreadable", 1)]);
+    var overall = ReplicaStatus.Overall(rootExit, contributions);
+    Console.WriteLine($"Overall backup status (primary root and every configured destination, D-186): exit {overall}.");
+    return overall;
+
+    int RootStatus()
+    {
     var status = BackupRunStatus.Evaluate(runs, now, TimeSpan.FromHours(maxAgeHours));
     Console.WriteLine($"Backup status: {status.Code} (exit {status.ExitCode}).");
     if (status.Latest is { } latest)
@@ -154,6 +237,7 @@ if (command is "backup-status" or "backup-retention-preview")
         if (status.ExitCode == 0) { Console.WriteLine("Backup status: retention_deletion_incomplete (exit 8)."); return 8; }
     }
     return status.ExitCode;
+    }
 }
 
 if (command == "backup-recovery-keygen")
@@ -194,6 +278,15 @@ if (command == "backup-recovery-keygen")
     catch (BackupException ex) { Console.Error.WriteLine($"backup-recovery-keygen stopped ({ex.Code}); nothing usable was written."); return Failed; }
 }
 
+if (command == "identity-tag")
+{
+    // Owner decision OD-3 (identity integrity plan section 7): tagging the existing users blesses whatever the rows say NOW, including a row a runtime-credential holder wrote. It is therefore NOT available until the
+    // reviewed reconciliation report of slice S-2c exists and the command is bound to that report. Until then an upgraded installation keeps its untagged users locked out (OD-2: no compatibility mode); a fresh
+    // installation creates its first administrator tagged through bootstrap-admin. Nothing is read or written here.
+    Console.Error.WriteLine("identity-tag is not available yet. Owner decision OD-3 requires a reviewed reconciliation report before any existing user is tagged, and that report is slice S-2c of docs/IDENTITY-INTEGRITY-PLAN.md. Nothing was changed.");
+    return Failed;
+}
+
 if (command == "encryption-keygen")
 {
     // No database involved. The master key is written to the configured key directory with owner-only permissions; only its id is printed.
@@ -212,8 +305,9 @@ HasmDatabaseOptions options;
 try
 {
     options = HasmDatabaseOptions.FromConfiguration(configuration);
+    if (allowSuperuserForDevelopment) options.AllowSuperuserMigrationAccountForDevelopment();
     // Verification and anchoring are read-only with respect to the database and use the least-privilege runtime account.
-    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor"));
+    options.EnsureValid(requireAdmin: command is not ("audit-verify" or "audit-anchor" or "identity-audit-report"));
 }
 catch (DatabaseConfigurationException ex)
 {
@@ -266,9 +360,11 @@ try
 
             // Administrative tool: the privileged account is acceptable here (never in the API runtime).
             var trail = AuditTrail.FromOptions(auditOptions, TimeProvider.System);
-            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail);
+            await using var store = new IdentityStore(options.BuildSystemConnectionString(admin: true), TimeProvider.System, trail, new IdentityKeys(new FileKekRing(EncryptionOptions.FromConfiguration(configuration))));   // the first administrator is created TAGGED: no key ring, no administrator (fails closed)
             var auth = new AuthService(store, new PasswordService(authOptions.Pbkdf2Iterations), authOptions);
-            var result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password);
+            CreateUserResult? result;
+            try { result = await auth.BootstrapAdministratorAsync(args[1], args.Length == 3 ? args[2] : args[1], password); }
+            catch (EncryptionUnavailableException) { Console.Error.WriteLine("The encryption key ring is not available (Hasm__Encryption__KeyDirectory and Hasm__Encryption__ActiveKeyId): the administrator is created with an integrity tag and cannot be created without it. Nothing was changed."); return BadConfig; }
             if (result is null)
             {
                 Console.Error.WriteLine("An identity administrator already exists; nothing was changed.");
@@ -314,15 +410,25 @@ try
         case "revoke-journal-approver":
         case "grant-import-approver":
         case "revoke-import-approver":
+        case "grant-cash-account-manager":
+        case "revoke-cash-account-manager":
+        case "grant-cash-account-sensitive-viewer":
+        case "revoke-cash-account-sensitive-viewer":
         {
             // Offline delegation of the Fiscal Approver role (approval of exceptional fiscal reopenings). No HTTP endpoint exists for this: a company administrator
             // cannot grant a permission they do not hold, so this is the supported way to create the first approver and the recovery path. Audited without an actor user.
             await using var access = new AccessService(options.BuildSystemConnectionString(admin: true), TimeProvider.System, PermissionCatalog.Default, AuditTrail.FromOptions(auditOptions, TimeProvider.System));
             var importRole = command.EndsWith("import-approver", StringComparison.Ordinal);
             var journalRole = command.EndsWith("journal-approver", StringComparison.Ordinal);
-            var roleName = importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
+            var cashManager = command.EndsWith("cash-account-manager", StringComparison.Ordinal);
+            var cashViewer = command.EndsWith("cash-account-sensitive-viewer", StringComparison.Ordinal);
+            var roleName = cashManager ? "Cash Account Manager" : cashViewer ? "Cash Account Sensitive Viewer" : importRole ? "Import Approver" : journalRole ? "Journal Approver" : "Fiscal Approver";
             var granting = command.StartsWith("grant-", StringComparison.Ordinal);
-            var status = importRole
+            var status = cashManager
+                ? (granting ? await access.GrantCashAccountManagerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountManagerOfflineAsync(args[1], companyId))
+                : cashViewer
+                ? (granting ? await access.GrantCashAccountSensitiveViewerOfflineAsync(args[1], companyId) : await access.RevokeCashAccountSensitiveViewerOfflineAsync(args[1], companyId))
+                : importRole
                 ? (granting ? await access.GrantImportApproverOfflineAsync(args[1], companyId) : await access.RevokeImportApproverOfflineAsync(args[1], companyId))
                 : journalRole
                 ? (granting ? await access.GrantJournalApproverOfflineAsync(args[1], companyId) : await access.RevokeJournalApproverOfflineAsync(args[1], companyId))
@@ -359,6 +465,19 @@ try
             PrintReport(report);
             return report.Verdict switch { AuditVerdict.Verified => Ok, AuditVerdict.Failed => AuditFailed, _ => AuditIncomplete };
         }
+        case "identity-audit-report":
+        {
+            // READ-ONLY (identity integrity S-2c, owner decision OD-3): the user rows reconciled against the net state of the verified system audit stream. Prints codes, counts and ids and the report hash; writes only the optional --out file.
+            var (keys, store) = BuildAuditEvidence(auditOptions, null, requireActiveKey: false);
+            var encryption = EncryptionOptions.FromConfiguration(configuration);
+            IdentityKeys? identityKeys = encryption.KeyDirectory is null ? null : new IdentityKeys(new FileKekRing(encryption), encryption.IdentityPreviousKeyIds);
+            var reportConnection = await VerifierConnectionAsync(options, AuditStream.System);
+            var result = await IdentityAuditReport.BuildAsync(reportConnection, new AuditVerifier(reportConnection, keys, store), identityKeys);
+            var text = IdentityAuditReport.Render(result);
+            Console.Write(text);
+            if (args.Length == 3 && !result.Refused) await File.WriteAllTextAsync(args[2], text);
+            return result.Refused ? AuditFailed : Ok;
+        }
         case "audit-anchor":
         {
             var (keys, store) = BuildAuditEvidence(auditOptions, null, requireActiveKey: true);
@@ -370,22 +489,29 @@ try
         case "trial-restore-company":
         case "drop-trial-restore":
         case "backup-run":
+        case "backup-replicate":
+        case "backup-replica-verify":
         case "backup-recovery-test":
-            return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration, new RestoreArgs(recoveryKeyFile, signingTrustFile, signingPublicKeyFile, keysExportDir, passphraseStdin));
+            return await BackupCommandAsync(command!, args, companyId, keepTrial, options, configuration, new RestoreArgs(recoveryKeyFile, signingTrustFile, signingPublicKeyFile, keysExportDir, passphraseStdin), new ReplicateArgs(replicateRun, replicateDestination, replicateNewestFirst, verifyAll));
         case "backup-signing-keygen":
         case "backup-keys":
             return await BackupKeyCommandAsync(command!, args, options, configuration, auditOptions);
+        case "encryption-key-retirement-report":
+            return await KeyRetirementCommandAsync(retirementRoots, retirementScopeAttested, options, configuration, planJson);
         case "backup-retention-plan":
         case "backup-retention-apply":
         case "backup-hold-place":
         case "backup-hold-list":
-            return await RetentionCommandAsync(command!, args, options, configuration, auditOptions, planJson, new BackupHoldRequest(holdRun, holdCompany, holdFrom, holdTo, holdReason));
+            return await RetentionCommandAsync(command!, args, options, configuration, auditOptions, planJson, new BackupHoldRequest(holdRun, holdCompany, holdFrom, holdTo, holdReason), retentionDestination);
         case "migrate-companies":
         {
             var registry = new CompanyRegistry(options.BuildSystemConnectionString(admin: true));
             var outcomes = await new CompanyMigrator(options, registry).MigrateAsync(onlyCompany);
             foreach (var o in outcomes)
-                Console.WriteLine($"Company {o.CompanyId}: {o.Status}" + (o.Applied.Count > 0 ? $" (applied {string.Join(", ", o.Applied.Select(v => v.ToString("0000")))})" : "") + (o.ErrorCode is null ? "" : $" [{o.ErrorCode}]"));
+            {
+                Console.WriteLine(o.Line());
+                if (o.Detail is not null) Console.Error.WriteLine($"  {options.Scrub(o.Detail)}");   // a migration refusal names its triggers (table.trigger); nothing was re-enabled
+            }
             var failed = outcomes.Count(o => o.Status == CompanyMigrationStatus.Failed);
             var busy = outcomes.Count(o => o.Status == CompanyMigrationStatus.Busy);
             var skipped = outcomes.Count(o => o.Status == CompanyMigrationStatus.NotReady);
@@ -396,6 +522,22 @@ try
             if (failed > 0) return done > 0 ? PartialFailure : Failed;
             if (busy > 0) return InProgress;
             return onlyCompany is not null && skipped > 0 ? Failed : Ok;
+        }
+        case "grant-system-runtime":
+        {
+            // Owner decision D-235. Codes and logical table names only; never a role name, a physical name or a secret.
+            SystemRuntimeGrantResult granted;
+            try { granted = await SystemRuntimeAdministration.GrantAsync(options); }
+            catch (SystemRuntimeGrantException ex) { Console.Error.WriteLine($"grant-system-runtime stopped ({ex.Code}): {ex.Message}"); return Failed; }
+            Console.WriteLine("The runtime account now holds exactly the system catalog. Re-run after every system migration and after restoring a system database.");
+            foreach (var note in granted.Findings.Notes) Console.WriteLine($"note: {note}");
+            foreach (var violation in granted.Findings.Violations) Console.Error.WriteLine($"violation: {violation}");
+            if (granted.Findings.Violations.Count > 0)
+            {
+                Console.Error.WriteLine("The TOTP secret store is still not least-privilege (another role holds access, or the runtime account has attributes this command does not change). The API refuses to start until this is corrected.");
+                return Failed;
+            }
+            return Ok;
         }
         case "grant-company-runtime":
         {
@@ -456,7 +598,7 @@ catch (CompanyNotFoundException)
     Console.Error.WriteLine($"{command} stopped: the company is not registered; nothing was changed.");
     return Failed;
 }
-catch (PostgresException ex) when (command is "migrate-companies" or "grant-company-runtime")
+catch (PostgresException ex) when (command is "migrate-companies" or "grant-company-runtime" or "grant-system-runtime")
 {
     // PostgreSQL messages may quote object names; only the SQLSTATE is printed.
     Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");
@@ -471,7 +613,7 @@ catch (Exception ex)
 }
 
 // Phase 4.3 backup commands (D-058): stable codes, counts, the company id and operator file paths only; never a physical database name, a password or tool output.
-static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration, RestoreArgs restore)
+static async Task<int> BackupCommandAsync(string command, string[] args, Guid companyId, bool keep, HasmDatabaseOptions options, IConfiguration configuration, RestoreArgs restore, ReplicateArgs replicate)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4, Warnings = 8;
     var backupOptions = BackupOptions.FromConfiguration(configuration);
@@ -515,6 +657,9 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
             case "trial-restore-company":
             {
                 // slice 5: an encrypted set needs the operator's recovery key and trust list; an unencrypted set is accepted only under THIS reader's DEV/TEST acknowledgement (D-095, review M1)
+                // slice 8 (D-184): a trial restore never writes its attachment staging into, or around, a configured backup destination
+                BackupDestinations.RefuseInsideDestination(args[3], BackupDestinations.FromConfiguration(configuration));
+                // (checked before any key is loaded or anything is restored)
                 RestoreKeys? keys = null;
                 if (CompanyBackupService.IsEncryptedSet(args[1])) keys = restore.RecoveryKeyFile is null ? throw new BackupException("recovery_key_required") : LoadRestoreKeys(restore);
                 else if (!BackupGuard.UnencryptedReadAllowed(backupOptions)) throw new BackupException("unencrypted_set_refused");
@@ -557,6 +702,8 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
             }
             case "backup-run":
             {
+                // slice 8 (D-183, D-184): the destinations are read and checked BEFORE anything is written; an invalid or unsafe configuration is exit 3 and is never skipped
+                var destinations = await CheckedDestinationsAsync(args[1], configuration, backupOptions, systemConnection, trail);
                 var (report, runDir) = await new BackupRunService(options, AttachmentOptions.FromConfiguration(configuration), EncryptionOptions.FromConfiguration(configuration), protectedDirectories: protectedDirs).RunAsync(args[1], material);
                 Console.WriteLine($"Backup run {report.RunId}: {report.Verdict.ToUpperInvariant()} in {report.DurationMs / 1000.0:0.0} s; written to {runDir} (run.json written last).");
                 Console.WriteLine($"System database: {report.System.Outcome}{(report.System.Code is { } sc ? $" ({sc})" : "")}, {report.System.DurationMs / 1000.0:0.0} s; data excluded: {string.Join(", ", report.Excluded)}.");
@@ -567,7 +714,49 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 Console.WriteLine(material is not null
                     ? "The run is encrypted to the offline recovery key and signed (run.status.json is the only readable file). Back up the key directories with backup-keys. The run is not one point in time across databases."
                     : $"{BackupGuard.DegradedStatus}: the run is NOT encrypted; DEV/TEST only. The run is not one point in time across databases.");
-                return report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
+                var runExit = report.Verdict switch { "ok" => Ok, "partial" => Warnings, _ => Failed };
+                if (destinations.Count == 0) return runExit;
+                return BackupSeverity.Worst(runExit, await ReplicateAfterRunAsync(destinations, args[1], report, material is not null, options, backupOptions, ProtectedDirectoriesOf(configuration, backupOptions), systemConnection, trail));
+            }
+            case "backup-replica-verify":
+            {
+                var destinations = await CheckedDestinationsAsync(null, configuration, backupOptions, systemConnection, trail);
+                if (destinations.Count == 0)
+                {
+                    Console.Error.WriteLine("backup-replica-verify: no backup destination is configured (Hasm__Backup__Destinations); nothing to verify.");
+                    return BadConfig;
+                }
+                var trust = RequireTrust(backupOptions);
+                var outcomes = await new ReplicaVerifyService(options, trust, new SystemReplicaEvents(systemConnection, trail)).VerifyAsync(destinations, new ReplicaVerifyRequest(replicate.Destination, replicate.All));
+                foreach (var o in outcomes)
+                    Console.WriteLine($"Re-verification {o.RunId} at destination {o.DestinationId}: {o.Result.ToUpperInvariant()}{(o.Check is { } c ? $" ({c})" : "")}"
+                        + (o.Result == "corrupt" ? (o.Reported ? "; reported (audit 2042); the copy is left exactly as it is: move the folder away, then run backup-replicate" : "; already reported earlier (no new 2042); the copy is left as it is") : ""));
+                var bad = outcomes.Count(o => !o.IsVerified);
+                Console.WriteLine($"Re-verification: {outcomes.Count(o => o.IsVerified)} copy(ies) verified again, {bad} not ({(replicate.All ? "every run folder" : "default selection: newest copy, newest per company, held and pinned runs")}).");
+                // review U2 of PR 214: where the hard-link count could not be read nothing is claimed about independence, and the operator is told once
+                var unavailable = outcomes.Any(o => o.LinkCheckUnavailable);
+                if (unavailable) Console.WriteLine("  [WARNING] link_check_unavailable (the hard-link count of the copies could not be read on this platform, so their independence from other storage was not checked)");
+                return bad > 0 ? Failed : unavailable ? Warnings : Ok;
+            }
+            case "backup-replicate":
+            {
+                var destinations = await CheckedDestinationsAsync(args[1], configuration, backupOptions, systemConnection, trail);
+                if (destinations.Count == 0)
+                {
+                    Console.Error.WriteLine("backup-replicate: no backup destination is configured (Hasm__Backup__Destinations); nothing to copy.");
+                    return BadConfig;
+                }
+                var trust = RequireTrust(backupOptions);
+                var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)) { ProtectedDirectories = ProtectedDirectoriesOf(configuration, backupOptions) }
+                    .ReplicateAsync(args[1], destinations, new ReplicationRequest(replicate.Run, replicate.Destination, replicate.NewestFirst));
+                PrintOutcomes(result.Outcomes);
+                Console.WriteLine($"Replication pass: {result.Outcomes.Count(o => o.IsVerified)} copy(ies) verified, {result.Outcomes.Count(o => !o.IsVerified)} failed; {result.NotReplicable} run(s) of the primary are never replicated (failed, unsigned, unencrypted or unclean).");
+                var selected = replicate.Destination is null ? destinations : [.. destinations.Where(d => d.Destination.Id == replicate.Destination)];
+                var reports = ReplicaStatusReport.Evaluate(selected, args[1], trust, DateTimeOffset.UtcNow, TimeSpan.FromHours(26));
+                foreach (var line in reports.SelectMany(r => r.Lines)) Console.WriteLine(line);
+                var failed = result.Outcomes.Any(o => !o.IsVerified);
+                var replicationExit = failed ? (result.Outcomes.Any(o => o.IsVerified) ? Warnings : Failed) : Ok;
+                return BackupSeverity.Worst(new[] { replicationExit }.Concat(reports.Select(r => r.ExitCode)));
             }
             default: // drop-trial-restore
                 await service.DropTrialRestoreAsync(args[1]);
@@ -587,10 +776,11 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
                 $"recovery test operator={BackupAudit.Operator()} run={(BackupRunFiles.IsRunId(Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1]))) ? Path.GetFileName(Path.TrimEndingDirectorySeparator(args[1])) : "unknown")} outcome=refused code={(BackupRunFiles.IsCode(ex.Code) ? ex.Code : "refused")}");
         return ex.Code switch
         {
-            "attachment_storage_not_configured" or "database_not_configured" => BadConfig,
+            "attachment_storage_not_configured" or "database_not_configured" or "destination_config_invalid" or "retention_below_minimum"
+                or "symbolic_link_refused" or "destination_duplicate" or "destination_overlaps_source" or "destination_unknown" or "invalid_run_id" => BadConfig,
             // slice 5 (D-095): encryption is the default; a missing or contradictory configuration is a configuration error, never a silent fallback
             "backup_encryption_not_configured" or "unencrypted_ack_invalid" or "unencrypted_ack_with_recovery_key" or "recovery_key_invalid" or "signing_key_unavailable" => BadConfig,
-            "company_busy" or "run_in_progress" => InProgress,
+            "company_busy" or "run_in_progress" or "destination_busy" or "retention_in_progress" => InProgress,
             _ => Failed,
         };
     }
@@ -599,6 +789,61 @@ static async Task<int> BackupCommandAsync(string command, string[] args, Guid co
         Console.Error.WriteLine($"{command} failed: PostgreSQL error {ex.SqlState}.");
         return Failed;
     }
+}
+
+// Phase 4.3 slice 8 (S8b): destinations and replication for backup-run and backup-replicate.
+static async Task<IReadOnlyList<CheckedDestination>> CheckedDestinationsAsync(string? primaryRoot, IConfiguration configuration, BackupOptions backupOptions, string systemConnection, AuditTrail trail)
+{
+    try
+    {
+        var configured = BackupDestinations.FromConfiguration(configuration);
+        return BackupDestinations.Check(configured, primaryRoot, ProtectedDirectoriesOf(configuration, backupOptions));
+    }
+    catch (BackupException ex) when (ex.Code is "destination_config_invalid" or "retention_below_minimum" or "symbolic_link_refused" or "destination_duplicate" or "destination_overlaps_source")
+    {
+        // D-188: a refused destination is audited (best effort: the command is refused anyway and nothing was written); the cause names an id, never a path
+        var id = ex.Cause is { } c && c.StartsWith("destination ", StringComparison.Ordinal) && System.Text.RegularExpressions.Regex.IsMatch(c[12..], "^[a-z0-9-]{1,32}$") ? c[12..] : null;
+        try { await new SystemReplicaEvents(systemConnection, trail).RefusedAsync(id, ex.Code, CancellationToken.None); }
+        catch (Exception audit) when (audit is AuditConfigurationException or AuditUnavailableException or NpgsqlException or InvalidOperationException) { Console.Error.WriteLine("The system audit event 2043 could not be written; the refusal stands."); }
+        throw;
+    }
+}
+
+// review L1 of #214: without a trusted signing key nothing can be verified; a command that needs verification refuses as a configuration error instead of reporting every copy corrupt
+static SigningTrust RequireTrust(BackupOptions backupOptions)
+{
+    var trust = BackupMaterialLoader.ServerTrust(backupOptions);
+    if (trust is null || trust.Count == 0) throw new BackupException("signing_key_unavailable");
+    return trust;
+}
+
+static IReadOnlyList<string?> ProtectedDirectoriesOf(IConfiguration configuration, BackupOptions backupOptions) =>
+    [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, AuditOptions.FromConfiguration(configuration).KeyDirectory, backupOptions.SigningKeyDirectory];
+
+static void PrintOutcomes(IEnumerable<ReplicaOutcome> outcomes)
+{
+    foreach (var o in outcomes)
+        Console.WriteLine($"Replication {o.RunId} -> destination {o.DestinationId}: {o.Result.ToUpperInvariant()}{(o.Code is { } c ? $" ({c})" : "")}"
+            + (o.IsVerified ? $", {o.Files} file(s), {o.Bytes} byte(s), {o.DurationMs / 1000.0:0.0} s (verified by read-back after flush)" : ""));
+}
+
+// After a run: copy it to every destination, then the exit code is the worst (1 > 8 > 0) of the replication result of THIS run and the destinations' status after the copy (D-186); the run's own code is combined by the caller.
+static async Task<int> ReplicateAfterRunAsync(IReadOnlyList<CheckedDestination> destinations, string primaryRoot, BackupRunReport report, bool encrypted, HasmDatabaseOptions options, BackupOptions backupOptions, IReadOnlyList<string?> protectedDirectories, string systemConnection, AuditTrail trail)
+{
+    var trust = BackupMaterialLoader.ServerTrust(backupOptions) ?? new SigningTrust([]);
+    var replicationExit = 0;
+    if (report.Verdict == "failed") Console.WriteLine("The run failed and is not replicated (D-182); the destinations are reported as they are.");
+    else
+    {
+        var result = await new ReplicationService(options, trust, new SystemReplicaEvents(systemConnection, trail)) { ProtectedDirectories = protectedDirectories }.ReplicateAsync(primaryRoot, destinations, new ReplicationRequest(report.RunId));
+        PrintOutcomes(result.Outcomes);
+        replicationExit = ReplicationService.ReplicationCode(result.Outcomes, report.RunId, destinations.Count);
+        if (replicationExit != 0) Console.Error.WriteLine($"WARNING {(replicationExit == 1 ? "replication_failed" : "replication_incomplete")}: not every configured destination holds a verified copy of run {report.RunId}.");
+        if (!encrypted) Console.Error.WriteLine("WARNING replica_unencrypted_refused: an unencrypted DEV/TEST run is never copied (D-088).");
+    }
+    var reports = ReplicaStatusReport.Evaluate(destinations, primaryRoot, trust, DateTimeOffset.UtcNow, TimeSpan.FromHours(26));
+    foreach (var line in reports.SelectMany(r => r.Lines)) Console.WriteLine(line);
+    return BackupSeverity.Worst(new[] { replicationExit }.Concat(reports.Select(r => r.ExitCode)));
 }
 
 // Phase 4.3 slice 5 key commands (D-087, D-092, D-094, D-118). Interim mode: operating-system access, no named administrator with MFA until Phase 4.1 (D-099; a dated limitation). Both write a
@@ -633,6 +878,8 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
         if (BackupGuard.Resolve(backupOptions) != BackupProtection.Encrypted) throw new BackupException("backup_encryption_not_configured");
         if (encryption.KeyDirectory is null) { Console.Error.WriteLine("Hasm__Encryption__KeyDirectory is required."); return BadConfig; }
         var destination = KeyExport.CheckDestination(args[1], [attachments.StorageDirectory, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory]);
+        // slice 8 (D-184, D-087): the key export never lies inside, or contains, a configured backup destination
+        BackupDestinations.RefuseInsideDestination(destination, BackupDestinations.FromConfiguration(configuration));
         var material = BackupMaterialLoader.Load(backupOptions);
         KeyExportManifest m;
         try { m = await KeyExport.WriteAsync(destination, encryption.KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory!, material, DateTimeOffset.UtcNow); }
@@ -650,13 +897,75 @@ static async Task<int> BackupKeyCommandAsync(string command, string[] args, Hasm
     catch (BackupException ex)
     {
         Console.Error.WriteLine($"{command} stopped ({ex.Code}); nothing usable was written.");
-        return ex.Code is "backup_encryption_not_configured" or "recovery_key_invalid" or "signing_key_unavailable" ? BadConfig : Failed;
+        return ex.Code is "backup_encryption_not_configured" or "recovery_key_invalid" or "signing_key_unavailable" or "destination_config_invalid" or "retention_below_minimum" ? BadConfig : Failed;
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     {
         Console.Error.WriteLine($"{command} stopped: the key files could not be written (existing keys are never overwritten); nothing usable was written.");
         return Failed;
     }
+}
+
+// encryption-key-retirement-report: one or more absolute backup roots, then the optional attestation --all-backup-copies-listed, then an optional --json <file>.
+bool ParseRetirementArgs()
+{
+    var end = args.Length;
+    if (end >= 4 && args[end - 2] == "--json" && Path.IsPathFullyQualified(args[end - 1])) { planJson = args[end - 1]; end -= 2; }
+    if (end >= 3 && args[end - 1] == "--all-backup-copies-listed") { retirementScopeAttested = true; end--; }
+    for (var i = 1; i < end; i++)
+        if (!Path.IsPathFullyQualified(args[i]) || args[i].StartsWith("--", StringComparison.Ordinal)) return false;
+    retirementRoots = [.. args[1..end].Distinct(StringComparer.Ordinal)];
+    return retirementRoots.Count >= 1;
+}
+
+// backup-replicate <root> [--run <run id>] [--destination <id>] [--newest-first] (slice 8, S8b); each option at most once.
+bool ParseRetentionPlanFlags()
+{
+    // backup-retention-plan <root> [--destination <id>] [--json <absolute file>] (each at most once)
+    for (var i = 2; i < args.Length; i += 2)
+    {
+        if (i + 1 >= args.Length) return false;
+        switch (args[i])
+        {
+            case "--json" when planJson is null && Path.IsPathFullyQualified(args[i + 1]): planJson = args[i + 1]; break;
+            case "--destination" when retentionDestination is null && args[i + 1].Length is >= 1 and <= 64 && args[i + 1].All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-' or '_'): retentionDestination = args[i + 1]; break;
+            default: return false;
+        }
+    }
+    return true;
+}
+
+bool ParseReplicateArgs()
+{
+    if (args.Length < 2 || !Path.IsPathFullyQualified(args[1])) return false;
+    for (var i = 2; i < args.Length; i++)
+    {
+        var value = i + 1 < args.Length ? args[i + 1] : null;
+        switch (args[i])
+        {
+            case "--run" when replicateRun is null && value is not null && BackupRunFiles.IsRunId(value): replicateRun = value; i++; break;
+            case "--destination" when replicateDestination is null && value is not null && System.Text.RegularExpressions.Regex.IsMatch(value, "^[a-z0-9-]{1,32}$"): replicateDestination = value; i++; break;
+            case "--newest-first" when !replicateNewestFirst: replicateNewestFirst = true; break;
+            default: return false;
+        }
+    }
+    return true;
+}
+
+// backup-replica-verify [--destination <id>] [--all] (slice 8, S8c); each option at most once.
+bool ParseVerifyArgs()
+{
+    for (var i = 1; i < args.Length; i++)
+    {
+        var value = i + 1 < args.Length ? args[i + 1] : null;
+        switch (args[i])
+        {
+            case "--destination" when replicateDestination is null && value is not null && System.Text.RegularExpressions.Regex.IsMatch(value, "^[a-z0-9-]{1,32}$"): replicateDestination = value; i++; break;
+            case "--all" when !verifyAll: verifyAll = true; break;
+            default: return false;
+        }
+    }
+    return true;
 }
 
 // The options of backup-hold-place (slice 6): exactly one scope, an optional date range for a company, and a reason.
@@ -678,8 +987,46 @@ bool ParseHoldFlags()
     return (holdRun is null) != (holdCompany is null) && holdReason is not null && (holdCompany is not null || (holdFrom is null && holdTo is null));
 }
 
+// The encryption-key retirement report (D-179..D-181). Read-only; no audit event (it changes nothing; retiring a key is a separate, independently approved operation, D-080(6)).
+static async Task<int> KeyRetirementCommandAsync(IReadOnlyList<string> roots, bool scopeAttested, HasmDatabaseOptions options, IConfiguration configuration, string? json)
+{
+    const int Ok = 0, Failed = 1, BadConfig = 3, Incomplete = 8;
+    var encryption = EncryptionOptions.FromConfiguration(configuration);
+    if (encryption.KeyDirectory is null) { Console.Error.WriteLine($"{EncryptionOptions.SectionName}:KeyDirectory is required."); return BadConfig; }
+    var service = new EncryptionKeyRetirementService(options, AttachmentOptions.FromConfiguration(configuration), Hasm.Infrastructure.Imports.ImportOptions.FromConfiguration(configuration), encryption);
+    KeyRetirementReport report;
+    try { report = await service.ReportAsync(FileKekRing.ListKeyIds(encryption.KeyDirectory), encryption.ActiveKeyId, roots, BackupMaterialLoader.ServerTrust(BackupOptions.FromConfiguration(configuration)), scopeAttested); }
+    catch (Exception ex) when (ex is Npgsql.NpgsqlException or IOException or UnauthorizedAccessException) { Console.Error.WriteLine("encryption-key-retirement-report stopped: the system database or a key directory could not be read."); return Failed; }
+    foreach (var k in report.Keys)
+        Console.WriteLine(k.Retirable
+            ? $"  {k.KeyId} RETIRABLE WITHIN THE SCANNED SCOPE (retiring it needs independent approval, D-080(6); keep it with every older backup kit)"
+            : $"  {k.KeyId} keep: {string.Join(", ", k.Reasons)}");
+    foreach (var b in report.Blockers) Console.WriteLine($"  [BLOCKER] {b}");
+    // the scope, printed with EVERY report (review H1 of PR 182): what was read and what the tool cannot see
+    Console.WriteLine($"Scope: the live sensitive attachments and import originals of every registered company, and EVERY run present (also one that retention would delete) in ONLY these {roots.Count} backup root(s):");
+    foreach (var root in roots) Console.WriteLine($"  {root}");
+    Console.WriteLine("NOT seen: any other backup destination or copy (another disk, an off-site or offline copy), standalone backup-company sets (they can hold attachment envelopes under a key), "
+        + "uploads in flight and orphan files. Inside a root only run folders (named by a run id) are read: any other entry there (a run moved or copied under another name, a nested folder, "
+        + "a hidden entry, a file) is a blocker (backup_root_unrecognised_entry), never \"not needed\"; so is anything in .retention other than retention tombstones, and anything "
+        + "inside a run folder that a run does not hold, such as another run copied into it (backup_run_unrecognised_content).");
+    Console.WriteLine(scopeAttested
+        ? "The operator attested (--all-backup-copies-listed) that the roots above are every place a backup of this installation is kept. If that is not true, do not retire any key."
+        : "No attestation (--all-backup-copies-listed) was given that the roots above are every place a backup is kept: the tool cannot know, so no key is reported retirable.");
+    Console.WriteLine($"Generated {report.GeneratedUtc:yyyy-MM-ddTHH:mm:ssZ} (UTC). The report describes that moment only.");
+    Console.WriteLine(report.Complete
+        ? $"Encryption-key retirement report (D-181): {report.Keys.Count} key(s), {report.Keys.Count(k => k.Retirable)} retirable within the scanned scope."
+        : $"Encryption-key retirement report (D-181) INCOMPLETE ({report.Blockers.Count} blocker(s)): no key may be retired.");
+    if (json is not null)
+    {
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(report, new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        AuditFilePermissions.CreateOwnerOnlyFile(json, bytes);
+        Console.WriteLine($"Report written to {json}.");
+    }
+    return report.Complete ? Ok : Incomplete;
+}
+
 // Phase 4.3 slice 6 retention commands (D-130..D-139). Interim mode: operating-system access (dated limitation); every command writes its audit event and fails closed when it cannot.
-static async Task<int> RetentionCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions, string? planJson, BackupHoldRequest hold)
+static async Task<int> RetentionCommandAsync(string command, string[] args, HasmDatabaseOptions options, IConfiguration configuration, AuditOptions auditOptions, string? planJson, BackupHoldRequest hold, string? destinationId = null)
 {
     const int Ok = 0, Failed = 1, BadConfig = 3, InProgress = 4;
     var backupOptions = BackupOptions.FromConfiguration(configuration);
@@ -710,15 +1057,53 @@ static async Task<int> RetentionCommandAsync(string command, string[] args, Hasm
             }
             case "backup-retention-plan":
             {
-                var (plan, inputs) = await service.PlanAsync(args[1], BackupMaterialLoader.ServerTrust(backupOptions));
+                var trust = BackupMaterialLoader.ServerTrust(backupOptions);
+                // S8d-1: the destinations (checked like every command) and the AUTHENTICATED audit facts (one full verification pass; nothing is used above the verified prefix)
+                IReadOnlyList<CheckedDestination> destinations;
+                try
+                {
+                    var configured = BackupDestinations.FromConfiguration(configuration);
+                    if (BackupDestinations.IsDestinationPath(args[1], configured)) { Console.Error.WriteLine("backup-retention-plan: give the PRIMARY root; use --destination <id> for a destination."); return BadConfig; }
+                    destinations = BackupDestinations.Check(configured, args[1],
+                        [AttachmentOptions.FromConfiguration(configuration).StorageDirectory, EncryptionOptions.FromConfiguration(configuration).KeyDirectory, auditOptions.KeyDirectory, backupOptions.SigningKeyDirectory]);
+                }
+                catch (BackupException ex)
+                {
+                    Console.Error.WriteLine($"backup-retention-plan refused ({ex.Code}{(ex.Cause is null ? "" : $": {ex.Cause}")}). Fix Hasm__Backup__Destinations; no destination is ever skipped.");
+                    return BadConfig;
+                }
+                ReplicaAuditState? audit = null; var auditReadable = true;
+                if (destinations.Count > 0)
+                {
+                    try
+                    {
+                        var evidence = BuildAuditEvidence(auditOptions, null, requireActiveKey: false);
+                        audit = await ReplicaAuditReader.ReadVerifiedAsync(systemConnection, evidence.Keys, evidence.Store);
+                    }
+                    catch (Exception ex) when (ex is BackupException or AuditConfigurationException) { auditReadable = false; }
+                }
+                var located = await service.PlanLocationAsync(args[1], destinationId, destinations, trust, audit);
+                var (plan, inputs) = (located.Plan, located.Inputs);
+                Console.WriteLine($"Retention plan for {(destinationId is null ? "the primary root" : $"destination {destinationId}")} (a PREVIEW: nothing is deleted, nothing is written except audit 2014):");
                 foreach (var d in plan.Runs)
                     Console.WriteLine(d.Eligible ? $"  {d.RunId} ELIGIBLE (automatic deletion is INACTIVE: nothing is deleted)" : $"  {d.RunId} keep: {string.Join(", ", d.Reasons)}");
                 var byReason = plan.Runs.SelectMany(d => d.Reasons).GroupBy(r => r).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}={g.Count()}").ToList();
                 Console.WriteLine($"Retention plan (D-086): {plan.Runs.Count} run(s), {plan.Eligible.Count()} eligible, plan {plan.PlanHash}; keep reasons: {string.Join(", ", byReason)}.");
                 Console.WriteLine($"Key inventory of the retained runs: {(plan.KeyInventoryComplete ? "complete" : "INCOMPLETE (backup_inventory_incomplete): no key may be retired")}; recovery key(s) still needed: {string.Join(", ", plan.RecoveryKeysNeeded)}.");
                 if (inputs.DeletingFolders.Count > 0) Console.WriteLine($"  [WARNING] retention_deletion_incomplete count={inputs.DeletingFolders.Count}");
+                if (destinations.Count > 0)
+                {
+                    Console.WriteLine("Replication check: the PREVIEW uses the light check (folder, signed status equal to the primary's, signed inventory bound to it); an apply would re-verify every byte first.");
+                    if (audit is { UnverifiedRemainder: true }) Console.WriteLine($"  [FAILURE] audit_unverified (the system audit chain verifies only through sequence {audit.VerifiedThroughSeq}; later records were not used)");
+                    if (destinationId is null)                                                   // a destination's own plan does not classify the primary's runs
+                    foreach (var (run, ids) in located.Pending.MissingAt.Where(kv => kv.Value.Count > 0).OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                        Console.WriteLine($"  {run} replication_pending at {string.Join(", ", ids)}");
+                }
+                var locations = DeletionReadiness.Locations(retention, destinations, args[1], trust, audit, auditReadable);
+                foreach (var line in DeletionReadiness.Lines(locations)) Console.WriteLine(line);
+                foreach (var line in DeletionReadiness.Notice(locations)) Console.WriteLine(line);
                 if (!await TryAuditAsync(systemConnection, trail, BackupAuditEvents.RetentionEvaluated,
-                    $"backup retention evaluated operator={BackupAudit.Operator()} runs={plan.Runs.Count} eligible={plan.Eligible.Count()} plan={plan.PlanHash} inventory={(plan.KeyInventoryComplete ? "complete" : "incomplete")} reasons={string.Join(',', byReason)}"))
+                    $"backup retention evaluated operator={BackupAudit.Operator()} runs={plan.Runs.Count} eligible={plan.Eligible.Count()} plan={plan.PlanHash} inventory={(plan.KeyInventoryComplete ? "complete" : "incomplete")} reasons={string.Join(',', byReason)} destination={located.Location}"))
                     return Failed;
                 if (planJson is not null)
                 {
@@ -853,6 +1238,7 @@ static void PrintReport(AuditVerificationReport r)
 }
 
 /// <summary>The restore options parsed from the command line (slice 5).</summary>
+sealed record ReplicateArgs(string? Run, string? Destination, bool NewestFirst, bool All);
 sealed record RestoreArgs(string? RecoveryKeyFile, string? TrustFile, string? PublicKeyFile, string? KeysExport, bool PassphraseStdin);
 
 /// <summary>The options of backup-hold-place (slice 6).</summary>

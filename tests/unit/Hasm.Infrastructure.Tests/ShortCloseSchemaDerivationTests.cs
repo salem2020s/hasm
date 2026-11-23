@@ -7,13 +7,13 @@ using Hasm.Infrastructure.SystemDatabase;
 namespace Hasm.Infrastructure.Tests;
 
 /// <summary>
-/// The opaque names of the short-close company migration (Phase 3.13, owner decision D-201; provisional number 0033) are DERIVED, not invented: prefix + the first 8 hex digits of
-/// SHA-256("hasm.company.short-close.v1:" + logical token), exactly as <c>tools/schema/company-0033-short-close.cjs</c> generates them (the seed has no migration number, so a renumbering changes no name).
+/// The opaque names of the short-close company migration (Phase 3.13, owner decision D-201; company migration 0039) are DERIVED, not invented: prefix + the first 8 hex digits of
+/// SHA-256("hasm.company.short-close.v1:" + logical token), exactly as <c>tools/schema/company-0039-short-close.cjs</c> generates them (the seed has no migration number, so a renumbering changes no name).
 /// The migration adds one append-only table and two additive guards (on the link table and on the document table); it drops, grants and replaces nothing.
 /// </summary>
 public class ShortCloseSchemaDerivationTests
 {
-    private const int Version = 33;   // provisional number: changes with the merge order (together with the generator constant and the file name)
+    private const int Version = 39;   // allocated by merge order: a renumbering changes this (together with the generator constant and the file name)
 
     private static string Derive(string token)
     {

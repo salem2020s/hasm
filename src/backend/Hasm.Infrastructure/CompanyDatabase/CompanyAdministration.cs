@@ -19,7 +19,12 @@ public enum CompanyMigrationStatus
     Failed,
 }
 
-public sealed record CompanyMigrationOutcome(Guid CompanyId, CompanyMigrationStatus Status, IReadOnlyList<int> Applied, string? ErrorCode);
+/// <param name="Detail">For a migration refusal only (a <see cref="MigrationException"/>): the message the runner wrote (it names switched-off triggers as table.trigger, never a database name or a secret).</param>
+public sealed record CompanyMigrationOutcome(Guid CompanyId, CompanyMigrationStatus Status, IReadOnlyList<int> Applied, string? ErrorCode, string? Detail = null)
+{
+    /// <summary>The one line the administrative tool prints per company (never a database name).</summary>
+    public string Line() => $"Company {CompanyId}: {Status}" + (Applied.Count > 0 ? $" (applied {string.Join(", ", Applied.Select(v => v.ToString("0000")))})" : "") + (ErrorCode is null ? "" : $" [{ErrorCode}]");
+}
 
 /// <summary>
 /// Explicit administrative upgrade of company databases (<c>Hasm.Admin migrate-companies</c>). Uses the privileged account only; the
@@ -36,6 +41,9 @@ public sealed class CompanyMigrator(HasmDatabaseOptions options, CompanyRegistry
     /// <summary>Test seam: invoked for each company after its lock is taken and before the migration (e.g. to hold the lock or fail).</summary>
     internal Func<Guid, CancellationToken, Task>? BeforeMigrate { get; init; }
 
+    /// <summary>TEST SEAM (can only add a refusal, see <see cref="MigrationAccountPolicy"/>): an additional "is a superuser" reading.</summary>
+    internal Func<bool>? AdditionalSuperuserReading { get; init; }
+
     public async Task<IReadOnlyList<CompanyMigrationOutcome>> MigrateAsync(Guid? onlyCompany = null, CancellationToken ct = default)
     {
         options.EnsureValid(requireAdmin: true);
@@ -51,7 +59,7 @@ public sealed class CompanyMigrator(HasmDatabaseOptions options, CompanyRegistry
             try { outcomes.Add(await MigrateOneAsync(company, ct)); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                outcomes.Add(new CompanyMigrationOutcome(company.Id, CompanyMigrationStatus.Failed, [], CompanyProvisioner.ErrorCode(ex)));
+                outcomes.Add(new CompanyMigrationOutcome(company.Id, CompanyMigrationStatus.Failed, [], CompanyProvisioner.ErrorCode(ex), ex is MigrationException ? ex.Message : null));
             }
         }
         return outcomes;
@@ -77,7 +85,7 @@ public sealed class CompanyMigrator(HasmDatabaseOptions options, CompanyRegistry
         provisioner.EnsureSafeTarget(company.PhysicalDatabaseName);
         await provisioner.VerifyMappingAsync(company, ct);
 
-        var result = await new MigrationRunner(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName)).ApplyAsync(scripts, ct);
+        var result = await new MigrationRunner(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName)) { AllowSuperuser = options.AllowSuperuserMigrationAccount, AdditionalSuperuserReading = AdditionalSuperuserReading }.ApplyAsync(scripts, ct);
         return new CompanyMigrationOutcome(company.Id, result.Applied.Count == 0 ? CompanyMigrationStatus.UpToDate : CompanyMigrationStatus.Migrated, result.Applied, null);
     }
 }

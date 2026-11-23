@@ -14,7 +14,7 @@ public class MfaChallengeStoreTests : IdentityTestBase
     private async Task<UserRecord> Setup()
     {
         await Start();
-        Challenges = new MfaChallengeStore(Options.BuildSystemConnectionString(admin: true), Clock);
+        Challenges = new MfaChallengeStore(Options.BuildSystemConnectionString(admin: true), Clock, keys: TestIdentityKeys.Instance);
         return await NewUser();
     }
 
@@ -25,7 +25,8 @@ public class MfaChallengeStoreTests : IdentityTestBase
     {
         var user = await Setup();
         var issued = await Challenges.IssueAsync(user.Id, MfaChallengePurpose.Login, SessionClient.Web, "10.0.0.1");
-        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.TokenHash} = @h", ("h", SessionToken.Hash(issued.Token))));
+        Assert.Equal(1L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.TokenHash} = @h", ("h", TestIdentityKeys.Instance.TokenHash(TestIdentityKeys.Instance.Active(), issued.Token))));   // the KEYED hash (identity integrity S-2d), never the plain SHA-256
+        Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE {C.TokenHash} = @h", ("h", SessionToken.Hash(issued.Token))));
         Assert.Equal(0L, await Scalar<long>($"SELECT count(*) FROM {C.Table} WHERE encode({C.TokenHash}, 'escape') LIKE '%' || @t || '%'", ("t", issued.Token)));   // the plaintext token is nowhere
         Assert.Equal(Clock.GetUtcNow().AddMinutes(5), issued.ExpiresAtUtc);
 

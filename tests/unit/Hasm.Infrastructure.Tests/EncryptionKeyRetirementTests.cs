@@ -1,0 +1,370 @@
+using Hasm.Infrastructure.Backup;
+using Hasm.Infrastructure.Security;
+
+namespace Hasm.Infrastructure.Tests;
+
+/// <summary>
+/// D-179..D-181: the encryption-key retirement rule (live attachments, live import originals and the backup runs present in the given roots; fail closed on anything unknown) and the key-usage scan of stored items.
+/// </summary>
+public sealed class EncryptionKeyRetirementTests
+{
+    private static readonly Guid C1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static EncryptionKeyUsage U(params string[] ids) => new(ids, 0, 0);
+    private static CompanyKeyUsage Company(EncryptionKeyUsage? attachments = null, EncryptionKeyUsage? imports = null, EncryptionKeyUsage? cash = null) =>
+        new(C1, true, null, attachments ?? EncryptionKeyUsage.Empty, imports ?? EncryptionKeyUsage.Empty, cash ?? EncryptionKeyUsage.Empty);
+    private static BackupRootKeyNeeds Root(params string[] ids) => new("/backups", true, null, ids);
+    private static readonly DateTimeOffset At = new(2026, 11, 21, 9, 30, 0, TimeSpan.FromHours(3));
+    private static KeyRetirementEntry Key(KeyRetirementReport r, string id) => r.Keys.Single(k => k.KeyId == id);
+
+    [Fact]
+    public void A_key_is_retirable_only_when_it_is_not_active_and_nothing_live_or_retained_needs_it()
+    {
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3", "k4", "k5"], "k5",
+            [Company(attachments: U("k2"), imports: U("k3"))], [Root("k4")], backupScopeAttested: true, At);
+        Assert.True(r.Complete);
+        Assert.Empty(r.Blockers);
+        Assert.True(Key(r, "k1").Retirable);
+        Assert.Equal(["needed_by_attachments"], Key(r, "k2").Reasons);
+        Assert.Equal(["needed_by_import_originals"], Key(r, "k3").Reasons);                    // the import originals count (register item K follow-up)
+        Assert.Equal(["needed_by_present_backups"], Key(r, "k4").Reasons);
+        Assert.Equal(["active_key"], Key(r, "k5").Reasons);
+        Assert.Equal(["k1"], r.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+    }
+
+    [Fact]
+    public void A_key_that_protects_a_stored_cash_number_is_needed_and_never_retirable_and_an_old_company_without_cash_numbers_changes_nothing()
+    {
+        var withCash = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, U("k2"));
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3"], "k3", [withCash], [Root()], backupScopeAttested: true, At);
+        Assert.True(r.Complete);
+        Assert.Equal(["needed_by_cash_numbers"], Key(r, "k2").Reasons);
+        Assert.Equal(["k1"], r.Keys.Where(k => k.Retirable).Select(k => k.KeyId));
+        var absent = EncryptionKeyRetirement.Evaluate(["k1", "k2", "k3"], "k3", [Company()], [Root()], backupScopeAttested: true, At);
+        Assert.Equal(["k1", "k2"], absent.Keys.Where(k => k.Retirable).Select(k => k.KeyId));                  // an explicit EMPTY cash usage (a company with no bank number): the earlier behaviour exactly
+        var unknown = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, new EncryptionKeyUsage(["k2"], 1, 0));
+        Assert.Contains($"cash_number_key_unknown:{C1:N}:1", EncryptionKeyRetirement.Evaluate(["k2"], "k2", [unknown], [Root()], backupScopeAttested: true, At).Blockers);
+    }
+
+    [Fact]
+    public void The_cash_number_usage_is_required_there_is_no_silent_default_to_no_cash_usage()
+    {
+        // (review L5 of PR 206) a record cannot be built without it: no optional parameter ...
+        var ctor = Assert.Single(typeof(CompanyKeyUsage).GetConstructors());
+        Assert.Contains(ctor.GetParameters(), p => p.Name == "CashNumbers");
+        Assert.All(ctor.GetParameters(), p => Assert.False(p.HasDefaultValue, p.Name));
+        // ... and a value that nevertheless arrives as null (a deserialised or reflected record) is REFUSED: the report is incomplete and no key is retirable, never "nothing needs the key"
+        var missing = new CompanyKeyUsage(C1, true, null, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, null!);
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k2"], "k2", [missing], [Root()], backupScopeAttested: true, At);
+        Assert.False(r.Complete);
+        Assert.Equal([$"cash_number_usage_missing:{C1:N}"], r.Blockers);
+        Assert.Empty(r.Keys.Where(k => k.Retirable));
+        Assert.Contains("report_incomplete", Key(r, "k1").Reasons);
+        // an UNREADABLE company needs no usage (it is already a blocker of its own)
+        var unreadable = new CompanyKeyUsage(C1, false, "company_not_ready", EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, null!);
+        Assert.Equal([$"company_unreadable:{C1:N}:company_not_ready"], EncryptionKeyRetirement.Evaluate(["k1"], "k1", [unreadable], [Root()], backupScopeAttested: true, At).Blockers);
+    }
+
+    [Fact]
+    public void A_needed_key_missing_from_the_key_directory_is_reported_and_never_retirable()
+    {
+        var r = EncryptionKeyRetirement.Evaluate(["k2"], "k2", [Company(imports: U("k0"))], [Root()], backupScopeAttested: true, At);
+        var missing = Key(r, "k0");
+        Assert.False(missing.Present);
+        Assert.False(missing.Retirable);
+        Assert.Contains("missing_from_key_directory", missing.Reasons);
+    }
+
+    public static TheoryData<string, CompanyKeyUsage[], BackupRootKeyNeeds[], string?> Incomplete => new()
+    {
+        { "company_unreadable", [new CompanyKeyUsage(C1, false, "company_not_ready", EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty, EncryptionKeyUsage.Empty)], [Root()], "k9" },
+        { "attachment_key_unknown", [Company(attachments: new EncryptionKeyUsage([], 1, 0))], [Root()], "k9" },
+        { "import_original_key_unknown", [Company(imports: new EncryptionKeyUsage([], 1, 0))], [Root()], "k9" },
+        { "no_backup_root", [Company()], [], "k9" },
+        // review M-FH1 of PR 182: a present run with unknown key needs, and an unfinished deletion
+        { "backup_inventory_incomplete:backup_run_key_needs_unknown", [Company()], [new BackupRootKeyNeeds("/backups", false, "backup_run_key_needs_unknown", [])], "k9" },
+        { "backup_inventory_incomplete:backup_root_deletion_incomplete", [Company()], [new BackupRootKeyNeeds("/backups", false, "backup_root_deletion_incomplete", [])], "k9" },
+        // review H1 of PR 182: a root that proves nothing blocks, also next to a good root
+        { "backup_inventory_incomplete:backup_root_missing", [Company()], [Root(), new BackupRootKeyNeeds("/typo", false, "backup_root_missing", [])], "k9" },
+        { "backup_inventory_incomplete:backup_root_no_complete_verified_run", [Company()], [new BackupRootKeyNeeds("/empty", false, "backup_root_no_complete_verified_run", [])], "k9" },
+        { "active_key_not_configured", [Company()], [Root()], null },
+        // review M-FH3 of PR 182: an entry of a root that is not a run folder (a run moved or copied under another name is not read)
+        { "backup_inventory_incomplete:backup_root_unrecognised_entry:archive", [Company()], [Root(), new BackupRootKeyNeeds("/backups2", false, "backup_root_unrecognised_entry:archive", [])], "k9" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Incomplete))]
+    public void Anything_unknown_makes_the_report_incomplete_and_no_key_retirable(string blocker, CompanyKeyUsage[] companies, BackupRootKeyNeeds[] backups, string? active)
+    {
+        var r = EncryptionKeyRetirement.Evaluate(["k1", "k9"], active, companies, backups, backupScopeAttested: true, At);
+        Assert.False(r.Complete);
+        Assert.Contains(r.Blockers, b => b.StartsWith(blocker, StringComparison.Ordinal));
+        Assert.All(r.Keys, k => Assert.False(k.Retirable));
+        Assert.Contains("report_incomplete", Key(r, "k1").Reasons);
+    }
+
+    [Fact]
+    public void Without_the_operators_attestation_of_the_backup_scope_nothing_is_retirable_and_the_scope_limits_are_always_stated()
+    {
+        // review H1 of PR 182: the report sees only the given roots; other destinations, copies and standalone backup-company sets are invisible, so it cannot know without the attestation
+        var unattested = EncryptionKeyRetirement.Evaluate(["k1", "k9"], "k9", [Company()], [Root()], backupScopeAttested: false, At);
+        Assert.False(unattested.Complete);
+        Assert.Equal(["backup_scope_not_attested"], unattested.Blockers);
+        Assert.All(unattested.Keys, k => Assert.False(k.Retirable));
+        var attested = EncryptionKeyRetirement.Evaluate(["k1", "k9"], "k9", [Company()], [Root()], backupScopeAttested: true, At);
+        Assert.True(attested.Complete);
+        Assert.True(Key(attested, "k1").Retirable);
+        Assert.All(new[] { unattested, attested }, r => Assert.Equal(
+            ["backup_roots_not_given_are_not_scanned", "standalone_backup_company_sets_and_copies_are_not_scanned", "uploads_in_flight_and_orphan_files_are_not_scanned"], r.ScopeLimits));
+        // review L-FH1 of PR 182: the report names the roots it scanned, whether the scope was attested, and when it was generated (UTC)
+        Assert.Equal(["/backups"], attested.BackupRootsScanned);
+        Assert.True(attested.BackupScopeAttested);
+        Assert.False(unattested.BackupScopeAttested);
+        Assert.Equal(At.UtcDateTime, attested.GeneratedUtc.UtcDateTime);
+        Assert.Equal(TimeSpan.Zero, attested.GeneratedUtc.Offset);
+    }
+
+    [Fact]
+    public void A_backup_root_must_be_an_existing_real_directory()
+    {
+        var work = Path.Combine(Path.GetTempPath(), "hasm-krr-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try
+        {
+            var real = Path.Combine(work, "runs"); Directory.CreateDirectory(real);
+            var file = Path.Combine(work, "a-file"); File.WriteAllText(file, "x");
+            Assert.Null(EncryptionKeyRetirementService.RootProblem(real));
+            Assert.Null(EncryptionKeyRetirementService.RootProblem(real + Path.DirectorySeparatorChar));
+            Assert.Equal("backup_root_missing", EncryptionKeyRetirementService.RootProblem(Path.Combine(work, "typo")));
+            Assert.Equal("backup_root_not_a_directory", EncryptionKeyRetirementService.RootProblem(file));
+            Assert.Equal("backup_root_not_absolute", EncryptionKeyRetirementService.RootProblem("runs"));
+            if (OperatingSystem.IsWindows()) return;   // creating a link needs a privilege there; the rule is the same
+            var link = Path.Combine(work, "link"); Directory.CreateSymbolicLink(link, real);
+            var fileLink = Path.Combine(work, "file-link"); File.CreateSymbolicLink(fileLink, file);
+            var dangling = Path.Combine(work, "dangling"); Directory.CreateSymbolicLink(dangling, Path.Combine(work, "gone"));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(link));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(link + Path.DirectorySeparatorChar));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(fileLink));
+            Assert.Equal("backup_root_symbolic_link", EncryptionKeyRetirementService.RootProblem(dangling));
+        }
+        finally { Directory.Delete(work, true); }
+    }
+
+    [Fact]
+    public void Only_a_finished_verified_encrypted_run_with_known_key_needs_and_a_verdict_of_ok_or_partial_proves_a_backup_root()
+    {
+        var at = new DateTimeOffset(2026, 3, 1, 2, 0, 0, TimeSpan.Zero);
+        var good = new RetentionRun("20260301T020000Z-0a0b0c0d", at, at, Complete: true, Verified: true, Encrypted: true, "ok", "r1", false, [], "hash", true, false, new RunKeyNeeds([], []));
+        Assert.True(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good));
+        Assert.True(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = "partial" }));
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = "failed" }));      // a failed run wrote no usable set
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verdict = null }));
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Complete = false }));        // no status: the run never finished
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Verified = false }));        // unsigned, forged or signed by an untrusted key
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Keys = null }));             // a version 1 status: key needs unknown
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(good with { Encrypted = false }));       // an unencrypted DEV/TEST run
+    }
+
+    [Fact]
+    public void The_backup_inventory_counts_every_run_present_in_the_root_and_is_incomplete_on_an_unknown_run_or_an_unfinished_deletion()
+    {
+        // review M-FH1 of PR 182: the inventory is of the runs ON DISK. It never asks which of them the retention plan would delete: such a run is still restorable.
+        var at = new DateTimeOffset(2026, 3, 1, 2, 0, 0, TimeSpan.Zero);
+        RetentionRun Run(string id, params string[] keys) => new(id, at, at, Complete: true, Verified: true, Encrypted: true, "ok", "r1", false, [], "hash", true, false, new RunKeyNeeds(keys, []));
+        var newer = Run("20260313T020000Z-0a0b0c0d", "k1");
+        var older = Run("20260304T020000Z-0a0b0c0d", "k0", "k1");                                                    // e.g. a run that is no longer a daily, weekly or period-end run
+        Assert.Equal((null, "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, newer], [], [])));
+        Assert.Equal((null, "k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([newer], [], [])));
+
+        // any present run whose key needs are unknown: unfinished, unverifiable, a version 1 status, an unencrypted DEV/TEST run. The known keys are still listed.
+        foreach (var unknown in new[] { older with { Keys = null }, older with { Complete = false, Keys = null }, older with { Verified = false, Keys = null }, older with { Encrypted = false, Keys = null } })
+            Assert.Equal(("backup_run_key_needs_unknown", "k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([unknown, newer], [], [])));
+        // an unfinished deletion: what is left of that run is not readable as a run
+        Assert.Equal(("backup_root_deletion_incomplete", "k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([newer], ["20260304T020000Z-0a0b0c0d.deleting-0123456789abcdef"], [])));
+        // nothing proves the root: that code comes first
+        Assert.Equal(("backup_root_no_complete_verified_run", ""), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([], ["20260304T020000Z-0a0b0c0d.deleting-0123456789abcdef"], [])));
+        Assert.Equal(("backup_root_no_complete_verified_run", ""), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older with { Keys = null }], [], [])));
+
+        // review L-OBKP1 of PR 182: a verified run whose verdict is "failed" (its system dump failed) can still hold company sets written "ok" whose key ids its signed status lists. It does not
+        // prove the root, but it is present and restorable per company, so its keys are listed next to a good run's (the union is over EVERY present run, not only the runs that prove the root).
+        var failedVerdict = Run("20260305T020000Z-0a0b0c0d", "k2") with { Verdict = "failed" };
+        Assert.False(EncryptionKeyRetirementService.IsCompleteVerifiedRun(failedVerdict));
+        Assert.Equal((null, "k1,k2"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([failedVerdict, newer], [], [])));
+        var keptByFailed = EncryptionKeyRetirement.Evaluate(["k1", "k2"], "k1", [Company()],
+            [new BackupRootKeyNeeds("/backups", true, null, EncryptionKeyRetirementService.InventoryOfPresentRuns([failedVerdict, newer], [], []).EncryptionKeysNeeded)], backupScopeAttested: true, At);
+        Assert.Equal(["needed_by_present_backups"], Key(keptByFailed, "k2").Reasons);
+        Assert.DoesNotContain(keptByFailed.Keys, k => k.Retirable);
+
+        // review M-FH3 of PR 182: an entry of the root that is not a run folder, a .deleting-* folder or .retention comes first, even when nothing else proves the root (e.g. the only run renamed)
+        Assert.Equal(("backup_root_unrecognised_entry:archive", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, newer], [], ["archive"])));
+        Assert.Equal(("backup_root_unrecognised_entry:20260304T020000Z-0a0b0c0d.bak", ""), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([], [], ["20260304T020000Z-0a0b0c0d.bak"])));
+
+        // review M-OBKP4 of PR 182: a present run that holds anything a run does not hold (the scan's Clean is false, e.g. another run copied into <run>/old/<run id>/) has unknown key needs;
+        // it is named, its own known keys are still listed, and an unrecognised root entry still comes first
+        var withNested = newer with { Clean = false };
+        Assert.Equal(("backup_run_unrecognised_content:20260313T020000Z-0a0b0c0d", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, withNested], [], [])));
+        Assert.Equal(("backup_run_unrecognised_content:20260313T020000Z-0a0b0c0d", "k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([withNested], [], [])));
+        Assert.Equal(("backup_root_unrecognised_entry:archive", "k0,k1"), Flat(EncryptionKeyRetirementService.InventoryOfPresentRuns([older, withNested], [], ["archive"])));
+
+        // and the rule turns each of them into "nothing retirable"; a key only the older run needs is kept
+        var needed = EncryptionKeyRetirement.Evaluate(["k0", "k1"], "k1", [Company()], [new BackupRootKeyNeeds("/backups", true, null, ["k0", "k1"])], backupScopeAttested: true, At);
+        Assert.True(needed.Complete);
+        Assert.Equal(["needed_by_present_backups"], Key(needed, "k0").Reasons);
+        Assert.DoesNotContain(needed.Keys, k => k.Retirable);
+    }
+
+    [Fact]
+    public void Every_entry_of_a_backup_root_that_is_not_a_run_folder_a_deletion_or_the_retention_folder_is_unrecognised()
+    {
+        // review M-FH3 of PR 182: the retention scan reads only folders named by a run id and ignores everything else, so a complete signed run moved or copied inside the root under another name
+        // was invisible and its key read as retirable. For the report every other entry (directory, file, hidden, link) is a blocker.
+        const string Id = "20260301T020000Z-0a0b0c0d";
+        var root = Path.Combine(Path.GetTempPath(), "hasm-kru-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, Id));
+            Directory.CreateDirectory(Path.Combine(root, "20260302T020000Z-0a0b0c0d"));
+            Directory.CreateDirectory(Path.Combine(root, "20260303T020000Z-0a0b0c0d.deleting-0123456789abcdef"));
+            Directory.CreateDirectory(Path.Combine(root, ".retention", "tombstones"));
+            Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));                                     // a clean root: nothing unrecognised
+            Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(Path.Combine(root, "does-not-exist")));      // a missing root is RootProblem's case
+
+            void Blocks(string name, Action create, Action remove)
+            {
+                create();
+                try
+                {
+                    Assert.Equal([name], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+                    var at = new DateTimeOffset(2026, 3, 1, 2, 0, 0, TimeSpan.Zero);
+                    var good = new RetentionRun(Id, at, at, Complete: true, Verified: true, Encrypted: true, "ok", "r1", false, [], "hash", true, false, new RunKeyNeeds(["k1"], []));
+                    var (problem, _) = EncryptionKeyRetirementService.InventoryOfPresentRuns([good], [], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+                    Assert.Equal(EncryptionKeyRetirementService.UnrecognisedEntryProblem([name]), problem);
+                    Assert.StartsWith("backup_root_unrecognised_entry:", problem, StringComparison.Ordinal);
+                }
+                finally { remove(); }
+                Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));
+            }
+            void Folder(string name) => Blocks(name, () => Directory.CreateDirectory(Path.Combine(root, name)), () => Directory.Delete(Path.Combine(root, name), true));
+            void AFile(string name) => Blocks(name, () => File.WriteAllText(Path.Combine(root, name), "x"), () => File.Delete(Path.Combine(root, name)));
+
+            Blocks("archive", () => Directory.CreateDirectory(Path.Combine(root, "archive", Id, "companies")), () => Directory.Delete(Path.Combine(root, "archive"), true));   // a nested run
+            Folder(Id + ".bak");                                       // a renamed run
+            Folder("run-" + Id);
+            Folder(".old");                                            // a hidden folder
+            Folder("20260301T020000Z-0A0B0C0D");                       // an upper-case id is not a run id
+            Folder("20260301T020000Z-0a0b0c0d.deleting-XYZ");          // not the deletion pattern
+            AFile("keys.json");                                        // a file, e.g. a --json report written into the root
+            AFile(Id + ".tar");                                        // an archive of a run
+            AFile(".DS_Store");                                        // a hidden file
+            AFile("20260304T020000Z-0a0b0c0d");                        // a FILE named like a run id
+            Blocks(".retention", () => { Directory.Delete(Path.Combine(root, ".retention"), true); File.WriteAllText(Path.Combine(root, ".retention"), "x"); },
+                () => { File.Delete(Path.Combine(root, ".retention")); Directory.CreateDirectory(Path.Combine(root, ".retention")); });   // .retention must be a folder
+            if (!OperatingSystem.IsWindows())
+            {
+                // a link is never recognised, whatever its name (a run-id link to a run elsewhere; a dangling one)
+                Blocks("20260305T020000Z-0a0b0c0d", () => Directory.CreateSymbolicLink(Path.Combine(root, "20260305T020000Z-0a0b0c0d"), Path.Combine(root, Id)),
+                    () => File.Delete(Path.Combine(root, "20260305T020000Z-0a0b0c0d")));
+                Blocks("20260306T020000Z-0a0b0c0d", () => Directory.CreateSymbolicLink(Path.Combine(root, "20260306T020000Z-0a0b0c0d"), Path.Combine(root, "gone")),
+                    () => File.Delete(Path.Combine(root, "20260306T020000Z-0a0b0c0d")));
+            }
+
+            // several entries: ordinal order, all named
+            Directory.CreateDirectory(Path.Combine(root, "b")); File.WriteAllText(Path.Combine(root, "a"), "x");
+            Assert.Equal(["a", "b"], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Inside_the_retention_folder_only_slice_6_tombstones_are_recognised()
+    {
+        // review M-OBKP4 of PR 182: .retention was trusted whole, so a run kept in .retention/archive/<run id>/ was invisible to the report
+        const string Id = "20260301T020000Z-0a0b0c0d";
+        var root = Path.Combine(Path.GetTempPath(), "hasm-krt-" + Guid.NewGuid().ToString("N"));
+        var tombstone = Path.Combine(root, ".retention", "tombstones", Id);
+        Directory.CreateDirectory(tombstone);
+        Directory.CreateDirectory(Path.Combine(root, Id));
+        try
+        {
+            // a complete slice 6 tombstone, plus a crash leftover of the atomic writer: recognised; so is an incomplete one (a crash between its files) and an empty tombstones folder
+            foreach (var f in new[] { "run.status.json", "run.status.json.sig", "deleted.json", "completed.json", "deleted.json.tmp-0123456789abcdef0123456789abcdef" })
+                File.WriteAllText(Path.Combine(tombstone, f), "x");
+            var partial = Path.Combine(root, ".retention", "tombstones", "20260302T020000Z-0a0b0c0d");
+            Directory.CreateDirectory(partial);
+            File.WriteAllText(Path.Combine(partial, "run.status.json"), "x");
+            Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));
+
+            void Blocks(string expected, Action create, Action remove)
+            {
+                create();
+                try
+                {
+                    Assert.Equal([expected], EncryptionKeyRetirementService.UnrecognisedEntries(root));
+                    Assert.Equal("backup_root_unrecognised_entry:" + string.Join("/", expected.Split('/').Select(Uri.EscapeDataString)),
+                        EncryptionKeyRetirementService.UnrecognisedEntryProblem(EncryptionKeyRetirementService.UnrecognisedEntries(root)));
+                }
+                finally { remove(); }
+                Assert.Empty(EncryptionKeyRetirementService.UnrecognisedEntries(root));
+            }
+            string R(params string[] parts) => Path.Combine([root, .. parts]);
+            Blocks(".retention/archive", () => Directory.CreateDirectory(R(".retention", "archive", Id, "companies")), () => Directory.Delete(R(".retention", "archive"), true));   // a run kept there
+            Blocks(".retention/notes.txt", () => File.WriteAllText(R(".retention", "notes.txt"), "x"), () => File.Delete(R(".retention", "notes.txt")));                         // a stray file
+            Blocks(".retention/.hidden", () => Directory.CreateDirectory(R(".retention", ".hidden")), () => Directory.Delete(R(".retention", ".hidden")));
+            Blocks(".retention/tombstones/archive", () => Directory.CreateDirectory(R(".retention", "tombstones", "archive")), () => Directory.Delete(R(".retention", "tombstones", "archive")));
+            Blocks(".retention/tombstones/x.json", () => File.WriteAllText(R(".retention", "tombstones", "x.json"), "x"), () => File.Delete(R(".retention", "tombstones", "x.json")));
+            Blocks($".retention/tombstones/{Id}/companies", () => Directory.CreateDirectory(R(".retention", "tombstones", Id, "companies")), () => Directory.Delete(R(".retention", "tombstones", Id, "companies")));   // a run inside a tombstone
+            Blocks($".retention/tombstones/{Id}/manifest.json.hbe", () => File.WriteAllText(R(".retention", "tombstones", Id, "manifest.json.hbe"), "x"), () => File.Delete(R(".retention", "tombstones", Id, "manifest.json.hbe")));
+            Blocks($".retention/tombstones/{Id}/deleted.json.tmp-XYZ", () => File.WriteAllText(R(".retention", "tombstones", Id, "deleted.json.tmp-XYZ"), "x"), () => File.Delete(R(".retention", "tombstones", Id, "deleted.json.tmp-XYZ")));
+            Blocks(".retention/a b", () => Directory.CreateDirectory(R(".retention", "a b")), () => Directory.Delete(R(".retention", "a b")));                                  // encoded per segment: .retention/a%20b
+            // tombstones itself must be a real folder
+            Blocks(".retention/tombstones", () => { Directory.Move(R(".retention", "tombstones"), root + "-moved"); File.WriteAllText(R(".retention", "tombstones"), "x"); },
+                () => { File.Delete(R(".retention", "tombstones")); Directory.Move(root + "-moved", R(".retention", "tombstones")); });
+            if (!OperatingSystem.IsWindows())
+            {
+                // links are never recognised: a tombstones link, a tombstone link, a file link inside a tombstone
+                Blocks($".retention/tombstones/20260303T020000Z-0a0b0c0d", () => Directory.CreateSymbolicLink(R(".retention", "tombstones", "20260303T020000Z-0a0b0c0d"), R(Id)),
+                    () => File.Delete(R(".retention", "tombstones", "20260303T020000Z-0a0b0c0d")));
+                Blocks($".retention/tombstones/{Id}/completed.json", () => { File.Delete(R(".retention", "tombstones", Id, "completed.json")); File.CreateSymbolicLink(R(".retention", "tombstones", Id, "completed.json"), R(".retention", "tombstones", Id, "deleted.json")); },
+                    () => { File.Delete(R(".retention", "tombstones", Id, "completed.json")); File.WriteAllText(R(".retention", "tombstones", Id, "completed.json"), "x"); });
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void The_unrecognised_entry_code_encodes_the_names_and_is_bounded()
+    {
+        Assert.Equal("backup_root_unrecognised_entry:archive,x.bak", EncryptionKeyRetirementService.UnrecognisedEntryProblem(["archive", "x.bak"]));
+        // a name can neither break the code (":" ",") nor carry a control character or a space into the output
+        Assert.Equal("backup_root_unrecognised_entry:a%20b,x%3Ay%2Cz,n%0Al%1B", EncryptionKeyRetirementService.UnrecognisedEntryProblem(["a b", "x:y,z", "n\nl\u001b"]));
+        var many = Enumerable.Range(0, EncryptionKeyRetirementService.UnrecognisedEntriesListed + 5).Select(i => $"e{i:D2}").ToList();
+        var code = EncryptionKeyRetirementService.UnrecognisedEntryProblem(many);
+        Assert.EndsWith(",e19,+5_more", code, StringComparison.Ordinal);
+        Assert.Equal(EncryptionKeyRetirementService.UnrecognisedEntriesListed + 1, code["backup_root_unrecognised_entry:".Length..].Split(',').Length);
+    }
+
+    private static (string?, string) Flat((string? Problem, IReadOnlyList<string> Keys) x) => (x.Problem, string.Join(",", x.Keys));
+
+    private static byte[] EnvelopeUnder(string keyId)
+    {
+        var ring = new InMemoryKekRing(keyId);
+        return new EnvelopeEncryptor(ring).Encrypt("x"u8, "ctx");
+    }
+
+    [Fact]
+    public void The_usage_scan_keeps_the_row_key_and_the_envelope_key_and_counts_what_it_cannot_determine()
+    {
+        var b = new EncryptionKeyUsageBuilder("k2");
+        b.Add("k1", () => EnvelopeUnder("k2"));                 // a rewrap crashed after the file replacement: both keys stay needed
+        b.Add("k2", () => EnvelopeUnder("k2"));                 // current
+        b.Add("k3", () => null);                                // the file is gone: the row still names its key
+        b.Add("k4", () => throw new IOException("unreadable"));   // unknown: its row key counts AND the item is unknown
+        b.Add("k5", () => [1, 2, 3]);                           // a malformed envelope: unknown
+        b.Add("NOT A KEY ID", () => EnvelopeUnder("k2"));       // a row with an invalid key id: unknown
+        b.Add("k6", () => throw new ArgumentException("Invalid stored file name."));   // review L-FH2 of PR 182: a stored name the store refuses is unknown, not an unhandled error
+        var u = b.Build();
+        Assert.Equal(["k1", "k2", "k3", "k4", "k5", "k6"], u.KeyIdsInUse);
+        Assert.Equal(4, u.Unknown);
+        Assert.Equal(5, u.UnderOtherKeys);                      // k1 (with k2), k3, k4, k5, k6 name a key other than the active k2
+    }
+}

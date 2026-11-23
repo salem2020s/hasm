@@ -82,6 +82,8 @@ public sealed partial class PermissionCatalog
         new("access.roles", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Delete]),
         new("access.assignments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Create, PermissionAction.Delete]),
         new("access.audit", ScopeKind.Company, [PermissionAction.View]),
+        // The company MFA policy (Phase 4.1 S3b-1b, system migration 0034): view it, change it (an MFA-fresh, audited action). Only the Company Administrator preset holds it.
+        new("access.mfapolicy", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         // Company administration (Phase 3.1A-2, system migration 0006).
         new("company.profile", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
         new("company.settings", ScopeKind.Company, [PermissionAction.View, PermissionAction.Update]),
@@ -143,6 +145,9 @@ public sealed partial class PermissionCatalog
         // Phase 3.8B-3: negativeexception = approve the negative-stock exception of an issue document of the warehouse (never the creator; never the poster; system migration 0022)
         new("company.stockdocs", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Post, PermissionAction.Reverse, PermissionAction.NegativeException]),
         new("company.stockbalance", ScopeKind.Warehouse, [PermissionAction.View]),
+        // Compensation plans of a back-dated stock event (Phase 3.8D step 5): warehouse-scoped on the plan's root warehouse. Create = write a plan from the read-only planner output; Approve = approve or reject a plan
+        // (never the creator, last editor or submitter of the plan or of the event document: service AND PostgreSQL). The resource is privileged (D-096) and NO preset role holds either code (owner decision X4 is open).
+        new("company.compensationplans", ScopeKind.Warehouse, [PermissionAction.Create, PermissionAction.Approve]),
         // Stocktake (3.8B-1): warehouse-scoped like stock documents; the approver is never the submitter (service AND PostgreSQL). Counting and approving create no stock movement.
         new("company.stocktake", ScopeKind.Warehouse, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
         // Party registry (3.9A, system migration 0023): company-wide. View the local parties and the shared identity they are linked to; create a local party (which proposes its shared identity);
@@ -161,6 +166,10 @@ public sealed partial class PermissionCatalog
         // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
         // plan) is NOT in the Company Administrator preset: it belongs to the Retention Approver preset (a sensitive grant, offline through the administrative tool; separation of duties).
         new("company.attachmentretention", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Hold, PermissionAction.Approve, PermissionAction.Execute]),
+        // Cash and bank accounts (Phase 3.14 slice S1, docs/PHASE-3.14.md, D-155/D-211): BRANCH-scoped (a cashbox belongs to a branch). Update and activate are privileged (they redirect where money is paid: D-096); the FULL bank account
+        // number needs the separate privileged resource (the attachments precedent) on the account's branch. Granting these codes to the preset roles is a system migration that waits for the owner's answer on the preset pattern.
+        new("company.cashaccounts", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
+        new("company.cashaccountssensitive", ScopeKind.Branch, [PermissionAction.View]),
     ]);
 
     public static class Codes
@@ -176,6 +185,8 @@ public sealed partial class PermissionCatalog
         public const string AssignmentsCreate = "access.assignments.create";
         public const string AssignmentsDelete = "access.assignments.delete";
         public const string AuditView = "access.audit.view";
+        public const string MfaPolicyView = "access.mfapolicy.view";
+        public const string MfaPolicyUpdate = "access.mfapolicy.update";
         public const string ProfileView = "company.profile.view";
         public const string ProfileUpdate = "company.profile.update";
         public const string SettingsView = "company.settings.view";
@@ -267,6 +278,8 @@ public sealed partial class PermissionCatalog
         public const string StockDocsReverse = "company.stockdocs.reverse";
         public const string StockDocsNegativeException = "company.stockdocs.negativeexception";
         public const string StockBalanceView = "company.stockbalance.view";
+        public const string CompensationPlansCreate = "company.compensationplans.create";
+        public const string CompensationPlansApprove = "company.compensationplans.approve";
         public const string StocktakeView = "company.stocktake.view";
         public const string StocktakeCreate = "company.stocktake.create";
         public const string StocktakeUpdate = "company.stocktake.update";
@@ -299,6 +312,11 @@ public sealed partial class PermissionCatalog
         public const string AttachmentsDelete = "company.attachments.delete";
         public const string AttachmentsSensitiveView = "company.attachmentssensitive.view";
         public const string AttachmentsSensitiveUpload = "company.attachmentssensitive.upload";
+        public const string CashAccountsView = "company.cashaccounts.view";
+        public const string CashAccountsCreate = "company.cashaccounts.create";
+        public const string CashAccountsUpdate = "company.cashaccounts.update";
+        public const string CashAccountsActivate = "company.cashaccounts.activate";
+        public const string CashAccountsSensitiveView = "company.cashaccountssensitive.view";
         public const string RetentionView = "company.attachmentretention.view";
         public const string RetentionConfigure = "company.attachmentretention.configure";
         public const string RetentionHold = "company.attachmentretention.hold";
@@ -334,14 +352,26 @@ public static class PresetRoles
     public static readonly Guid ImportApproverId = new("5c1b0f6e-0000-4a00-8000-000000000006");
     public static readonly Guid CommercialApproverId = new("5c1b0f6e-0000-4a00-8000-000000000007");
     public static readonly Guid RetentionApproverId = new("5c1b0f6e-0000-4a00-8000-000000000008");
+    /// <summary>X4-PRESET-ROLE (owner Option A, 2026-11-22; plan docs/X4-PRESET-ROLES-PLAN.md): the cash and bank account configuration role. PRIVILEGED (update and activate, D-158). Dedicated preset: Company Administrator is not widened.</summary>
+    public static readonly Guid CashAccountManagerId = new("5c1b0f6e-0000-4a00-8000-00000000000a");
+    /// <summary>X4-PRESET-ROLE: the role that may read a FULL bank account number. PRIVILEGED (resource company.cashaccountssensitive, D-155, D-158).</summary>
+    public static readonly Guid CashAccountSensitiveViewerId = new("5c1b0f6e-0000-4a00-8000-00000000000b");
 
     public const string CompanyAdministratorKey = "company-administrator";
+
+    /// <summary>
+    /// The cash and bank account permissions (Phase 3.14 slice S1) are in the catalog but are NOT in the Company Administrator preset, and stay out of it (owner decision X4-PRESET-ROLE, Option A, 2026-11-22; lead direction: widening
+    /// Company Administrator counts as granting new privileges to existing users; D-158: the sensitive view is not in Company Administrator). They are held by two dedicated presets, Cash Account Manager and Cash Account Sensitive Viewer
+    /// (system migration 0036, provisional number), which are assigned offline only. This list is the exclusion that keeps the Company Administrator definition equal to its seed.
+    /// </summary>
+    private static readonly string[] CashAccountCodes =
+        [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
 
     public static IReadOnlyDictionary<Guid, (string Key, IReadOnlySet<string> Permissions)> Definitions { get; } =
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, .. CashAccountCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -356,6 +386,9 @@ public static class PresetRoles
             [ImportApproverId] = ("import-approver", new HashSet<string> { PermissionCatalog.Codes.ImportsView, PermissionCatalog.Codes.ImportsApprove }),
             [CommercialApproverId] = ("commercial-approver", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialApprove }),
             [RetentionApproverId] = ("retention-approver", new HashSet<string> { PermissionCatalog.Codes.RetentionView, PermissionCatalog.Codes.RetentionApprove }),
+            // X4 (system migration 0036, provisional number): dedicated presets, assigned offline only (grant-cash-account-manager / grant-cash-account-sensitive-viewer). Neither is in Company Administrator.
+            [CashAccountManagerId] = ("cash-account-manager", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate }),
+            [CashAccountSensitiveViewerId] = ("cash-account-sensitive-viewer", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsSensitiveView }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,
@@ -434,6 +467,11 @@ public interface IScopeTargetValidator
 
 /// <summary>The current state of a branch or warehouse as far as access control is concerned. <paramref name="Epoch"/> is its activation epoch.</summary>
 public sealed record ScopeTargetState(bool Active, long Epoch);
+
+internal interface IBudgetedScopeTargetValidator
+{
+    Task<ScopeTargetState?> GetStateAsync(Guid companyId, ScopeKind kind, Guid id, Action reserveCommand, CancellationToken ct);
+}
 
 public sealed class DenyAllScopeTargetValidator : IScopeTargetValidator
 {

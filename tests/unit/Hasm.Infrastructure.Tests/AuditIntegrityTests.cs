@@ -312,7 +312,8 @@ public class FileCheckpointStoreTests : IDisposable
         await store.AppendAsync("system", 1, H(9), 1, key);
         var names = Directory.GetFiles(dir).Select(Path.GetFileName).ToList();
         Assert.Equal(2, names.Count);
-        Assert.All(names, n => { Assert.DoesNotContain("1111", n!); Assert.DoesNotContain("system", n!); Assert.EndsWith(".hcp", n!); });
+        // the whole company id, not a four-digit fragment: the opaque file names are hex hashes, in which "1111" occurs by chance now and then
+        Assert.All(names, n => { Assert.DoesNotContain("11111111222233334444555555555555", n!); Assert.DoesNotContain("system", n!); Assert.EndsWith(".hcp", n!); });
         Assert.Single((await store.ReadAllAsync(Stream)).Checkpoints);
         Assert.Equal(H(9), (await store.ReadLastAsync("system"))!.Hash);
     }

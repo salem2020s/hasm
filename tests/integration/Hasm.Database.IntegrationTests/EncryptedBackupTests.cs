@@ -132,6 +132,18 @@ public class EncryptedBackupTests : PostgresTestBase
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
 
     [PostgresFact]
+    public async Task The_key_inventory_of_an_encrypted_set_includes_the_keys_of_encrypted_cash_numbers()
+    {
+        await Init();
+        var (c, _) = await NewCompany();
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-1", "1101", "k1"));
+        await Exec(Options.BuildCompanyAdminConnectionString(c.PhysicalDatabaseName), CashTestSql.BankRow("NB-9", "1102", "k9"));
+        var backup = await Companies().BackupCompanyEncryptedAsync(c.Id, Path.Combine(work, "set-cash"), Material());
+        Assert.Equal(new[] { "k1", "k9" }, backup.Manifest.Company!.KeyIdsRequired);
+        Assert.Equal(new[] { "k9" }, backup.MissingKeyIds);
+    }
+
+    [PostgresFact]
     public async Task An_encrypted_run_holds_no_plaintext_and_its_signed_status_needs_a_recovery_test()
     {
         await Init();
@@ -141,9 +153,9 @@ public class EncryptedBackupTests : PostgresTestBase
         Assert.Equal("ok", report.Verdict);
         Assert.True(report.Encrypted);
 
-        // D-091: only ciphertext, signatures and the signed readable status; no dump, manifest, report or marker in plaintext
+        // D-091: only ciphertext, signatures, the signed readable status and the signed ciphertext inventory (names, sizes and SHA-256 of the ciphertext, D-185 as amended); no dump, manifest, report or marker in plaintext
         var files = Directory.EnumerateFiles(runDir, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(runDir, f).Replace('\\', '/')).ToList();
-        Assert.All(files, f => Assert.True(f.EndsWith(".hbe") || f.EndsWith(".sig") || f == SignedDocuments.RunStatusFileName, f));
+        Assert.All(files, f => Assert.True(f.EndsWith(".hbe") || f.EndsWith(".sig") || f == SignedDocuments.RunStatusFileName || f == CiphertextDigests.FileName, f));
         Assert.Contains("system/database.dump.hbe", files);
         Assert.Contains($"companies/{c.Id:N}/database.dump.hbe", files);
         Assert.Single(files, f => f.StartsWith($"companies/{c.Id:N}/attachments/"));

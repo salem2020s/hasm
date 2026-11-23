@@ -1,0 +1,16 @@
+# Phase 3.8D initial design and safe-slice review
+
+* **Pull request:** #48 (Draft; phase incomplete)
+* **Initial head SHA reviewed:** b22cbe0d23634209b0885a6a50ff9dc1a892e2ed, followed by the complete uncommitted arithmetic/design delta against origin/main at 814bd7c43cd7ad4cd78aec0a5c0eca707a26a1eb. Final pushed-head confirmation is pending.
+* **Reviewer context:** separate Codex/GPT agent (`pr46_review`), independent of the author.
+* **Prompt/scope:** adversarial full-PR design/code review of costing/closed-period invariants, transfer/reversal/obligation semantics, authorization, stale plans, accounting-policy boundaries, immutable arithmetic and tests. No cherry-picked diff.
+* **Checks run by reviewer:** read-only source/Git inspection and git diff --check passed; no application tests executed.
+* **High design finding, fixed in proposal:** ordinary adjustment drafts might post before their source event. The revised proposal permits non-postable proposal storage only until guarded execution-group materialization commits source and complete adjustment set atomically; every posting path must honor the binding, and a stale group invalidates all approvals. No executable write path existed or was changed.
+* **Medium code finding, fixed:** numeric bounds were missing before decimal scaling/aggregate conversion. The primitive now matches live per-event bounds and refuses unsupported aggregates with a stable code; extreme-decimal, exact-limit and cumulative-boundary fixtures were added. Reviewer confirmed resolution with no new Critical/High/Medium issue in the primitive.
+* **Open design prerequisites:** original-versus-replayed mapping/dimension reconciliation, negative-obligation transition matrix, deterministic transfer/reversal scheduler examples and complete stale-plan/approval binding. These are explicit prerequisites before persistence/execution, not approved accounting policy. Consequential unanswered accounting questions remain owner-held.
+* **Safe implementation scope approved:** internal immutable already-ordered ordinary receipt/issue arithmetic using existing CostingMath. No database, API, scheduler, dependency-injection registration, production caller, journal or live mutation. Unsupported history is not claimed supported. Existing back-dated and method-change barriers remain.
+* **Author validation:** 17 new unit cases; full local unit suite 885/885 passed, zero skips. Generator, docs/traceability and diff checks passed. Applicable final-head CI pending.
+* **Adversarial self-review:** checked exact FIFO allocations, moving-average inserted-receipt deltas, final-unit remainder conservation, shortages, immutable/repeated results, full-input unsupported-kind validation and numeric limits. No current application behavior changed, and no temporary files, caches or test results are staged.
+* **Blocker or High findings open in this checkpoint:** none
+* **NOT VERIFIED:** no snapshot loader, authorized public preview, transfer/reversal/negative-obligation replay integration, persistent adjustment proposal/execution or UI exists. Phase 3.8D is NOT complete. Exact-head CI and final-head review confirmation remain pending.
+* **Verdict:** approve the limited safe checkpoint; keep the phase PR Draft.

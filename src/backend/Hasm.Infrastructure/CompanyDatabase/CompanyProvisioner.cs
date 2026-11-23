@@ -51,10 +51,19 @@ public sealed class CompanyProvisioner(
     /// <summary>Test seam: invoked after each step. Throwing OperationCanceledException simulates an interrupted process.</summary>
     internal Func<ProvisioningStep, CancellationToken, Task>? AfterStep { get; init; }
 
+    /// <summary>TEST SEAM (can only add a refusal, see <see cref="MigrationAccountPolicy"/>): an additional "is a superuser" reading.</summary>
+    internal Func<bool>? AdditionalSuperuserReading { get; init; }
+
     public async Task<ProvisioningResult> ProvisionAsync(Guid companyId, CancellationToken ct = default)
     {
         options.EnsureValid(requireAdmin: true);
         MigrationScript.Validate(scripts);
+
+        await using (var gate = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true)))
+        {
+            await gate.OpenAsync(ct);
+            await MigrationAccountPolicy.EnsureAsync(gate, options.AllowSuperuserMigrationAccount, null, AdditionalSuperuserReading, ct);   // before a database is created
+        }
 
         await using var lockConn = new NpgsqlConnection(options.BuildSystemConnectionString(admin: true));
         await lockConn.OpenAsync(ct);
@@ -68,6 +77,8 @@ public sealed class CompanyProvisioner(
         if (company.State == ProvisioningState.Ready)
         {
             await VerifyMappingAsync(company, ct);
+            // Owner decision Q2: no migration runs for a Ready company, but a database with a switched-off trigger is still not accepted (nothing is changed, the state stays Ready).
+            await MigrationRunner.EnsureNoSwitchedOffAsync(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName), ct);
             return new ProvisioningResult(companyId, ProvisioningOutcome.AlreadyReady, false, [], company.ProvisioningAttempts);
         }
 
@@ -81,7 +92,7 @@ public sealed class CompanyProvisioner(
             var created = await EnsureDatabaseAsync(company.PhysicalDatabaseName, ct);
             await Step(ProvisioningStep.DatabaseEnsured, ct);
 
-            var migrated = await new MigrationRunner(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName))
+            var migrated = await new MigrationRunner(options.BuildCompanyAdminConnectionString(company.PhysicalDatabaseName)) { AllowSuperuser = options.AllowSuperuserMigrationAccount, AdditionalSuperuserReading = AdditionalSuperuserReading }
                 .ApplyAsync(scripts, ct);
             await Step(ProvisioningStep.Migrated, ct);
 

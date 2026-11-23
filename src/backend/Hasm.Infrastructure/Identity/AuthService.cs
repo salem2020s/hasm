@@ -41,7 +41,7 @@ public abstract record MfaEnrolOutcome
 
 public sealed record AuthenticatedSession(
     Guid SessionId, Guid UserId, string Login, string DisplayName, bool IsIdentityAdministrator,
-    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None);
+    SessionClient Client, DateTimeOffset IdleExpiresAtUtc, DateTimeOffset AbsoluteExpiresAtUtc, DateTimeOffset? MfaVerifiedAtUtc = null, MfaState MfaState = MfaState.None, Guid? SelectedCompanyId = null);
 
 public enum CreateUserStatus { Created, InvalidLogin, WeakPassword, InvalidDisplayName, LoginTaken }
 public sealed record CreateUserResult(CreateUserStatus Status, UserRecord? User = null, IReadOnlyList<string>? PasswordProblems = null);
@@ -153,7 +153,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         var sessionId = Guid.NewGuid();
         var absolute = now + options.SessionAbsolute;
         var idle = Min(now + options.SessionIdle, absolute);
-        await store.CreateSessionAsync(sessionId, user.Id, SessionToken.Hash(token), client, idle, absolute, mfaVerifiedAt, ct);
+        await store.CreateSessionAsync(sessionId, user.Id, token, client, idle, absolute, mfaVerifiedAt, ct);
         logger?.LogInformation("auth.login outcome=success user={UserId} session={SessionId} client={Client} mfa={Mfa}", user.Id, sessionId, client, mfaVerifiedAt is not null);
         return new LoginOutcome.Success(token, user, sessionId, idle, absolute);
     }
@@ -328,7 +328,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
         var sessionId = Guid.NewGuid();
         var absolute = now + options.SessionAbsolute;
         var idle = Min(now + options.SessionIdle, absolute);
-        var issue = new SessionIssue(sessionId, SessionToken.Hash(token), client, idle, absolute, now);
+        var issue = new SessionIssue(sessionId, token, client, idle, absolute, now);
         if (!await mfa!.State.ActivatePendingAsync(user.Id, secretId, step, null, ct, consumeEnrolmentCode, issue)) return new MfaEnrolOutcome.Refused();
         logger?.LogInformation("auth.mfa_enrol outcome=confirmed user={UserId} session={SessionId} client={Client}", user.Id, sessionId, client);
         return new MfaEnrolOutcome.Confirmed(new LoginOutcome.Success(token, user, sessionId, idle, absolute));
@@ -357,7 +357,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
     public async Task<AuthenticatedSession?> AuthenticateAsync(string? token, CancellationToken ct = default)
     {
         if (!SessionToken.IsWellFormed(token)) return null;
-        var s = await store.FindActiveSessionAsync(SessionToken.Hash(token!), ct);
+        var s = await store.FindActiveSessionAsync(token!, ct);
         if (s is null) return null;
         // defence in depth (review M1): a session of a user who is not MFA-free but lacks the second-factor verification (for example a password-only session from before enforcement) is not a session
         if (s.MfaState != MfaState.None && s.MfaVerifiedAtUtc is null) return null;
@@ -369,7 +369,7 @@ public sealed class AuthService(IdentityStore store, PasswordService passwords, 
             idle = Min(now + options.SessionIdle, s.AbsoluteExpiresAtUtc);
             await store.TouchSessionAsync(s.SessionId, idle, ct);
         }
-        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc, s.MfaVerifiedAtUtc, s.MfaState);
+        return new AuthenticatedSession(s.SessionId, s.UserId, s.Login, s.DisplayName, s.IsIdentityAdministrator, s.Client, idle, s.AbsoluteExpiresAtUtc, s.MfaVerifiedAtUtc, s.MfaState, s.SelectedCompanyId);
     }
 
     public async Task LogoutAsync(Guid sessionId, CancellationToken ct = default)

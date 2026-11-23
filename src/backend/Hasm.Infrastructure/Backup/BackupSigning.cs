@@ -106,6 +106,9 @@ public sealed class SigningTrust
 {
     private readonly Dictionary<string, (TrustedSigningKey Entry, ECDsa Key)> keys = new(StringComparer.Ordinal);
 
+    /// <summary>The number of trusted signing keys (0: nothing can verify; a command that needs verification refuses as a configuration error).</summary>
+    public int Count => keys.Count;
+
     public SigningTrust(IEnumerable<TrustedSigningKey> entries)
     {
         foreach (var e in entries)

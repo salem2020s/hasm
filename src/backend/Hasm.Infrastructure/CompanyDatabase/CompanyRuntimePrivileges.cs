@@ -152,6 +152,30 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.RetentionPolicy.Table, ["SELECT", "INSERT", "UPDATE"]),   // draft -> approved -> revoked or superseded
         (CompanySchema.RetentionRule.Table, ["SELECT", "INSERT"]),
         (CompanySchema.LegalHold.Table, ["SELECT", "INSERT", "UPDATE"]),   // placed, then released once
+        // Company migration 0033: one identity per approval policy, written only THROUGH the deferred triggers of the policy and stage tables (they run as the writer). Whatever is written, the guard trigger stores
+        // the fingerprint PostgreSQL computes; rows are never removed.
+        (CompanySchema.ApprovalPolicyIdentity.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Phase 3.14 slice S1 (company migration 0033, provisional): cash and bank accounts are never deleted (PostgreSQL refuses it); their state advances by revision-fenced updates. The migration creates no other table.
+        (CompanySchema.CashAccount.Table, ["SELECT", "INSERT", "UPDATE"]),
+        // Phase 3.8D (company migration 0036, provisional): plan storage and approval, database layer. Every table is append-only (PostgreSQL refuses UPDATE, DELETE and TRUNCATE); the plan alone takes UPDATE, and its
+        // trigger lets only the status transition through. The guards on the cost entry, cost operation and stock posting tables read all of these tables as the invoker, so the ordinary posting path needs SELECT on them.
+        // The runtime role holds INSERT only where the plan storage and approval services write (plan, closure, lines, history, approval). It holds SELECT ONLY on the four tables of EXECUTION (execution, its journals, epoch
+        // members and epoch lineage): in this checkpoint execution is disabled, and an epoch is the database's only door for back-dated cost history, so the role cannot write one (owner condition "cannot be activated or
+        // called", review M1 of PR 48). INSERT on those four tables returns with the reviewed executor slice, as a grant in this catalog (no migration is needed for it).
+        (CompanySchema.CompensationPlan.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CompensationPlanPosition.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanEvent.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanApproval.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CompensationPlanExecution.Table, ["SELECT"]),
+        (CompanySchema.CompensationPlanExecutionJournal.Table, ["SELECT"]),
+        (CompanySchema.EpochMember.Table, ["SELECT"]),
+        (CompanySchema.EpochEntryLineage.Table, ["SELECT"]),
+        // Phase 3.8D threat T2, slice A1 (company migration 0037): the replay authorization registry. SELECT ONLY: the signer key table is written by the database owner alone, and the two grant tables are inert shells until
+        // the insert-time and commit-time verification of slices A2 to A4 exist (a row written before them would escape them), so the runtime role gets no INSERT here. INSERT on the grant tables arrives with A2.
+        (CompanySchema.ReplaySignerKey.Table, ["SELECT"]),
+        (CompanySchema.ReplayExecutionGrant.Table, ["SELECT"]),
+        (CompanySchema.ReplayGrantUse.Table, ["SELECT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>
@@ -224,8 +248,13 @@ public static class CompanyRuntimePrivileges
     /// Reports every way <paramref name="roleName"/> holds more than the catalog allows in the connected company database
     /// (codes only; empty = least privilege). Run by the grant command with the owner account, and by the API gate with the runtime role itself.
     /// </summary>
-    public static async Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+    public static Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+        => FindViolationsCoreAsync(conn, roleName, ct, null);
+    internal static Task<IReadOnlyList<string>> FindViolationsAsync(NpgsqlConnection conn, string roleName, Action reserveCommand, CancellationToken ct)
+        => FindViolationsCoreAsync(conn, roleName, ct, reserveCommand);
+    private static async Task<IReadOnlyList<string>> FindViolationsCoreAsync(NpgsqlConnection conn, string roleName, CancellationToken ct, Action? reserveCommand)
     {
+        reserveCommand?.Invoke();
         await using var cmd = new NpgsqlCommand(ViolationSql, conn);
         cmd.Parameters.AddWithValue("r", roleName);
         cmd.Parameters.AddWithValue("audit", BizAudit.Table);
@@ -255,17 +284,24 @@ public static class CompanyRuntimePrivileges
     }
 
     /// <summary>True when the role holds every privilege of the catalog on every table that exists (what the API needs to work at all).</summary>
-    public static async Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+    public static Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, CancellationToken ct = default)
+        => HasRequiredAccessCoreAsync(conn, roleName, ct, null);
+    internal static Task<bool> HasRequiredAccessAsync(NpgsqlConnection conn, string roleName, Action reserveCommand, CancellationToken ct)
+        => HasRequiredAccessCoreAsync(conn, roleName, ct, reserveCommand);
+    private static async Task<bool> HasRequiredAccessCoreAsync(NpgsqlConnection conn, string roleName, CancellationToken ct, Action? reserveCommand)
     {
-        foreach (var (table, privileges) in Tables)
-        {
-            await using var cmd = new NpgsqlCommand("SELECT to_regclass(@t) IS NOT NULL AND bool_and(has_table_privilege(@r::name, to_regclass(@t), p)) FROM unnest(@p::text[]) p", conn);
-            cmd.Parameters.AddWithValue("r", roleName);
-            cmd.Parameters.AddWithValue("t", table);
-            cmd.Parameters.AddWithValue("p", privileges);
-            // A table the database does not have yet (a migration this backend knows but the database lacks) is reported by the schema gate, not here.
-            if (await cmd.ExecuteScalarAsync(ct) is not true) return false;
-        }
-        return true;
+        // ONE set-based command whatever the number of tables (it used to be one command per table, which charged the shared command budget of every bounded read about a hundred commands on each cold schema check):
+        // every (table, privilege) pair of the catalog must exist and be held. A table the database does not have yet (a migration this backend knows but the database lacks) is reported by the schema gate, not here.
+        var tables = new List<string>();
+        var privileges = new List<string>();
+        foreach (var (table, held) in Tables)
+            foreach (var privilege in held) { tables.Add(table); privileges.Add(privilege); }
+        reserveCommand?.Invoke();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT NOT EXISTS (SELECT 1 FROM unnest(@t::text[], @p::text[]) AS x(tbl, priv) WHERE to_regclass(x.tbl) IS NULL OR NOT has_table_privilege(@r::name, to_regclass(x.tbl), x.priv))", conn);
+        cmd.Parameters.AddWithValue("r", roleName);
+        cmd.Parameters.AddWithValue("t", tables.ToArray());
+        cmd.Parameters.AddWithValue("p", privileges.ToArray());
+        return await cmd.ExecuteScalarAsync(ct) is true;
     }
 }

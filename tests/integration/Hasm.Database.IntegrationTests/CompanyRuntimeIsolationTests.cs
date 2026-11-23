@@ -183,7 +183,7 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
 
         // What it may do.
         Assert.Equal(c.Id, await Run<Guid>(conn, $"SELECT {I.CompanyId} FROM {I.Table}"));
-        Assert.Equal(33L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(39L, await Run<long>(conn, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
         Assert.Equal(0L, await Run<long>(conn, $"SELECT count(*) FROM {B.Table}"));
 
         // What it must not: modify or truncate audit events (a privilege failure, before any trigger runs).
@@ -278,6 +278,90 @@ public class CompanyRuntimeIsolationTests : CompanyRuntimeTestBase
         await using var strict = await RealResolver().OpenAsync(c.Id);
         await using var direct = await AsRuntime(c);
         await Denied(direct, $"UPDATE {B.Table} SET {B.Detail} = 'x'");
+    }
+
+    // ---- the required-access check answers NO for a missing privilege (review of PR 48, L-a) -----------------------
+
+    private static (string Table, string Privilege) CataloguedInsert() => (B.Table, "INSERT");
+
+    /// <summary>The company database, the role and a connection AS the runtime role; asserts the baseline first: a cold resolver opens it and the check answers yes.</summary>
+    private async Task<(CompanyRecord Company, string Role)> RequiredAccessBaseline()
+    {
+        await StartCompanies();
+        var (c, _) = await GrantedCompany();
+        var role = RoleOf(c);
+        await using (await RealResolver().OpenAsync(c.Id)) { }
+        await using var rt = await AsRuntime(c);
+        Assert.True(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));
+        return (c, role);
+    }
+
+    private async Task AssertNotProvisioned(CompanyRecord c, string role)
+    {
+        await using (var rt = await AsRuntime(c)) Assert.False(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));      // the check itself answers no
+        Assert.Equal(CompanyDatabaseException.RuntimeNotProvisioned, (await Assert.ThrowsAsync<CompanyDatabaseException>(() => RealResolver().OpenAsync(c.Id))).Code);   // and a COLD resolver refuses, with that code
+    }
+
+    private async Task AssertProvisionedAgain(CompanyRecord c, string role)
+    {
+        Assert.True((await Provisioner().GrantAsync(c.Id)).LoginVerified);                                         // the grant command converges back to the catalog
+        await using var rt = await AsRuntime(c);
+        Assert.True(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));
+        await using (await RealResolver().OpenAsync(c.Id)) { }
+    }
+
+    [PostgresRoleFact]
+    public async Task One_missing_catalog_privilege_makes_the_check_answer_no_and_a_cold_resolver_refuses_with_RuntimeNotProvisioned()
+    {
+        var (c, role) = await RequiredAccessBaseline();
+        var (table, privilege) = CataloguedInsert();
+        Assert.Contains(CompanyRuntimePrivileges.Tables, t => t.Table == table && t.Privileges.Contains(privilege));                 // it IS a catalog privilege
+        await InCompany(c.PhysicalDatabaseName, $"REVOKE {privilege} ON TABLE {table} FROM \"{role}\"");
+        Assert.True(await InCompany<bool>(c.PhysicalDatabaseName, $"SELECT has_table_privilege(@r::name, '{table}', 'SELECT')", ("r", role)));    // everything else is still held: ONE privilege is missing
+        await AssertNotProvisioned(c, role);
+        await AssertProvisionedAgain(c, role);
+    }
+
+    [PostgresRoleFact]
+    public async Task A_column_only_grant_is_not_the_table_privilege_and_the_check_answers_no()
+    {
+        var (c, role) = await RequiredAccessBaseline();
+        var (table, _) = CompanyRuntimePrivileges.Tables.First(t => t.Privileges.Contains("UPDATE"));
+        var column = await InCompany<string>(c.PhysicalDatabaseName, $"SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid = '{table}'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum LIMIT 1");
+        await InCompany(c.PhysicalDatabaseName, $"REVOKE UPDATE ON TABLE {table} FROM \"{role}\"");
+        await InCompany(c.PhysicalDatabaseName, $"GRANT UPDATE ({column}) ON TABLE {table} TO \"{role}\"");                        // the privilege is held on ONE column only
+        Assert.True(await InCompany<bool>(c.PhysicalDatabaseName, $"SELECT has_column_privilege(@r::name, '{table}', '{column}', 'UPDATE')", ("r", role)));
+        Assert.False(await InCompany<bool>(c.PhysicalDatabaseName, $"SELECT has_table_privilege(@r::name, '{table}', 'UPDATE')", ("r", role)));
+        await AssertNotProvisioned(c, role);
+        await AssertProvisionedAgain(c, role);
+    }
+
+    [PostgresRoleFact]
+    public async Task A_privilege_held_only_through_a_membership_with_INHERIT_FALSE_is_not_held_and_the_check_answers_no()
+    {
+        var (c, role) = await RequiredAccessBaseline();
+        var (table, privilege) = CataloguedInsert();
+        var holder = "hasm_c_holder_" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
+        await RoleAdmin($"CREATE ROLE \"{holder}\" NOLOGIN");
+        try
+        {
+            await InCompany(c.PhysicalDatabaseName, $"GRANT USAGE ON SCHEMA public TO \"{holder}\"");
+            await InCompany(c.PhysicalDatabaseName, $"GRANT {privilege} ON TABLE {table} TO \"{holder}\"");
+            await InCompany(c.PhysicalDatabaseName, $"REVOKE {privilege} ON TABLE {table} FROM \"{role}\"");                       // the runtime role no longer holds it itself
+            await RoleAdmin($"GRANT \"{holder}\" TO \"{role}\" WITH INHERIT TRUE, SET FALSE");
+            await using (var rt = await AsRuntime(c)) Assert.True(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));   // control: through an INHERITING membership it is held (the API would refuse the membership as over-privilege, a different code)
+            await RoleAdmin($"REVOKE \"{holder}\" FROM \"{role}\"");
+            await RoleAdmin($"GRANT \"{holder}\" TO \"{role}\" WITH INHERIT FALSE, SET TRUE");
+            await AssertNotProvisioned(c, role);                                                                                      // INHERIT FALSE: the privilege is not held without SET ROLE
+            await RoleAdmin($"REVOKE \"{holder}\" FROM \"{role}\"");
+            await AssertProvisionedAgain(c, role);
+        }
+        finally
+        {
+            await InCompany(c.PhysicalDatabaseName, $"REVOKE ALL ON TABLE {table} FROM \"{holder}\"");
+            await InCompany(c.PhysicalDatabaseName, $"REVOKE ALL ON SCHEMA public FROM \"{holder}\"");
+            await RoleAdmin($"DROP ROLE IF EXISTS \"{holder}\"");
+        }
     }
 
     // ---- the audited transaction through the real role ------------------------------------------
@@ -491,7 +575,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
 
         var first = await AdminTool.Run(Configured(), "migrate-companies");
         Assert.Equal(0, first.Exit);
-        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033)", first.Out);
+        Assert.Contains($"Company {legacy.Id}: Migrated (applied 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032, 0033, 0034, 0035, 0036, 0037, 0038, 0039)", first.Out);
         Assert.Contains($"Company {current.Id}: UpToDate", first.Out);
         Assert.Contains("grant-company-runtime", first.Out);                     // reminder to re-grant after a migration
 
@@ -516,7 +600,7 @@ public class CompanyAdminToolTests : CompanyRuntimeTestBase
         Assert.Contains($"Company {bad.Id}: Failed [migration]", run.Out);
         Assert.Contains("1 failed", run.Out);
         AssertNoLeak([run.All], good, bad);
-        Assert.Equal(33L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
+        Assert.Equal(39L, await InCompany<long>(good.PhysicalDatabaseName, $"SELECT count(*) FROM {SystemSchema.MigrationJournalTable}"));
     }
 
     [PostgresFact]

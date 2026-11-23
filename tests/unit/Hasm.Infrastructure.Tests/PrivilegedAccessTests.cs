@@ -21,10 +21,10 @@ public class PrivilegedAccessTests
     {
         // review L1 of PR #172: an explicit expected list, not a rule derived from the table under test. Changing the classification is a deliberate, reviewed change to THIS list.
         Assert.Equal(
-            ["access.assignments", "access.audit", "access.members", "access.roles", "company.approvalpolicies", "company.attachmentretention", "company.attachmentssensitive",
-             "company.costcenterpolicies", "company.journalsoftclosed", "company.ledgersettings", "company.settings"],
+            ["access.assignments", "access.audit", "access.members", "access.mfapolicy", "access.roles", "company.approvalpolicies", "company.attachmentretention", "company.attachmentssensitive",
+             "company.cashaccountssensitive", "company.compensationplans", "company.costcenterpolicies", "company.journalsoftclosed", "company.ledgersettings", "company.settings"],
             PrivilegedAccess.PrivilegedResources.OrderBy(x => x, StringComparer.Ordinal).ToArray());
-        Assert.Equal(["company.imports.configure"], PrivilegedAccess.PrivilegedPermissions.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(["company.cashaccounts.activate", "company.cashaccounts.update", "company.imports.configure"], PrivilegedAccess.PrivilegedPermissions.OrderBy(x => x, StringComparer.Ordinal).ToArray());
         Assert.Equal(
             [PermissionAction.Approve, PermissionAction.FinalClose, PermissionAction.NegativeException, PermissionAction.Override, PermissionAction.Reopen],
             PrivilegedAccess.PrivilegedActions.OrderBy(a => a.ToString(), StringComparer.Ordinal).ToArray());
@@ -62,6 +62,8 @@ public class PrivilegedAccessTests
     [InlineData("company.imports.configure")]                       // import maintenance, including the key rewrap of imported files
     [InlineData("company.attachmentretention.hold")]               // Phase R R1: retention policy, legal holds and attachment deletion
     [InlineData("company.attachmentretention.execute")]
+    [InlineData("company.compensationplans.create")]              // Phase 3.8D step 5: planning, approving and executing a compensation plan rewrites the cost history
+    [InlineData("company.compensationplans.approve")]
     public void Permissions_that_authorize_key_rewrap_or_override_a_control_are_privileged(string code) => Assert.True(PrivilegedAccess.IsPrivilegedPermission(code), code);
 
     [Theory]

@@ -365,7 +365,7 @@ public class ImportApprovalTests : ImportTestBase
         await StartApi(configure: b =>
         {
             b.UseSetting("Hasm:Imports:StorageDirectory", StorageDir);
-            b.ConfigureServices(s => { s.AddSingleton<Hasm.Infrastructure.Security.KekRing>(new Hasm.Infrastructure.Security.InMemoryKekRing("k1")); s.AddSingleton(TestEncryption); s.AddSingleton<IImportAdapter>(Adapter); });
+            b.ConfigureServices(s => { s.AddSingleton<Hasm.Infrastructure.Security.KekRing>(new Hasm.Infrastructure.Security.InMemoryKekRing("k1", TestIdentityKeys.Master)); s.AddSingleton(TestEncryption); s.AddSingleton<IImportAdapter>(Adapter); });
         });
         const string Base = "/api/v1/company/imports";
         var cookie = await SignIn(Admin);
