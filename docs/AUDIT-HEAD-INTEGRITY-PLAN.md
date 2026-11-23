@@ -1,0 +1,101 @@
+# Audit head integrity: availability under a forged head row - PLAN
+
+Status: PLAN ONLY (documentation). Nothing here is built. It answers a pre-existing HIGH availability finding of the independent security review of the S8d plan (PR 223): **one row with a bad authentication code, inserted at the head of the system audit stream with the runtime credentials, makes every further audited write fail** (logins, MFA, administration, backups), and company streams are affected the same way; there is no recovery path, because the audit table is append-only even for its owner. The plan compares three remedies, recommends a combination, lists the adversarial tests, the migration impact (numbers are NOT allocated here; the lead allocates them) and the owner decision that is needed. No audit key, checkpoint or existing record changes; no existing safeguard is weakened.
+
+Sources read: `src/backend/Hasm.Infrastructure/Audit/AuditTrail.cs`, `AuditVerifier.cs`, `AuditCanonical.cs`, `AuditModel.cs`, system migration `0005_cryptographic_audit_integrity.sql`, company migration `0002_company_business_audit.sql`, `SystemRuntimePrivileges.cs`, `CompanyRuntimePrivileges.cs`, PR 188's migration guard (`docs/MIGRATION-GUARD.md`), the S8d plan (`docs/PHASE-4.3-S8D-PLAN.md`, section 4B).
+
+## 1. The problem, exactly
+
+* **Where the audit lives.** The system database holds ONE append-only table (`t_7e93ef23`) for the `system` stream and one `company:<id>` access stream per company; every company database holds one append-only business table for its `business:<id>` stream. Each row carries `Seq`, `PrevHash`, `Hash` (SHA-256 of the canonical bytes, no key needed) and `Mac` (HMAC under a key that never enters the database). The primary key is `(stream, seq)`. A row-level trigger refuses UPDATE and DELETE even for the owner (`audit events are append-only`).
+* **Who may insert.** The runtime role holds `SELECT` and `INSERT` on each of these tables (the system role: `SystemRuntimePrivileges`, `AuditEvent` = Append; the company role: `SELECT, INSERT` on the business table). The migration comment states the trust boundary: a holder of the runtime credentials can append rows, and the verifier (keyed MAC plus external checkpoints) detects what is not genuine.
+* **The writer's rule.** `AuditTrail.AppendAsync`, on the first touch of a stream in a transaction, reads the head and calls `EnsureHeadIsSoundAndAnchoredAsync`: `AuditVerifier.CheckRecord(head)` must be `Ok`, otherwise it throws `audit_head_corrupt` ("refusing to extend the chain") or, for a missing key, `audit_key_unavailable`. This refusal is deliberate: the chain is never extended on a damaged head.
+* **The attack.** With the runtime credentials only: `SELECT` the head, then `INSERT` a row at `Seq = head + 1` with `PrevHash = head.Hash`, any `Hash` and a random `Mac`. From then on the head fails `CheckRecord`, every audited write on that stream throws `audit_head_corrupt`, and every operation that audits (login, MFA enrolment, user and role administration, backups, the S8d deletion steps) fails. Nothing the application can do repairs it: the forged row cannot be updated or deleted, and the writer will not append after it.
+* **Why no recovery exists today.** The only owner-level action would be disabling the append-only trigger and deleting rows, which destroys evidence and is outside the product (and is exactly the kind of statement PR 188's migration guard refuses in a migration).
+* **Impact.** A denial of service of the whole system (system stream) or of one company (its streams) by anyone who holds the runtime credentials, for example after an SQL injection that executes as the runtime role. It does not forge a valid event and it does not break confidentiality; it is an availability and a recovery gap.
+
+## 2. Facts that constrain the design
+
+* The MAC key is not in the database by design, so PostgreSQL cannot tell a genuine row from a forged one. A key-free database check can only enforce structure (sequence, link, lengths, stream).
+* The `Hash` is key-free but is the SHA-256 of a versioned BINARY canonical form (`AuditCanonical.Serialize`); re-implementing that form in SQL would duplicate a persisted format and gain nothing, because an attacker can compute a correct hash and still has no valid MAC.
+* A forged row occupies a `(stream, seq)` slot forever. Any recovery must therefore continue AFTER it: the sequence cannot be reused.
+* The verifier already computes a `VerifiedThroughSeq` (the contiguous verified prefix) and reports any invalid record as a failure. A recovery must change how the verifier treats an explicitly recovered range, and only that range.
+* The writer, the verifier and the S8d evidence rule (the chain-verified prefix, section 4B of the S8d plan) must stay consistent: a recovered range must never become evidence.
+
+## 3. The options
+
+### (a) A BEFORE INSERT trigger enforcing the link (no key needed)
+
+A new trigger function on each audit table checks, for every inserted row: the stream equals the stream the row's own columns imply (already a CHECK), `Seq = 1` and `PrevHash = SHA-256('HASM-AUDIT-GENESIS-v1' || NUL || stream)` when the stream is empty, otherwise `Seq = head.Seq + 1` and `PrevHash = head.Hash`, where the head is the row with the greatest `Seq` of the stream (a primary-key lookup). It refuses anything else with a stable error (`audit_link_violation`).
+
+* **What it prevents:** rows with a gap, an unlinked or random `PrevHash`, a replay at an old sequence, or a hidden insertion in the middle of a chain. After it, every row in the table sits at the end of a linked chain, so a forgery is always a CONTIGUOUS TAIL (which makes recovery (b) well defined and removes an important class of splice attempts that the verifier today only detects afterwards).
+* **Its limit (stated plainly):** it cannot stop the attack of section 1. The attacker reads the head (it has `SELECT`), copies `head.Hash` into `PrevHash` and sets `Seq = head + 1`: the row passes the trigger and has a bad MAC. A junk row at head+1 with a consistent link remains possible. So (a) alone does NOT restore availability; it narrows the shape of damage.
+* **Cost:** one primary-key lookup per audit insert, under the writer's existing per-stream advisory lock; no key, no network; additive.
+
+### (b) A defined, audited, owner-only recovery for a forged head that never deletes evidence
+
+An administrative command (`Hasm.Admin audit-recover-head --stream <key> --reason <text> [--dry-run]`) that continues the stream AFTER the forged tail through an explicit, authenticated, audited break:
+
+1. **Preconditions (all must hold, else refuse and change nothing):** the stream's genuine prefix `1..k` verifies (hashes, MACs under known keys, links, the protected checkpoints, none of which refers to a sequence above `k`); records `k+1..m` form a contiguous tail up to the head that ALL fail verification; no valid record follows an invalid one (a forgery in the middle, a missing key or a checkpoint conflict is a human investigation, not a recovery); the command holds the active audit key and the owner-level database credentials (the runtime role can do neither).
+2. **Actions, in ONE transaction:** (i) insert one row per quarantined record into a NEW append-only table `audit_quarantine` (stream, seq, event id, hash, previous hash, the failure code, who, when): an evidence index, while the forged rows themselves REMAIN in the audit table; (ii) append a **chain-break record** at `Seq = m + 1` with `PrevHash` = the hash of record `m` (so the sequence and the link stay contiguous and (a) still holds), sealed with the active key, event type `AuditChainBreak` (an unallocated reserved type; the lead allocates it), whose detail names exactly the quarantined range (`first=<k+1> last=<m> reason=<code> operator=<os account or named administrator> reason_text=<hash of the text>`), through a new `AuditTrail.AppendChainBreakAsync` that is the ONLY method allowed to extend a stream whose head is invalid and only after the preconditions are re-checked inside the transaction; (iii) anchor the new head in the protected checkpoint store.
+3. **Evidence is never deleted:** the forged rows, their hashes and the quarantine index stay; the break record authenticates the recovery (operator, range, reason, outcome, the event time as the timestamp).
+4. **Effect on verification (the verifier changes):** a record whose sequence lies in a range named by a VALID chain-break record AND listed in the quarantine table is classified `quarantined`: a `chain_break_recovered` finding of severity Note (not Failure), never counted as an authenticated record, never evidence. The chain link continues through the forged record's hash (the break record links to it), so `VerifiedThroughSeq` continues across the break: the verified prefix is `1..k` plus the break record plus every later genuine record. A range is accepted only if (i) a valid break record names exactly that contiguous range, (ii) the record before the range is itself verified, and (iii) every sequence in the range has a quarantine row. A forged break record is just another invalid row. `audit-verify` prints every break with its range and operator, and the S8d evidence rule (verified prefix, section 4B of the S8d plan) never uses a quarantined fact.
+5. **The writer:** `AppendAsync` is unchanged for a damaged head (it still refuses with `audit_head_corrupt`, and the message names this recovery); once the head is a valid break record it extends the chain normally.
+* **Its limit:** it makes the attack recoverable and evidenced, not impossible: the attacker can insert another junk row after the recovery and force another break. Each break is a visible, audited event, and the alerting of section 6 shows it.
+
+### (c) Audit inserts through a role the runtime credentials do not hold
+
+Three variants were analysed; none protects against a holder of the runtime credentials while keeping the design property that the audited mutation and its event commit or roll back TOGETHER (`AuditTrail` appends inside the caller's transaction and the caller commits):
+
+* **(c1) a SECURITY DEFINER function** owned by a dedicated audit role, `INSERT` revoked from the runtime role: the runtime role must be able to `EXECUTE` the function to write audit events at all, so a holder of the runtime credentials can call it with junk too. The function can enforce structure (it is option (a) in another form) but not authenticity, since it holds no key. No gain over (a).
+* **(c2) a separate database credential and connection for audit inserts:** the runtime credentials could not insert, but the event would be written in a different transaction from the business change. Writing it before the business commit leaves events for changes that roll back; after the commit leaves business changes with no event after a crash. Both break the central integrity property. Rejected.
+* **(c3) `SET LOCAL ROLE audit_appender` on the same connection:** the runtime role must be a member of the audit role to switch to it, so the attacker can switch too. No gain.
+
+Conclusion: (c) cannot close the vector in the stated threat model without giving up atomicity. It is NOT recommended.
+
+### (d) The writer skips a forged head by itself (considered, not recommended)
+
+The writer could walk back to the last valid record and continue with an automatic break. It needs no operator, but it lets the system decide on its own that a chain break is acceptable, repeatedly and silently under attack, and it puts the recovery logic into the hot path of every audited write. Recovery is a rare, reviewed, owner decision; (b) keeps it explicit. Listed as an owner choice in section 7.
+
+## 4. Recommendation
+
+**(a) + (b), no (c), no (d).**
+
+* **(a) first.** It is cheap, key-free and additive, and it guarantees that any damage is a contiguous tail behind a linked chain, which is the precondition that makes (b) safe and well defined and closes hidden mid-chain and unlinked inserts for good.
+* **(b) as the recovery path.** It turns an unrecoverable denial of service into a recoverable, audited, evidence-preserving event, owner-only, with the verifier and the S8d evidence rule taught the one extra concept (an authenticated, explicitly recovered range that is never evidence).
+* **Honest residual:** an attacker holding the runtime credentials can still make a junk head and force a break; the recovery is manual and each break is visible (alerting, section 6). That is the best available without moving the MAC key into the database (which would defeat the design) or splitting the transaction (which would break atomicity).
+
+## 5. Migration impact (numbers NOT allocated)
+
+* **Two migrations**, because the audit tables live in two kinds of database: one SYSTEM migration (the guard function and trigger on `t_7e93ef23`, plus `audit_quarantine`) and one COMPANY migration (the same for the business audit table of every company database). Numbers follow merge order and are allocated by the lead at merge time; none is reserved here. Delivery in two PRs: PR 1 is (a) (both migrations contain only the trigger and its function); PR 2 is (b) (a second pair of migrations that add `audit_quarantine`, plus the tool, the verifier and writer changes) so (a) can ship and be reviewed alone.
+* **Must pass PR 188's migration guard** (`MigrationGuard`): only `CREATE FUNCTION` with NEW names (no `CREATE OR REPLACE` of an earlier function, no allow-list entry), `CREATE TRIGGER` (never `CREATE OR REPLACE TRIGGER`), `CREATE TABLE`, `GRANT` and `REVOKE`; no `DROP`, `DELETE FROM`, `TRUNCATE`, `DISABLE`/`ENABLE TRIGGER`, `ALTER FUNCTION`, dynamic `EXECUTE`, `search_path`, `set_config`, or `pg_` names outside the guard's allowed list; the function uses `sha256(convert_to(...))` only. The existing append-only function and trigger are untouched. A unit test runs the new migration text through the guard; generated physical names come from a deterministic generator like the other schema files.
+* **Existing data:** the migration reads and validates no existing row; the trigger applies to later inserts only. A stream whose existing chain is already damaged keeps its damage (recovery (b) handles it); a stream with a legitimate historical gap (none is known: migration 0005 backfills nothing) would be accepted at its next insert only if the new row links to the actual head, which the genuine writer always does.
+* **Grants:** `audit_quarantine` is `SELECT` for the runtime role and has no `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` for it (only the administrative tool's owner account writes it); the same catalog test as for the audit table (`audit_modifiable`) is extended to it.
+* **Registry and counts:** new PostgreSQL test classes are registered in the backend registry; the pinned migration counts of the existing tests are raised by one per migration in the merge turn.
+
+## 6. Alerting (no new channel)
+
+`audit_head_corrupt` and every recovery are surfaced through what exists: the API returns a stable error code and logs the code only; `audit-verify` reports `chain_break_recovered` and any non-quarantined invalid record; `backup-status` and the S8d readiness lines already report `audit_unverified`; the break record is the durable notice. A scheduled `audit-verify` (the operating system's scheduler, like the backup commands) is the monitoring recommendation. No e-mail or in-app channel is built here.
+
+## 7. Adversarial tests (all with REAL roles: the runtime role holds INSERT and SELECT, the owner account runs the tool; classes use the isolated PostgreSQL runner and run only where roles can be created)
+
+1. **The attack today (documents the baseline):** as the runtime role insert a junk head (bad MAC, consistent link): the next `AuditTrail` append throws `audit_head_corrupt`; every audited API operation fails.
+2. **(a) structure:** as the runtime role insert a row with a gap, a duplicate sequence, a random `PrevHash`, a wrong genesis hash on an empty stream, a row for another stream, a row with a wrong-length hash or MAC: each is refused by the trigger (`audit_link_violation`), nothing is written; concurrent inserts at the same sequence yield exactly one row (primary key) and the other fails; the genuine writer is unaffected (the whole existing audit suite passes unchanged).
+3. **(a) limit:** a junk row at head+1 with a consistent link IS accepted (the test pins the stated limit so nobody believes (a) closes the vector).
+4. **(b) recovery:** after the junk head, `audit-recover-head --dry-run` reports the plan and changes nothing; the real run (owner account and key) writes the quarantine rows, appends a valid chain-break record, anchors it, and the next `AuditTrail` append succeeds; every forged row is still in the audit table, byte for byte; `audit-verify` returns the recovered verdict with `chain_break_recovered` (a Note), `VerifiedThroughSeq` runs through the break to the new head, and the quarantined sequences are not counted as authenticated.
+5. **(b) refusals:** a valid record after an invalid one (a middle forgery), a missing key, a checkpoint above the tail, a stream that already verifies, a range that is not the contiguous tail: each is refused with no change; the runtime role cannot run the recovery (it holds no key and no right on `audit_quarantine`); a forged chain-break record inserted as the runtime role (bad MAC) is an ordinary invalid row and quarantines nothing.
+6. **(b) forged quarantine:** the runtime role cannot insert into `audit_quarantine`; a break record whose named range does not match the quarantine rows, or whose preceding record is not verified, does not make a range `quarantined` (the verifier reports failures as before).
+7. **Evidence rule:** the S8d evidence rule never uses a fact inside a quarantined range (a forged 2011 or 2015 inside it is not evidence) and uses genuine facts after the break.
+8. **Repeat and alert:** a second junk row after the recovery forces a second break; both are listed by `audit-verify`; each break record carries the operator, the range and the reason.
+9. **Migration guard and generator:** the new migrations pass `MigrationGuard`; the generator `--check` matches; the catalog test shows only the new function, trigger and table were added.
+10. **Company streams:** the same cases for a `business:<id>` stream in a company database with the company runtime role.
+
+## 8. Owner decisions needed
+
+* **D1 (policy; the owner decides).** Is an EXPLICIT, authenticated, audited chain break with preserved evidence acceptable in the audit-integrity model? The current model has no legitimate way to continue a stream past a damaged head, which is what makes the denial of service permanent. Recommended: yes, as (b), owner-only; the alternative is to accept the permanent denial of service as the price of a chain that can never contain a break (then only (a) is built and the vector stays).
+* **D2 (who may run the recovery).** Until the named-administrator login (D-099) and the independent-approval framework (S4) exist, the interim operator is the operating-system account that holds the owner database credentials and the active audit key (a dated interim limitation like the other administrative tools). After they exist, the recovery requires a named administrator with fresh MFA and the independent approval of S4, and S4's approval records must be authenticated (the S8d plan's dependency note). Recommended as stated.
+* **D3 (manual or automatic).** Manual owner-only recovery (recommended) or the writer-side automatic skip (d). Recommended: manual.
+* Not an owner decision: the migration numbers and the new event type (the lead allocates them), the two-PR delivery, the quarantine table, the verifier and writer changes.
+
+## 9. Out of scope
+
+Compromise of the audit key (a holder of the key can forge valid records); an owner who truncates or rewrites the table (detected by the external checkpoints, outside the runtime-credential model); the splice of a rolled-back history (the S8d plan's chain-verified prefix); a protected change to `tools/verify/**` or the required-checks files.
