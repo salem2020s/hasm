@@ -6,7 +6,7 @@ namespace Hasm.Infrastructure.Cash;
 /// <summary>
 /// Authorized entry point for cash vouchers (the only thing the API calls). Permissions are re-read from Hasm_System on every call and are BRANCH-scoped: a voucher belongs to the branch of its cash or bank account, and a voucher of
 /// a branch the caller does not hold is never listed, never returned and never changed, and answers exactly like an unknown id (404). A caller who holds the permission of the action nowhere gets 403 before the company database
-/// is asked anything. Creating needs <c>create</c> on the branch of the chosen cash account (an account of another branch answers like an unknown account); updating needs <c>update</c>; submitting and withdrawing need
+/// is asked anything. Creating needs <c>create</c> on the branch of the chosen cash account (an account of another branch answers like an unknown account); updating needs <c>update</c>; submitting needs
 /// <c>submit</c>; cancelling needs <c>cancel</c>. The business rules live in <see cref="CashVoucherService"/> and PostgreSQL; the client is never trusted for any of them. Nothing here approves, numbers or posts (D-214).
 /// </summary>
 public sealed class CashVoucherManagementService(AccessService access, CashVoucherService vouchers)
@@ -61,10 +61,6 @@ public sealed class CashVoucherManagementService(AccessService access, CashVouch
 
     public async Task<ConfigResult<CashVoucherView>> SubmitAsync(Guid userId, Guid companyId, Guid id, long? revision, CancellationToken ct = default) =>
         await Refusal(userId, companyId, id, PermissionCatalog.Codes.CashVouchersSubmit, ct) ?? await vouchers.SubmitAsync(userId, companyId, id, revision, ct);
-
-    /// <summary>Withdrawal needs the submit permission (the reverse of submitting).</summary>
-    public async Task<ConfigResult<CashVoucherView>> WithdrawAsync(Guid userId, Guid companyId, Guid id, long? revision, CancellationToken ct = default) =>
-        await Refusal(userId, companyId, id, PermissionCatalog.Codes.CashVouchersSubmit, ct) ?? await vouchers.WithdrawAsync(userId, companyId, id, revision, ct);
 
     public async Task<ConfigResult<CashVoucherView>> CancelAsync(Guid userId, Guid companyId, Guid id, long? revision, string? reason, CancellationToken ct = default) =>
         await Refusal(userId, companyId, id, PermissionCatalog.Codes.CashVouchersCancel, ct) ?? await vouchers.CancelAsync(userId, companyId, id, revision, reason, ct);

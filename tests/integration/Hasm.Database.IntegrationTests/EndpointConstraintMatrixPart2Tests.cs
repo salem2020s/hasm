@@ -187,7 +187,6 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/cash-vouchers/"] = "idempotent replay (same answer, one voucher)",
             ["PUT /api/v1/company/cash-vouchers/{id:guid}"] = "stale-revision race",
             ["POST /api/v1/company/cash-vouchers/{id:guid}/submit"] = "transition race",
-            ["POST /api/v1/company/cash-vouchers/{id:guid}/withdraw"] = "transition race",
             ["POST /api/v1/company/cash-vouchers/{id:guid}/cancel"] = "transition race",
         },
     };

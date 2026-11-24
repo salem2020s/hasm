@@ -3,13 +3,13 @@ namespace Hasm.Infrastructure.Cash;
 // Phase 3.14 slice S2a (docs/PHASE-3.14.md; owner decisions D-211, D-214): cash vouchers WITHOUT any financial posting. A voucher here is a draft, a submitted draft or a cancelled one. Nothing in this slice approves a
 // voucher, gives it an official number, creates a journal entry or changes a balance: financial posting for cash and bank stays closed until the reviews D-214 requires are recorded.
 
-/// <summary>Business audit events of cash vouchers (company stream, inside the block 2100-2199 of Phase 3.14; 2100-2107 are the cash account master). Persisted codes: never renumber. 2115-2129 are left to the later voucher slice.</summary>
+/// <summary>Business audit events of cash vouchers (company stream, inside the block 2100-2199 of Phase 3.14; 2100-2107 are the cash account master). Persisted codes: never renumber.
+/// 2113 is deliberately UNUSED (no withdrawal exists: the approved state machine has no submitted -> draft transition); it is left free, not reused for another event. 2115-2129 are left to the later voucher slice.</summary>
 public static class CashVoucherAuditEvents
 {
     public const short Created = 2110;
     public const short Updated = 2111;
     public const short Submitted = 2112;
-    public const short Withdrawn = 2113;
     public const short Cancelled = 2114;
 }
 
@@ -19,8 +19,8 @@ public enum CashVoucherKind : short { Receipt = 1, Payment = 2 }
 /// <summary>The states this slice implements. 3 (approved) and 4 (rejected) are reserved by the plan for the slice that adds approval (S2b); PostgreSQL refuses them here and no code of this slice reaches them.</summary>
 public enum CashVoucherStatus : short { Draft = 1, Submitted = 2, Cancelled = 5 }
 
-/// <summary>1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled.</summary>
-public enum CashVoucherEventKind : short { Created = 1, Updated = 2, Submitted = 3, Withdrawn = 4, Cancelled = 5 }
+/// <summary>1 created, 2 updated, 3 submitted, 5 cancelled. 4 is not used (there is no withdrawal) and PostgreSQL refuses it.</summary>
+public enum CashVoucherEventKind : short { Created = 1, Updated = 2, Submitted = 3, Cancelled = 5 }
 
 /// <summary>A counter line: the explicitly chosen counter account (D-211 Q3) and a positive amount in the voucher currency. Line numbers are assigned by position; the line's branch is always the voucher's (Q11), so it is not an input.</summary>
 public sealed record CashVoucherLineInput(Guid? AccountId, decimal? Amount, string? Description);

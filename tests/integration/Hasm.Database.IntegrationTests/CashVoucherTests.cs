@@ -20,7 +20,7 @@ using VL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CashVoucherLine;
 namespace Hasm.Database.IntegrationTests;
 
 /// <summary>
-/// Phase 3.14 slice S2a: cash vouchers WITHOUT any financial posting, over real HTTP and by direct SQL. The API runs with the PRODUCTION usage probe of the cash account master (the real one since this slice), so the freeze and the
+/// Phase 3.14 slice S2a: cash vouchers WITHOUT any financial posting, over real HTTP and by direct SQL. There is no withdrawal: from submitted the only move is the cancellation. The API runs with the PRODUCTION usage probe of the cash account master (the real one since this slice), so the freeze and the
 /// open-document rule of an account are exercised end to end. The permission codes are in no preset role, so every member holds them through a role the test creates (see <see cref="CashAccountTestBase.Holder"/>).
 /// </summary>
 public abstract class CashVoucherTestBase : CashAccountTestBase
@@ -88,8 +88,9 @@ public abstract class CashVoucherTestBase : CashAccountTestBase
     protected static string VoucherSql(Guid id, Guid account, Guid branch, Guid by, string key, short status = 1, long revision = 1, string currency = "JOD", long linesRevision = 1, string? submittedBy = null, Guid? updatedBy = null) =>
         $"INSERT INTO {CV.Table} ({CV.Id}, {CV.Kind}, {CV.CashAccountId}, {CV.BranchId}, {CV.Currency}, {CV.VoucherDate}, {CV.Status}, {CV.LinesRevision}, {CV.IdempotencyKey}, {CV.PayloadHash}, {CV.SubmittedBy}, {CV.UpdatedBy}, {CV.Revision}, {CV.CreatedBy}, {CV.CreatedAtUtc}, {CV.UpdatedAtUtc}) " +
         $"VALUES ('{id}', 1, '{account}', '{branch}', '{currency}', '2026-03-10', {status}, {linesRevision}, '{key}', '{Hash}', {(submittedBy is null ? "NULL" : $"'{submittedBy}'")}, '{updatedBy ?? by}', {revision}, '{by}', now(), now())";
-    protected static string EventSql(Guid voucher, short kind, short? from, short to, long revision) =>
-        $"INSERT INTO {VE.Table} ({VE.Id}, {VE.VoucherId}, {VE.Kind}, {VE.FromStatus}, {VE.ToStatus}, {VE.Revision}, {VE.ActorUserId}, {VE.AtUtc}) VALUES (gen_random_uuid(), '{voucher}', {kind}, {(from is null ? "NULL" : from.ToString())}, {to}, {revision}, gen_random_uuid(), now())";
+    /// <summary>A history event by direct SQL. <paramref name="reasonSql"/> is the SQL expression of the reason; when it is not given, a cancellation (kind 5) carries one and every other event carries none.</summary>
+    protected static string EventSql(Guid voucher, short kind, short? from, short to, long revision, string? reasonSql = null) =>
+        $"INSERT INTO {VE.Table} ({VE.Id}, {VE.VoucherId}, {VE.Kind}, {VE.FromStatus}, {VE.ToStatus}, {VE.Revision}, {VE.ActorUserId}, {VE.Reason}, {VE.AtUtc}) VALUES (gen_random_uuid(), '{voucher}', {kind}, {(from is null ? "NULL" : from.ToString())}, {to}, {revision}, gen_random_uuid(), {reasonSql ?? (kind == 5 ? "'by direct SQL'" : "NULL")}, now())";
     protected static string LineSql(Guid voucher, long revision, int no, Guid account, string amount = "10") =>
         $"INSERT INTO {VL.Table} ({VL.Id}, {VL.VoucherId}, {VL.Revision}, {VL.LineNo}, {VL.AccountId}, {VL.Amount}) VALUES (gen_random_uuid(), '{voucher}', {revision}, {no}, '{account}', {amount})";
     /// <summary>A status change by direct SQL, with the revision advanced (and nothing else changed unless <paramref name="extra"/> says so).</summary>
@@ -161,15 +162,16 @@ public class CashVoucherLifecycleTests : CashVoucherTestBase
     }
 
     [PostgresFact]
-    public async Task Submit_withdraw_and_cancel_follow_the_state_machine_and_every_step_is_one_revision_one_event_and_one_audit_event()
+    public async Task Submit_and_cancel_follow_the_state_machine_a_submitted_voucher_never_returns_to_draft_and_every_step_is_one_revision_one_event_and_one_audit_event()
     {
         await StartV();
         var main = await MainBranch(); var box = await Box("c1", main, "1101"); var sales = await Gl("4101", 4);
         var clerk = await Holder(Clerk); var cookie = await SignIn(clerk);
         var id = IdOf(await Post(cookie, Body("receipt", box, "state-key-0001", Line(sales, 10m))));
         object edit = new { voucherDate = "2026-03-12", lines = new[] { Line(sales, 1m) } };
+        static bool NoRoute(ApiResponse r) => r.Status is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed;
 
-        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_submitted"), Refusal(await Act(cookie, id, "withdraw", 1)));
+        Assert.True(NoRoute(await Act(cookie, id, "withdraw", 1)));                                              // no withdrawal exists (the approved state machine has no submitted -> draft)
         Assert.Equal((HttpStatusCode.PreconditionRequired, "precondition_required"), Refusal(await Send(HttpMethod.Post, $"{V}/{id}/submit", new { }, cookie)));
         Assert.Equal(HttpStatusCode.PreconditionFailed, (await Act(cookie, id, "submit", 7)).Status);
         var submitted = await Act(cookie, id, "submit", 1);
@@ -177,38 +179,46 @@ public class CashVoucherLifecycleTests : CashVoucherTestBase
         Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Put(cookie, id, 2, edit)));          // a submitted voucher is not edited
         Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Act(cookie, id, "submit", 2)));
 
-        var withdrawn = await Act(cookie, id, "withdraw", 2);
-        Assert.Equal((HttpStatusCode.OK, "draft", 3L, System.Text.Json.JsonValueKind.Null), (withdrawn.Status, StatusOf(withdrawn), Rev(withdrawn), withdrawn.Json.GetProperty("submittedBy").ValueKind));
-        Assert.Equal(HttpStatusCode.OK, (await Put(cookie, id, 3, edit)).Status);                                               // editable again
-        Assert.Equal(HttpStatusCode.OK, (await Act(cookie, id, "submit", 4)).Status);
+        // a submitted voucher never returns to draft: there is no route for it, and PostgreSQL refuses the transition by itself (with or without a submitter, with any event kind)
+        var withdraw = await Act(cookie, id, "withdraw", 2);
+        Assert.True(NoRoute(withdraw), $"{(int)withdraw.Status} {withdraw.Body}");
+        Assert.NotEqual("cash_voucher_not_found", withdraw.Error);                                                // the refusal is the missing route, not the voucher service
+        const string Illegal = "illegal cash voucher status transition";
+        Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(id, 1)));
+        Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(id, 1, clerk.Id.ToString())));
+        Assert.Equal(Illegal, await SqlErrorAsync($"{MoveSql(id, 1)}; {EventSql(id, 4, 2, 1, 3)}"));
+        Assert.Equal(Illegal, await SqlErrorAsync($"{MoveSql(id, 1)}; {EventSql(id, 2, 1, 1, 3)}"));
+        Assert.Equal(((short)2, 2L, clerk.Id), (await DbStatus(id), await DbRevision(id), await Sql<Guid>($"SELECT {CV.SubmittedBy} FROM {CV.Table} WHERE {CV.Id} = '{id}'")));   // the submitter of record is never cleared
 
-        Assert.Equal("reason_required", FieldCode(await Act(cookie, id, "cancel", 5), "reason"));
-        Assert.Equal("reason_required", FieldCode(await Act(cookie, id, "cancel", 5, new { reason = "  " }), "reason"));
-        var cancelled = await Act(cookie, id, "cancel", 5, new { reason = "entered twice" });
-        Assert.Equal((HttpStatusCode.OK, "cancelled", 6L, clerk.Id), (cancelled.Status, StatusOf(cancelled), Rev(cancelled), cancelled.Json.GetProperty("submittedBy").GetGuid()));   // the submitter record is kept
-        Assert.Equal(new short[] { 1, 3, 4, 2, 3, 5 }, EventKinds(cancelled));
-        Assert.Equal("entered twice", cancelled.Json.GetProperty("events")[5].GetProperty("reason").GetString());
+        // from submitted the only move is the cancellation
+        Assert.Equal("reason_required", FieldCode(await Act(cookie, id, "cancel", 2), "reason"));
+        Assert.Equal("reason_required", FieldCode(await Act(cookie, id, "cancel", 2, new { reason = "  " }), "reason"));
+        var cancelled = await Act(cookie, id, "cancel", 2, new { reason = "entered twice" });
+        Assert.Equal((HttpStatusCode.OK, "cancelled", 3L, clerk.Id), (cancelled.Status, StatusOf(cancelled), Rev(cancelled), cancelled.Json.GetProperty("submittedBy").GetGuid()));   // the submitter record is kept
+        Assert.Equal(new short[] { 1, 3, 5 }, EventKinds(cancelled));
+        Assert.Equal("entered twice", cancelled.Json.GetProperty("events")[2].GetProperty("reason").GetString());
         // cancelled is final
-        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Put(cookie, id, 6, edit)));
-        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Act(cookie, id, "submit", 6)));
-        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_submitted"), Refusal(await Act(cookie, id, "withdraw", 6)));
-        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_cancellable"), Refusal(await Act(cookie, id, "cancel", 6, new { reason = "again" })));
-        Assert.Equal((6L, (short)5, 6L), (await DbRevision(id), await DbStatus(id), await Rows(VE.Table, $"{VE.VoucherId} = '{id}'")));
-        Assert.Equal((1L, 1L, 2L, 1L, 1L), (await Events(CashVoucherAuditEvents.Created), await Events(CashVoucherAuditEvents.Updated), await Events(CashVoucherAuditEvents.Submitted), await Events(CashVoucherAuditEvents.Withdrawn), await Events(CashVoucherAuditEvents.Cancelled)));
+        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Put(cookie, id, 3, edit)));
+        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_draft"), Refusal(await Act(cookie, id, "submit", 3)));
+        Assert.True(NoRoute(await Act(cookie, id, "withdraw", 3)));
+        Assert.Equal((HttpStatusCode.Conflict, "cash_voucher_not_cancellable"), Refusal(await Act(cookie, id, "cancel", 3, new { reason = "again" })));
+        Assert.Equal((3L, (short)5, 3L), (await DbRevision(id), await DbStatus(id), await Rows(VE.Table, $"{VE.VoucherId} = '{id}'")));
+        Assert.Equal((1L, 0L, 1L, 1L), (await Events(CashVoucherAuditEvents.Created), await Events(CashVoucherAuditEvents.Updated), await Events(CashVoucherAuditEvents.Submitted), await Events(CashVoucherAuditEvents.Cancelled)));
+        Assert.Equal((0L, 0L), (await Events(2113), await Rows(VE.Table, $"{VE.Kind} = 4")));                    // the unused audit code and event kind of a withdrawal are never written
         // a draft is cancelled directly too
         var draft = IdOf(await Post(cookie, Body("payment", box, "state-key-0002")));
         Assert.Equal("cancelled", StatusOf(await Act(cookie, draft, "cancel", 1, new { reason = "not needed" })));
     }
 
     [PostgresFact]
-    public async Task There_is_no_approval_rejection_numbering_posting_reversal_or_delete_route()
+    public async Task There_is_no_withdrawal_approval_rejection_numbering_posting_reversal_or_delete_route()
     {
         await StartV();
         var main = await MainBranch(); var box = await Box("c1", main, "1101"); var sales = await Gl("4101", 4);
         var cookie = await AsMember(Clerk);
         var id = IdOf(await Post(cookie, Body("receipt", box, "noroute-key-01", Line(sales, 10m))));
         Assert.Equal(HttpStatusCode.OK, (await Act(cookie, id, "submit", 1)).Status);
-        foreach (var later in new[] { "approve", "reject", "decision", "post", "posting", "reverse", "reversal", "number", "journal", "void" })
+        foreach (var later in new[] { "withdraw", "withdrawal", "return", "reopen", "approve", "reject", "decision", "post", "posting", "reverse", "reversal", "number", "journal", "void" })
             Assert.True((await Act(cookie, id, later, 2, new { reason = "x" })).Status is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, later);
         Assert.True((await Send(HttpMethod.Delete, $"{V}/{id}", cookie: cookie, ifMatch: "\"2\"")).Status is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed);
         Assert.Equal(((short)2, 2L), (await DbStatus(id), await DbRevision(id)));
@@ -336,6 +346,65 @@ public class CashVoucherValidationTests : CashVoucherTestBase
         Assert.Equal("submitted", StatusOf(await Act(cookie, first, "submit", 2)));
     }
 
+    /// <summary>Review L4 (ii): the service rule <c>branch_inactive</c> (the precedent of the journal and of the cash account master; a service rule, PostgreSQL has no such guard).</summary>
+    [PostgresFact]
+    public async Task A_voucher_is_neither_written_nor_submitted_on_an_account_of_an_inactive_branch_and_can_still_be_cancelled()
+    {
+        await StartV();
+        var b2 = await Make("B2"); var box = await Box("c2", b2.Id, "1102"); var sales = await Gl("4101", 4);
+        var cookie = await AsMember(Clerk);
+        var draft = IdOf(await Post(cookie, Body("receipt", box, "branch-off-0001", Line(sales, 1m))));
+        var waiting = IdOf(await Post(cookie, Body("receipt", box, "branch-off-0002", Line(sales, 2m))));
+        Assert.Equal(HttpStatusCode.OK, (await Act(cookie, waiting, "submit", 1)).Status);
+        Assert.True((await Domain.DeactivateAsync(Admin.Id, Company.Id, b2.Id, b2.Revision)).IsOk);
+
+        Assert.Equal("branch_inactive", FieldCode(await Post(cookie, Body("receipt", box, "branch-off-0003", Line(sales, 1m)), HttpStatusCode.BadRequest), "cashAccountId"));
+        Assert.Equal("branch_inactive", FieldCode(await Put(cookie, draft, 1, new { voucherDate = "2026-03-11", lines = new[] { Line(sales, 5m) } }), "cashAccountId"));
+        Assert.Equal("branch_inactive", FieldCode(await Act(cookie, draft, "submit", 1), "cashAccountId"));
+        Assert.Equal((2L, 2L, 3L, (short)1, 1L), (await Rows(CV.Table), await Rows(VL.Table), await Rows(VE.Table), await DbStatus(draft), await DbRevision(draft)));   // no refused request wrote anything
+        Assert.Equal(HttpStatusCode.OK, (await Read(cookie, draft)).Status);                                   // still readable
+        // cancelling needs no active branch: both are cancelled
+        Assert.Equal("cancelled", StatusOf(await Act(cookie, draft, "cancel", 1, new { reason = "branch closed" })));
+        Assert.Equal("cancelled", StatusOf(await Act(cookie, waiting, "cancel", 2, new { reason = "branch closed" })));
+    }
+
+    /// <summary>
+    /// Review L4 (iii), choice (f): a voucher of S2a is not financial history, so it does not lock the base currency. The plan (5a) says what then holds: PostgreSQL and the service refuse to WRITE or SUBMIT a voucher whose
+    /// currency is not the base currency. The plan is silent on the rest; the behaviour as built is pinned here: the draft stays readable in its own currency, and it can still be cancelled.
+    /// </summary>
+    [PostgresFact]
+    public async Task After_a_change_of_the_base_currency_an_earlier_draft_is_neither_edited_nor_submitted_and_can_still_be_cancelled()
+    {
+        await StartV();
+        var main = await MainBranch(); var box = await Box("c1", main, "1101"); var sales = await Gl("4101", 4);
+        var cookie = await AsMember(Clerk);
+        var draft = IdOf(await Post(cookie, Body("receipt", box, "base-change-001", Line(sales, 1.125m))));
+        var second = IdOf(await Post(cookie, Body("payment", box, "base-change-002", Line(sales, 2m))));
+        // the base currency moves from JOD to USD (nothing of S2a prevents it: no voucher is financial history)
+        await Sql($"UPDATE {Cc.Table} SET {Cc.IsBase} = false, {Cc.Revision} = {Cc.Revision} + 1 WHERE {Cc.Code} = 'JOD'; INSERT INTO {Cc.Table} ({Cc.Code}, {Cc.IsBase}, {Cc.Enabled}, {Cc.Revision}, {Cc.UpdatedAtUtc}) VALUES ('USD', true, true, 1, now())");
+
+        object edit = new { voucherDate = "2026-03-11", lines = new[] { Line(sales, 5m) } };
+        Assert.Equal("cash_account_currency_not_base", FieldCode(await Put(cookie, draft, 1, edit), "cashAccountId"));
+        Assert.Equal("cash_account_currency_not_base", FieldCode(await Act(cookie, draft, "submit", 1), "cashAccountId"));
+        Assert.Equal("cash_account_currency_not_base", FieldCode(await Post(cookie, Body("receipt", box, "base-change-003", Line(sales, 1m)), HttpStatusCode.BadRequest), "cashAccountId"));
+        // PostgreSQL refuses the same by itself: the submission, and a new voucher in the old or in the new base currency on the account of the old one
+        var by = Guid.NewGuid();
+        Assert.Equal("cash_voucher_currency_not_base", await SqlErrorAsync($"{MoveSql(draft, 2, by.ToString())}; {EventSql(draft, 3, 1, 2, 2)}"));
+        Assert.Equal("cash_voucher_currency_not_base", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), box, main, by, "base-sql-0001")));
+        Assert.Equal("cash_voucher_currency_not_base", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), box, main, by, "base-sql-0002", currency: "USD")));
+        Assert.Equal((2L, (short)1, 1L, 2L), (await Rows(CV.Table), await DbStatus(draft), await DbRevision(draft), await Rows(VL.Table)));
+        // the draft is still read, in the currency it was written in, and listed
+        var read = await Read(cookie, draft);
+        Assert.Equal((HttpStatusCode.OK, "JOD", "draft", 1.125m), (read.Status, read.Json.GetProperty("currency").GetString(), StatusOf(read), read.Json.GetProperty("total").GetDecimal()));
+        Assert.Equal(2, (await Send(HttpMethod.Get, V, cookie: cookie)).Json.GetProperty("vouchers").GetArrayLength());
+        // and it can be cancelled (the only way out), by the service and by direct SQL
+        Assert.Equal("cancelled", StatusOf(await Act(cookie, draft, "cancel", 1, new { reason = "base currency changed" })));
+        Assert.Equal("", await SqlErrorAsync($"{MoveSql(second, 5)}; {EventSql(second, 5, 1, 5, 2)}"));
+        // back in the old base currency the account takes vouchers again
+        await Sql($"UPDATE {Cc.Table} SET {Cc.IsBase} = ({Cc.Code} = 'JOD'), {Cc.Revision} = {Cc.Revision} + 1");
+        Assert.Equal(HttpStatusCode.Created, (await Post(cookie, Body("receipt", box, "base-change-004", Line(sales, 1m)))).Status);
+    }
+
     [PostgresFact]
     public async Task The_party_is_an_optional_reference_that_must_exist()
     {
@@ -427,18 +496,19 @@ public class CashVoucherConcurrencyTests : CashVoucherTestBase
     }
 
     [PostgresFact]
-    public async Task A_withdrawal_racing_a_cancellation_leaves_exactly_one_of_them()
+    public async Task Parallel_cancellations_of_a_submitted_voucher_cancel_it_once_and_it_never_returns_to_draft()
     {
         var (cookie, box, sales) = await Fixture();
         var id = IdOf(await Post(cookie, Body("receipt", box, "race-leave-001", Line(sales, 10m))));
         Assert.Equal(HttpStatusCode.OK, (await Act(cookie, id, "submit", 1)).Status);
-        var answers = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(() => i % 2 == 0 ? Act(cookie, id, "withdraw", 2) : Act(cookie, id, "cancel", 2, new { reason = "race" }))));
-        OneWinner(answers, "412:revision_conflict");
-        var status = await DbStatus(id);
-        Assert.Contains(status, new short[] { 1, 5 });
-        Assert.Equal((3L, 3L), (await DbRevision(id), await Rows(VE.Table, $"{VE.VoucherId} = '{id}'")));
-        Assert.Equal(1L, await Events(CashVoucherAuditEvents.Withdrawn) + await Events(CashVoucherAuditEvents.Cancelled));
-        Assert.Equal(status == 1 ? 1L : 0L, await Events(CashVoucherAuditEvents.Withdrawn));
+        // cancellations race each other and requests for a withdrawal, which has no route: exactly one cancellation wins and nothing else is written
+        var answers = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Task.Run(() => i % 2 == 0 ? Act(cookie, id, "withdraw", 2) : Act(cookie, id, "cancel", 2, new { reason = $"race {i}" }))));
+        Assert.All(answers.Where((_, i) => i % 2 == 0), r => Assert.True(r.Status is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, $"{(int)r.Status} {r.Body}"));
+        OneWinner([.. answers.Where((_, i) => i % 2 == 1)], "412:revision_conflict");
+        Assert.Equal(((short)5, 3L, 3L), (await DbStatus(id), await DbRevision(id), await Rows(VE.Table, $"{VE.VoucherId} = '{id}'")));
+        Assert.Equal((1L, 0L), (await Events(CashVoucherAuditEvents.Cancelled), await Events(2113)));
+        var winner = answers.Single(r => r.Status == HttpStatusCode.OK);
+        Assert.Equal(winner.Json.GetProperty("events")[2].GetProperty("reason").GetString(), await Sql<string>($"SELECT {VE.Reason} FROM {VE.Table} WHERE {VE.VoucherId} = '{id}' AND {VE.Kind} = 5"));
     }
 
     [PostgresFact]
@@ -480,7 +550,7 @@ public class CashVoucherAccessTests : CashVoucherTestBase
         Assert.Equal(Refusal(other), Refusal(unknown));                                                        // no probing of other branches
         object edit = new { voucherDate = "2026-03-10", lines = new[] { Line(sales, 9m) } };
         Assert.Equal(Refusal(unknown), Refusal(await Put(cookie, inB, 1, edit)));
-        foreach (var action in new[] { "submit", "withdraw", "cancel" }) Assert.Equal(Refusal(unknown), Refusal(await Act(cookie, inB, action, 1, new { reason = "x" })));
+        foreach (var action in new[] { "submit", "cancel" }) Assert.Equal(Refusal(unknown), Refusal(await Act(cookie, inB, action, 1, new { reason = "x" })));
         Assert.Equal((1L, (short)1), (await DbRevision(inB), await DbStatus(inB)));
         // a voucher on an account of a branch the caller does not hold: exactly the answer of an unknown account, and nothing is written
         var foreign = await Post(cookie, Body("receipt", boxB, "branch-key-b002", Line(sales, 1m)), HttpStatusCode.BadRequest);
@@ -510,7 +580,7 @@ public class CashVoucherAccessTests : CashVoucherTestBase
             if (get) { Assert.Equal(HttpStatusCode.Forbidden, (await Send(HttpMethod.Get, V, cookie: cookie)).Status); Assert.Equal(HttpStatusCode.Forbidden, (await Read(cookie, id)).Status); Assert.Equal(HttpStatusCode.Forbidden, (await Read(cookie, Guid.NewGuid())).Status); }
             if (post) Assert.Equal((HttpStatusCode.Forbidden, "forbidden"), Refusal(await Send(HttpMethod.Post, V, create, cookie)));
             if (put) { Assert.Equal((HttpStatusCode.Forbidden, "forbidden"), Refusal(await Put(cookie, id, 1, edit))); Assert.Equal(HttpStatusCode.Forbidden, (await Put(cookie, Guid.NewGuid(), 1, edit)).Status); }
-            if (submit) foreach (var action in new[] { "submit", "withdraw" }) Assert.Equal((HttpStatusCode.Forbidden, "forbidden"), Refusal(await Act(cookie, id, action, 1)));
+            if (submit) Assert.Equal((HttpStatusCode.Forbidden, "forbidden"), Refusal(await Act(cookie, id, "submit", 1)));
             if (cancel) Assert.Equal((HttpStatusCode.Forbidden, "forbidden"), Refusal(await Act(cookie, id, "cancel", 1, new { reason = "x" })));
         }
         await Forbidden(await AsMember([PermissionCatalog.Codes.WarehousesView]), get: true, post: true, put: true, submit: true, cancel: true);
@@ -526,8 +596,8 @@ public class CashVoucherAccessTests : CashVoucherTestBase
         Assert.Equal(HttpStatusCode.OK, (await Put(await AsMember([View, PermissionCatalog.Codes.CashVouchersUpdate]), id, 1, edit)).Status);
         var submitter = await AsMember([View, PermissionCatalog.Codes.CashVouchersSubmit]);
         Assert.Equal(HttpStatusCode.OK, (await Act(submitter, id, "submit", 2)).Status);
-        Assert.Equal(HttpStatusCode.OK, (await Act(submitter, id, "withdraw", 3)).Status);                         // withdrawing is the reverse of submitting
-        Assert.Equal(HttpStatusCode.OK, (await Act(await AsMember([View, PermissionCatalog.Codes.CashVouchersCancel]), id, "cancel", 4, new { reason = "x" })).Status);
+        Assert.True((await Act(submitter, id, "withdraw", 3)).Status is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed);   // the submit permission opens no way back to draft: the route does not exist
+        Assert.Equal(HttpStatusCode.OK, (await Act(await AsMember([View, PermissionCatalog.Codes.CashVouchersCancel]), id, "cancel", 3, new { reason = "x" })).Status);
     }
 
     [PostgresFact]
@@ -606,6 +676,10 @@ public class CashVoucherGuardTests : CashVoucherTestBase
             Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(cancelled, later)));
         }
         Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(submitted, 2, by.ToString())));                      // not submitted twice
+        // submitted -> draft (a withdrawal) is not a transition of the approved state machine: refused whatever the submitter column and whatever event is offered with it
+        Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(submitted, 1)));
+        Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(submitted, 1, by.ToString())));
+        foreach (var (kind, from, to) in new (short, short?, short)[] { (4, 2, 1), (2, 1, 1), (2, 2, 1), (1, null, 1) }) Assert.Equal(Illegal, await SqlErrorAsync($"{MoveSql(submitted, 1)}; {EventSql(submitted, kind, from, to, 3)}"));
         foreach (var back in new short[] { 1, 2, 5 }) Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(cancelled, back, back == 2 ? by.ToString() : null)));   // cancelled is final
         Assert.Equal(Illegal, await SqlErrorAsync(MoveSql(draft, 10)));
         // the insert: a voucher starts as a draft at revision 1, without a submitter
@@ -618,7 +692,7 @@ public class CashVoucherGuardTests : CashVoucherTestBase
         Assert.Equal("revision must advance by one", await SqlErrorAsync($"UPDATE {CV.Table} SET {CV.Status} = 2, {CV.SubmittedBy} = '{by}' WHERE {CV.Id} = '{draft}'"));
         Assert.Equal("revision must advance by one", await SqlErrorAsync($"UPDATE {CV.Table} SET {CV.Status} = 2, {CV.SubmittedBy} = '{by}', {CV.Revision} = {CV.Revision} + 2 WHERE {CV.Id} = '{draft}'"));
         Assert.Equal("a submitted cash voucher names its submitter", await SqlErrorAsync(MoveSql(draft, 2)));
-        Assert.Equal("a draft has no submitter", await SqlErrorAsync(MoveSql(submitted, 1, by.ToString())));
+        Assert.Equal("a draft has no submitter", await SqlErrorAsync($"UPDATE {CV.Table} SET {CV.SubmittedBy} = '{by}', {CV.Note} = 'x', {CV.Revision} = {CV.Revision} + 1, {CV.LinesRevision} = {CV.Revision} + 1 WHERE {CV.Id} = '{draft}'"));
         Assert.Equal("cancellation keeps the submitter record", await SqlErrorAsync(MoveSql(submitted, 5)));
         // a status change edits nothing; a submitted voucher is not edited at all (an "edit" keeps the status, which submitted -> submitted is not)
         foreach (var edit in new[] { $", {CV.VoucherDate} = '2026-04-01'", $", {CV.Note} = 'x'", $", {CV.Reference} = 'x'", $", {CV.UpdatedBy} = gen_random_uuid()", $", {CV.LinesRevision} = 2" })
@@ -675,7 +749,7 @@ public class CashVoucherGuardTests : CashVoucherTestBase
         Assert.Equal(Current, await SqlErrorAsync(EventSql(Guid.NewGuid(), 1, null, 1, 1)));                    // no such voucher
         Assert.Contains("duplicate key", await SqlErrorAsync(EventSql(submitted, 3, 1, 2, 2)));
         Assert.Equal("the first event of a cash voucher is its creation", await SqlErrorAsync(EventSql(draft, 2, 1, 1, 1)));
-        foreach (var (kind, from, to) in new (short, short?, short)[] { (6, 2, 3), (7, 2, 4), (8, 3, 3), (9, 3, 5), (3, 2, 2), (5, 5, 5), (1, 1, 1), (4, 1, 1) })   // approved, rejected, journal created, reversed and mismatched pairs
+        foreach (var (kind, from, to) in new (short, short?, short)[] { (6, 2, 3), (7, 2, 4), (8, 3, 3), (9, 3, 5), (3, 2, 2), (5, 5, 5), (1, 1, 1), (4, 1, 1), (4, 2, 1), (2, 2, 1) })   // approved, rejected, journal created, reversed, the unused kind 4 (withdrawn) and mismatched pairs
             Assert.Equal("unknown cash voucher event", await SqlErrorAsync(EventSql(submitted, kind, from, to, 2)));
         // a proper edit by SQL: new revision, new set, event; then the old set stays closed and the new one closes with its event
         Assert.Equal("", await SqlErrorAsync($"UPDATE {CV.Table} SET {CV.Note} = 'edited', {CV.Revision} = {CV.Revision} + 1, {CV.LinesRevision} = {CV.Revision} + 1 WHERE {CV.Id} = '{draft}'; {LineSql(draft, 2, 1, sales, "7")}; {LineSql(draft, 2, 2, sales, "8")}; {EventSql(draft, 2, 1, 1, 2)}"));
@@ -683,6 +757,35 @@ public class CashVoucherGuardTests : CashVoucherTestBase
         Assert.Equal("a line set carries the current revision of its cash voucher", await SqlErrorAsync(LineSql(draft, 1, 2, sales)));
         Assert.Equal((1L, 2L, 2L), (await Rows(VL.Table, $"{VL.VoucherId} = '{draft}' AND {VL.Revision} = 1"), await Rows(VL.Table, $"{VL.VoucherId} = '{draft}' AND {VL.Revision} = 2"), await Rows(VE.Table, $"{VE.VoucherId} = '{draft}'")));
         Assert.Equal((1L, 2L), (await DbRevision(await Draft("lines-key-0009")), await DbRevision(submitted)));
+    }
+
+    [PostgresFact]
+    public async Task A_cancellation_event_carries_a_reason_and_an_event_starts_at_the_status_the_previous_event_ended_at()
+    {
+        await Setup();
+        var draft = await Draft("event-key-0001"); var submitted = await Submitted("event-key-0002");
+        // review L2 (i): PostgreSQL itself requires the reason of a cancellation (missing, empty or blank), for a draft and for a submitted voucher
+        const string NoReason = "a cancellation event carries its reason";
+        foreach (var reason in new[] { "NULL", "''", "'   '", "E'\\t \\n'" })
+        {
+            Assert.Equal(NoReason, await SqlErrorAsync($"{MoveSql(draft, 5)}; {EventSql(draft, 5, 1, 5, 2, reason)}"));
+            Assert.Equal(NoReason, await SqlErrorAsync($"{MoveSql(submitted, 5, by.ToString())}; {EventSql(submitted, 5, 2, 5, 3, reason)}"));
+        }
+        // review L2 (ii): a change is not recorded as another one. The event starts at the status the previous event ended at, so a cancellation of a SUBMITTED voucher is not recorded as the cancellation of a draft, nor the reverse
+        const string WrongStart = "a cash voucher event starts at the status its voucher had before the change";
+        Assert.Equal(WrongStart, await SqlErrorAsync($"{MoveSql(submitted, 5, by.ToString())}; {EventSql(submitted, 5, 1, 5, 3)}"));
+        Assert.Equal(WrongStart, await SqlErrorAsync($"{MoveSql(draft, 5)}; {EventSql(draft, 5, 2, 5, 2)}"));
+        // with the status pairs of the slice the kind is thereby the change that happened: a submission or a cancellation is not recorded as an edit, an edit not as a submission
+        const string Current = "a cash voucher event must carry the current revision and status of its voucher";
+        Assert.Equal(Current, await SqlErrorAsync($"{MoveSql(draft, 2, by.ToString())}; {EventSql(draft, 2, 1, 1, 2)}"));
+        Assert.Equal(Current, await SqlErrorAsync($"{MoveSql(draft, 5)}; {EventSql(draft, 2, 1, 1, 2)}"));
+        Assert.Equal(Current, await SqlErrorAsync($"UPDATE {CV.Table} SET {CV.Note} = 'x', {CV.Revision} = {CV.Revision} + 1, {CV.LinesRevision} = {CV.Revision} + 1 WHERE {CV.Id} = '{draft}'; {EventSql(draft, 3, 1, 2, 2)}"));
+        Assert.Equal("unknown cash voucher event", await SqlErrorAsync($"{MoveSql(submitted, 5, by.ToString())}; {EventSql(submitted, 3, 2, 5, 3)}"));
+        Assert.Equal(((short)1, 1L, 1L, (short)2, 2L, 2L), (await DbStatus(draft), await DbRevision(draft), await Rows(VE.Table, $"{VE.VoucherId} = '{draft}'"), await DbStatus(submitted), await DbRevision(submitted), await Rows(VE.Table, $"{VE.VoucherId} = '{submitted}'")));
+        // the true records are accepted, and a reason on another event stays allowed (the guard requires one only for a cancellation)
+        Assert.Equal("", await SqlErrorAsync($"{MoveSql(submitted, 5, by.ToString())}; {EventSql(submitted, 5, 2, 5, 3, "'duplicate of R-9'")}"));
+        Assert.Equal("", await SqlErrorAsync($"{MoveSql(draft, 5)}; {EventSql(draft, 5, 1, 5, 2, "'not needed'")}"));
+        Assert.Equal(("duplicate of R-9", "not needed"), (await Sql<string>($"SELECT {VE.Reason} FROM {VE.Table} WHERE {VE.VoucherId} = '{submitted}' AND {VE.Kind} = 5"), await Sql<string>($"SELECT {VE.Reason} FROM {VE.Table} WHERE {VE.VoucherId} = '{draft}' AND {VE.Kind} = 5")));
     }
 
     [PostgresFact]
@@ -741,6 +844,16 @@ public class CashVoucherFootprintTests : CashVoucherTestBase
     private static Dictionary<string, long> Changed(Dictionary<string, long> before, Dictionary<string, long> after) =>
         after.Where(kv => before.GetValueOrDefault(kv.Key, -1) != kv.Value).ToDictionary(kv => kv.Key, kv => kv.Value - before.GetValueOrDefault(kv.Key));
 
+    /// <summary>
+    /// Review L4 (i): the CONTENT of every table, not only its row count: per table "rows:hash", the hash being the MD5 of the ordered MD5s of the text form of each row (stable, independent of the physical order), so an
+    /// UPDATE of an existing row anywhere (a balance, a counter, a number, a journal row) is seen although no count moves.
+    /// </summary>
+    private const string Fingerprints =
+        "SELECT COALESCE(string_agg(c.oid::regclass::text || '=' || (xpath('/row/n/text()', query_to_xml(format('SELECT count(*)::text || '':'' || COALESCE(md5(string_agg(md5(x::text), '''' ORDER BY md5(x::text))), ''-'') AS n FROM %s x', c.oid::regclass), false, true, '')))[1]::text, ';' ORDER BY c.oid::regclass::text), '') " +
+        "FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE c.relkind IN ('r', 'p') AND s.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')";
+    private async Task<Dictionary<string, string>> CompanyContent() =>
+        (await Sql<string>(Fingerprints)).Split(';', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Split('=')).ToDictionary(p => p[0].Split('.')[^1].Trim('"'), p => p[1]);
+
     [PostgresFact]
     public async Task The_whole_life_of_a_voucher_writes_only_voucher_rows_and_audit_events_and_no_journal_ledger_or_number_row()
     {
@@ -748,17 +861,17 @@ public class CashVoucherFootprintTests : CashVoucherTestBase
         var main = await MainBranch(); var box = await Box("c1", main, "1101"); var sales = await Gl("4101", 4); var rent = await Gl("5101", 5); var party = await Party("P1");
         var cookie = await AsMember(Clerk);
         Assert.Equal(HttpStatusCode.OK, (await Send(HttpMethod.Get, V, cookie: cookie)).Status);              // the session is in use before the snapshot
-        var company = await CompanyCounts(); var system = await SystemCounts();
+        var company = await CompanyCounts(); var system = await SystemCounts(); var content = await CompanyContent();
         Assert.True(company.Count > 60, $"only {company.Count} company tables were counted");
+        Assert.Equal(company.Keys.Order(), content.Keys.Order());
         string[] ledger = [CompanySchema.JournalEntry.Table, CompanySchema.JournalLine.Table, CompanySchema.JournalAllocation.Table, CompanySchema.JournalEvent.Table, CompanySchema.NumberIssue.Table, CompanySchema.NumberCounter.Table, CompanySchema.NumberingRule.Table];
         Assert.All(ledger, t => Assert.True(company.ContainsKey(t), t));
+        string[] own = [CV.Table, VL.Table, VE.Table, CompanySchema.BusinessAudit.Table];
 
-        // a receipt: created, edited, submitted, withdrawn, submitted again and left submitted; a payment: created, replayed, submitted and cancelled; a draft cancelled; refused requests in between
+        // a receipt: created, edited, submitted and left submitted; a payment: created, replayed, submitted and cancelled; a draft cancelled; refused requests in between
         var receipt = IdOf(await Post(cookie, new { kind = "receipt", cashAccountId = box, voucherDate = "2026-03-10", partyId = party, reference = "R-1", idempotencyKey = "footprint-key-1", lines = new[] { Line(sales, 100m), Line(sales, 15.5m) } }));
         Assert.Equal(HttpStatusCode.OK, (await Put(cookie, receipt, 1, new { voucherDate = "2026-03-11", partyId = party, lines = new[] { Line(sales, 120m) } })).Status);
         Assert.Equal(HttpStatusCode.OK, (await Act(cookie, receipt, "submit", 2)).Status);
-        Assert.Equal(HttpStatusCode.OK, (await Act(cookie, receipt, "withdraw", 3)).Status);
-        Assert.Equal(HttpStatusCode.OK, (await Act(cookie, receipt, "submit", 4)).Status);
         var paymentBody = Body("payment", box, "footprint-key-2", Line(rent, 40m));
         var payment = IdOf(await Post(cookie, paymentBody));
         Assert.Equal(payment, IdOf(await Post(cookie, paymentBody, HttpStatusCode.OK)));
@@ -770,14 +883,233 @@ public class CashVoucherFootprintTests : CashVoucherTestBase
         Assert.Equal(HttpStatusCode.BadRequest, (await Send(HttpMethod.Post, V, Body("receipt", box, "footprint-key-4", Line(sales, 0m)), cookie)).Status);
 
         var changed = Changed(company, await CompanyCounts());
-        // 3 vouchers; line sets 2 + 1 (receipt) + 1 (payment) + 0; events 5 + 3 + 2; one audit event per history event
-        Assert.Equal(new Dictionary<string, long> { [CV.Table] = 3, [VL.Table] = 4, [VE.Table] = 10, [CompanySchema.BusinessAudit.Table] = 10 }.OrderBy(kv => kv.Key), changed.OrderBy(kv => kv.Key));
+        // 3 vouchers; line sets 2 + 1 (receipt) + 1 (payment) + 0; events 3 + 3 + 2; one audit event per history event
+        Assert.Equal(new Dictionary<string, long> { [CV.Table] = 3, [VL.Table] = 4, [VE.Table] = 8, [CompanySchema.BusinessAudit.Table] = 8 }.OrderBy(kv => kv.Key), changed.OrderBy(kv => kv.Key));
         var after = await CompanyCounts();
         Assert.All(ledger, t => Assert.Equal(company[t], after[t]));                                           // explicitly: no journal entry, line, allocation or event, no issued number, no counter, no rule
         Assert.Equal((0L, 0L), (after[CompanySchema.JournalEntry.Table], after[CompanySchema.NumberIssue.Table]));
         Assert.Empty(Changed(system, await SystemCounts()));                                                   // and nothing in Hasm_System
         // the cash account row itself is untouched (no balance, no counter, no revision)
         Assert.Equal(1L, await Sql<long>($"SELECT {Ca.Revision} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"));
+        // CONTENT (review L4): outside the three voucher tables and the audit stream no row of ANY company table was added, removed or CHANGED: the journal, its lines, allocations and events, the issued numbers, the
+        // counters and the numbering rules by name, and every other table (the chart, the cash account master, the parties, the fiscal calendar, the stock and commercial tables, ...)
+        var contentAfter = await CompanyContent();
+        Assert.All(ledger, t => Assert.Equal(content[t], contentAfter[t]));
+        Assert.Empty(contentAfter.Where(kv => !own.Contains(kv.Key) && content.GetValueOrDefault(kv.Key) != kv.Value).Select(kv => kv.Key));
+        Assert.All(own, t => Assert.NotEqual(content[t], contentAfter[t]));                                    // the comparison does see the four tables that changed
+        // the comparison is by content: an UPDATE that moves no count is seen (here on the chart, by direct SQL after the voucher work), and only where it happened
+        await Sql($"UPDATE {Ac.Table} SET {Ac.Revision} = {Ac.Revision} + 1 WHERE {Ac.Id} = '{sales}'");
+        var touched = await CompanyContent();
+        Assert.Equal([Ac.Table], touched.Where(kv => contentAfter[kv.Key] != kv.Value).Select(kv => kv.Key).ToArray());
+        Assert.Equal(contentAfter[Ac.Table].Split(':')[0], touched[Ac.Table].Split(':')[0]);                   // same number of rows, another hash
+    }
+}
+
+/// <summary>
+/// Review M1 of PR 247: the guard that company migration 0040 puts on the cash account row decides on what it reads of the voucher table, which is race-free only at READ COMMITTED. Any other level is refused first.
+/// </summary>
+public abstract class CashVoucherIsolationTestBase : CashVoucherTestBase
+{
+    protected const string LevelRefusal = "cash accounts are changed at READ COMMITTED only";
+    private int seq;
+
+    protected string OwnerCs => new NpgsqlConnectionStringBuilder(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName)) { Pooling = false }.ConnectionString;
+
+    private static async Task<(string? State, string Message)> Run(string connectionString, string sql)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        try { await using var cmd = new NpgsqlCommand(sql, conn); await cmd.ExecuteNonQueryAsync(); return (null, ""); }
+        catch (PostgresException ex) { return (ex.SqlState, ex.MessageText); }
+    }
+
+    /// <summary>
+    /// One transaction of <paramref name="cs"/> at <paramref name="level"/>: it takes its snapshot (a read of the voucher table), then <paramref name="between"/> commits in ANOTHER transaction of the same principal at the
+    /// default level, then the transaction runs <paramref name="sql"/> and commits when it was accepted. Returns the refusal (state and message), or (null, "") when the statement was accepted and committed.
+    /// </summary>
+    protected static async Task<(string? State, string Message)> At(string cs, string level, string sql, string? between = null)
+    {
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync();
+        await using (var begin = new NpgsqlCommand($"BEGIN ISOLATION LEVEL {level}", conn)) await begin.ExecuteNonQueryAsync();
+        await using (var current = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn)) Assert.Equal(level.ToLowerInvariant(), (string)(await current.ExecuteScalarAsync())!);
+        await using (var snapshot = new NpgsqlCommand($"SELECT count(*) FROM {CV.Table}", conn)) await snapshot.ExecuteScalarAsync();
+        if (between is not null) Assert.Equal((null, ""), await Run(cs, between));
+        try
+        {
+            await using (var cmd = new NpgsqlCommand(sql, conn)) await cmd.ExecuteNonQueryAsync();
+            await using (var commit = new NpgsqlCommand("COMMIT", conn)) await commit.ExecuteNonQueryAsync();
+            return (null, "");
+        }
+        catch (PostgresException ex)
+        {
+            await using var rollback = new NpgsqlCommand("ROLLBACK", conn);
+            await rollback.ExecuteNonQueryAsync();
+            return (ex.SqlState, ex.MessageText);
+        }
+    }
+
+    protected static string Change(Guid box, string set) => $"UPDATE {Ca.Table} SET {set}, {Ca.Revision} = {Ca.Revision} + 1 WHERE {Ca.Id} = '{box}'";
+    private async Task<(bool Active, Guid Gl, Guid Branch, long Revision)> State(Guid box) => (await Sql<bool>($"SELECT {Ca.IsActive} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"),
+        await Sql<Guid>($"SELECT {Ca.AccountId} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"), await Sql<Guid>($"SELECT {Ca.BranchId} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"), await Sql<long>($"SELECT {Ca.Revision} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"));
+
+    /// <summary>
+    /// The interleaving of the review (I1 as the owner, I4 as the runtime role): a transaction takes its snapshot, a complete draft voucher on the account commits beside it, then the transaction deactivates the account,
+    /// re-binds its ledger account or moves its branch. Before the fix every one of them was ACCEPTED at REPEATABLE READ and SERIALIZABLE and left an open voucher on a deactivated, re-bound or re-branched account.
+    /// As the principal of <paramref name="cs"/> (which also writes the voucher): refused at every level other than READ COMMITTED, with or without a concurrent writer and whatever the change; decided by the rules of the
+    /// account at READ COMMITTED. The other direction (a voucher written from a snapshot that predates a committed deactivation) holds at every level by the row lock, and is pinned too.
+    /// </summary>
+    protected async Task AccountChangesAreRefusedAboveReadCommitted(string cs)
+    {
+        var main = await MainBranch(); var b2 = (await Make("B2")).Id; var sales = await Gl("4101", 4); var by = Guid.NewGuid();
+        async Task<(Guid Box, Guid OwnGl, Guid FreeGl)> NewBox()
+        {
+            var n = Interlocked.Increment(ref seq);
+            var box = await Box($"iso{n}", main, $"13{n:00}");
+            return (box, await Sql<Guid>($"SELECT {Ca.AccountId} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"), await Gl($"14{n:00}"));
+        }
+        string Voucher(Guid box, out Guid id) { id = Guid.NewGuid(); return $"{VoucherSql(id, box, main, by, $"iso-key-{Interlocked.Increment(ref seq):00000}")}; {LineSql(id, 1, 1, sales)}; {EventSql(id, 1, null, 1, 1)}"; }
+        string[] Changes(Guid freeGl) => [$"{Ca.IsActive} = false", $"{Ca.AccountId} = '{freeGl}'", $"{Ca.BranchId} = '{b2}'", $"{Ca.NameEn} = 'Renamed'"];
+
+        foreach (var level in new[] { "REPEATABLE READ", "SERIALIZABLE" })
+        {
+            for (var change = 0; change < 4; change++)
+            {
+                // a voucher commits after the snapshot: the change of its account is refused, the account is exactly as it was and the voucher is there
+                var a = await NewBox();
+                Assert.Equal(("P0001", LevelRefusal), await At(cs, level, Change(a.Box, Changes(a.FreeGl)[change]), Voucher(a.Box, out var v)));
+                Assert.Equal((true, a.OwnGl, main, 1L), await State(a.Box));
+                Assert.Equal(1L, await Rows(CV.Table, $"{CV.Id} = '{v}' AND {CV.Status} = 1"));
+            }
+            // no concurrent writer and no voucher at all: every change of a cash account is refused at this level (the refusal comes before any rule)
+            var idle = await NewBox();
+            foreach (var set in Changes(idle.FreeGl)) Assert.Equal(("P0001", LevelRefusal), await At(cs, level, Change(idle.Box, set)));
+            Assert.Equal((true, idle.OwnGl, main, 1L), await State(idle.Box));
+        }
+        // "any level other than read committed": PostgreSQL treats READ UNCOMMITTED as READ COMMITTED, but the guard names the one supported level and refuses the rest (fail-closed, as migration 0039)
+        var u = await NewBox();
+        Assert.Equal(("P0001", LevelRefusal), await At(cs, "READ UNCOMMITTED", Change(u.Box, $"{Ca.NameEn} = 'Renamed'")));
+
+        // READ COMMITTED (the level of the application): the same interleaving is decided by the rules, because the guard reads after the row lock was granted
+        var r1 = await NewBox();
+        Assert.Equal(("P0001", "cash_account_has_open_documents"), await At(cs, "READ COMMITTED", Change(r1.Box, $"{Ca.IsActive} = false"), Voucher(r1.Box, out _)));
+        var r2 = await NewBox();
+        Assert.Equal(("P0001", "cash_account_binding_frozen"), await At(cs, "READ COMMITTED", Change(r2.Box, $"{Ca.AccountId} = '{r2.FreeGl}'"), Voucher(r2.Box, out _)));
+        var r3 = await NewBox();
+        Assert.Equal(("P0001", "cash_account_binding_frozen"), await At(cs, "READ COMMITTED", Change(r3.Box, $"{Ca.BranchId} = '{b2}'"), Voucher(r3.Box, out _)));
+        Assert.Equal((true, r1.OwnGl, main, 1L), await State(r1.Box));
+        Assert.Equal((true, r2.OwnGl, main, 1L), await State(r2.Box));
+        Assert.Equal((true, r3.OwnGl, main, 1L), await State(r3.Box));
+        // ... and every change WORKS there: what is not frozen changes beside a committed voucher, and an account without a voucher is re-bound, moved and deactivated
+        Assert.Equal((null, ""), await At(cs, "READ COMMITTED", Change(r3.Box, $"{Ca.NameEn} = 'Renamed'"), Voucher(r3.Box, out _)));
+        var free = await NewBox();
+        Assert.Equal((null, ""), await At(cs, "READ COMMITTED", Change(free.Box, $"{Ca.AccountId} = '{free.FreeGl}'")));
+        Assert.Equal((null, ""), await At(cs, "READ COMMITTED", Change(free.Box, $"{Ca.BranchId} = '{b2}'")));
+        Assert.Equal((null, ""), await At(cs, "READ COMMITTED", Change(free.Box, $"{Ca.IsActive} = false")));
+        Assert.Equal((false, free.FreeGl, b2, 4L), await State(free.Box));
+
+        // THE OTHER DIRECTION needs no level rule (the voucher guards lock a row the other side CHANGES): a voucher written by a transaction whose snapshot predates a committed deactivation of its account is never
+        // accepted: refused by the rule at READ COMMITTED, by a serialization failure (40001) at the snapshot levels
+        foreach (var level in new[] { "READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE" })
+        {
+            var d = await NewBox();
+            var late = await At(cs, level, Voucher(d.Box, out var v), Change(d.Box, $"{Ca.IsActive} = false"));
+            Assert.Equal(level == "READ COMMITTED" ? ("P0001", "cash_voucher_account_inactive") : ("40001", late.Message), late);
+            Assert.Equal(0L, await Rows(CV.Table, $"{CV.CashAccountId} = '{d.Box}'"));
+        }
+        // nothing in the whole company database is an open voucher on an inactive account, or a voucher of another branch than its account's
+        Assert.Equal(0L, await Sql<long>($"SELECT count(*) FROM {CV.Table} v JOIN {Ca.Table} a ON a.{Ca.Id} = v.{CV.CashAccountId} WHERE (v.{CV.Status} <> 5 AND NOT a.{Ca.IsActive}) OR a.{Ca.BranchId} <> v.{CV.BranchId}"));
+    }
+}
+
+public class CashVoucherIsolationLevelTests : CashVoucherIsolationTestBase
+{
+    [PostgresFact]
+    public async Task A_direct_change_of_a_cash_account_is_refused_at_repeatable_read_and_serializable_and_decided_by_the_voucher_rules_at_read_committed()
+    {
+        await StartV();
+        await AccountChangesAreRefusedAboveReadCommitted(OwnerCs);
+    }
+
+    /// <summary>
+    /// No service path changes a cash account or writes a voucher at another level: every one of them runs in <see cref="CompanyAuditedTransactions"/>, whose transaction is begun at READ COMMITTED explicitly, also when
+    /// the sessions of the deployment default to another level. The merged S1 operations on the account (update, deactivate, reactivate, the key re-wrap) and the voucher operations all work through such connections.
+    /// </summary>
+    [PostgresFact]
+    public async Task The_cash_services_change_accounts_and_write_vouchers_at_read_committed_even_when_the_server_default_is_another_level()
+    {
+        await StartV();
+        var main = await MainBranch(); var sales = await Gl("4101", 4); var manager = await AccountManager();
+        var box = await Box("c1", main, "1101");
+        var bank = IdOf(await Create(manager, Bank("b1", main, await Gl("1102"))));
+        await using (var conn = await Resolver.OpenAsync(Company.Id, default))
+        {
+            await using var tx = await conn.BeginTransactionAsync();
+            await using var cmd = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn, tx);
+            Assert.Equal("read committed", (string)(await cmd.ExecuteScalarAsync())!);
+        }
+        // a deployment whose sessions DEFAULT to another level (default_transaction_isolation)
+        var skewed = new CompanyDatabaseResolver(Configured(true), new Hasm.Infrastructure.Companies.CompanyRegistry(Options.BuildSystemConnectionString(admin: true)), Credentials, Clock, Logs.CreateLogger("Hasm.Company"), CompanyScripts)
+        {
+            ResolutionLifetime = TimeSpan.Zero, SchemaCheckLifetime = TimeSpan.Zero,
+            ConnectionStringOverride = (db, _, _) => new NpgsqlConnectionStringBuilder(Options.BuildCompanyAdminConnectionString(db)) { Options = "-c default_transaction_isolation=serializable" }.ConnectionString,
+        };
+        string level;
+        await using (var conn = await skewed.OpenAsync(Company.Id, default))
+        {
+            await using (var d = new NpgsqlCommand("SELECT current_setting('default_transaction_isolation')", conn)) Assert.Equal("serializable", (string)(await d.ExecuteScalarAsync())!);
+            await using var tx = await conn.BeginTransactionAsync();
+            await using var cmd = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn, tx);
+            level = (string)(await cmd.ExecuteScalarAsync())!;
+        }
+        Assert.Equal("read committed", level);                                                                 // the driver begins every application transaction with an explicit READ COMMITTED
+        var transactions = new CompanyAuditedTransactions(skewed, Audit, Clock);
+        var accounts = new CashAccountService(skewed, transactions, new EnvelopeEncryptor(Keys), new CashDocumentUsageProbe(), Clock);
+        var vouchers = new CashVoucherService(skewed, transactions, Clock);
+        var actor = Guid.NewGuid();
+
+        // the merged S1 paths that UPDATE a cash account row (each fires the new guard): update, deactivate, reactivate, re-wrap
+        var renamed = await accounts.UpdateAsync(actor, Company.Id, box, 1, new CashAccountInput("cashbox", "C1", "الصندوق", "Renamed", main, await Sql<Guid>($"SELECT {Ca.AccountId} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"), null, null, null));
+        Assert.True(renamed.IsOk, renamed.Code);
+        Assert.True((await accounts.DeactivateAsync(actor, Company.Id, box, 2)).IsOk);
+        Assert.True((await accounts.ReactivateAsync(actor, Company.Id, box, 3)).IsOk);
+        Keys.Add("k2", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)); Keys.Activate("k2");
+        var rewrap = await accounts.RewrapNumbersAsync(actor, Company.Id);
+        Assert.Equal((1, 0), (rewrap.Rewrapped, rewrap.Failed));
+        Assert.Equal("k2", await Sql<string>($"SELECT {Ca.NumberKeyId} FROM {Ca.Table} WHERE {Ca.Id} = '{bank}'"));
+        // the voucher paths, and the two rules of the guard through the service
+        var created = await vouchers.CreateAsync(actor, Company.Id, new CashVoucherInput("receipt", box, new DateOnly(2026, 3, 10), null, null, null, "skewed-key-0001", [new CashVoucherLineInput(sales, 10m, null)]));
+        Assert.True(created.IsOk, created.Code);
+        Assert.True((await vouchers.SubmitAsync(actor, Company.Id, created.Value!.Id, 1)).IsOk);
+        var refused = await accounts.DeactivateAsync(actor, Company.Id, box, 4);
+        Assert.Equal((ConfigStatus.Conflict, "cash_account_has_open_documents"), (refused.Status, refused.Code));
+        Assert.True((await vouchers.CancelAsync(actor, Company.Id, created.Value.Id, 2, "skewed")).IsOk);
+        Assert.True((await accounts.DeactivateAsync(actor, Company.Id, box, 4)).IsOk);
+        Assert.Equal((false, 5L), (await Sql<bool>($"SELECT {Ca.IsActive} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'"), await Sql<long>($"SELECT {Ca.Revision} FROM {Ca.Table} WHERE {Ca.Id} = '{box}'")));
+    }
+}
+
+/// <summary>Review M1 of PR 247, as the REAL per-company runtime role (role-capable disposable cluster only): the role holds UPDATE on the cash account table and may choose its isolation level; the guard refuses it.</summary>
+public class CashVoucherIsolationLevelRuntimeRoleTests : CashVoucherIsolationTestBase
+{
+    protected override bool RolesRequired => true;
+
+    [PostgresRoleFact]
+    public async Task The_runtime_role_is_refused_a_change_of_a_cash_account_at_repeatable_read_and_serializable_and_makes_it_at_read_committed()
+    {
+        await StartV();
+        await new CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
+        var credential = (await new FileCompanyCredentialStore(CredentialDirectory).GetAsync(Company.Id))!;
+        var cs = new NpgsqlConnectionStringBuilder(Configured().BuildCompanyRuntimeConnectionString(Company.PhysicalDatabaseName, credential.Username, credential.Password)) { Pooling = false }.ConnectionString;
+        var role = CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName);
+        await using (var rt = new NpgsqlConnection(cs))
+        {
+            await rt.OpenAsync();
+            await using (var who = new NpgsqlCommand("SELECT current_user::text", rt)) Assert.Equal(role, (string)(await who.ExecuteScalarAsync())!);
+            Assert.Empty(await CompanyRuntimePrivileges.FindViolationsAsync(rt, role));
+            Assert.True(await CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));
+        }
+        await AccountChangesAreRefusedAboveReadCommitted(cs);
     }
 }
 
@@ -814,12 +1146,12 @@ public class CashVoucherRuntimeRoleTests : CashVoucherTestBase
         var updated = await service.UpdateAsync(actor, Company.Id, id, 1, input with { Kind = null, CashAccountId = null, Lines = [new CashVoucherLineInput(fees, 3m, null)] });
         Assert.True(updated.IsOk, updated.Code);
         Assert.True((await service.SubmitAsync(actor, Company.Id, id, 2)).IsOk);
-        Assert.True((await service.WithdrawAsync(actor, Company.Id, id, 3)).IsOk);
-        Assert.True((await service.SubmitAsync(actor, Company.Id, id, 4)).IsOk);
-        var cancelled = await service.CancelAsync(actor, Company.Id, id, 5, "runtime");
-        Assert.Equal((CashVoucherStatus.Cancelled, 6L, 6), (cancelled.Value!.Status, cancelled.Value.Revision, cancelled.Value.Events.Count));
+        var cancelled = await service.CancelAsync(actor, Company.Id, id, 3, "runtime");
+        Assert.Equal((CashVoucherStatus.Cancelled, 4L, 4), (cancelled.Value!.Status, cancelled.Value.Revision, cancelled.Value.Events.Count));
         Assert.Single(await service.ListAsync(Company.Id, new CashVoucherFilter()));
         var open = (await service.CreateAsync(actor, Company.Id, input with { IdempotencyKey = "runtime-key-0002" })).Value!.Id;
+        var waiting = (await service.CreateAsync(actor, Company.Id, input with { IdempotencyKey = "runtime-key-0003" })).Value!.Id;
+        Assert.True((await service.SubmitAsync(actor, Company.Id, waiting, 1)).IsOk);
         // the usage probe of the account master, as the runtime role
         await using (var probeConn = await resolver.OpenAsync(Company.Id))
         await using (var tx = await probeConn.BeginTransactionAsync())
@@ -848,9 +1180,13 @@ public class CashVoucherRuntimeRoleTests : CashVoucherTestBase
         // the UPDATE it does hold on the voucher row is fenced by PostgreSQL: no approval, no silent status change, no change without its history event
         Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, MoveSql(open, 3)));
         Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, MoveSql(id, 1)));
+        Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, MoveSql(waiting, 1)));                    // submitted -> draft (a withdrawal): refused for the runtime role too, with or without an event
+        Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, $"{MoveSql(waiting, 1)}; {EventSql(waiting, 4, 2, 1, 3)}"));
+        Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, $"{MoveSql(waiting, 5, actor.ToString())}; {EventSql(waiting, 5, 2, 5, 3, "NULL")}"));   // a cancellation without its reason
+        Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, $"{MoveSql(waiting, 5, actor.ToString())}; {EventSql(waiting, 5, 1, 5, 3)}"));           // ... or recorded as the cancellation of a draft
         Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, MoveSql(open, 5)));                       // legal transition, but no event: refused at commit
         Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, $"SET CONSTRAINTS ALL IMMEDIATE; {MoveSql(open, 5)}"));
         Assert.Equal(PostgresErrorCodes.RaiseException, await Try(rt, LineSql(open, 1, 9, sales)));             // no line slipped into a recorded set
-        Assert.Equal(((short)5, 6L, (short)1, 1L), (await DbStatus(id), await DbRevision(id), await DbStatus(open), await DbRevision(open)));
+        Assert.Equal(((short)5, 4L, (short)1, 1L, (short)2, 2L), (await DbStatus(id), await DbRevision(id), await DbStatus(open), await DbRevision(open), await DbStatus(waiting), await DbRevision(waiting)));
     }
 }

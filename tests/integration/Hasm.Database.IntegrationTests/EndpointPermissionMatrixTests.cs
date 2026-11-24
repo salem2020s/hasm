@@ -150,7 +150,7 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         // cash and bank accounts (Phase 3.14 S1): branch-scoped; the branch-scope and sensitivity rules are pinned by CashAccountAccessTests and CashAccountSensitiveTests
         P("/api/v1/company/cash-accounts/"), U("/api/v1/company/cash-accounts/{id:guid}"), P("/api/v1/company/cash-accounts/{id:guid}/deactivate"), P("/api/v1/company/cash-accounts/{id:guid}/activate"), P("/api/v1/company/cash-accounts/maintenance/rewrap"),
         // cash vouchers without posting (Phase 3.14 S2a): branch-scoped through the cash account; the branch scope and the separate permissions are pinned by CashVoucherAccessTests
-        P("/api/v1/company/cash-vouchers/"), U("/api/v1/company/cash-vouchers/{id:guid}"), P("/api/v1/company/cash-vouchers/{id:guid}/submit"), P("/api/v1/company/cash-vouchers/{id:guid}/withdraw"), P("/api/v1/company/cash-vouchers/{id:guid}/cancel"),
+        P("/api/v1/company/cash-vouchers/"), U("/api/v1/company/cash-vouchers/{id:guid}"), P("/api/v1/company/cash-vouchers/{id:guid}/submit"), P("/api/v1/company/cash-vouchers/{id:guid}/cancel"),
     ];
 
     /// <summary>Mutating company routes deliberately NOT in the matrix, each with its reason: an in-flight pull request owns the route and its 403 tests.</summary>

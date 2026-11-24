@@ -38,7 +38,7 @@ public sealed class CashDocumentUsageProbe : ICashAccountUsageProbe
 }
 
 /// <summary>
-/// The audited company-side store of cash vouchers (Phase 3.14 slice S2a): draft, submitted (withdrawn back to draft) and cancelled. <b>No authorization here by design:</b> <see cref="CashVoucherManagementService"/> wraps it.
+/// The audited company-side store of cash vouchers (Phase 3.14 slice S2a): draft, submitted and cancelled (from submitted the only move is the cancellation: there is no withdrawal). <b>No authorization here by design:</b> <see cref="CashVoucherManagementService"/> wraps it.
 /// Every write is ONE company transaction: the voucher row is locked, the revision is fenced, and the change, its line set, its history event and its audit event commit together. Nothing is ever removed or overwritten: an edit
 /// of a draft writes a new line set under the new revision. Creation is idempotent per (creator, key); a key reused with another payload is refused.
 /// <b>This service creates NO journal entry, allocates NO number and has NO ledger or balance effect</b> (D-214: financial posting for cash and bank stays closed). It has no approve, reject, number, journal or reversal operation.
@@ -384,7 +384,7 @@ public sealed partial class CashVoucherService(CompanyDatabaseResolver resolver,
 
     /// <summary>
     /// Draft to submitted. A voucher needs at least one line, and everything a draft was checked for is checked again (the account or a counter account may have changed since). The submitter is recorded: the independent-approver
-    /// rule of the later slice compares against it. Submitting approves nothing and posts nothing.
+    /// rule of the later slice compares against it. Submitting approves nothing and posts nothing. A submitted voucher does not return to draft in this slice (the approved state machine has no withdrawal): it can only be cancelled.
     /// </summary>
     public Task<ConfigResult<CashVoucherView>> SubmitAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
         Transition(companyId, id, expectedRevision, async (work, cur) =>
@@ -394,15 +394,6 @@ public sealed partial class CashVoucherService(CompanyDatabaseResolver resolver,
             await RequireValidAsync(work, cur.CashAccountId, cur.Lines, null, ct);
             await SetStatusAsync(work, cur, CashVoucherStatus.Submitted, actor, ct);
             await AppendEventAsync(work, cur.Id, CashVoucherEventKind.Submitted, CashVoucherStatus.Draft, CashVoucherStatus.Submitted, cur.Revision + 1, actor, null, CashVoucherAuditEvents.Submitted, $"cash voucher submitted r{cur.Revision + 1}", ct);
-        }, ct);
-
-    /// <summary>Submitted back to draft (withdrawal): the submitter record is cleared and the voucher is editable again.</summary>
-    public Task<ConfigResult<CashVoucherView>> WithdrawAsync(Guid actor, Guid companyId, Guid id, long? expectedRevision, CancellationToken ct = default) =>
-        Transition(companyId, id, expectedRevision, async (work, cur) =>
-        {
-            if (cur.Status != CashVoucherStatus.Submitted) throw new Abort(ConfigStatus.Conflict, "cash_voucher_not_submitted");
-            await SetStatusAsync(work, cur, CashVoucherStatus.Draft, null, ct);
-            await AppendEventAsync(work, cur.Id, CashVoucherEventKind.Withdrawn, CashVoucherStatus.Submitted, CashVoucherStatus.Draft, cur.Revision + 1, actor, null, CashVoucherAuditEvents.Withdrawn, $"cash voucher withdrawn r{cur.Revision + 1}", ct);
         }, ct);
 
     /// <summary>Draft or submitted to cancelled (final), with a mandatory reason. Nothing was numbered or posted, so nothing is voided or reversed: a cancelled voucher never consumed a number (the plan's section 6).</summary>

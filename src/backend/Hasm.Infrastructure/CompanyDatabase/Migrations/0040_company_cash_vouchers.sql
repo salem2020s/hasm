@@ -7,16 +7,19 @@
 -- one and no reversal. A voucher here is a draft, a submitted draft or a cancelled one; the columns and the status values of the later slice (S2b) are added by its own migration.
 -- Invariants enforced by PostgreSQL:
 --   * vouchers, lines and events are never removed; the identity of a voucher (kind, cash account, branch, currency, creator, idempotency key, payload hash) never changes; every change advances the revision by one;
---   * the status guard allows ONLY draft -> draft (an edit), draft -> submitted, submitted -> draft (withdraw) and draft/submitted -> cancelled. Approval, rejection and every later state are NOT in this guard: a direct statement
---     attempting them is refused. A cancelled voucher is final; a status change edits nothing; a submitted or cancelled voucher is not edited;
+--   * the status guard allows ONLY draft -> draft (an edit), draft -> submitted and draft/submitted -> cancelled (the state machine of the plan's section 6, without its approval half). Approval, rejection, every later
+--     state AND submitted -> draft (a withdrawal is not in the approved state machine) are NOT in this guard: a direct statement attempting them is refused. From submitted the only move is the cancellation. A cancelled
+--     voucher is final; a status change edits nothing; a submitted or cancelled voucher is not edited;
 --   * a voucher is created, and submitted, only on an ACTIVE cash or bank account whose branch and currency are the voucher's, the currency being the base currency (Q2);
 --   * lines are APPEND-ONLY line sets: every edit of a draft writes a whole new set under the new revision (the voucher names its current set); a set is closed once its revision has its history event; a line is written only
 --     while the voucher is a draft; no line is ever updated or deleted, so the history of a draft's lines is kept;
 --   * a counter account is an active, non-group account that admits the base currency, is NOT bound to any cash or bank account (that would be a transfer in disguise, Q7) and is NOT the control account of any party role (Q3);
 --     checked when a line is written and again for every current line when the voucher is submitted; a submitted voucher has at least one line;
---   * the events are append-only, one per revision, each carrying the CURRENT revision and status of its voucher, and every revision of a voucher has its event when its transaction commits;
+--   * the events are append-only, one per revision, each carrying the CURRENT revision and status of its voucher and STARTING at the status the previous event ended at (so a change cannot be recorded under the kind of
+--     another one), a cancellation event carries a non-blank reason, and every revision of a voucher has its event when its transaction commits;
 --   * (cash account master, D-211 Q1 and the plan's section 4) the branch and the bound general-ledger account of a cash or bank account are FROZEN once any voucher refers to it, and it is not deactivated while one of its
---     vouchers is not cancelled (in this slice every voucher that is not cancelled is open: nothing can be approved yet).
+--     vouchers is not cancelled (in this slice every voucher that is not cancelled is open: nothing can be approved yet). The guard of the account row decides on what it READS of the voucher table, which is race-free
+--     only at READ COMMITTED (the read follows the row lock): a change of a cash account at any other isolation level is refused.
 
 CREATE TABLE t_05fb4037 (
     c_9d4a288c uuid NOT NULL,
@@ -138,7 +141,7 @@ BEGIN
         RAISE EXCEPTION 'the identity of a cash voucher is immutable';
     END IF;
     IF NEW.c_95ebf428 <> OLD.c_95ebf428 + 1 THEN RAISE EXCEPTION 'revision must advance by one'; END IF;
-    IF NOT ((OLD.c_8ced6547 = 1 AND NEW.c_8ced6547 IN (1, 2, 5)) OR (OLD.c_8ced6547 = 2 AND NEW.c_8ced6547 IN (1, 5))) THEN
+    IF NOT ((OLD.c_8ced6547 = 1 AND NEW.c_8ced6547 IN (1, 2, 5)) OR (OLD.c_8ced6547 = 2 AND NEW.c_8ced6547 = 5)) THEN
         RAISE EXCEPTION 'illegal cash voucher status transition';
     END IF;
     IF NEW.c_8ced6547 <> OLD.c_8ced6547 THEN
@@ -204,11 +207,10 @@ REVOKE ALL ON TABLE t_731339c2 FROM PUBLIC;
 CREATE FUNCTION f_b14fead7() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'cash voucher events are append-only'; END IF;
-    -- the events of this slice: 1 created, 2 updated, 3 submitted, 4 withdrawn, 5 cancelled, each with the statuses it connects
+    -- the events of this slice: 1 created, 2 updated, 3 submitted, 5 cancelled, each with the statuses it connects (kind 4 is not used: there is no withdrawal)
     IF NOT ((NEW.c_351c5cdd = 1 AND NEW.c_c9bb8a25 IS NULL AND NEW.c_bbe96a4d = 1)
          OR (NEW.c_351c5cdd = 2 AND NEW.c_c9bb8a25 = 1 AND NEW.c_bbe96a4d = 1)
          OR (NEW.c_351c5cdd = 3 AND NEW.c_c9bb8a25 = 1 AND NEW.c_bbe96a4d = 2)
-         OR (NEW.c_351c5cdd = 4 AND NEW.c_c9bb8a25 = 2 AND NEW.c_bbe96a4d = 1)
          OR (NEW.c_351c5cdd = 5 AND NEW.c_c9bb8a25 IN (1, 2) AND NEW.c_bbe96a4d = 5)) THEN
         RAISE EXCEPTION 'unknown cash voucher event';
     END IF;
@@ -217,6 +219,13 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM t_05fb4037 d WHERE d.c_9d4a288c = NEW.c_abddc114 AND d.c_95ebf428 = NEW.c_e2361087 AND d.c_8ced6547 = NEW.c_bbe96a4d) THEN
         RAISE EXCEPTION 'a cash voucher event must carry the current revision and status of its voucher';
     END IF;
+    -- ... and it starts where the previous event ended (events are append-only and one per revision, so that row is fixed): with the pairs above, the kind of an event is thereby the change that really happened
+    IF NEW.c_e2361087 > 1 AND NOT EXISTS (SELECT 1 FROM t_ba09cd09 p WHERE p.c_abddc114 = NEW.c_abddc114 AND p.c_e2361087 = NEW.c_e2361087 - 1
+        AND p.c_bbe96a4d = NEW.c_c9bb8a25) THEN
+        RAISE EXCEPTION 'a cash voucher event starts at the status its voucher had before the change';
+    END IF;
+    -- a cancellation carries its reason (not null, not empty, not only white space)
+    IF NEW.c_351c5cdd = 5 AND (NEW.c_d7fdbf7e IS NULL OR NEW.c_d7fdbf7e !~ '[^[:space:]]') THEN RAISE EXCEPTION 'a cancellation event carries its reason'; END IF;
     RETURN NEW;
 END;
 $$;
@@ -226,9 +235,11 @@ REVOKE ALL ON TABLE t_ba09cd09 FROM PUBLIC;
 
 -- the cash account master, now that a document can refer to it (docs/PHASE-3.14.md section 4): the branch and the bound ledger account are frozen once ANY voucher refers to the account (a different binding is a new cash or
 -- bank account), and the account is not deactivated while one of its vouchers is open. In this slice a voucher is open unless it is cancelled (nothing can be approved yet); the slice that adds approval replaces this function.
--- The row is already locked when this BEFORE trigger runs, and a voucher takes a share lock on it, so neither rule can be raced.
+-- The row is already locked when this BEFORE trigger runs, and a voucher takes a share lock on it, so at READ COMMITTED neither rule can be raced: the reads below follow the lock and see every committed voucher. At
+-- REPEATABLE READ or SERIALIZABLE they would use the snapshot of the transaction, which can predate a committed voucher (a share lock changes nothing in the row, so no serialization error is raised): refused first.
 CREATE FUNCTION f_3be56995() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'cash accounts are changed at READ COMMITTED only'; END IF;
     IF (NEW.c_5b26d90b IS DISTINCT FROM OLD.c_5b26d90b OR NEW.c_320d83b3 IS DISTINCT FROM OLD.c_320d83b3)
        AND EXISTS (SELECT 1 FROM t_05fb4037 v WHERE v.c_02b9651f = OLD.c_a448c834) THEN
         RAISE EXCEPTION 'cash_account_binding_frozen';

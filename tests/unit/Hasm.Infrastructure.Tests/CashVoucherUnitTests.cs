@@ -83,10 +83,11 @@ public class CashVoucherUnitTests
     [Fact]
     public void The_audit_codes_are_inside_the_allocated_block_and_apart_from_the_account_master()
     {
-        short[] codes = [CashVoucherAuditEvents.Created, CashVoucherAuditEvents.Updated, CashVoucherAuditEvents.Submitted, CashVoucherAuditEvents.Withdrawn, CashVoucherAuditEvents.Cancelled];
-        Assert.Equal(new short[] { 2110, 2111, 2112, 2113, 2114 }, codes);
+        short[] codes = [CashVoucherAuditEvents.Created, CashVoucherAuditEvents.Updated, CashVoucherAuditEvents.Submitted, CashVoucherAuditEvents.Cancelled];
+        Assert.Equal(new short[] { 2110, 2111, 2112, 2114 }, codes);                             // 2113 is UNUSED (no withdrawal exists); the other codes keep their numbers
         var all = typeof(CashVoucherAuditEvents).GetFields(BindingFlags.Public | BindingFlags.Static).Select(f => (short)f.GetRawConstantValue()!).ToArray();
-        Assert.Equal(codes.Order(), all.Order());                                                // no approved, rejected, journal-created or reversed event exists in this slice
+        Assert.Equal(codes.Order(), all.Order());                                                // no withdrawn, approved, rejected, journal-created or reversed event exists in this slice
+        Assert.DoesNotContain(typeof(CashVoucherAuditEvents).GetFields(BindingFlags.Public | BindingFlags.Static), f => f.Name.Contains("Withdraw", StringComparison.OrdinalIgnoreCase));
     }
 
     // ---- no approval, numbering, journal or reversal surface (D-214)
@@ -94,11 +95,15 @@ public class CashVoucherUnitTests
     [Fact]
     public void The_services_expose_exactly_the_operations_of_the_slice()
     {
-        string[] expected = ["CancelAsync", "CreateAsync", "GetAsync", "ListAsync", "SubmitAsync", "UpdateAsync", "WithdrawAsync"];
+        string[] expected = ["CancelAsync", "CreateAsync", "GetAsync", "ListAsync", "SubmitAsync", "UpdateAsync"];   // no WithdrawAsync: the approved state machine has no submitted -> draft
         foreach (var type in new[] { typeof(CashVoucherService), typeof(CashVoucherManagementService) })
             Assert.Equal(expected, type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Where(m => !m.IsSpecialName).Select(m => m.Name).Distinct().Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(["Cancelled", "Draft", "Submitted"], Enum.GetNames<CashVoucherStatus>().Order(StringComparer.Ordinal).ToArray());
-        Assert.Equal(["Cancelled", "Created", "Submitted", "Updated", "Withdrawn"], Enum.GetNames<CashVoucherEventKind>().Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(["Cancelled", "Created", "Submitted", "Updated"], Enum.GetNames<CashVoucherEventKind>().Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(new short[] { 1, 2, 3, 5 }, Enum.GetValues<CashVoucherEventKind>().Select(k => (short)k).Order().ToArray());   // 4 (withdrawn) is unused and refused by PostgreSQL
+        // absent by name, on every type of the slice: a withdrawal, an approval, a rejection, a numbering, a posting, a reversal
+        foreach (var type in new[] { typeof(CashVoucherService), typeof(CashVoucherManagementService), typeof(CashVoucherAuditEvents), typeof(CashVoucherEventKind), typeof(CashVoucherStatus), typeof(CashVoucherRules) })
+            Assert.DoesNotContain(type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly), m => Regex.IsMatch(m.Name, "Withdraw|Approve|Reject|Revers|Number|Post(?!gres)", RegexOptions.IgnoreCase));
         Assert.DoesNotContain(typeof(CashVoucherView).GetProperties(), p => Regex.IsMatch(p.Name, "Number|Approv|Journal|Entry|Posted|Revers"));
     }
 
@@ -120,7 +125,10 @@ public class CashVoucherUnitTests
         var code = files.SelectMany(f => File.ReadAllLines(f).Select((line, i) => (f, line, n: i + 1))).Where(x => !x.line.TrimStart().StartsWith("//")).ToList();
         Assert.Empty(code.Where(x => forbidden.IsMatch(x.line)).Select(x => $"{Path.GetFileName(x.f)}:{x.n}"));
         var routes = code.Where(x => x.f.EndsWith("CashVoucherEndpoints.cs", StringComparison.Ordinal)).SelectMany(x => Regex.Matches(x.line, @"g\.Map(Get|Post|Put|Patch|Delete)\(""([^""]*)""").Select(m => $"{m.Groups[1].Value} {m.Groups[2].Value}")).ToArray();
-        Assert.Equal(["Get ", "Post ", "Get /{id:guid}", "Put /{id:guid}", "Post /{id:guid}/submit", "Post /{id:guid}/withdraw", "Post /{id:guid}/cancel"], routes);
+        Assert.Equal(["Get ", "Post ", "Get /{id:guid}", "Put /{id:guid}", "Post /{id:guid}/submit", "Post /{id:guid}/cancel"], routes);
+        // absent routes and operations, by name: no withdrawal (submitted -> draft is not in the approved state machine), approval, rejection, numbering, posting, reversal or delete
+        var absent = new Regex(@"(?i)withdraw|WithdrawAsync|/approve|/reject|/decision|/post\b|/reverse|/reversal|/number|/journal|MapDelete");
+        Assert.Empty(code.Where(x => absent.IsMatch(x.line)).Select(x => $"{Path.GetFileName(x.f)}:{x.n}"));
     }
 
     // ---- runtime grants
@@ -184,7 +192,26 @@ public class CashVoucherUnitTests
             CompanySchema.CashVoucher.Table, CompanySchema.CashVoucherLine.Table, CompanySchema.CashVoucherEvent.Table];
         Assert.Empty(Regex.Matches(sql, @"\bt_[0-9a-f]{8}\b").Select(m => m.Value).Distinct().Except(allowed));
         // the only status transitions the guard admits (draft 1, submitted 2, cancelled 5); approved 3 and rejected 4 appear nowhere in it
-        Assert.Contains($"(OLD.{CompanySchema.CashVoucher.Status} = 1 AND NEW.{CompanySchema.CashVoucher.Status} IN (1, 2, 5)) OR (OLD.{CompanySchema.CashVoucher.Status} = 2 AND NEW.{CompanySchema.CashVoucher.Status} IN (1, 5))", sql);
+        // from submitted (2) ONLY the cancellation: submitted -> draft (a withdrawal) is refused
+        Assert.Contains($"(OLD.{CompanySchema.CashVoucher.Status} = 1 AND NEW.{CompanySchema.CashVoucher.Status} IN (1, 2, 5)) OR (OLD.{CompanySchema.CashVoucher.Status} = 2 AND NEW.{CompanySchema.CashVoucher.Status} = 5)", sql);
+        Assert.DoesNotContain($"OLD.{CompanySchema.CashVoucher.Status} = 2 AND NEW.{CompanySchema.CashVoucher.Status} IN", sql);
+        Assert.DoesNotContain($"NEW.{CompanySchema.CashVoucherEvent.Kind} = 4", sql);                // no event kind for a withdrawal
+        Assert.DoesNotMatch(@"(?i)withdr", sql);
         Assert.DoesNotMatch(@"(?i)\b(official|approved|posted|journal)\b", sql);
+    }
+
+    /// <summary>Review M1 of PR 247: the guard on the cash account row refuses every isolation level other than READ COMMITTED as its FIRST statement, in the form of the merged fix of company migration 0039.</summary>
+    [Fact]
+    public void The_account_guard_refuses_every_isolation_level_other_than_read_committed_before_anything_else()
+    {
+        var sql = MigrationScript.LoadEmbeddedCompany().Single(s => s.Version == int.Parse(Number)).Sql;
+        var body = Regex.Match(sql, $@"CREATE FUNCTION {CompanySchema.CashVoucherAccountGuard.FnGuard}\(\) RETURNS trigger LANGUAGE plpgsql AS \$\$(.*?)\$\$;", RegexOptions.Singleline).Groups[1].Value;
+        Assert.Matches(@"^\s*BEGIN\s+IF current_setting\('transaction_isolation'\) <> 'read committed' THEN RAISE EXCEPTION 'cash accounts are changed at READ COMMITTED only'; END IF;", body);
+        Assert.Equal(1, Regex.Matches(sql, @"current_setting\('transaction_isolation'\)").Count);   // only this guard decides on rows it does not lock; the voucher, line and event guards lock the row the other side changes
+        // review L2: a cancellation event carries a reason, and an event starts at the status the previous event ended at
+        var events = Regex.Match(sql, $@"CREATE FUNCTION {CompanySchema.CashVoucherEvent.FnGuard}\(\) RETURNS trigger LANGUAGE plpgsql AS \$\$(.*?)\$\$;", RegexOptions.Singleline).Groups[1].Value;
+        Assert.Contains($"NEW.{CompanySchema.CashVoucherEvent.Kind} = 5 AND (NEW.{CompanySchema.CashVoucherEvent.Reason} IS NULL OR NEW.{CompanySchema.CashVoucherEvent.Reason} !~ '[^[:space:]]')", events);
+        Assert.Contains($"p.{CompanySchema.CashVoucherEvent.Revision} = NEW.{CompanySchema.CashVoucherEvent.Revision} - 1", events);
+        Assert.Contains($"p.{CompanySchema.CashVoucherEvent.ToStatus} = NEW.{CompanySchema.CashVoucherEvent.FromStatus}", events);
     }
 }

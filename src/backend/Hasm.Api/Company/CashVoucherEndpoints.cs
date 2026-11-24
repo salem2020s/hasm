@@ -20,7 +20,7 @@ public static class CashVoucherSetup
 /// <summary>
 /// /api/v1/company/cash-vouchers: receipt and payment vouchers WITHOUT any financial posting (Phase 3.14 slice S2a). The company comes ONLY from the server-side session; every call is authorized inside
 /// <see cref="CashVoucherManagementService"/> (RBAC by BRANCH: a voucher of another branch answers like an unknown id); changes use <c>If-Match</c> with the revision (428 missing, 412 stale); creation is idempotent by key
-/// (201 for a new voucher, 200 with <c>replayed</c> for a repeated key). There is NO delete, approve, reject, number, journal, post or reverse route: financial posting for cash and bank stays closed (D-214).
+/// (201 for a new voucher, 200 with <c>replayed</c> for a repeated key). There is NO delete, withdraw, approve, reject, number, journal, post or reverse route: financial posting for cash and bank stays closed (D-214).
 /// </summary>
 public static class CashVoucherEndpoints
 {
@@ -36,7 +36,6 @@ public static class CashVoucherEndpoints
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
         g.MapPost("/{id:guid}/submit", Submit).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
-        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
         g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
@@ -86,8 +85,6 @@ public static class CashVoucherEndpoints
         Run(http, access, true, (u, c, rev) => svc.UpdateAsync(u, c, id, rev, body, http.RequestAborted));
     private static Task<IResult> Submit(Guid id, HttpContext http, AccessService access, CashVoucherManagementService svc) =>
         Run(http, access, true, (u, c, rev) => svc.SubmitAsync(u, c, id, rev, http.RequestAborted));
-    private static Task<IResult> Withdraw(Guid id, HttpContext http, AccessService access, CashVoucherManagementService svc) =>
-        Run(http, access, true, (u, c, rev) => svc.WithdrawAsync(u, c, id, rev, http.RequestAborted));
     private static Task<IResult> Cancel(Guid id, CancelBody? body, HttpContext http, AccessService access, CashVoucherManagementService svc) =>
         Run(http, access, true, (u, c, rev) => svc.CancelAsync(u, c, id, rev, body?.Reason, http.RequestAborted));
 
