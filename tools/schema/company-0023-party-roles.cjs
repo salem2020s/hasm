@@ -137,6 +137,7 @@ function existingNames() {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { if (e.name !== "bin" && e.name !== "obj") scan(p); continue; }
       if (p === outSql || p === outCs) continue;
+      if (/\d{4}_company_cash_vouchers\.sql$|CompanySchema\.CashVouchers\.cs$/.test(p)) continue;   // a later migration (Phase 3.14 S2a, cash vouchers) references the party-role table and its control account: its files are not "other names" (the rule of company-0028-commercial.cjs)
       if (!/\.(sql|cs)$/.test(e.name)) continue;
       for (const m of fs.readFileSync(p, "utf8").matchAll(/\b[tcfkr]_[0-9a-f]{8}\b/g)) names.add(m[0]);
     }
