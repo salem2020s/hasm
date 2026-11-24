@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "updatedAt": "2026-11-23",
+  "updatedAt": "2026-11-24",
   "main": {
-    "verifiedHead": "78bb2e849b6e01069f47af9da9590ebc82338617",
-    "note": "Refresh of 2026-11-23 (restart handoff). main = 78bb2e8 (merge of #239), read from git and GitHub REST on 2026-11-23. PostgreSQL registry 1805 (step title of .github/workflows/backend.yml equals the per-class sum of 268 classes). Migrations on main: company 0001-0038, system 0001-0040. The lists mergedRecently, next, followUpsNew and migrationAllocation below were NOT extended in this refresh for the pull requests merged after #48 (they are listed in docs/RESTART-HANDOFF.md); for those the handoff and GitHub are the record."
+    "verifiedHead": "9f5079d4dd2d3f9419202bec815dfa02500fadbd",
+    "note": "Refresh of 2026-11-24 (after the merges of #242, #241, #243, #245 and #244). main = 9f5079d (merge of #244), read from git (first-parent history) and GitHub REST on 2026-11-24. PostgreSQL registry 1832 (step title of .github/workflows/backend.yml equals the per-class sum of 279 classes). Migrations on main: company 0001-0039, system 0001-0041. Hosted push runs on main for 9f5079d at this read: Verification and Frontend success, Desktop and Picomatch validation in progress, Backend pending: NOT VERIFIED green. mergedRecently is extended for #241 to #245 only; the pull requests merged between #48 and #232 are NOT itemised there (docs/RESTART-HANDOFF.md and GitHub are the record), and the lists next and followUpsNew were not rewritten."
   },
   "baseline": {
     "roadmap": "docs/ROADMAP.md",
@@ -591,13 +591,72 @@
         "docs/review-records/PR-48-checkpoint-delta-confirmation.md"
       ],
       "note": "merged head is later than the confirmed head dc41673: NOT VERIFIED beyond the record"
+    },
+    {
+      "pr": 242,
+      "phase": "Restart handoff, second refresh of 2026-11-23 (documentation only)",
+      "mergeCommit": "e309ca7be794e26d948dbc67d3b81a9c4f6bb808",
+      "headMerged": "0bfbe4f88b92a18cec5a3e8cf1429e2c7041119f",
+      "mergedAt": "2026-11-23T21:11:07Z",
+      "reviewRecords": [
+        "docs/review-records/PR-242-handoff-second-refresh-review.md"
+      ],
+      "note": "approve at 976cb4b (four Lows, addressed by the refresh of 2026-11-24); merged head = the last reviewed head plus one commit adding only the review record; hosted CI on the merged head not re-read for this refresh (NOT VERIFIED here)"
+    },
+    {
+      "pr": 241,
+      "phase": "Backup: drop a disposable database although an autovacuum worker is in it (42501 on the forced drop); no migration; registry 1815 to 1817",
+      "mergeCommit": "4b8fa4a00429828e0ac8341271fd66a48190b9b6",
+      "headMerged": "ad358488c15fe77b8080676abe156a66964dfdc5",
+      "mergedAt": "2026-11-23T22:45:31Z",
+      "reviewRecords": [
+        "docs/review-records/PR-241-database-drop-review.md",
+        "docs/review-records/PR-241-database-drop-delta-confirmation.md"
+      ],
+      "note": "request changes at 025edb8 (M1), approve at 6127c2e; merged head = the last reviewed head plus one commit adding only the review record; hosted CI on the merged head not re-read for this refresh (NOT VERIFIED here)"
+    },
+    {
+      "pr": 243,
+      "phase": "Backup: review Lows of #241 (L3, L5) and #232 (L3, L4); no migration; registry unchanged (1817)",
+      "mergeCommit": "ad23cf4243b7f1e2c21f785fabc314604c8b3814",
+      "headMerged": "4646891d5bdaf77b52a5638bbbfe00fbb4bbac33",
+      "mergedAt": "2026-11-23T23:44:47Z",
+      "reviewRecords": [
+        "docs/review-records/PR-243-backup-review-lows-review.md",
+        "docs/review-records/PR-243-backup-review-lows-delta-confirmation.md"
+      ],
+      "note": "request changes at ad81e5f (M1), approve at 420fcfd; merged head = the last reviewed head plus one commit adding only the review record; hosted CI on the merged head not re-read for this refresh (NOT VERIFIED here)"
+    },
+    {
+      "pr": 245,
+      "phase": "UI: the shared Tabs moves focus in the key event, not in a later animation frame",
+      "mergeCommit": "2dcc8d7a828af695f29e21e6698c20347fb91d28",
+      "headMerged": "a1db7262a38639891e686ccd62120667a3847e9d",
+      "mergedAt": "2026-11-24T01:08:33Z",
+      "reviewRecords": [
+        "docs/review-records/PR-245-tabs-focus-race-review.md"
+      ],
+      "note": "approve at b852d11 (four Lows open); merged head = the last reviewed head plus one commit adding only the review record; hosted CI on the merged head not re-read for this refresh (NOT VERIFIED here)"
+    },
+    {
+      "pr": 244,
+      "phase": "Phase 3.13 short close (D-201) with the preset Commercial Document Closer (D-254): company migration 0039, system migration 0041; registry 1832; inert in production (no closable document type registered); team decision D-267; owner item SHORT-CLOSE-READINGS open",
+      "mergeCommit": "9f5079d4dd2d3f9419202bec815dfa02500fadbd",
+      "headMerged": "7455d5a434c8f3573ecd801c65a216c56efc06a3",
+      "mergedAt": "2026-11-24T01:23:30Z",
+      "reviewRecords": [
+        "docs/review-records/PR-244-short-close-review.md",
+        "docs/review-records/PR-244-short-close-concurrency-and-preset-review.md",
+        "docs/review-records/PR-244-short-close-delta-confirmation.md"
+      ],
+      "note": "approve at f6dfaa4 (five Lows), request changes at 49c3e19 (M1), approve at 9416201; merged head = the last reviewed head plus one commit adding only the review record; hosted CI on the merged head not re-read for this refresh (NOT VERIFIED here)"
     }
   ],
   "active": {
     "phase": "Refresh after the merges of #212, #210, #213 and #48 (2026-11-22); Phase 3.8D part 1 merged with execution disabled (owner Option D); team running",
     "state": "3.8D: X1-A (D-190) and X2-X8 (D-191) approved by the owner. Team reading (not owner wording): X2–X8 are implemented together with the X1-A replay design and therefore follow the same review gate. Implementation gate (the owner's condition under Q1): MET on the #48 branch (Agent G, record bound to c73b643, approve), so the implementation authorization is effective; execution stays closed until the full N1-N32 test matrix of the approved final design (a superset of the owner's N1-N29) and its review pass. Q3 revaluation contract and Q4 guard modification OPEN. Q5 migration-guard hardening authorized as a separate security workstream (D-194), not started. Legacy cleanup (D-196): #51, #55, #62 closed without merging, branches preserved; #85 closed without merging by the lead under D-196 after #187 ported its remaining capability (branch preserved at 8b87ea3). #176 reopened after an accidental closure caused by a closing keyword in the merged #179 description (D-197), then merged as 2d5da1f. Exact-head verify-head NOT run by this refresh. D-237: #183 merged on the owner's condition; FH's record states the single exception (hbe_not_authenticated accepted under the test helper's digest for the SPKI-length bytes 53/54, the false flaky assertion, replaced by a stricter check under the parser-framed digest).",
     "knownIssues": [
-      "Decisions: next free ID D-268. D-267 the team readings of D-201 for the short close (TEAM decision under D-048, PR 244, not on main until it merges). D-261..D-266 the owner decisions of 2026-11-23 (audit-head recovery D1-D3, off-machine backup protection, container/VM confirmation, identity tagging); D-240..D-260 the owner's consolidated message of 2026-11-22 (on main via #225). D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
+      "Decisions: next free ID D-268. D-267 the team readings of D-201 for the short close (TEAM decision under D-048, on main since the merge of PR 244 as 9f5079d). D-261..D-266 the owner decisions of 2026-11-23 (audit-head recovery D1-D3, off-machine backup protection, container/VM confirmation, identity tagging); D-240..D-260 the owner's consolidated message of 2026-11-22 (on main via #225). D-198..D-239 the owner's consolidated package of 2026-11-21 (on main via #189). D-164..D-166 on main (#172); D-167..D-169 on #181; D-179..D-181 on #182; D-182..D-189 on main (#176); D-190..D-197 the owner decisions of 2026-11-21 (on main via #186); D-108..D-115 and D-122..D-129 allocated, not on main; D-044/D-045 reserved for #48.",
       "Audit: 1336/1337 on main; 1338 allocated to S3b-1b (#181); blocks 2000-2009 R, 2010-2013 slice 5, 2014-2019 slice 6, 2020-2029 slice 7, 2030-2039 Phase 4.4, 2040-2049 slice 8 (#176), 2100-2199 Phase 3.14.",
       "4.1 S3 is NOT complete: S3a (#166), S3b-1a (#172) and the S3b-2a UI (#178) merged; S3b-1b is #181 and S3b-2b is #185 (stacked on #181), both open.",
       "Release acceptance stays blocked per owner item 11 (D-088).",
@@ -654,25 +713,13 @@
       "pr": 238,
       "branch": "feature/t2-a3-epoch-comparison",
       "head": "2ee2ae0d708cf95f8fa7aed4bf34380a2bfb7af0",
-      "state": "T2 slice A3 (company migration 0039, provisional); REST: draft, mergeable; hosted CI at the read of 2026-11-23: 6 success, postgres-integration in progress; awaits the independent security confirmation of the H1 fix and of the merges (deferred after the model change of 2026-11-23)"
-    },
-    {
-      "pr": 232,
-      "branch": "feature/phase-4-3-s8d1",
-      "head": "4814c713b958fef8ead3f43a3c417fc25cd9c465",
-      "state": "Phase 4.3 S8d-1, read only; REST: draft, not mergeable (conflicts); approved at b2aac3c, Low fixes A1-A3 pushed as 4814c71; no hosted check-run listed on this head; needs a merge-main round and a delta confirmation"
+      "state": "T2 slice A3; its provisional company migration 0039 is TAKEN by #244: renumber to company 0040 or the next free number and run a merge round against main (base 78bb2e8; registry lines conflict); REST at the read of 2026-11-24: draft, mergeable state unknown; hosted CI on this head was 7 success on the old base; critical security review deferred after the model change of 2026-11-23 (confirmation record on the final head required)"
     },
     {
       "pr": 234,
       "branch": "feature/audit-head-trigger",
       "head": "c773a7c80f9a25af8206bc25f110b6c84d9980ac",
-      "state": "audit-head link guard, option (a), migration numbers provisional; REST: draft, not mergeable (conflicts); not reviewed; needs the merge of main, renumbering and an independent security review (deferred after the model change of 2026-11-23)"
-    },
-    {
-      "pr": 240,
-      "branch": "docs/restart-handoff-2026-11-23",
-      "head": "see GitHub (this file is part of the pull request, so it cannot name its own head)",
-      "state": "restart handoff and the record of the owner decisions of 2026-11-23 (D-261..D-266), documentation only; draft"
+      "state": "audit-head link guard, option (a), migration numbers provisional (system next free 0042; company 0040 unless another PR merges first); REST at the read of 2026-11-24: draft, mergeable state unknown (conflicts at the earlier reads); not reviewed; needs the merge of main, renumbering and an independent security review (deferred after the model change of 2026-11-23)"
     }
   ],
   "inertPullRequests": [],
@@ -699,9 +746,9 @@
   ],
   "wipBranches": [
     {
-      "branch": "system migration 0036 (short-close permission) and 0037 (cash preset grant)",
+      "branch": "feature/3-14-s2-vouchers",
       "head": "",
-      "state": "work in progress, ON HOLD: the preset pattern is open with the owner (X4-PRESET-ROLE); per the lead, NOT VERIFIED"
+      "state": "Phase 3.14 S2 vouchers backend, first cut without posting (posting gate D-214 closed); started by the lead, Draft PR to follow; per the lead, NOT VERIFIED (branch not on origin at the read of 2026-11-24)"
     }
   ],
   "closedWithoutMerging": [
@@ -803,19 +850,22 @@
     "system": {
       "0034": "#181 (on main)",
       "0035": "#210 owner-only trigger on the TOTP secret material (on main, final)",
-      "next": "CORRECTED 2026-11-23 (PR 244): X4-PRESET-ROLE was decided by D-254, so the short-close preset is no longer on hold; main holds system 0001-0040; system 0041 = the preset Commercial Document Closer and company 0039 = the short close, both PR 244 (final when it merges); Draft PRs 238 (company 0039 provisional) and 234 (provisional numbers) renumber to the next free numbers when they resume"
+      "next": "0042 (main holds system 0001-0041, read from the migration directory on 2026-11-24); Draft PR 234 (provisional numbers) takes the next free number when it resumes",
+      "0041": "#244 preset Commercial Document Closer (on main, final)"
     },
     "company": {
       "0033": "#200 (D-209, on main)",
       "0034": "#204 (D-220, on main)",
       "0035": "#206 (Phase 3.14 S1 cash accounts, on main)",
-      "0036": "#48 Phase 3.8D part 1 plan-execution layer (on main, final)"
+      "0036": "#48 Phase 3.8D part 1 plan-execution layer (on main, final)",
+      "0039": "#244 Phase 3.13 short close (on main, final)",
+      "next": "0040 (main holds company 0001-0039, read from the migration directory on 2026-11-24); Draft PR 238 (its provisional 0039 is taken) and Draft PR 234 renumber to the next free numbers in merge order"
     }
   },
   "registry": {
-    "mainPostgreSqlTests": 1805,
+    "mainPostgreSqlTests": 1832,
     "queued": {},
-    "note": "main read from the step title on 2026-11-23 (equal to the per-class sum 1805); per-PR increments not broken down (NOT VERIFIED); queued additions are re-read at each merge"
+    "note": "main read from the step title on 2026-11-24 (equal to the per-class sum 1832 of 279 classes); read at the merge commits: 1815 (#242), 1817 (#241), 1817 (#243, #245), 1832 (#244); earlier per-PR increments not broken down (NOT VERIFIED); queued additions are re-read at each merge"
   },
   "inertNote": "No inert pull request: #48 is active and listed under openPullRequests (G approve of the final design revision at c73b643); #85 is under closedWithoutMerging.",
   "flaggedForOwnerNotBlocking": {
