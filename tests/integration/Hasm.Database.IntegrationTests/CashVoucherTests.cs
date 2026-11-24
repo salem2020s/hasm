@@ -266,7 +266,7 @@ public class CashVoucherValidationTests : CashVoucherTestBase
         Assert.Equal("cash_voucher_account_inactive", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), idle, main, by, "sql-key-0001")));
         Assert.Equal("cash_voucher_branch_mismatch", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), box, other, by, "sql-key-0002")));
         Assert.Equal("cash_voucher_currency_not_base", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), box, main, by, "sql-key-0003", currency: "USD")));
-        Assert.Contains("violates foreign key", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), Guid.NewGuid(), main, by, "sql-key-0004")));
+        Assert.Equal("cash_voucher_account_not_found", await SqlErrorAsync(VoucherSql(Guid.NewGuid(), Guid.NewGuid(), main, by, "sql-key-0004")));
         Assert.Equal(1L, await Rows(CV.Table));
     }
 
