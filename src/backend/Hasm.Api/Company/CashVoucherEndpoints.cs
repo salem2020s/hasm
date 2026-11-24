@@ -35,9 +35,9 @@ public static class CashVoucherEndpoints
         g.MapPost("", Create).WithMetadata(new BodyLimit());
         g.MapGet("/{id:guid}", Get);
         g.MapPut("/{id:guid}", Update).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/submit", Submit).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(new BodyLimit());
-        g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(new BodyLimit());
+        g.MapPost("/{id:guid}/submit", Submit).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/withdraw", Withdraw).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
+        g.MapPost("/{id:guid}/cancel", Cancel).WithMetadata(Hasm.Api.Hosting.RequestLimits.Action);
     }
 
     private static string StatusName(CashVoucherStatus s) => s switch { CashVoucherStatus.Draft => "draft", CashVoucherStatus.Submitted => "submitted", _ => "cancelled" };
