@@ -1,6 +1,7 @@
 using Hasm.Infrastructure.Commercial;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using DL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentLink;
+using SC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentShortClose;
 using Mode = Hasm.Database.IntegrationTests.EndpointConstraintMatrixPart2Tests.Mode;
 
 namespace Hasm.Database.IntegrationTests;
@@ -68,6 +69,12 @@ public class EndpointConstraintMatrixPart2CommercialTests : CommercialTestBase
         await Race("commercial link", ["2xx"], HttpMethod.Post, $"{Base}/links",
             new { fromDocumentId = order.Id, fromLineNo = 1, toDocumentId = delivery.Id, toLineNo = 1, kind = 1, quantity = 4m, idempotencyKey = "cvm2-link-0001" }, mode: Mode.Same);
         Assert.Equal(1L, await Sql<long>($"SELECT count(*) FROM {DL.Table} WHERE {DL.IdempotencyKey} = 'cvm2-link-0001'"));
+
+        // the short close (D-201) of the now partially fulfilled order carries an idempotency key as well (re-checked after the line locks): every answer is the one operation, and exactly ONE exists
+        var closer = await SignIn(await NewCloserUser());
+        await Race("commercial short close", ["2xx"], HttpMethod.Post, $"{Base}/{order.Id}/short-close", new { reason = "matrix", idempotencyKey = "cvm2-close-0001" }, $"\"{order.Revision}\"", mode: Mode.Same, caller: closer);
+        Assert.Equal(1L, await Sql<long>($"SELECT count(DISTINCT {SC.OperationId}) FROM {SC.Table} WHERE {SC.IdempotencyKey} = 'cvm2-close-0001'"));
+        Assert.Equal(6m, await Sql<decimal>($"SELECT sum({SC.Quantity}) FROM {SC.Table} WHERE {SC.DocumentId} = '{order.Id}'"));
 
         races.AssertNoFindings();
         races.AssertRan(EndpointConstraintMatrixPart2Tests.Shares[nameof(Commercial_documents_and_links_end_in_a_mapped_4xx_never_a_5xx)]);

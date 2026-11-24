@@ -54,6 +54,24 @@ public sealed class DocumentLinkManagementService(AccessService access, Document
         return a.IsOk ? ConfigResult<IReadOnlyList<DocumentLinkView>>.Ok(await links.ListAsync(company, documentId, ct)) : ConfigResult<IReadOnlyList<DocumentLinkView>>.Fail(a.Status, a.Code!);
     }
 
+    /// <summary>
+    /// The short close (D-201) needs <c>company.commercialdocs.close</c> on the document's branch (an explicit, separate permission; never implied by update, approve or cancel). A missing or invisible document is the same
+    /// refusal for a branch-scoped caller.
+    /// </summary>
+    public async Task<ConfigResult<ShortCloseView>> ShortCloseAsync(Guid user, Guid company, Guid documentId, long? expectedRevision, ShortCloseInput? input, CancellationToken ct = default)
+    {
+        var a = await Authorized(user, company, documentId, PermissionCatalog.Codes.CommercialClose, ct);
+        if (!a.IsOk) return ConfigResult<ShortCloseView>.Fail(a.Status, a.Code!);
+        return await links.ShortCloseAsync(user, company, documentId, expectedRevision, input, ct);
+    }
+
+    /// <summary>The short-close operations of the document (needs the view permission on the document's branch).</summary>
+    public async Task<ConfigResult<IReadOnlyList<ShortCloseView>>> ListShortClosesAsync(Guid user, Guid company, Guid documentId, CancellationToken ct = default)
+    {
+        var a = await Authorized(user, company, documentId, PermissionCatalog.Codes.CommercialView, ct);
+        return a.IsOk ? ConfigResult<IReadOnlyList<ShortCloseView>>.Ok(await links.ListShortClosesAsync(company, documentId, ct)) : ConfigResult<IReadOnlyList<ShortCloseView>>.Fail(a.Status, a.Code!);
+    }
+
     /// <summary>The derived ordered, fulfilled, invoiced and returned quantities of every line (needs the view permission on the document's branch).</summary>
     public async Task<ConfigResult<IReadOnlyList<LineQuantityView>>> QuantitiesAsync(Guid user, Guid company, Guid documentId, CancellationToken ct = default)
     {

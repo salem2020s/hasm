@@ -160,7 +160,7 @@ public sealed partial class PermissionCatalog
         new("company.salesreps", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure]),
         new("company.pricing", ScopeKind.Company, [PermissionAction.View, PermissionAction.Configure, PermissionAction.Override]),
         // Commercial documents (3.13 S1a, system migration 0028): BRANCH-scoped like the journal (SRS 3.5, 4.2). Approve (S1b; it also covers rejection) is NOT in the Company Administrator preset (separation of duties, like the journal approver): it belongs to the Commercial Approver preset role (system migration 0029), which is granted offline (AccessService.GrantCommercialApproverOfflineAsync) or copied into custom roles.
-        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel]),
+        new("company.commercialdocs", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Approve, PermissionAction.Cancel, PermissionAction.Close]),   // Close = the short-close action (D-201). NOT in the Company Administrator preset (X4-PRESET-ROLE, D-254, Option A: existing roles are not widened): it is held by the dedicated preset Commercial Document Closer (system migration 0041), assigned offline only
         new("company.attachments", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload, PermissionAction.Delete]),
         new("company.attachmentssensitive", ScopeKind.Company, [PermissionAction.View, PermissionAction.Upload]),
         // Retention of REMOVED attachments (Phase R, decision D-082): the policy, legal holds and (R2) purge. Company-wide. Approve (approving a policy version, revoking it, releasing a legal hold, approving a purge
@@ -300,6 +300,7 @@ public sealed partial class PermissionCatalog
         public const string CommercialSubmit = "company.commercialdocs.submit";
         public const string CommercialCancel = "company.commercialdocs.cancel";
         public const string CommercialApprove = "company.commercialdocs.approve";
+        public const string CommercialClose = "company.commercialdocs.close";
         public const string TaxView = "company.tax.view";
         public const string TaxConfigure = "company.tax.configure";
         public const string PartyRolesView = "company.partyroles.view";
@@ -355,6 +356,8 @@ public static class PresetRoles
     public static readonly Guid CashAccountManagerId = new("5c1b0f6e-0000-4a00-8000-00000000000a");
     /// <summary>X4-PRESET-ROLE: the role that may read a FULL bank account number. PRIVILEGED (resource company.cashaccountssensitive, D-155, D-158).</summary>
     public static readonly Guid CashAccountSensitiveViewerId = new("5c1b0f6e-0000-4a00-8000-00000000000b");
+    /// <summary>X4-PRESET-ROLE (D-254, Option A; plan docs/X4-PRESET-ROLES-PLAN.md section 3.3): the role that may close the remaining quantity of a partially fulfilled commercial document short (D-201). NOT privileged (Close is not a privileged action, the resource is ordinary). Dedicated preset: Company Administrator is not widened. The id ...09 is left to the planned Inventory Cost Approver.</summary>
+    public static readonly Guid CommercialDocumentCloserId = new("5c1b0f6e-0000-4a00-8000-00000000000c");
 
     public const string CompanyAdministratorKey = "company-administrator";
 
@@ -370,7 +373,7 @@ public static class PresetRoles
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, .. CashAccountCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, PermissionCatalog.Codes.CommercialClose, .. CashAccountCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,
@@ -388,6 +391,9 @@ public static class PresetRoles
             // X4 (system migration 0036, provisional number): dedicated presets, assigned offline only (grant-cash-account-manager / grant-cash-account-sensitive-viewer). Neither is in Company Administrator.
             [CashAccountManagerId] = ("cash-account-manager", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate }),
             [CashAccountSensitiveViewerId] = ("cash-account-sensitive-viewer", new HashSet<string> { PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsSensitiveView }),
+            // X4 (system migration 0041): the short-close preset (D-201), assigned offline only (grant-commercial-document-closer). View is seeded with Close because the action is taken on a document the holder must read (its revision is the
+            // precondition of the request), as every approver preset pairs its action with the view of its resource. It holds no create, update, submit, approve or cancel code, and neither it nor the Commercial Approver holds the other's action.
+            [CommercialDocumentCloserId] = ("commercial-document-closer", new HashSet<string> { PermissionCatalog.Codes.CommercialView, PermissionCatalog.Codes.CommercialClose }),
             [AccessAuditorId] = ("access-auditor", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.RolesView,

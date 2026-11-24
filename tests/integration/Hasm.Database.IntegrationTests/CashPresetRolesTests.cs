@@ -271,13 +271,17 @@ public class CashPresetRolesMigrationTests : PostgresTestBase
         var result = await new SystemDatabaseInitializer(Options).InitializeAsync();
         Assert.Equal(All.Where(s => s.Version >= Presets.Version).Select(s => s.Version).ToList(), result.AppliedMigrations);
 
-        // every pre-existing preset, permission row, assignment and membership is byte-identical: rows were only ADDED (2 roles, 6 permission rows)
+        // every pre-existing preset, permission row, assignment and membership is byte-identical: rows were only ADDED (2 roles and 6 permission rows by this migration; the upgrade also applies the later
+        // preset migration 0041, the Commercial Document Closer of X4: 1 role, 2 permission rows; CommercialDocumentCloserMigrationTests owns that one)
         var rolesAfter = await Rows(Ro.Table);
         var permissionsAfter = await Rows(Rp.Table);
-        Assert.Equal(10, rolesAfter.Count);
+        Assert.Equal(11, rolesAfter.Count);
+        Assert.Equal(3, rolesAfter.Except(rolesBefore).Count());
+        Assert.Equal(2, rolesAfter.Except(rolesBefore).Count(r => r.Contains("cash-account-", StringComparison.Ordinal)));
         Assert.Empty(rolesBefore.Except(rolesAfter));
         Assert.Empty(permissionsBefore.Except(permissionsAfter));
-        Assert.Equal(permissionsBefore.Count + 6, permissionsAfter.Count);
+        Assert.Equal(permissionsBefore.Count + 8, permissionsAfter.Count);
+        Assert.Equal(6, permissionsAfter.Except(permissionsBefore).Count(r => r.Contains(PresetRoles.CashAccountManagerId.ToString(), StringComparison.Ordinal) || r.Contains(PresetRoles.CashAccountSensitiveViewerId.ToString(), StringComparison.Ordinal)));
         Assert.Equal(assignmentsBefore, await Rows(Ra.Table));
         Assert.Equal(membershipsBefore, await Rows(SystemSchema.UserCompanyAccess.Table));
 

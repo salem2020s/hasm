@@ -723,6 +723,25 @@ describe("api client: document links (S6 follow-up)", () => {
     expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/d/line-quantities");
   });
 
+  it("closes a document short with the revision as If-Match, reads the operations and the closable types (an absent field is none)", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ operationId: "op", lines: [{ lineNo: 1, quantity: 6 }], replayed: false }))
+      .mockResolvedValueOnce(json({ shortCloses: [{ operationId: "op" }] }))
+      .mockResolvedValueOnce(json({ types: ["a"], shortCloseTypes: ["a"] }))
+      .mockResolvedValueOnce(json({ types: ["a"] }));
+    const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);
+    expect((await client.shortCloseDocument("d 1", { reason: "no longer needed", idempotencyKey: "key-00001" }, 7)).operationId).toBe("op");
+    expect(await client.listShortCloses("d 1")).toEqual([{ operationId: "op" }]);
+    expect(await client.listShortCloseTypes()).toEqual(["a"]);
+    expect(await client.listShortCloseTypes()).toEqual([]);
+    expect(call(fetchMock, 0).url).toBe("https://x/api/v1/company/commercial-documents/d%201/short-close");
+    expect(call(fetchMock, 0).init.method).toBe("POST");
+    expect(new Headers(call(fetchMock, 0).init.headers).get("If-Match")).toBe("\"7\"");
+    expect(JSON.parse(call(fetchMock, 0).init.body as string)).toEqual({ reason: "no longer needed", idempotencyKey: "key-00001" });   // no creator, no document id, no quantity: the server closes what is open
+    expect(call(fetchMock, 1).url).toBe("https://x/api/v1/company/commercial-documents/d%201/short-closes");
+    expect(call(fetchMock, 2).url).toBe("https://x/api/v1/company/commercial-documents/types");
+  });
+
   it("reads the registered link pairs from the types route and treats an absent field as none", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(json({ types: ["a"], linkPairs: [{ source: "a", target: "a", kind: 1 }] })).mockResolvedValueOnce(json({ types: [] }));
     const client = createApiClient("https://x", fetchMock as unknown as typeof fetch);

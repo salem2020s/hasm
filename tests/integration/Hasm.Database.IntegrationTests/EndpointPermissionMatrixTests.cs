@@ -88,6 +88,7 @@ public class EndpointPermissionMatrixTests : JournalTestBase
         P("/api/v1/company/commercial-documents/{id:guid}/submit", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/{id:guid}/withdraw", branch: BranchTarget.CommercialDocument),
         P("/api/v1/company/commercial-documents/{id:guid}/approve", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/{id:guid}/reject", branch: BranchTarget.CommercialDocument),
         P("/api/v1/company/commercial-documents/{id:guid}/cancel", branch: BranchTarget.CommercialDocument), P("/api/v1/company/commercial-documents/links"),
+        P("/api/v1/company/commercial-documents/{id:guid}/short-close", branch: BranchTarget.CommercialDocument),   // D-201: needs company.commercialdocs.close, which no administrator-made role can hold (ShortCloseApiTests covers the holder)
         // company configuration
         U("/api/v1/company/profile"), P("/api/v1/company/profile/display-name-sync"), U("/api/v1/company/settings"), U("/api/v1/company/currencies/{code}"),
         // cost centers and their policies
@@ -382,7 +383,7 @@ public class EndpointPermissionMatrixTests : JournalTestBase
             _ => throw new InvalidOperationException(r.Key),
         };
         var scoped = Matrix.Where(r => r.Branch != BranchTarget.None).ToList();
-        Assert.Equal(19, scoped.Count);                                                                             // branches 4, commercial documents 7, journal 8
+        Assert.Equal(20, scoped.Count);                                                                             // branches 4, commercial documents 8 (with the short close), journal 8
 
         // branch B: every branch-scoped endpoint refuses, and nothing is written
         var before = await Footprint();

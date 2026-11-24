@@ -10,6 +10,7 @@ using NpgsqlTypes;
 using CD = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocument;
 using CL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.CommercialDocumentLine;
 using DL = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentLink;
+using SC = Hasm.Infrastructure.CompanyDatabase.CompanySchema.DocumentShortClose;
 
 namespace Hasm.Infrastructure.Commercial;
 
@@ -108,7 +109,9 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
                 if (kind != CommercialLinkKind.Amends)
                 {
                     var used = await Scalar<decimal>(work, $"SELECT COALESCE(sum({DL.Quantity}), 0) FROM {DL.Table} WHERE {DL.FromLineId} = @a AND {DL.Kind} = @k", ("a", fromLine.Id), ("k", (short)kind));
-                    if (used + quantity > fromLine.Quantity) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
+                    // D-201: what was closed short on the source line can no longer be fulfilled or invoiced (tolerance 0 stays; the lines are locked, so the sum is stable; PostgreSQL enforces the same cap)
+                    var closed = kind is CommercialLinkKind.Fulfils or CommercialLinkKind.Invoices ? await Scalar<decimal>(work, $"SELECT COALESCE(sum({SC.Quantity}), 0) FROM {SC.Table} WHERE {SC.LineId} = @a", ("a", fromLine.Id)) : 0m;
+                    if (used + quantity > fromLine.Quantity - closed) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
                     var usedTarget = await Scalar<decimal>(work, $"SELECT COALESCE(sum({DL.Quantity}), 0) FROM {DL.Table} WHERE {DL.ToLineId} = @a AND {DL.Kind} = @k", ("a", toLine.Id), ("k", (short)kind));
                     if (usedTarget + quantity > toLine.Quantity) throw new Abort(ConfigStatus.Conflict, "over_fulfilment");
                 }
@@ -212,12 +215,12 @@ public sealed partial class DocumentLinkService(CompanyDatabaseResolver resolver
     {
         await using var conn = await resolver.OpenAsync(companyId, ct);
         await using var q = new NpgsqlCommand($"SELECT l.{CL.LineNo}, l.{CL.Quantity}, " +
-            $"COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 1), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 2), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 3), 0) " +
+            $"COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 1), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 2), 0), COALESCE(sum(k.{DL.Quantity}) FILTER (WHERE k.{DL.Kind} = 3), 0), (SELECT COALESCE(sum(s.{SC.Quantity}), 0) FROM {SC.Table} s WHERE s.{SC.LineId} = l.{CL.Id}) " +
             $"FROM {CL.Table} l LEFT JOIN {DL.Table} k ON k.{DL.FromLineId} = l.{CL.Id} WHERE l.{CL.DocumentId} = @d GROUP BY l.{CL.Id}, l.{CL.LineNo}, l.{CL.Quantity} ORDER BY l.{CL.LineNo}", conn);
         q.Parameters.AddWithValue("d", documentId);
         var list = new List<LineQuantityView>();
         await using var r = await q.ExecuteReaderAsync(ct);
-        while (await r.ReadAsync(ct)) list.Add(new LineQuantityView(r.GetInt32(0), r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3), r.GetDecimal(4)));
+        while (await r.ReadAsync(ct)) list.Add(new LineQuantityView(r.GetInt32(0), r.GetDecimal(1), r.GetDecimal(2), r.GetDecimal(3), r.GetDecimal(4), r.GetDecimal(5)));
         return list;
     }
 

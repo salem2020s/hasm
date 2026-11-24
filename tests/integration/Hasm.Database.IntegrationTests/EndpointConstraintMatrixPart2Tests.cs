@@ -151,6 +151,7 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/commercial-documents/{id:guid}/approve"] = "stale-revision race",
             ["POST /api/v1/company/commercial-documents/{id:guid}/reject"] = "stale-revision race",
             ["POST /api/v1/company/commercial-documents/links"] = "idempotent replay (same answer, one link)",
+            ["POST /api/v1/company/commercial-documents/{id:guid}/short-close"] = "idempotent replay (same answer, one short close)",
         },
         [nameof(EndpointConstraintMatrixPart2ImportTests.Imports_from_upload_to_application_with_templates_settings_and_maintenance_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
         {
@@ -273,8 +274,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((111, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));
-        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 8, 18, 5], Shares.Values.Select(share => share.Count));
+        Assert.Equal((112, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));   // 112 with the short close (D-201)
+        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 9, 18, 5], Shares.Values.Select(share => share.Count));   // the commercial share is 9 with the short close (D-201)
         // AssertRan resolves each probed request to its route through the route table: every route must be reachable by exactly one template (no ambiguity)
         var ambiguous = all.Where(t => ConstraintRaces.TemplateOf(new HttpMethod(t[..t.IndexOf(' ')]), SamplePath(t[(t.IndexOf(' ') + 1)..]), all) != t).Order(StringComparer.Ordinal).ToList();
         Assert.True(ambiguous.Count == 0, "routes the probe resolver cannot tell apart:\n" + string.Join("\n", ambiguous));

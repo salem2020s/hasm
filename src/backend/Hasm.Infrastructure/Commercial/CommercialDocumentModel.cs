@@ -13,6 +13,8 @@ public static class CommercialAuditEvents
     public const short ReapprovalRequested = 1907;
     public const short Reopened = 1908;
     public const short LinkCreated = 1909;
+    /// <summary>A quantity of an approved document was closed short (D-201): the detail names the operation, the line count and the total quantity, never the reason text.</summary>
+    public const short ShortClosed = 1910;
 }
 
 /// <summary>The commercial-status track (SRS 19.7): draft, submitted, approved (numbered and sealed), rejected, cancelled.</summary>
@@ -33,21 +35,28 @@ public interface ICommercialDocumentTypeRegistry
     bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind);
     /// <summary>The registered link pairs whose two types are both registered (static registry data; the screen offers link creation only for a target type that appears here).</summary>
     IReadOnlyList<LinkPairView> LinkPairs { get; }
+    /// <summary>Whether documents of this type may be closed short (D-201). Fail-closed: only an explicitly registered type; production registers none until the concrete order types (3.15/3.16).</summary>
+    bool IsShortCloseAllowed(string docType);
+    /// <summary>The registered types that may be closed short (static registry data; the screen offers the action only for these).</summary>
+    IReadOnlyList<string> ShortCloseTypes { get; }
 }
 
 /// <summary>One registered link pair as the API shows it: documents of <c>Source</c> may be linked into documents of <c>Target</c> with <c>Kind</c> (1 fulfils, 2 invoices, 3 returns, 4 amends).</summary>
 public sealed record LinkPairView(string Source, string Target, short Kind);
 
 /// <summary>The answer of the types route: the registered type names and the registered link pairs. Production registers neither (3.15/3.16).</summary>
-public sealed record CommercialTypesView(IReadOnlyList<string> Types, IReadOnlyList<LinkPairView> LinkPairs);
+public sealed record CommercialTypesView(IReadOnlyList<string> Types, IReadOnlyList<LinkPairView> LinkPairs, IReadOnlyList<string>? ShortCloseTypes = null);
 
 /// <summary>The registered types and, separately, the permitted link pairs. Production registers neither until the concrete sales and purchase types (3.15/3.16); only the test composition registers pairs.</summary>
-public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types, IEnumerable<(string From, string To, CommercialLinkKind Kind)>? linkPairs = null) : ICommercialDocumentTypeRegistry
+public sealed class CommercialDocumentTypeRegistry(IEnumerable<string> types, IEnumerable<(string From, string To, CommercialLinkKind Kind)>? linkPairs = null, IEnumerable<string>? shortCloseTypes = null) : ICommercialDocumentTypeRegistry
 {
     private readonly HashSet<string> set = new(types, StringComparer.Ordinal);
+    private readonly HashSet<string> closable = new(shortCloseTypes ?? [], StringComparer.Ordinal);
     private readonly HashSet<(string, string, CommercialLinkKind)> pairs = [.. linkPairs ?? []];
     public bool IsRegistered(string docType) => set.Contains(docType);
     public IReadOnlyCollection<string> Types => set;
+    public bool IsShortCloseAllowed(string docType) => set.Contains(docType) && closable.Contains(docType);
+    public IReadOnlyList<string> ShortCloseTypes => [.. closable.Where(set.Contains).Order(StringComparer.Ordinal)];
     public bool IsLinkAllowed(string fromType, string toType, CommercialLinkKind kind) => set.Contains(fromType) && set.Contains(toType) && pairs.Contains((fromType, toType, kind));
     public IReadOnlyList<LinkPairView> LinkPairs => [.. pairs.Where(p => set.Contains(p.Item1) && set.Contains(p.Item2)).OrderBy(p => p.Item1, StringComparer.Ordinal).ThenBy(p => p.Item2, StringComparer.Ordinal).ThenBy(p => p.Item3).Select(p => new LinkPairView(p.Item1, p.Item2, (short)p.Item3))];
 }
@@ -61,12 +70,25 @@ public sealed record DocumentLinkInput(Guid? FromDocumentId, int? FromLineNo, Gu
 public sealed record DocumentLinkView(Guid Id, Guid FromDocumentId, int FromLineNo, Guid ToDocumentId, int ToLineNo, CommercialLinkKind Kind, decimal Quantity, Guid CreatedBy, DateTimeOffset CreatedAtUtc, bool Replayed = false);
 
 /// <summary>Derived, never stored: ordered is the quantity of the line, the others are the sums of the links FROM this line by kind; remaining is what each kind may still take (tolerance 0, Q3 default).</summary>
-public sealed record LineQuantityView(int LineNo, decimal Ordered, decimal Fulfilled, decimal Invoiced, decimal Returned)
+public sealed record LineQuantityView(int LineNo, decimal Ordered, decimal Fulfilled, decimal Invoiced, decimal Returned, decimal ShortClosed = 0)
 {
-    public decimal RemainingToFulfil => Ordered - Fulfilled;
-    public decimal RemainingToInvoice => Ordered - Invoiced;
+    public decimal RemainingToFulfil => Ordered - ShortClosed - Fulfilled;
+    public decimal RemainingToInvoice => Ordered - ShortClosed - Invoiced;
     public decimal RemainingToReturn => Ordered - Returned;
+    /// <summary>What may still be closed short, and what the line still has open: ordered minus the larger of fulfilled and invoiced minus what was closed short (D-201). Zero means the line no longer counts as open.</summary>
+    public decimal Open => Math.Max(0, Ordered - Math.Max(Fulfilled, Invoiced) - ShortClosed);
 }
+
+/// <summary>One line of a short-close request: the line number and the quantity to close (at most 10 decimals, at most what is open).</summary>
+public sealed record ShortCloseLineInput(int? LineNo, decimal? Quantity);
+
+/// <summary>Short-close body (D-201): a mandatory reason (1-500 characters) and an idempotency key; no <c>Lines</c> closes the whole open remainder of every line of the order, otherwise exactly the named quantities.</summary>
+public sealed record ShortCloseInput(string? Reason, IReadOnlyList<ShortCloseLineInput>? Lines, string? IdempotencyKey);
+
+public sealed record ShortCloseLineView(int LineNo, decimal Quantity);
+
+/// <summary>One short-close operation of a document, as recorded (append-only).</summary>
+public sealed record ShortCloseView(Guid OperationId, Guid DocumentId, string Reason, Guid CreatedBy, DateTimeOffset CreatedAtUtc, IReadOnlyList<ShortCloseLineView> Lines, bool Replayed = false);
 
 /// <summary>The one internal, non-user-facing test type. It is registered ONLY by the test composition; the production composition contains no type and no switch.</summary>
 public static class CommercialTestType

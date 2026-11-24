@@ -55,6 +55,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
 
     /// <summary>The registered link pairs (both types registered): static registry data.</summary>
     public IReadOnlyList<LinkPairView> RegisteredLinkPairs => types.LinkPairs;
+    public IReadOnlyList<string> RegisteredShortCloseTypes => types.ShortCloseTypes;
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private static NpgsqlParameter Uuid(string name, Guid? v) => new(name, NpgsqlDbType.Uuid) { Value = v is { } g ? g : DBNull.Value };
@@ -374,6 +375,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
                     return;
                 }
                 if (await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075: a linked document stays approved (a material edit would send it back to draft)
+                if (await DocumentLinkService.HasShortCloseAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_short_closed");   // D-201: a document closed short stays approved as well
                 await ToDraftAsync(work, cur, CommercialEventKind.ReapprovalRequested, CommercialAuditEvents.ReapprovalRequested, actor, null, $"material edit of approved commercial document: re-approval required, number {cur.OfficialNumber} kept", ct);
                 working = cur with { Status = CommercialStatus.Draft, Revision = cur.Revision + 1 };
             }
@@ -581,6 +583,7 @@ public sealed partial class CommercialDocumentService(CompanyDatabaseResolver re
             if (cur.Status == CommercialStatus.Cancelled) throw new Abort(ConfigStatus.Conflict, "document_not_cancellable");
             if (cur.Status == CommercialStatus.Approved && await HasEffectsAsync(work, cur, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_effects");
             if (cur.Status == CommercialStatus.Approved && await DocumentLinkService.HasLinksAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_has_links");   // D-075 interim restriction (stricter than Q8)
+            if (cur.Status == CommercialStatus.Approved && await DocumentLinkService.HasShortCloseAsync(work.Connection, work.Transaction, cur.Id, ct)) throw new Abort(ConfigStatus.Conflict, "document_short_closed");   // D-201: a document closed short stays approved
             if (cur.OfficialNumber is not null)
                 await NumberingService.VoidAsync(work.Connection, work.Transaction!, cur.DocType, cur.OfficialNumber, actor, text.Length > 200 ? text[..200] : text, Now, ct);
             await SetStatusAsync(work, cur, CommercialStatus.Cancelled, cur.SubmittedBy, ct);

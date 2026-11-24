@@ -33,7 +33,8 @@ Session note: the lead session is being restarted to reduce context; agents of t
 - D-264: off-machine backup protection, strict default kept (OFFMACHINE-ATTESTATION; docs/PHASE-4.3-S8D-PLAN.md).
 - D-265: container/VM confirmation, strict default kept (CONTAINER-VM-CONFIRMATION; same document).
 - D-266: identity tagging, conservative default kept (IDENTITY-TAGGING-DISPOSITION; docs/IDENTITY-INTEGRITY-PLAN.md; applies OD-3, D-242).
-- Next free decision ID: D-267.
+- D-267 (TEAM decision under D-048, not owner text; PR 244): implementation readings of D-201 for the short close (register item SHORT-CLOSE-READINGS: OPEN with the owner since 2026-11-24, one consolidated item with Q1 partial close, Q2 segregation of duties and Q3 information; not blocking; no production document type is registered as closable until the owner answers). Migration allocation of PR 244: company 0039 = short close, system 0041 = Commercial Document Closer; PR 238 and PR 234 renumber to the next free numbers when they resume.
+- Next free decision ID: D-268.
 
 Lead defaults applied under existing owner decisions (not owner text; unchanged by this record): S8d Q4 recovery-test window 35 days, configurable downwards only; Q5 existing notification means suffice while the gate is closed, the external channel of T2 D2 is an activation condition.
 

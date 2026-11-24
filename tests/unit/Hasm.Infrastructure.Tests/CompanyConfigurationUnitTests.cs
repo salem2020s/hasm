@@ -246,6 +246,7 @@ public class ConfigurationSchemaContractTests
         CompanySchema.StatementMappingVersion.Table, CompanySchema.StatementMappingEntry.Table,   // Phase 3.3 S3 (migration 0011): the versioned classification of accounts into financial-statement sections (presentation metadata, no financial data)
         CompanySchema.ReplaySignerKey.Table, CompanySchema.ReplayExecutionGrant.Table, CompanySchema.ReplayGrantUse.Table,   // Phase 3.8D threat T2 slice A1 (migration 0037): the replay signer key registry (public keys only) and the empty grant shells; no balance, no ledger table, no financial record
         CompanySchema.CashAccount.Table,   // Phase 3.14 S1 (migration 0033, provisional number): the cash and bank account master; configuration only, no balance, no ledger table
+        CompanySchema.DocumentShortClose.Table,   // Phase 3.13 short close (D-201, migration 0039): an append-only record of a quantity that will not be fulfilled or invoiced; quantities only, no amount, no currency, no stock or ledger effect (like DocumentLink)
     ];
 
     /// <summary>
