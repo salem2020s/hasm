@@ -16,16 +16,11 @@ namespace Hasm.Infrastructure.Cash;
 
 /// <summary>
 /// Whether a cash or bank account is referenced by vouchers or transfers (the binding to its general-ledger account and its branch freeze once it is) and whether any such document is still OPEN (not approved, or approved with
-/// its journal entry neither posted nor cancelled), which blocks deactivation. Slices S2 and S3 provide the real probe. Until then no such document can exist (no table of one exists), so <see cref="NoCashDocuments"/> answers truthfully.
+/// its journal entry neither posted nor cancelled), which blocks deactivation. The real probe is <see cref="CashDocumentUsageProbe"/> (vouchers since slice S2a; slice S3 adds transfers).
 /// </summary>
 public interface ICashAccountUsageProbe
 {
     Task<CashAccountUsage> GetAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid cashAccountId, CancellationToken ct);
-}
-
-public sealed class NoCashDocuments : ICashAccountUsageProbe
-{
-    public Task<CashAccountUsage> GetAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid cashAccountId, CancellationToken ct) => Task.FromResult(new CashAccountUsage(false, false));
 }
 
 /// <summary>
@@ -379,6 +374,9 @@ public sealed class CashAccountService(CompanyDatabaseResolver resolver, Company
         { MessageText: "cash_account_gl_not_postable" } => new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("accountId", "account_not_postable")]),
         { MessageText: "cash_account_gl_currency" } => new Abort(ConfigStatus.Invalid, "validation_failed", fields: [new("accountId", "account_currency_not_base")]),
         { MessageText: "cash_base_currency_not_selected" } => new Abort(ConfigStatus.Conflict, "base_currency_not_selected"),
+        // the guards company migration 0040 adds to the account row (the probe refuses first; these answer a statement that reached PostgreSQL all the same)
+        { MessageText: "cash_account_binding_frozen" } => new Abort(ConfigStatus.Conflict, "binding_frozen"),
+        { MessageText: "cash_account_has_open_documents" } => new Abort(ConfigStatus.Conflict, "cash_account_has_open_documents"),
         _ => throw ex,
     };
 

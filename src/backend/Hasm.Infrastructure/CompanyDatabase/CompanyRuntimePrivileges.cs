@@ -176,6 +176,11 @@ public static class CompanyRuntimePrivileges
         (CompanySchema.ReplaySignerKey.Table, ["SELECT"]),
         (CompanySchema.ReplayExecutionGrant.Table, ["SELECT"]),
         (CompanySchema.ReplayGrantUse.Table, ["SELECT"]),
+        // Phase 3.14 slice S2a (company migration 0040): cash vouchers WITHOUT posting (D-214). The voucher advances by revision-fenced updates and is never deleted; its line sets and its history are APPEND-ONLY
+        // (PostgreSQL refuses UPDATE, DELETE and TRUNCATE on them, and the role does not hold them either: an edit of a draft writes a new line set, it never replaces one).
+        (CompanySchema.CashVoucher.Table, ["SELECT", "INSERT", "UPDATE"]),
+        (CompanySchema.CashVoucherLine.Table, ["SELECT", "INSERT"]),
+        (CompanySchema.CashVoucherEvent.Table, ["SELECT", "INSERT"]),
     ];
 
     /// <summary>Privileges that must never reach a runtime role on the audit table or on the schema-state tables.</summary>

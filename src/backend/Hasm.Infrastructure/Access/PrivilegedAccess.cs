@@ -25,7 +25,13 @@ public static class PrivilegedAccess
     };
 
     /// <summary>Individual permissions that are privileged although their resource is ordinary (review M3): <c>company.imports.configure</c> authorizes the import maintenance, including the encryption-key rewrap of imported files.</summary>
-    public static IReadOnlySet<string> PrivilegedPermissions { get; } = new HashSet<string>(StringComparer.Ordinal) { "company.imports.configure", "company.cashaccounts.update", "company.cashaccounts.activate" };
+    public static IReadOnlySet<string> PrivilegedPermissions { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "company.imports.configure", "company.cashaccounts.update", "company.cashaccounts.activate",
+        // Phase 3.14 S2a: docs/PHASE-3.14.md section 6 lists view, create, submit and cancel of vouchers as ordinary and does NOT classify the voucher's update; its pin sentence (section 8) names "update" among the privileged
+        // actions. An unclassified permission is privileged (D-096, when in doubt), so editing a draft voucher counts as privileged until the lead or the owner says otherwise.
+        "company.cashvouchers.update",
+    };
 
     /// <summary>Resources classified as ordinary at resource level (their privileged ACTIONS, see <see cref="PrivilegedActions"/>, still count). Listing a resource here is a deliberate review decision.</summary>
     public static IReadOnlySet<string> OrdinaryResources { get; } = new HashSet<string>(StringComparer.Ordinal)
@@ -37,6 +43,8 @@ public static class PrivilegedAccess
         "company.inventorysettings", "company.inventoryaccounting", "company.stockdocs", "company.stockbalance", "company.stocktake", "company.parties", "company.tax",
         "company.partyroles", "company.salesreps", "company.pricing", "company.commercialdocs", "company.attachments",
         "company.cashaccounts",
+        // Phase 3.14 S2a: view, create, submit and cancel of cash vouchers are ordinary (docs/PHASE-3.14.md section 6); update is listed in PrivilegedPermissions (see there). Approve is privileged by action when S2b adds it; reverse is then listed in PrivilegedPermissions.
+        "company.cashvouchers",
     };
 
     /// <summary>Actions that are privileged on every resource: approving (an approver is a sensitive grant), overriding a control, reopening and final-closing a period, approving the negative-stock exception.</summary>
