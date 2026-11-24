@@ -490,3 +490,221 @@ public class ShortCloseApiTests : ShortCloseTestBase
         Assert.Empty(new CommercialDocumentTypeRegistry([]).ShortCloseTypes);
     }
 }
+
+/// <summary>
+/// The fixtures of the isolation-level tests (review M1 of PR 244, second review): the two guards of company migration 0039 that SUM (the close guard and the link cap) lock a row and then read the sums, which is
+/// race-free only at READ COMMITTED. At REPEATABLE READ or SERIALIZABLE a transaction sums with the snapshot it took before the other transaction committed, so fulfilled plus closed could exceed the ordered quantity
+/// (reproduced by the second review through direct SQL). Both guards therefore refuse any other level as their first statement; the link cap fires for every link insert and refuses before its kind test, so the
+/// link-after-link form of the 0030 guard is covered as well.
+/// </summary>
+public abstract class ShortCloseIsolationTestBase : ShortCloseTestBase
+{
+    protected const string Refusal = "short closes and document links are written at READ COMMITTED only";
+    protected Guid Item, Unit;
+    protected readonly List<(Guid Doc, Guid Line)> Targets = [];
+    private int seq;
+    protected string Key(string tag) => $"{tag}-{Interlocked.Increment(ref seq):000000}";
+
+    protected string OwnerCs => new NpgsqlConnectionStringBuilder(Options.BuildCompanyAdminConnectionString(Company.PhysicalDatabaseName)) { Pooling = false }.ConnectionString;
+
+    /// <summary>One item and three approved documents with a large quantity (the targets of the links).</summary>
+    protected async Task Setup()
+    {
+        await Basics();
+        (Item, Unit) = await NewItemAndUnit("ISO");
+        for (var i = 0; i < 3; i++)
+        {
+            var d = await NewApproved(Branch, Party, Key("target"), Approver, CommercialTestType.Name, (Item, Unit, 100000m));
+            Targets.Add((d.Id, await LineId(d.Id, 1)));
+        }
+    }
+
+    /// <summary>An approved order of 10 of which 4 are fulfilled (to the first target), so 6 are open.</summary>
+    protected async Task<(Guid Id, Guid Line, long Revision)> NewOrder()
+    {
+        var o = await NewApproved(Branch, Party, Key("order"), Approver, CommercialTestType.Name, (Item, Unit, 10m));
+        Ok(await Links.CreateAsync(Admin.Id, Company.Id, Link(o.Id, 1, Targets[0].Doc, 1, 4m, Key("init"))));
+        return (o.Id, await LineId(o.Id, 1), o.Revision);
+    }
+
+    protected async Task<(decimal Fulfilled, decimal Invoiced, decimal Closed)> LineState(Guid line) => (
+        await Sql<decimal>($"SELECT COALESCE(sum({DL.Quantity}),0) FROM {DL.Table} WHERE {DL.FromLineId} = '{line}' AND {DL.Kind} = 1"),
+        await Sql<decimal>($"SELECT COALESCE(sum({DL.Quantity}),0) FROM {DL.Table} WHERE {DL.FromLineId} = '{line}' AND {DL.Kind} = 2"),
+        await Sql<decimal>($"SELECT COALESCE(sum({SC.Quantity}),0) FROM {SC.Table} WHERE {SC.LineId} = '{line}'"));
+
+    /// <summary>
+    /// One transaction of <paramref name="connectionString"/> at <paramref name="level"/>: it takes its snapshot (a read of the short-close table), then <paramref name="between"/> commits in ANOTHER transaction at the
+    /// default level, then the transaction runs <paramref name="sql"/> and commits when it was accepted. Returns the refusal (state and message), or (null, "") when the statement was accepted and committed.
+    /// </summary>
+    protected async Task<(string? State, string Message)> At(string connectionString, string level, string sql, string? between = null)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using (var begin = new NpgsqlCommand($"BEGIN ISOLATION LEVEL {level}", conn)) await begin.ExecuteNonQueryAsync();
+        await using (var current = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn)) Assert.Equal(level.ToLowerInvariant(), (string)(await current.ExecuteScalarAsync())!);
+        await using (var snapshot = new NpgsqlCommand($"SELECT count(*) FROM {SC.Table}", conn)) await snapshot.ExecuteScalarAsync();
+        if (between is not null) Assert.Null((await Run(between)).State);
+        try
+        {
+            await using (var cmd = new NpgsqlCommand(sql, conn)) await cmd.ExecuteNonQueryAsync();
+            await using (var commit = new NpgsqlCommand("COMMIT", conn)) await commit.ExecuteNonQueryAsync();
+            return (null, "");
+        }
+        catch (PostgresException ex)
+        {
+            await using var rollback = new NpgsqlCommand("ROLLBACK", conn);
+            await rollback.ExecuteNonQueryAsync();
+            return (ex.SqlState, ex.MessageText);
+        }
+    }
+
+    /// <summary>
+    /// The three interleavings of the second review (close after a committed link, link after a committed close, link after a committed link: each would leave 16 of 10 without the refusal) and the plain statements,
+    /// as the principal of <paramref name="cs"/>: refused at REPEATABLE READ, SERIALIZABLE and READ UNCOMMITTED with the stable refusal, decided by the ordinary quantity rules at READ COMMITTED.
+    /// </summary>
+    protected async Task GuardedWritesAreRefusedAboveReadCommitted(string cs)
+    {
+        foreach (var level in new[] { "REPEATABLE READ", "SERIALIZABLE" })
+        {
+            // close after link: the 6 open pieces are linked and committed after this transaction took its snapshot; its close of the same 6 is refused
+            var a = await NewOrder();
+            var closeAfterLink = await At(cs, level, RawClose(a.Id, a.Line, "6", Key("cal-close")), RawLink(a.Id, a.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("cal-link")));
+            Assert.Equal(("P0001", Refusal), closeAfterLink);
+            Assert.Equal((10m, 0m, 0m), await LineState(a.Line));
+            // link after close: the 6 open pieces are closed and committed after the snapshot; a link of 6 more is refused
+            var b = await NewOrder();
+            var linkAfterClose = await At(cs, level, RawLink(b.Id, b.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("lac-link")), RawClose(b.Id, b.Line, "6", Key("lac-close")));
+            Assert.Equal(("P0001", Refusal), linkAfterClose);
+            Assert.Equal((4m, 0m, 6m), await LineState(b.Line));
+            // link after link (the sums of the 0030 guard, no short close involved): refused by the link cap of 0039, which fires for every link insert
+            var c = await NewOrder();
+            var linkAfterLink = await At(cs, level, RawLink(c.Id, c.Line, Targets[2].Doc, Targets[2].Line, 1, "6", Key("lal-two")), RawLink(c.Id, c.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("lal-one")));
+            Assert.Equal(("P0001", Refusal), linkAfterLink);
+            Assert.Equal((10m, 0m, 0m), await LineState(c.Line));
+            // no concurrent writer at all: every guarded write is refused at this level, whatever its kind (the refusal comes before the kind test) and whatever its quantity
+            var d = await NewOrder();
+            Assert.Equal(("P0001", Refusal), await At(cs, level, RawClose(d.Id, d.Line, "1", Key("plain-close"))));
+            foreach (var kind in new[] { 1, 2, 3, 4 })
+                Assert.Equal(("P0001", Refusal), await At(cs, level, RawLink(d.Id, d.Line, Targets[1].Doc, Targets[1].Line, kind, "1", Key("plain-link"))));
+            Assert.Equal((4m, 0m, 0m), await LineState(d.Line));
+        }
+        // "any level other than read committed": PostgreSQL treats READ UNCOMMITTED as READ COMMITTED, but the guards name the one supported level and refuse the rest (fail-closed)
+        var u = await NewOrder();
+        Assert.Equal(("P0001", Refusal), await At(cs, "READ UNCOMMITTED", RawClose(u.Id, u.Line, "1", Key("ru-close"))));
+        Assert.Equal(("P0001", Refusal), await At(cs, "READ UNCOMMITTED", RawLink(u.Id, u.Line, Targets[1].Doc, Targets[1].Line, 1, "1", Key("ru-link"))));
+
+        // READ COMMITTED (the level of the application): the same three interleavings are decided by the quantity rules, because each statement reads after its lock was granted
+        var e = await NewOrder();
+        var late = await At(cs, "READ COMMITTED", RawClose(e.Id, e.Line, "6", Key("rc-close")), RawLink(e.Id, e.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("rc-link")));
+        Assert.Equal("P0001", late.State);
+        Assert.Contains("never exceeds the open quantity", late.Message);
+        var f = await NewOrder();
+        late = await At(cs, "READ COMMITTED", RawLink(f.Id, f.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("rc-link")), RawClose(f.Id, f.Line, "6", Key("rc-close")));
+        Assert.Equal("P0001", late.State);
+        Assert.Contains("closed short", late.Message);
+        var g = await NewOrder();
+        late = await At(cs, "READ COMMITTED", RawLink(g.Id, g.Line, Targets[2].Doc, Targets[2].Line, 1, "6", Key("rc-two")), RawLink(g.Id, g.Line, Targets[1].Doc, Targets[1].Line, 1, "6", Key("rc-one")));
+        Assert.Equal("P0001", late.State);
+        Assert.Contains("over-fulfilment", late.Message);
+        // and both guarded writes WORK there, also after another transaction committed in between: 4 fulfilled + 2 linked in between + 1 linked + 3 closed = 10 of 10
+        var h = await NewOrder();
+        Assert.Null((await At(cs, "READ COMMITTED", RawLink(h.Id, h.Line, Targets[2].Doc, Targets[2].Line, 1, "1", Key("ok-link")), RawLink(h.Id, h.Line, Targets[1].Doc, Targets[1].Line, 1, "2", Key("ok-between")))).State);
+        Assert.Null((await At(cs, "READ COMMITTED", RawClose(h.Id, h.Line, "3", Key("ok-close")))).State);
+        Assert.Equal((7m, 0m, 3m), await LineState(h.Line));
+        Assert.Contains("never exceeds the open quantity", (await At(cs, "READ COMMITTED", RawClose(h.Id, h.Line, "0.0000000001", Key("ok-over")))).Message);
+
+        // nothing in the whole company database exceeds its ordered quantity
+        Assert.Equal(0L, await Sql<long>($@"SELECT count(*) FROM {CL.Table} l WHERE
+            GREATEST((SELECT COALESCE(sum(k.{DL.Quantity}),0) FROM {DL.Table} k WHERE k.{DL.FromLineId} = l.{CL.Id} AND k.{DL.Kind} = 1),
+                     (SELECT COALESCE(sum(k.{DL.Quantity}),0) FROM {DL.Table} k WHERE k.{DL.FromLineId} = l.{CL.Id} AND k.{DL.Kind} = 2))
+            + (SELECT COALESCE(sum(s.{SC.Quantity}),0) FROM {SC.Table} s WHERE s.{SC.LineId} = l.{CL.Id}) > l.{CL.Quantity}"));
+    }
+}
+
+/// <summary>Review M1 of PR 244: the guards refuse a short close or a link at any isolation level other than READ COMMITTED (direct SQL of the owner), and the service is unaffected.</summary>
+public class ShortCloseIsolationLevelTests : ShortCloseIsolationTestBase
+{
+    [PostgresFact]
+    public async Task A_direct_close_or_link_is_refused_at_repeatable_read_and_serializable_and_decided_by_the_quantity_rules_at_read_committed()
+    {
+        await Setup();
+        await GuardedWritesAreRefusedAboveReadCommitted(OwnerCs);
+        // the append-only refusals do not depend on the level: a change is refused at every level (by the level check or by the append-only rule, never accepted)
+        var o = await NewOrder();
+        Assert.Null((await Run(RawClose(o.Id, o.Line, "1", Key("keep-close")))).State);
+        foreach (var level in new[] { "READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE" })
+        {
+            Assert.Equal("P0001", (await At(OwnerCs, level, $"UPDATE {SC.Table} SET {SC.Quantity} = 2")).State);
+            Assert.Equal("P0001", (await At(OwnerCs, level, $"DELETE FROM {SC.Table}")).State);
+            Assert.Equal("P0001", (await At(OwnerCs, level, $"TRUNCATE {SC.Table}")).State);
+        }
+        Assert.Equal(1m, (await LineState(o.Line)).Closed);
+    }
+
+    [PostgresFact]
+    public async Task The_service_writes_links_and_short_closes_at_read_committed_even_when_the_server_default_is_another_level()
+    {
+        await Setup();
+        // the application transaction (CompanyAuditedTransactions) reports READ COMMITTED on an ordinary connection
+        await using (var conn = await Resolver.OpenAsync(Company.Id, default))
+        {
+            await using var tx = await conn.BeginTransactionAsync();
+            await using var cmd = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn, tx);
+            Assert.Equal("read committed", (string)(await cmd.ExecuteScalarAsync())!);
+        }
+        var o = await NewOrder();
+        Ok(await Links.CreateAsync(Admin.Id, Company.Id, Link(o.Id, 1, Targets[1].Doc, 1, 1m, Key("svc-link"))));
+        Ok(await Links.ShortCloseAsync(Admin.Id, Company.Id, o.Id, o.Revision, Whole(Key("svc-close"))));
+        Assert.Equal((5m, 0m, 5m), await LineState(o.Line));
+
+        // a deployment whose sessions DEFAULT to another level (default_transaction_isolation): the same services through such connections
+        var skewed = new Hasm.Infrastructure.CompanyDatabase.CompanyDatabaseResolver(Configured(true), new Hasm.Infrastructure.Companies.CompanyRegistry(Options.BuildSystemConnectionString(admin: true)), Credentials, Clock,
+            Logs.CreateLogger("Hasm.Company"), CompanyScripts)
+        {
+            ResolutionLifetime = TimeSpan.Zero, SchemaCheckLifetime = TimeSpan.Zero,
+            ConnectionStringOverride = (db, _, _) => new NpgsqlConnectionStringBuilder(Options.BuildCompanyAdminConnectionString(db)) { Options = "-c default_transaction_isolation=serializable" }.ConnectionString,
+        };
+        string level;
+        await using (var conn = await skewed.OpenAsync(Company.Id, default))
+        {
+            await using (var d = new NpgsqlCommand("SELECT current_setting('default_transaction_isolation')", conn)) Assert.Equal("serializable", (string)(await d.ExecuteScalarAsync())!);
+            await using var tx = await conn.BeginTransactionAsync();
+            await using var cmd = new NpgsqlCommand("SELECT current_setting('transaction_isolation')", conn, tx);
+            level = (string)(await cmd.ExecuteScalarAsync())!;
+        }
+        var skewedLinks = new DocumentLinkService(skewed, new Hasm.Infrastructure.CompanyDatabase.CompanyAuditedTransactions(skewed, Audit, Clock), Clock, TestRegistry());
+        var p = await NewOrder();
+        var link = await skewedLinks.CreateAsync(Admin.Id, Company.Id, Link(p.Id, 1, Targets[1].Doc, 1, 1m, Key("skew-link")));
+        var close = await skewedLinks.ShortCloseAsync(Admin.Id, Company.Id, p.Id, p.Revision, Whole(Key("skew-close")));
+        // the driver begins every application transaction with an explicit READ COMMITTED, so the server default does not reach the guards: the refusal cannot surface through the service
+        // (if it ever did, DocumentLinkService maps a guard refusal, SQLSTATE P0001, to 409 invariant_violation with nothing written)
+        Assert.Equal("read committed", level);
+        Ok(link);
+        Ok(close);
+        Assert.Equal((5m, 0m, 5m), await LineState(p.Line));
+    }
+}
+
+/// <summary>Review M1 of PR 244, as the REAL per-company runtime role (role-capable disposable cluster only): the role may choose its isolation level, and the guards refuse it.</summary>
+public class ShortCloseIsolationLevelRuntimeRoleTests : ShortCloseIsolationTestBase
+{
+    protected override bool RolesRequired => true;
+
+    [PostgresRoleFact]
+    public async Task The_runtime_role_is_refused_a_close_or_a_link_at_repeatable_read_and_serializable_and_writes_them_at_read_committed()
+    {
+        await Setup();
+        await new Hasm.Infrastructure.CompanyDatabase.CompanyRuntimeProvisioner(Configured(useRoleAdmin: true), Registry).GrantAsync(Company.Id);
+        var credential = (await new Hasm.Infrastructure.CompanyDatabase.FileCompanyCredentialStore(CredentialDirectory).GetAsync(Company.Id))!;
+        var cs = new NpgsqlConnectionStringBuilder(Configured().BuildCompanyRuntimeConnectionString(Company.PhysicalDatabaseName, credential.Username, credential.Password)) { Pooling = false }.ConnectionString;
+        var role = Hasm.Infrastructure.CompanyDatabase.CompanyRuntimeRole.NameFor(Company.PhysicalDatabaseName);
+        await using (var rt = new NpgsqlConnection(cs))
+        {
+            await rt.OpenAsync();
+            await using (var who = new NpgsqlCommand("SELECT current_user::text", rt)) Assert.Equal(role, (string)(await who.ExecuteScalarAsync())!);
+            Assert.Empty(await Hasm.Infrastructure.CompanyDatabase.CompanyRuntimePrivileges.FindViolationsAsync(rt, role));
+            Assert.True(await Hasm.Infrastructure.CompanyDatabase.CompanyRuntimePrivileges.HasRequiredAccessAsync(rt, role));
+        }
+        await GuardedWritesAreRefusedAboveReadCommitted(cs);
+    }
+}

@@ -40,6 +40,10 @@ const TEMPLATE = `-- Migration ${MIGRATION}: short close of commercial documents
 --   * TOLERANCE 0 STAYS: the quantity closed on a line never exceeds ordered - max(fulfilled, invoiced) (what was delivered or invoiced is never closed), and after a close a link of kind 1 (fulfils) or 2 (invoices)
 --     from that line cannot take more than ordered - closed (an additive guard on the link table, same lock order as the 0030 guard, so the 0030 function is not replaced);
 --   * an approved document that has a short close cannot leave the approved status (no cancellation, no re-approval): the same interim restriction as for linked documents (D-075).
+--   * ISOLATION LEVEL: the two guards that sum (the close guard and the link cap) lock a row and then read the sums, which is race-free only when every statement reads after its lock is granted, that is at
+--     READ COMMITTED. At REPEATABLE READ or SERIALIZABLE a transaction would sum with the snapshot it took before the other transaction committed (reproduced by the second review of PR 244), so both guards
+--     REFUSE any other level as their first statement. The link cap fires for EVERY link insert and refuses before its kind test, so the sums of the 0030 link guard are covered as well without replacing
+--     that function. The application writes links and short closes at the default level only (CompanyAuditedTransactions).
 
 CREATE TABLE {{DocumentShortClose}} (
     {{DocumentShortClose.Id}} uuid NOT NULL,
@@ -68,6 +72,8 @@ CREATE FUNCTION {{DocumentShortClose.FnGuard}}() RETURNS trigger LANGUAGE plpgsq
 DECLARE
     ldoc uuid; lqty numeric; dstatus smallint; fulfilled numeric; invoiced numeric; closed numeric;
 BEGIN
+    -- FIRST: the sums below are only race-free when read after the lock is granted (READ COMMITTED); any other level is refused
+    IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'short closes and document links are written at READ COMMITTED only'; END IF;
     IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'short close records are append-only'; END IF;
     -- LOCK ORDER (the order of a link and of a document edit: the document row first, its line second): the document is share-locked, a concurrent cancel or re-approval waits for this transaction; THEN the line is
     -- locked BEFORE any sum is read, so every close and every link against the same line is serialized here
@@ -100,6 +106,8 @@ CREATE FUNCTION {{DocumentShortClose.FnLinkCap}}() RETURNS trigger LANGUAGE plpg
 DECLARE
     fqty numeric; closed numeric; used numeric;
 BEGIN
+    -- FIRST, before the kind test: every link insert (any kind) is refused at another level, which also covers the sums of the 0030 link guard
+    IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'short closes and document links are written at READ COMMITTED only'; END IF;
     IF NEW.[[DocumentLink.Kind]] NOT IN (1, 2) THEN RETURN NEW; END IF;
     PERFORM 1 FROM [[CommercialDocument.Table]] d WHERE d.[[CommercialDocument.Id]] IN (NEW.[[DocumentLink.FromDocumentId]], NEW.[[DocumentLink.ToDocumentId]]) ORDER BY d.[[CommercialDocument.Id]] FOR SHARE;
     PERFORM 1 FROM [[CommercialDocumentLine.Table]] l WHERE l.[[CommercialDocumentLine.Id]] IN (NEW.[[DocumentLink.FromLineId]], NEW.[[DocumentLink.ToLineId]]) ORDER BY l.[[CommercialDocumentLine.Id]] FOR NO KEY UPDATE;

@@ -165,7 +165,7 @@ jobs:
           --logger "trx;LogFileName=pg-integration.trx"
           --results-directory "$RUNNER_TEMP/trx"
 
-      - name: Verify all 1829 PostgreSQL tests executed and passed (none skipped)
+      - name: Verify all 1832 PostgreSQL tests executed and passed (none skipped)
         # Exact expected count per PostgreSQL test class (theory cases counted individually). A new PostgreSQL test class MUST be added here, so a skipped, missing or unregistered test fails the job.
         # This is the single registry of both runner modes: the self-hosted twin of this job (backend-selfhosted.yml) reads it from this file. ci-guard allows it to be raised, never lowered.
         env:
@@ -181,6 +181,8 @@ jobs:
                 # Phase 3.13 short close (D-201, company migration 0039) and its dedicated preset Commercial Document Closer (X4-PRESET-ROLE, D-254, system migration 0041): the invariants in the service and in PostgreSQL, the race with links,
                 # the branch-scoped permission, the real API by a holder of the preset alone, the offline grant and revoke with audit, the Admin commands, the migration as an upgrade, the runtime role (CI role service only).
                 "ShortCloseTests": 6, "ShortCloseApiTests": 2, "ShortCloseRuntimeRoleTests": 1,
+                # Review M1 of PR 244: the two summing guards of 0039 refuse a close or a link at any isolation level other than READ COMMITTED (owner and, on the CI role service, the real runtime role); the service stays at READ COMMITTED.
+                "ShortCloseIsolationLevelTests": 2, "ShortCloseIsolationLevelRuntimeRoleTests": 1,
                 "CommercialDocumentCloserPresetTests": 1, "CommercialDocumentCloserToolTests": 1, "CommercialDocumentCloserMigrationTests": 1,
                 "LoginTests": 7, "SessionTests": 11, "BruteForceProtectionTests": 11, "AuthApiTests": 27,
                 "AccessMigrationTests": 4, "MembershipTests": 8, "RoleTests": 5, "AssignmentAndScopeTests": 8,

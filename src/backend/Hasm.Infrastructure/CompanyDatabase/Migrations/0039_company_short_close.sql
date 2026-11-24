@@ -12,6 +12,10 @@
 --   * TOLERANCE 0 STAYS: the quantity closed on a line never exceeds ordered - max(fulfilled, invoiced) (what was delivered or invoiced is never closed), and after a close a link of kind 1 (fulfils) or 2 (invoices)
 --     from that line cannot take more than ordered - closed (an additive guard on the link table, same lock order as the 0030 guard, so the 0030 function is not replaced);
 --   * an approved document that has a short close cannot leave the approved status (no cancellation, no re-approval): the same interim restriction as for linked documents (D-075).
+--   * ISOLATION LEVEL: the two guards that sum (the close guard and the link cap) lock a row and then read the sums, which is race-free only when every statement reads after its lock is granted, that is at
+--     READ COMMITTED. At REPEATABLE READ or SERIALIZABLE a transaction would sum with the snapshot it took before the other transaction committed (reproduced by the second review of PR 244), so both guards
+--     REFUSE any other level as their first statement. The link cap fires for EVERY link insert and refuses before its kind test, so the sums of the 0030 link guard are covered as well without replacing
+--     that function. The application writes links and short closes at the default level only (CompanyAuditedTransactions).
 
 CREATE TABLE t_b5c52137 (
     c_8a71c64d uuid NOT NULL,
@@ -40,6 +44,8 @@ CREATE FUNCTION f_753d3c3c() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     ldoc uuid; lqty numeric; dstatus smallint; fulfilled numeric; invoiced numeric; closed numeric;
 BEGIN
+    -- FIRST: the sums below are only race-free when read after the lock is granted (READ COMMITTED); any other level is refused
+    IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'short closes and document links are written at READ COMMITTED only'; END IF;
     IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'short close records are append-only'; END IF;
     -- LOCK ORDER (the order of a link and of a document edit: the document row first, its line second): the document is share-locked, a concurrent cancel or re-approval waits for this transaction; THEN the line is
     -- locked BEFORE any sum is read, so every close and every link against the same line is serialized here
@@ -72,6 +78,8 @@ CREATE FUNCTION f_fc72a8e2() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     fqty numeric; closed numeric; used numeric;
 BEGIN
+    -- FIRST, before the kind test: every link insert (any kind) is refused at another level, which also covers the sums of the 0030 link guard
+    IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'short closes and document links are written at READ COMMITTED only'; END IF;
     IF NEW.c_9c158568 NOT IN (1, 2) THEN RETURN NEW; END IF;
     PERFORM 1 FROM t_04d17dc0 d WHERE d.c_cceb8d4c IN (NEW.c_dcc9ea43, NEW.c_991145c6) ORDER BY d.c_cceb8d4c FOR SHARE;
     PERFORM 1 FROM t_33fca2e4 l WHERE l.c_57d9a479 IN (NEW.c_e817adff, NEW.c_8702ed66) ORDER BY l.c_57d9a479 FOR NO KEY UPDATE;

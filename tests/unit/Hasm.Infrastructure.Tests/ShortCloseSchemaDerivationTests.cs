@@ -68,6 +68,8 @@ public class ShortCloseSchemaDerivationTests
             var body = Regex.Match(sql, $@"CREATE FUNCTION {CompanySchema.Map["DocumentShortClose." + fn]}\(\).*?\$\$;", RegexOptions.Singleline).Value;
             Assert.True(body.IndexOf("FOR SHARE", StringComparison.Ordinal) is var share and >= 0 && share < body.IndexOf("FOR NO KEY UPDATE", StringComparison.Ordinal), fn + " locks documents before lines");
             Assert.True(body.IndexOf("FOR NO KEY UPDATE", StringComparison.Ordinal) < body.IndexOf("sum(", StringComparison.Ordinal), fn + " locks the line before reading a sum");
+            // review M1 of PR 244: the sums are race-free only at READ COMMITTED, so the FIRST statement of both guards refuses any other level (in the link cap before its kind test: every link insert is covered)
+            Assert.Matches(@"\bBEGIN\s+IF current_setting\('transaction_isolation'\) <> 'read committed' THEN RAISE EXCEPTION 'short closes and document links are written at READ COMMITTED only'; END IF;", body);
         }
     }
 }
