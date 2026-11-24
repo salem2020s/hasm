@@ -170,6 +170,10 @@ public sealed partial class PermissionCatalog
         // number needs the separate privileged resource (the attachments precedent) on the account's branch. Granting these codes to the preset roles is a system migration that waits for the owner's answer on the preset pattern.
         new("company.cashaccounts", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Activate]),
         new("company.cashaccountssensitive", ScopeKind.Branch, [PermissionAction.View]),
+        // Cash vouchers (Phase 3.14 slice S2a, docs/PHASE-3.14.md section 6, D-156): BRANCH-scoped (a voucher belongs to the branch of its cash or bank account). S2a carries ONLY the actions that have a route: view, create, update,
+        // submit (and withdraw) and cancel. Approve and reverse, which the plan names for this resource, arrive with the slice that implements them (S2b, behind the D-214 review gate): a code without a route is not created early.
+        // In no preset role (the Company Administrator is not widened, X4-PRESET-ROLE Option A): a preset for these codes is a system migration with its own review.
+        new("company.cashvouchers", ScopeKind.Branch, [PermissionAction.View, PermissionAction.Create, PermissionAction.Update, PermissionAction.Submit, PermissionAction.Cancel]),
     ]);
 
     public static class Codes
@@ -317,6 +321,11 @@ public sealed partial class PermissionCatalog
         public const string CashAccountsUpdate = "company.cashaccounts.update";
         public const string CashAccountsActivate = "company.cashaccounts.activate";
         public const string CashAccountsSensitiveView = "company.cashaccountssensitive.view";
+        public const string CashVouchersView = "company.cashvouchers.view";
+        public const string CashVouchersCreate = "company.cashvouchers.create";
+        public const string CashVouchersUpdate = "company.cashvouchers.update";
+        public const string CashVouchersSubmit = "company.cashvouchers.submit";
+        public const string CashVouchersCancel = "company.cashvouchers.cancel";
         public const string RetentionView = "company.attachmentretention.view";
         public const string RetentionConfigure = "company.attachmentretention.configure";
         public const string RetentionHold = "company.attachmentretention.hold";
@@ -369,11 +378,18 @@ public static class PresetRoles
     private static readonly string[] CashAccountCodes =
         [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
 
+    /// <summary>
+    /// The cash voucher permissions (Phase 3.14 slice S2a) are in the catalog and in NO preset role: the Company Administrator is not widened (X4-PRESET-ROLE, Option A) and a dedicated preset is a system migration with the paired
+    /// trigger pattern, which needs its own explicit review (D-254). Until one exists they are held through roles a company defines. This list is the exclusion that keeps the Company Administrator definition equal to its seed.
+    /// </summary>
+    private static readonly string[] CashVoucherCodes =
+        [PermissionCatalog.Codes.CashVouchersView, PermissionCatalog.Codes.CashVouchersCreate, PermissionCatalog.Codes.CashVouchersUpdate, PermissionCatalog.Codes.CashVouchersSubmit, PermissionCatalog.Codes.CashVouchersCancel];
+
     public static IReadOnlyDictionary<Guid, (string Key, IReadOnlySet<string> Permissions)> Definitions { get; } =
         new Dictionary<Guid, (string, IReadOnlySet<string>)>
         {
             // The approval of exceptional reopenings is deliberately outside this preset (segregation of duties); it belongs to Fiscal Approver.
-            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, PermissionCatalog.Codes.CommercialClose, .. CashAccountCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
+            [CompanyAdministratorId] = (CompanyAdministratorKey, PermissionCatalog.Default.All.Select(p => p.Code).Except([PermissionCatalog.Codes.FiscalReopenApprove, PermissionCatalog.Codes.JournalApprove, PermissionCatalog.Codes.ImportsApprove, PermissionCatalog.Codes.CommercialApprove, PermissionCatalog.Codes.RetentionApprove, PermissionCatalog.Codes.CommercialClose, .. CashAccountCodes, .. CashVoucherCodes, PermissionCatalog.Codes.CompensationPlansCreate, PermissionCatalog.Codes.CompensationPlansApprove]).ToHashSet()),
             [AccessManagerId] = ("access-manager", new HashSet<string>
             {
                 PermissionCatalog.Codes.MembersView, PermissionCatalog.Codes.MembersCreate, PermissionCatalog.Codes.MembersDelete,

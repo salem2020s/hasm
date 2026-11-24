@@ -67,14 +67,14 @@ internal sealed class RealKestrelHost : IDisposable
 
     public void Dispose() => factory.Dispose();
 
-    /// <summary>Sends one raw HTTP/1.1 POST (JSON, with the anti-CSRF header) and returns the status code of the answer. A chunked body is sent in 1 KiB chunks.</summary>
-    public async Task<int> PostStatus(string path, string body, bool chunked = false)
+    /// <summary>Sends one raw HTTP/1.1 request (POST unless <paramref name="method"/> says otherwise; JSON, with the anti-CSRF header) and returns the status code of the answer. A chunked body is sent in 1 KiB chunks.</summary>
+    public async Task<int> PostStatus(string path, string body, bool chunked = false, string method = "POST")
     {
         using var client = new TcpClient();
         await client.ConnectAsync(Host, Port);
         var stream = client.GetStream();
         var payload = Encoding.UTF8.GetBytes(body);
-        var head = new StringBuilder($"POST {path} HTTP/1.1\r\n").Append($"Host: {Host}:{Port}\r\n").Append("Content-Type: application/json\r\n").Append($"{AuthDefaults.RequestHeader}: 1\r\nConnection: close\r\n");
+        var head = new StringBuilder($"{method} {path} HTTP/1.1\r\n").Append($"Host: {Host}:{Port}\r\n").Append("Content-Type: application/json\r\n").Append($"{AuthDefaults.RequestHeader}: 1\r\nConnection: close\r\n");
         head.Append(chunked ? "Transfer-Encoding: chunked\r\n\r\n" : $"Content-Length: {payload.Length}\r\n\r\n");
         await stream.WriteAsync(Encoding.ASCII.GetBytes(head.ToString()));
         try

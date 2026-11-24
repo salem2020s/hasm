@@ -182,6 +182,13 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
             ["POST /api/v1/company/cash-accounts/{id:guid}/activate"] = "transition race",
             ["POST /api/v1/company/cash-accounts/maintenance/rewrap"] = "idempotent (same answer)",
         },
+        [nameof(EndpointConstraintMatrixPart2CashVoucherTests.Cash_vouchers_end_in_a_mapped_4xx_never_a_5xx)] = new Dictionary<string, string>
+        {
+            ["POST /api/v1/company/cash-vouchers/"] = "idempotent replay (same answer, one voucher)",
+            ["PUT /api/v1/company/cash-vouchers/{id:guid}"] = "stale-revision race",
+            ["POST /api/v1/company/cash-vouchers/{id:guid}/submit"] = "transition race",
+            ["POST /api/v1/company/cash-vouchers/{id:guid}/cancel"] = "transition race",
+        },
     };
 
     /// <summary>The routes part 2 probes (the union of <see cref="Shares"/>), each with the kind of probe. A property: evaluated on use, never during type initialization.</summary>
@@ -274,8 +281,8 @@ public class EndpointConstraintMatrixPart2Tests : JournalTestBase
         Assert.True(unclassified.Count == 0, "mutating company routes neither probed nor listed as pending (classify them in EndpointConstraintMatrixPart2Tests):\n" + string.Join("\n", unclassified));
         var stale = listed.Except(all).Order(StringComparer.Ordinal).ToList();
         Assert.True(stale.Count == 0, "listed routes the API no longer maps:\n" + string.Join("\n", stale));
-        Assert.Equal((112, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));   // 112 with the short close (D-201)
-        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 9, 18, 5], Shares.Values.Select(share => share.Count));   // the commercial share is 9 with the short close (D-201)
+        Assert.Equal((117, 60, 0), (Probed.Count, CoveredByPart1.Count, Pending.Count));   // 112 with the short close (D-201), 117 with the cash vouchers (3.14 S2a)
+        Assert.Equal([32, 5, 7, 5, 10, 10, 11, 9, 18, 5, 5], Shares.Values.Select(share => share.Count));   // the commercial share is 9 with the short close (D-201)
         // AssertRan resolves each probed request to its route through the route table: every route must be reachable by exactly one template (no ambiguity)
         var ambiguous = all.Where(t => ConstraintRaces.TemplateOf(new HttpMethod(t[..t.IndexOf(' ')]), SamplePath(t[(t.IndexOf(' ') + 1)..]), all) != t).Order(StringComparer.Ordinal).ToList();
         Assert.True(ambiguous.Count == 0, "routes the probe resolver cannot tell apart:\n" + string.Join("\n", ambiguous));

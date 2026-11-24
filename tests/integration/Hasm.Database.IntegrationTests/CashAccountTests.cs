@@ -230,7 +230,12 @@ public class CashAccountTests : CashAccountTestBase
         var liability = await Gl("2101", type: 2);
         Assert.Equal("cash_account_gl_not_asset", await SqlErrorAsync($"UPDATE {Ca.Table} SET {Ca.AccountId} = '{liability}', {Ca.Revision} = {Ca.Revision} + 1 WHERE {Ca.Id} = '{id}'"));
         Assert.Contains("never removed", await SqlErrorAsync($"DELETE FROM {Ca.Table} WHERE {Ca.Id} = '{id}'"));
-        Assert.Contains("never removed", await SqlErrorAsync($"TRUNCATE {Ca.Table}"));
+        // since company migration 0040 the cash vouchers refer to this table: PostgreSQL itself refuses a plain TRUNCATE before any trigger runs, and with CASCADE the truncate guards answer (the account's own "never removed", or the
+        // "never removed" / "append-only" of a voucher table, whichever fires first). The account's own truncate guard is still there and enabled.
+        Assert.Contains("cannot truncate a table referenced in a foreign key constraint", await SqlErrorAsync($"TRUNCATE {Ca.Table}"));
+        var cascade = await SqlErrorAsync($"TRUNCATE {Ca.Table} CASCADE");
+        Assert.True(cascade.Contains("never removed") || cascade.Contains("append-only"), cascade);
+        Assert.Equal("O", await Sql<string>($"SELECT tgenabled::text FROM pg_trigger WHERE tgname = '{Ca.TrTruncate}' AND tgrelid = '{Ca.Table}'::regclass"));
         Assert.Contains("immutable", await SqlErrorAsync($"UPDATE {Ca.Table} SET {Ca.Code} = 'ZZ', {Ca.Revision} = {Ca.Revision} + 1 WHERE {Ca.Id} = '{id}'"));
         Assert.Contains("immutable", await SqlErrorAsync($"UPDATE {Ca.Table} SET {Ca.Kind} = 2, {Ca.Revision} = {Ca.Revision} + 1 WHERE {Ca.Id} = '{id}'"));
         Assert.Contains("revision must advance by one", await SqlErrorAsync($"UPDATE {Ca.Table} SET {Ca.NameEn} = 'q' WHERE {Ca.Id} = '{id}'"));

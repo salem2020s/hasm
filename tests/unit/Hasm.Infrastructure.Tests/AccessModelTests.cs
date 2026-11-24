@@ -44,8 +44,11 @@ public class AccessModelTests
         string[] pendingPresetGrant = [PermissionCatalog.Codes.CashAccountsView, PermissionCatalog.Codes.CashAccountsCreate, PermissionCatalog.Codes.CashAccountsUpdate, PermissionCatalog.Codes.CashAccountsActivate, PermissionCatalog.Codes.CashAccountsSensitiveView];
         // The short-close code (D-201) is held by the dedicated preset Commercial Document Closer only (X4-PRESET-ROLE, D-254): Company Administrator is not widened.
         string[] dedicatedPreset = [PermissionCatalog.Codes.CommercialClose];
+        // The cash voucher codes (Phase 3.14 S2a) are in the catalog and in NO preset role: Company Administrator is not widened, and a dedicated preset is a system migration with its own review (D-254).
+        string[] noPreset = [PermissionCatalog.Codes.CashVouchersView, PermissionCatalog.Codes.CashVouchersCreate, PermissionCatalog.Codes.CashVouchersUpdate, PermissionCatalog.Codes.CashVouchersSubmit, PermissionCatalog.Codes.CashVouchersCancel];
+        Assert.All(noPreset, code => Assert.DoesNotContain(PresetRoles.Definitions, d => d.Value.Permissions.Contains(code)));
         Assert.Equal(PresetRoles.CommercialDocumentCloserId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.CommercialClose)).Key);
-        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Except(pendingPresetGrant).Except(dedicatedPreset).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
+        Assert.Equal(PermissionCatalog.Default.All.Select(p => p.Code).Except(approval).Except(pendingPresetGrant).Except(dedicatedPreset).Except(noPreset).Order(), PresetRoles.Definitions[PresetRoles.CompanyAdministratorId].Permissions.Order());
         Assert.Equal(PresetRoles.FiscalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.FiscalReopenApprove)).Key);
         Assert.Equal(PresetRoles.JournalApproverId, Assert.Single(PresetRoles.Definitions, d => d.Value.Permissions.Contains(PermissionCatalog.Codes.JournalApprove)).Key);
     }

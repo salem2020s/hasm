@@ -43,7 +43,7 @@ public sealed record GlAccountRef(Guid Id, string Code, string? NameAr, string? 
 /// <summary>A general-ledger account that could be bound now: an active, non-group asset account that admits the base currency and serves no cash or bank account yet.</summary>
 public sealed record GlCandidate(Guid Id, string Code, string? NameAr, string? NameEn);
 
-/// <summary>Whether anything refers to the account (S2 and S3 implement this; before them nothing can).</summary>
+/// <summary>Whether anything refers to the account, and whether a document that does is still open (vouchers since slice S2a; slice S3 adds transfers).</summary>
 public sealed record CashAccountUsage(bool Referenced, bool HasOpenDocuments);
 
 public static partial class CashAccountRules
