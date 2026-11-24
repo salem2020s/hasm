@@ -651,7 +651,7 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         var run = await MakeRunAsync(RunA);
         await Copier().ReplicateAsync(Destination(), Primary, run, default);
         var primaryRuns = RetentionInventory.Scan(Primary, trust).Runs;
-        IReadOnlySet<string> Pending(string? primaryRoot, Func<string, FileIdentityInfo?>? probe = null) =>
+        IReadOnlySet<string> Pending(string primaryRoot, Func<string, FileIdentityInfo?>? probe = null) =>
             ReplicationPending.Evaluate(primaryRuns, [Destination()], trust, null, null, primaryRoot, probe).RunIds;
         Assert.Empty(Pending(Primary));                                                         // an independent copy: not pending
         Assert.Equal([RunA], Pending(Primary, _ => null));                                      // identity unreadable: not counted as a copy (review M1 of PR 232)
@@ -660,13 +660,26 @@ public sealed class ReplicaCopierTests : IAsyncLifetime
         HardLink(Path.Combine(Primary, RunA, "system", EncryptedSets.DumpName), ours);
         Assert.Equal([RunA], Pending(Primary));                                                 // one hard-linked file: the status calls it replica_not_independent, the plan keeps the run pending
         Assert.Equal([RunA], ReplicaStatus.Inspect(Destination(), primaryRuns, trust, DateTimeOffset.UtcNow, null, Primary).NotIndependentRunIds);
-        Assert.Empty(Pending(null));                                                            // without the primary root the check cannot be made (as in the status function)
+        // the primary root is required (review L3 of PR 232): a caller cannot leave the independence check out and get the weaker answer; a missing or relative root is refused, never read as "no check"
+        Assert.Throws<ArgumentNullException>(() => Pending(null!));
+        Assert.Throws<ArgumentException>(() => Pending(""));
+        Assert.Throws<ArgumentException>(() => Pending(" "));
+        Assert.Throws<ArgumentException>(() => Pending(Path.Combine("relative", "root")));
+        Assert.Equal([RunA], Pending(Primary));                                                 // and the refused calls changed nothing: still pending
         File.Delete(ours);
         File.WriteAllBytes(ours, kept);
         Assert.Empty(Pending(Primary));                                                         // a separate file again: a copy again
         // the "copy" IS the primary's folder (a destination that resolves to the primary's storage)
         Assert.Equal([RunA], ReplicationPending.Evaluate(primaryRuns, [Destination(Primary)], trust, null, null, Primary).RunIds);
-        Assert.Empty(ReplicationPending.Evaluate(primaryRuns, [Destination(Primary)], trust, null).RunIds);      // the same folder passes the light check when the primary is not given: only the independence rule catches it
+        // only the independence rule catches it: the same folder passes every other part of the light check (seen from another primary root, which this folder does not share storage with)
+        var elsewhere = Path.Combine(root, "another-primary");
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Primary, RunA), "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(elsewhere, RunA, Path.GetRelativePath(Path.Combine(Primary, RunA), file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+        Assert.Empty(ReplicationPending.Evaluate(primaryRuns, [Destination(Primary)], trust, null, null, elsewhere).RunIds);
     }
 
     [Fact]
