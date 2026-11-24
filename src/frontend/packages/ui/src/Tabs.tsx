@@ -39,9 +39,11 @@ export function Tabs({ tabs, label, value, defaultValue, onChange, testId }: Tab
   const enabled = tabs.filter((x) => !x.disabled);
 
   const select = (id: string, focus: boolean) => {
+    // Keyboard moves focus NOW, in the key event: every tab button is always mounted, and a button with tabindex -1 is focusable by script.
+    // Never defer this (requestAnimationFrame/timeout): a late frame would pull focus out of a field the user entered meanwhile, and their typing or Enter would land on a tab.
+    if (focus) listRef.current?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(id)}"]`)?.focus();
     if (value === undefined) setInner(id);
     onChange?.(id);
-    if (focus) requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(id)}"]`)?.focus());
   };
 
   const onKey = (e: KeyboardEvent<HTMLButtonElement>) => {

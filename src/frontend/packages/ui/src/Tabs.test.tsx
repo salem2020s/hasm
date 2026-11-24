@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, Tabs, type TabItem } from "./index";
 
 const catalog = {
@@ -129,5 +129,87 @@ describe("Tabs", () => {
       fireEvent.click(tab("General"));
       expect(screen.getByLabelText("Name")).toHaveValue("W");
     } finally { delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__; }
+  });
+
+  describe("keyboard focus never races with the user (no deferred focus)", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Animation frames that arrive late (a busy or throttled window): 100 ms instead of ~16 ms. */
+    const slowFrames = () => {
+      const raf = vi.fn((cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 100));
+      vi.stubGlobal("requestAnimationFrame", raf);
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => window.clearTimeout(id));
+      return raf;
+    };
+
+    it("moves focus to the chosen tab synchronously with the key press, even when animation frames are slow", () => {
+      slowFrames();
+      setup("en");
+      tab("General").focus();
+      fireEvent.keyDown(tab("General"), { key: "ArrowRight" });
+      expect(tab("Units")).toHaveFocus(); // no waiting: nothing is left pending
+      expect(tab("Units")).toHaveAttribute("aria-selected", "true");
+      fireEvent.keyDown(tab("Units"), { key: "End" });
+      expect(tab("Tracking")).toHaveFocus();
+      fireEvent.keyDown(tab("Tracking"), { key: "Home" });
+      expect(tab("General")).toHaveFocus();
+    });
+
+    it("does not steal focus from a field the user enters right after an arrow key (slow frames): typing and Enter stay in the field", async () => {
+      slowFrames();
+      localStorage.setItem("hasm.locale", "en");
+      const onSubmit = vi.fn((e: { preventDefault(): void }) => e.preventDefault());
+      render(
+        <I18nProvider catalog={catalog}>
+          <form onSubmit={onSubmit}>
+            <Tabs label="Item" tabs={[
+              { id: "general", label: "General", content: <input aria-label="Name" /> },
+              { id: "units", label: "Units", content: <input aria-label="Factor" /> },
+            ]} />
+            <button type="submit">Save</button>
+          </form>
+        </I18nProvider>,
+      );
+      tab("General").focus();
+      fireEvent.keyDown(tab("General"), { key: "ArrowRight" });
+      await userEvent.setup({ delay: null }).click(screen.getByLabelText("Factor")); // at once, well inside the 100 ms frame
+      expect(screen.getByLabelText("Factor")).toHaveFocus();
+      await userEvent.setup({ delay: 40 }).keyboard("12345{Enter}"); // ~240 ms of typing, across the 100 ms frame
+      await sleep(150); // every frame requested by the key press has fired by now
+      expect(screen.getByLabelText("Factor")).toHaveFocus();
+      expect(screen.getByLabelText("Factor")).toHaveValue("12345");
+      expect(onSubmit).toHaveBeenCalledTimes(1); // Enter reached the field, not a tab button
+      expect(tab("Units")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("does not pull focus back to the tab list when the user tabs into the panel right after an arrow key (slow frames)", async () => {
+      slowFrames();
+      setup("en");
+      tab("General").focus();
+      await userEvent.keyboard("{ArrowRight}");
+      await userEvent.tab();
+      expect(screen.getByLabelText("Factor")).toHaveFocus();
+      await sleep(150);
+      expect(screen.getByLabelText("Factor")).toHaveFocus();
+    });
+
+    it("unmounting right after an arrow key leaves nothing pending: no error and no focus on a removed tab", async () => {
+      const raf = slowFrames();
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        localStorage.setItem("hasm.locale", "en");
+        const view = render(<I18nProvider catalog={catalog}><button type="button">Outside</button><Form /></I18nProvider>);
+        tab("General").focus();
+        fireEvent.keyDown(tab("General"), { key: "ArrowRight" });
+        view.rerender(<I18nProvider catalog={catalog}><button type="button">Outside</button></I18nProvider>); // Tabs unmounted, frame (if any) still pending
+        const outside = screen.getByRole("button", { name: "Outside" });
+        outside.focus();
+        await sleep(150);
+        expect(outside).toHaveFocus();
+        expect(screen.queryByRole("tab")).toBeNull();
+        expect(errors).not.toHaveBeenCalled();
+        expect(raf).not.toHaveBeenCalled(); // Tabs schedules no frame at all, so there is nothing to cancel on unmount
+      } finally { errors.mockRestore(); }
+    });
   });
 });
